@@ -547,6 +547,47 @@ test.describe('deployed agents surface', () => {
         },
         last_manifest_refresh_at: '2026-04-13T12:00:00Z',
       },
+      {
+        id: 'extagent-local',
+        surface_kind: 'connected_external_agent',
+        studio_object_type: 'connected_external_agent',
+        workspace_id: 'ws-1',
+        tenant_id: 'tenant-1',
+        name: 'Laptop Local Agent',
+        provider_kind: 'custom',
+        status: 'active',
+        enabled: true,
+        connection_state: 'verified',
+        trust_state: 'verified',
+        endpoint_refs: {
+          manifest_url: 'https://example.com/local/manifest.json',
+          chat_url: 'https://example.com/local/chat',
+        },
+        capability_manifest: {
+          capabilities: ['chat'],
+          chat: true,
+        },
+        protocols: [{ kind: 'custom_http', version: '1' }],
+        local_connector: {
+          required: true,
+          mode: 'agent_computer_proxy',
+          binding_state: 'bound',
+          bound: true,
+          proxy_available: false,
+          agent_computer_id: 'computer-macbook',
+          agent_computer_label: 'Mansur MacBook',
+          agent_computer_capability: 'external_agent_proxy',
+          attachment_kind: 'local_companion',
+          binding_message: 'Agent Computer is bound, but private proxying is not enabled yet.',
+        },
+        surface_sections: [],
+        object_types: [],
+        manifest: {
+          id: 'laptop-local-agent',
+          capabilities: ['chat'],
+        },
+        last_manifest_refresh_at: '2026-04-13T12:00:00Z',
+      },
     ];
     const runtimeAttachmentsPayload = {
       attachments: [
@@ -1342,6 +1383,12 @@ test.describe('deployed agents surface', () => {
     await expect(surface).toContainText(/workflow finished/i);
     await expect(surface).toContainText(/external-owned/i);
     await expect(surface).toContainText(/external agent event/i);
+    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /laptop local agent/i }).click();
+    await expect(surface).toContainText(/agent computer/i);
+    await expect(surface).toContainText(/mansur macbook/i);
+    await expect(surface).toContainText(/private proxy not enabled yet/i);
+    await expect(surface).toContainText(/localhost and private-network endpoints stay blocked/i);
+    await expect(surface).not.toContainText(/go live/i);
     await surface.locator('.studio-agents-nav__agent').filter({ hasText: /mansur macbook/i }).click();
     await expect(surface).toContainText(/runtime resource/i);
     await expect(surface).toContainText(/chat surface/i);

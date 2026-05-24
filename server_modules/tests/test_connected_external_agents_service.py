@@ -193,6 +193,33 @@ class _SubAgentSectionClient:
         })
 
 
+async def _fake_runtime_attachments(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    return {
+        "attachments": [
+            {
+                "attachment_id": "computer-macbook",
+                "attachment_kind": "local_companion",
+                "workspace_id": "ws-1",
+                "tenant_id": "tenant-1",
+                "runtime_id": "gateway-macbook",
+                "machine_id": "device-macbook",
+                "label": "Mansur MacBook",
+                "online": True,
+                "healthy": True,
+                "control_state": "active",
+                "status": "ready",
+                "capabilities": ["external_agent_proxy", "browser"],
+                "gateway_identity": {
+                    "gateway_id": "gateway-macbook",
+                    "device_id": "device-macbook",
+                    "device_trust_state": "verified",
+                    "status": "active",
+                },
+            }
+        ]
+    }
+
+
 @pytest.fixture(autouse=True)
 def _reset_local_store():
     service._reset_for_tests()
@@ -602,6 +629,105 @@ async def test_external_agent_rejects_private_network_endpoint() -> None:
                 endpoints={"chat_url": "https://127.0.0.1:9999/chat"},
                 manifest={"capabilities": ["chat"]},
             )
+
+
+@pytest.mark.anyio
+async def test_local_connector_projection_requires_explicit_agent_computer() -> None:
+    with patch("server_modules.control_plane_repository._scoped_connection", new=_fake_scoped_connection(None)):
+        created = await service.create_connected_external_agent(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            name="Laptop-local agent",
+            provider_kind="custom",
+            endpoints={},
+            manifest={
+                "local_connector": {
+                    "required": True,
+                    "reason": "The external runtime is reachable only from the owner device.",
+                },
+            },
+        )
+
+    assert created["local_connector"]["required"] is True
+    assert created["local_connector"]["mode"] == "agent_computer_proxy"
+    assert created["local_connector"]["binding_state"] == "missing_agent_computer"
+    assert created["local_connector"]["bound"] is False
+    assert created["local_connector"]["proxy_available"] is False
+
+
+@pytest.mark.anyio
+async def test_local_connector_binds_to_agent_computer_but_proxy_stays_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        service.runtime_attachment_service,
+        "list_workspace_runtime_attachments",
+        _fake_runtime_attachments,
+    )
+    with patch("server_modules.control_plane_repository._scoped_connection", new=_fake_scoped_connection(None)):
+        created = await service.create_connected_external_agent(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            name="Bound local agent",
+            provider_kind="custom",
+            endpoints={"chat_url": "https://example.com/chat"},
+            manifest={
+                "capabilities": ["chat"],
+                "local_connector": {
+                    "required": True,
+                    "agent_computer_id": "computer-macbook",
+                    "agent_computer_capability": "external_agent_proxy",
+                },
+            },
+        )
+
+    connector = created["local_connector"]
+    assert connector["binding_state"] == "bound"
+    assert connector["bound"] is True
+    assert connector["agent_computer_label"] == "Mansur MacBook"
+    assert connector["attachment_kind"] == "local_companion"
+    assert connector["runtime_id"] == "gateway-macbook"
+    assert connector["proxy_available"] is False
+
+
+@pytest.mark.anyio
+async def test_local_connector_required_chat_fails_closed_until_proxy_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        service.runtime_attachment_service,
+        "list_workspace_runtime_attachments",
+        _fake_runtime_attachments,
+    )
+    http_client = _FakeHttpClient()
+    with patch("server_modules.control_plane_repository._scoped_connection", new=_fake_scoped_connection(None)):
+        created = await service.create_connected_external_agent(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            name="Bound local chat agent",
+            provider_kind="custom",
+            endpoints={"chat_url": "https://example.com/chat"},
+            manifest={
+                "capabilities": ["chat"],
+                "local_connector": {
+                    "required": True,
+                    "agent_computer_id": "computer-macbook",
+                    "agent_computer_capability": "external_agent_proxy",
+                },
+            },
+        )
+        service.LOCAL_STORE[("tenant-1", "ws-1", created["id"])] = {
+            **created,
+            "connection_state": "verified",
+            "trust_state": "verified",
+        }
+
+        with pytest.raises(ValueError, match="proxy is not enabled"):
+            await service.chat_with_connected_external_agent(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                external_agent_id=created["id"],
+                message="hello",
+                http_client=http_client,
+            )
+
+    assert http_client.posts == []
 
 
 @pytest.mark.anyio

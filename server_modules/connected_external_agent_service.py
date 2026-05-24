@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from server_modules import control_plane_repository
 from server_modules import provider_profiles as provider_profiles_service
+from server_modules import runtime_attachment_service
 
 
 SURFACE_KIND_CONNECTED_EXTERNAL_AGENT = "connected_external_agent"
@@ -176,6 +177,7 @@ MAX_SECTION_RESPONSE_BYTES = 256 * 1024
 MAX_CHAT_MESSAGE_CHARS = 16_000
 MAX_RECENT_MESSAGES = 16
 MAX_RECENT_MESSAGE_CHARS = 4_000
+LOCAL_CONNECTOR_PROXY_AVAILABLE = False
 LOCAL_STORE: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 
 
@@ -524,13 +526,24 @@ def _normalize_surface_sections(value: Any, capabilities: Dict[str, Any]) -> Lis
 def _normalize_local_connector(value: Any) -> Dict[str, Any]:
     payload = _coerce_dict(value)
     if not payload:
-        return {"required": False}
+        return {
+            "required": False,
+            "mode": "none",
+            "binding_state": "not_required",
+            "bound": False,
+            "proxy_available": False,
+        }
     required = bool(payload.get("required"))
+    capability = _read_string(payload.get("agent_computer_capability"))[:120] or None
     return {
         "required": required,
+        "mode": "agent_computer_proxy" if required else "none",
         "reason": _read_string(payload.get("reason"))[:240] or None,
         "agent_computer_id": _read_string(payload.get("agent_computer_id"))[:160] or None,
-        "agent_computer_capability": _read_string(payload.get("agent_computer_capability"))[:120] or None,
+        "agent_computer_capability": capability,
+        "binding_state": "missing_agent_computer" if required else "not_required",
+        "bound": False,
+        "proxy_available": False,
     }
 
 
@@ -556,6 +569,208 @@ def _normalize_manifest_projection(payload: Dict[str, Any]) -> Dict[str, Any]:
         "object_types": objects,
         "local_connector": _normalize_local_connector(payload.get("local_connector")),
     }
+
+
+def _local_connector_attachment_candidates(attachment: Dict[str, Any]) -> set[str]:
+    identity = _coerce_dict(attachment.get("gateway_identity"))
+    candidates = {
+        attachment.get("id"),
+        attachment.get("attachment_id"),
+        attachment.get("runtime_profile_id"),
+        attachment.get("runtime_node_id"),
+        attachment.get("runtime_id"),
+        attachment.get("machine_id"),
+        attachment.get("instance_id"),
+        identity.get("gateway_id"),
+        identity.get("device_id"),
+    }
+    return {_read_string(item) for item in candidates if _read_string(item)}
+
+
+def _local_connector_state(
+    connector: Dict[str, Any],
+    *,
+    state: str,
+    attachment: Optional[Dict[str, Any]] = None,
+    message: Optional[str] = None,
+    gate_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    payload = {
+        **connector,
+        "binding_state": state,
+        "bound": state == "bound",
+        "proxy_available": bool(LOCAL_CONNECTOR_PROXY_AVAILABLE and state == "bound"),
+    }
+    if message:
+        payload["binding_message"] = message[:240]
+    if gate_reason:
+        payload["gate_reason"] = gate_reason[:120]
+    if attachment:
+        identity = _coerce_dict(attachment.get("gateway_identity"))
+        payload.update({
+            "agent_computer_label": _read_string(attachment.get("label"), "Agent Computer"),
+            "attachment_id": _read_string(attachment.get("attachment_id")) or None,
+            "attachment_kind": _read_string(attachment.get("attachment_kind")) or None,
+            "runtime_attachment_id": _read_string(attachment.get("attachment_id")) or None,
+            "runtime_profile_id": _read_string(attachment.get("runtime_profile_id")) or None,
+            "runtime_node_id": _read_string(attachment.get("runtime_node_id")) or None,
+            "runtime_id": _read_string(attachment.get("runtime_id")) or None,
+            "machine_id": _read_string(attachment.get("machine_id")) or None,
+            "gateway_id": _read_string(identity.get("gateway_id")) or None,
+            "device_id": _read_string(identity.get("device_id")) or None,
+        })
+    return payload
+
+
+def _local_connector_gate_state_from_error(reason: str) -> str:
+    lowered = _read_string(reason).lower()
+    if "revoked" in lowered:
+        return "revoked"
+    if "offline" in lowered:
+        return "offline"
+    if "unhealthy" in lowered:
+        return "unhealthy"
+    if "capability" in lowered:
+        return "missing_capability"
+    if "scope" in lowered:
+        return "scope_mismatch"
+    if "owner_approved" in lowered or "not_owner" in lowered:
+        return "unapproved"
+    return "unavailable"
+
+
+def _local_companion_binding_state(
+    *,
+    attachment: Dict[str, Any],
+    workspace_id: str,
+    required_capability: Optional[str],
+) -> Dict[str, Any]:
+    connector_workspace = _read_string(attachment.get("workspace_id"))
+    if connector_workspace and connector_workspace != _read_string(workspace_id):
+        return {"state": "scope_mismatch", "message": "Agent Computer is outside this workspace."}
+    identity = _coerce_dict(attachment.get("gateway_identity"))
+    status = _read_string(attachment.get("status")).lower()
+    control_state = _read_string(attachment.get("control_state")).lower()
+    trust_state = _read_string(identity.get("device_trust_state")).lower()
+    if status == "revoked" or control_state == "revoked" or trust_state == "revoked":
+        return {"state": "revoked", "message": "Agent Computer is revoked."}
+    if not bool(attachment.get("online")):
+        return {"state": "offline", "message": "Agent Computer is offline."}
+    if not bool(attachment.get("healthy")):
+        return {"state": "unhealthy", "message": "Agent Computer is unhealthy."}
+    if required_capability:
+        available = {
+            _read_string(item).lower()
+            for item in list(attachment.get("capabilities") or [])
+            if _read_string(item)
+        }
+        if required_capability.lower() not in available:
+            return {"state": "missing_capability", "message": f"Agent Computer is missing {required_capability}."}
+    return {"state": "bound", "message": "Agent Computer is bound, but private proxying is not enabled yet."}
+
+
+async def _resolve_local_connector_binding(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    connector: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not bool(connector.get("required")):
+        return _local_connector_state(connector, state="not_required")
+    requested_agent_computer_id = _read_string(connector.get("agent_computer_id"))
+    if not requested_agent_computer_id:
+        return _local_connector_state(
+            connector,
+            state="missing_agent_computer",
+            message="Choose an Agent Computer before this connected agent can use private endpoints.",
+        )
+    required_capability = _read_string(connector.get("agent_computer_capability")) or None
+    try:
+        inventory = await runtime_attachment_service.list_workspace_runtime_attachments(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        )
+    except Exception as error:
+        return _local_connector_state(
+            connector,
+            state="unavailable",
+            message="Agent Computer inventory is unavailable.",
+            gate_reason=type(error).__name__,
+        )
+    attachments = [
+        _coerce_dict(item)
+        for item in _coerce_list(_coerce_dict(inventory).get("attachments"))
+        if _coerce_dict(item)
+    ]
+    selected = next(
+        (
+            attachment
+            for attachment in attachments
+            if requested_agent_computer_id in _local_connector_attachment_candidates(attachment)
+        ),
+        None,
+    )
+    if selected is None:
+        return _local_connector_state(
+            connector,
+            state="not_found",
+            message="The requested Agent Computer is not registered in this workspace.",
+        )
+    attachment_kind = _read_string(selected.get("attachment_kind"))
+    if attachment_kind == "self_hosted_business_node":
+        try:
+            runtime_attachment_service.ensure_self_hosted_node_gate(
+                attachment=selected,
+                workspace_id=workspace_id,
+                required_capabilities=[required_capability] if required_capability else None,
+            )
+        except runtime_attachment_service.RuntimeAttachmentSelectionError as error:
+            return _local_connector_state(
+                connector,
+                state=_local_connector_gate_state_from_error(error.reason),
+                attachment=selected,
+                message=error.message,
+                gate_reason=error.reason,
+            )
+        return _local_connector_state(
+            connector,
+            state="bound",
+            attachment=selected,
+            message="Agent Computer is bound, but private proxying is not enabled yet.",
+        )
+    if attachment_kind == "local_companion":
+        gate = _local_companion_binding_state(
+            attachment=selected,
+            workspace_id=workspace_id,
+            required_capability=required_capability,
+        )
+        return _local_connector_state(
+            connector,
+            state=_read_string(gate.get("state"), "unavailable"),
+            attachment=selected,
+            message=_read_string(gate.get("message")) or None,
+        )
+    return _local_connector_state(
+        connector,
+        state="unsupported_attachment_kind",
+        attachment=selected,
+        message="Only local companion and self-hosted Agent Computers can proxy private external agents.",
+    )
+
+
+async def _manifest_projection_for_workspace(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    manifest: Dict[str, Any],
+) -> Dict[str, Any]:
+    projection = _normalize_manifest_projection(manifest)
+    projection["local_connector"] = await _resolve_local_connector_binding(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        connector=_coerce_dict(projection.get("local_connector")),
+    )
+    return projection
 
 
 def _sanitize_manifest(value: Any) -> Dict[str, Any]:
@@ -867,21 +1082,22 @@ def _build_metadata(
     secret_ref: Optional[str],
     connection_state: str,
     existing: Optional[Dict[str, Any]] = None,
+    projection: Optional[Dict[str, Any]] = None,
     last_error: Optional[str] = None,
 ) -> Dict[str, Any]:
     current = _coerce_dict(existing)
     auth_payload = _coerce_dict(current.get("auth"))
     if secret_ref is not None:
         auth_payload = {"secret_ref": _read_string(secret_ref)}
-    projection = _normalize_manifest_projection(manifest)
+    resolved_projection = _coerce_dict(projection) or _coerce_dict(current.get("manifest_projection")) or _normalize_manifest_projection(manifest)
     return {
         **current,
         "surface_kind": SURFACE_KIND_CONNECTED_EXTERNAL_AGENT,
         "provider_kind": provider_kind,
         "endpoint_refs": dict(endpoints),
         "auth": auth_payload,
-        "capability_manifest": projection["capability_manifest"],
-        "manifest_projection": projection,
+        "capability_manifest": resolved_projection["capability_manifest"],
+        "manifest_projection": resolved_projection,
         "connection_state": connection_state,
         "trust_state": connection_state,
         "last_error": last_error,
@@ -909,6 +1125,11 @@ async def create_connected_external_agent(
     normalized_endpoints = _normalize_endpoints(endpoints or {})
     normalized_endpoints = {**normalized_endpoints, **_manifest_endpoints(normalized_manifest)}
     normalized_endpoints = await _validate_endpoint_map_dns(normalized_endpoints)
+    projection = await _manifest_projection_for_workspace(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        manifest=normalized_manifest,
+    )
     install_id = f"extagent_{uuid.uuid4().hex}"
     definition_id = f"extdef_{uuid.uuid4().hex}"
     version_id = f"extver_{uuid.uuid4().hex}"
@@ -919,6 +1140,7 @@ async def create_connected_external_agent(
         manifest=normalized_manifest,
         secret_ref=secret_ref,
         connection_state=CONNECTION_STATE_UNVERIFIED,
+        projection=projection,
     )
 
     async with control_plane_repository._scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
@@ -1052,6 +1274,11 @@ async def update_connected_external_agent(
         next_endpoints = _normalize_endpoints(endpoints)
     next_endpoints = {**next_endpoints, **_manifest_endpoints(next_manifest)}
     next_endpoints = await _validate_endpoint_map_dns(next_endpoints)
+    projection = await _manifest_projection_for_workspace(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        manifest=next_manifest,
+    )
     endpoint_changed = next_endpoints != (current.get("endpoint_refs") or {})
     next_connection_state = CONNECTION_STATE_UNVERIFIED if endpoint_changed else _read_string(current.get("connection_state"), CONNECTION_STATE_UNVERIFIED)
     metadata = _build_metadata(
@@ -1061,12 +1288,12 @@ async def update_connected_external_agent(
         secret_ref=secret_ref,
         connection_state=next_connection_state,
         existing=current,
+        projection=projection,
     )
     now = _now_iso()
     async with control_plane_repository._scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         _require_control_plane_or_local_store(connection)
         if connection is None:
-            projection = _normalize_manifest_projection(next_manifest)
             updated = {
                 **current,
                 "name": next_name,
@@ -1193,6 +1420,11 @@ async def refresh_connected_external_agent_manifest(
         secret_ref=current.get("secret_ref"),
         connection_state=CONNECTION_STATE_VERIFIED,
         existing=current,
+        projection=await _manifest_projection_for_workspace(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            manifest=manifest_payload,
+        ),
     )
     metadata["last_manifest_refresh_at"] = _now_iso()
     metadata["handshake_status"] = "verified"
@@ -1201,7 +1433,7 @@ async def refresh_connected_external_agent_manifest(
     async with control_plane_repository._scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         _require_control_plane_or_local_store(connection)
         if connection is None:
-            projection = _normalize_manifest_projection(manifest_payload)
+            projection = _coerce_dict(metadata.get("manifest_projection"))
             updated = {
                 **current,
                 "manifest": manifest_payload,
@@ -1375,6 +1607,17 @@ def _validate_section_payload(payload: Dict[str, Any], *, section: Dict[str, Any
     }
 
 
+def _ensure_local_connector_proxy_ready(agent: Dict[str, Any]) -> None:
+    connector = _coerce_dict(agent.get("local_connector"))
+    if not bool(connector.get("required")):
+        return
+    binding_state = _read_string(connector.get("binding_state"), "missing_agent_computer")
+    if binding_state != "bound":
+        raise ValueError(f"External agent local connector is not ready: {binding_state}.")
+    if not bool(connector.get("proxy_available")):
+        raise ValueError("External agent local connector proxy is not enabled yet.")
+
+
 async def get_connected_external_agent_section_data(
     *,
     tenant_id: str,
@@ -1392,6 +1635,7 @@ async def get_connected_external_agent_section_data(
         raise ValueError("External agent must be verified before section data is available.")
     if _read_string(agent.get("status")) == CONNECTION_STATE_REVOKED or not bool(agent.get("enabled", True)):
         raise ValueError("External agent is disconnected.")
+    _ensure_local_connector_proxy_ready(agent)
     section = _find_surface_section(agent, section_id)
     capability_required = _read_string(section.get("capability_required"))
     capabilities = _coerce_dict(agent.get("capability_manifest"))
@@ -1459,6 +1703,7 @@ async def chat_with_connected_external_agent(
         raise ValueError("External agent must be verified before private chat is available.")
     if _read_string(agent.get("status")) == CONNECTION_STATE_REVOKED or not bool(agent.get("enabled", True)):
         raise ValueError("External agent is disconnected.")
+    _ensure_local_connector_proxy_ready(agent)
     capabilities = _coerce_dict(agent.get("capability_manifest"))
     if not bool(capabilities.get("chat")):
         raise ValueError("External agent manifest does not expose private chat.")

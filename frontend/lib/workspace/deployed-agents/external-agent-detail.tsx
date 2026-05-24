@@ -131,6 +131,31 @@ function externalItemSummary(item: Record<string, unknown>): string {
   return parts.join(' · ');
 }
 
+function localConnectorStatusLabel(localConnector: Record<string, unknown>): string {
+  if (!localConnector.required) {
+    return 'Not required';
+  }
+  const state = readString(localConnector.binding_state, 'missing_agent_computer');
+  if (state === 'bound') {
+    return readString(localConnector.agent_computer_label, 'Bound');
+  }
+  return humanizeToken(state, 'Needs Agent Computer');
+}
+
+function localConnectorStatusHint(localConnector: Record<string, unknown>): string {
+  if (!localConnector.required) {
+    return 'Public HTTPS proxy path';
+  }
+  const state = readString(localConnector.binding_state, 'missing_agent_computer');
+  if (state === 'bound' && !localConnector.proxy_available) {
+    return 'Bound, private proxy disabled';
+  }
+  if (readString(localConnector.binding_message)) {
+    return readString(localConnector.binding_message);
+  }
+  return 'Private endpoints require Agent Computer';
+}
+
 export const ConnectedExternalAgentDetailView = memo(({
   externalAgent,
   overlayTab,
@@ -449,8 +474,39 @@ export const ConnectedExternalAgentDetailView = memo(({
                       <AppSurfaceStat label="Chat" value={hasChat ? 'Available' : 'Not exposed'} hint="Manifest chat capability" />
                       <AppSurfaceStat label="Endpoint" value={readString(endpointRefs.chat_url) ? 'Backend proxy' : 'Missing'} hint="External endpoint never called from browser" />
                       <AppSurfaceStat label="Protocols" value={protocols.length > 0 ? protocols.join(', ') : 'Custom HTTP'} hint="Adapter hints only" />
-                      <AppSurfaceStat label="Local connector" value={localConnector.required ? 'Required' : 'Not required'} hint="Private endpoints require Agent Computer" />
+                      <AppSurfaceStat
+                        label="Agent Computer"
+                        value={localConnectorStatusLabel(localConnector)}
+                        hint={localConnectorStatusHint(localConnector)}
+                      />
                     </AppSurfaceStatGrid>
+                    {localConnector.required ? (
+                      <ListDetailPanel
+                        className="studio-panel studio-panel--detail"
+                        eyebrow="Local Connector"
+                        title={readString(localConnector.agent_computer_label, 'Agent Computer required')}
+                        subtitle="Localhost and private-network endpoints stay blocked unless they are routed through a verified Agent Computer connector."
+                      >
+                        <div className="studio-agent-overview__grid">
+                          <div className="studio-agent-overview__card">
+                            <div className="studio-agent-overview__card-icon"><ShieldCheck size={15} aria-hidden="true" /></div>
+                            <div>
+                              <strong>{humanizeToken(localConnector.binding_state, 'Needs Agent Computer')}</strong>
+                              <span>{readString(localConnector.binding_message, 'Bind an Agent Computer before private local runtime access is possible.')}</span>
+                              <span>{localConnector.proxy_available ? 'Private proxy enabled' : 'Private proxy not enabled yet'}</span>
+                            </div>
+                          </div>
+                          <div className="studio-agent-overview__card">
+                            <div className="studio-agent-overview__card-icon"><Cable size={15} aria-hidden="true" /></div>
+                            <div>
+                              <strong>{humanizeToken(localConnector.mode, 'Agent Computer proxy')}</strong>
+                              <span>{readString(localConnector.agent_computer_capability, 'No extra capability declared')}</span>
+                              <span>{readString(localConnector.attachment_kind, 'No runtime attachment selected')}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </ListDetailPanel>
+                    ) : null}
                     <ListDetailPanel
                       className="studio-panel studio-panel--detail"
                       eyebrow="Capabilities"

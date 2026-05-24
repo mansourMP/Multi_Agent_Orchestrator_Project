@@ -30,9 +30,13 @@ Provider names such as OpenClaw, NemoClaw, Hermes, A2A, MCP, laptop-local agents
   },
   "local_connector": {
     "required": false,
+    "mode": "none",
     "reason": null,
     "agent_computer_id": null,
-    "agent_computer_capability": null
+    "agent_computer_capability": null,
+    "binding_state": "not_required",
+    "bound": false,
+    "proxy_available": false
   },
   "surface_sections": [
     {
@@ -62,6 +66,34 @@ Provider names such as OpenClaw, NemoClaw, Hermes, A2A, MCP, laptop-local agents
 - Manifest claims are untrusted until refresh and health verification succeed.
 - Surface sections are schema-rendered by known Studio components. Arbitrary HTML or JavaScript is not allowed.
 - Public/customer send remains disabled for connected external agents.
+
+## Local Connector Binding
+
+`local_connector` describes a future Agent Computer/private endpoint route. It is
+binding metadata, not a direct browser or backend raw-localhost exception.
+
+When `required` is `true`, the backend resolves `agent_computer_id` against the
+workspace runtime attachment inventory and records a fail-closed `binding_state`.
+Supported states are:
+
+- `not_required`
+- `missing_agent_computer`
+- `not_found`
+- `bound`
+- `offline`
+- `unhealthy`
+- `revoked`
+- `unapproved`
+- `missing_capability`
+- `scope_mismatch`
+- `unsupported_attachment_kind`
+- `unavailable`
+
+`bound` means Studio found a matching verified local companion or self-hosted
+Agent Computer. It does not mean private proxying is enabled. In this pass,
+`proxy_available` remains `false`, and chat or section-data calls for
+local-connector-required agents fail closed until the Agent Computer relay is
+implemented.
 
 ## Surface Sections
 

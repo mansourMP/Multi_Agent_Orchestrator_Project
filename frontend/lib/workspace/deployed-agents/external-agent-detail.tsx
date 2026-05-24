@@ -6,6 +6,7 @@ import {
   BookOpen,
   Brain,
   Cable,
+  FileText,
   LayoutDashboard,
   MessageSquareText,
   Route,
@@ -32,6 +33,16 @@ export type ExternalAgentChatMessage = {
 
 export type ExternalAgentChatSessionState = {
   messages: ExternalAgentChatMessage[];
+};
+
+type ExternalSurfaceSection = {
+  id: string;
+  title: string;
+  icon: string;
+  capabilityRequired: string;
+  dataEndpointRef: string;
+  actionsEndpointRef: string;
+  displayKind: string;
 };
 
 export function createEmptyExternalAgentChatSession(): ExternalAgentChatSessionState {
@@ -68,6 +79,28 @@ function formatOptionalTimestamp(value: unknown, fallback: string): string {
   return readString(value) ? formatTimestamp(value) : fallback;
 }
 
+function normalizeSurfaceSections(value: unknown): ExternalSurfaceSection[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => {
+    const record = readRecord(item);
+    return {
+      id: readString(record.id),
+      title: readString(record.title, 'External section'),
+      icon: readString(record.icon, 'key_value'),
+      capabilityRequired: readString(record.capability_required),
+      dataEndpointRef: readString(record.data_endpoint_ref),
+      actionsEndpointRef: readString(record.actions_endpoint_ref),
+      displayKind: readString(record.display_kind, 'key_value'),
+    };
+  }).filter((item) => item.id && item.dataEndpointRef);
+}
+
+function externalOwnershipLabel(value: unknown): string {
+  return readString(value, 'external') === 'external' ? 'External-owned' : humanizeToken(value, 'External-owned');
+}
+
 export const ConnectedExternalAgentDetailView = memo(({
   externalAgent,
   overlayTab,
@@ -89,6 +122,8 @@ export const ConnectedExternalAgentDetailView = memo(({
   const [isSending, setIsSending] = useState(false);
   const [isRefreshingManifest, setIsRefreshingManifest] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [loadingSectionIds, setLoadingSectionIds] = useState<Set<string>>(() => new Set());
+  const [sectionPayloads, setSectionPayloads] = useState<Record<string, Record<string, unknown>>>({});
   const [localError, setLocalError] = useState<string | null>(null);
 
   const externalAgentId = readString(externalAgent?.id);
@@ -97,7 +132,15 @@ export const ConnectedExternalAgentDetailView = memo(({
   const connectionState = readString(externalAgent?.connection_state, 'unverified').toLowerCase();
   const trustState = readString(externalAgent?.trust_state, connectionState).toLowerCase();
   const endpointRefs = readRecord(externalAgent?.endpoint_refs);
+  const localConnector = readRecord(externalAgent?.local_connector);
   const capabilityManifest = readRecord(externalAgent?.capability_manifest);
+  const externalSections = normalizeSurfaceSections(externalAgent?.surface_sections);
+  const objectTypes = Array.isArray(externalAgent?.object_types)
+    ? externalAgent.object_types.map((item) => humanizeToken(item, '')).filter(Boolean)
+    : [];
+  const protocols = Array.isArray(externalAgent?.protocols)
+    ? externalAgent.protocols.map((item) => humanizeToken(readRecord(item).kind, '')).filter(Boolean)
+    : [];
   const hasChat = capabilityEnabled(capabilityManifest, 'chat');
   const isVerified = connectionState === 'verified';
   const isRevoked = connectionState === 'revoked' || externalAgent?.enabled === false;
@@ -111,6 +154,9 @@ export const ConnectedExternalAgentDetailView = memo(({
     }
     if (tab.id === 'tools') {
       return capabilityEnabled(capabilityManifest, 'actions') || capabilityEnabled(capabilityManifest, 'tools');
+    }
+    if (tab.id === 'analytics') {
+      return true;
     }
     return true;
   }), [capabilityManifest]);
@@ -193,6 +239,54 @@ export const ConnectedExternalAgentDetailView = memo(({
     }
   }
 
+  async function loadExternalSection(section: ExternalSurfaceSection) {
+    if (!externalAgentId || !section.id || loadingSectionIds.has(section.id)) {
+      return;
+    }
+    setLocalError(null);
+    setLoadingSectionIds((current) => new Set([...current, section.id]));
+    try {
+      const payload = await services.client.getConnectedExternalAgentSectionData({
+        externalAgentId,
+        sectionId: section.id,
+      });
+      setSectionPayloads((current) => ({
+        ...current,
+        [section.id]: readRecord(payload),
+      }));
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : 'External section could not be loaded.');
+    } finally {
+      setLoadingSectionIds((current) => {
+        const next = new Set(current);
+        next.delete(section.id);
+        return next;
+      });
+    }
+  }
+
+  function renderSectionItems(payload: Record<string, unknown>) {
+    const items = Array.isArray(payload.items) ? payload.items.map(readRecord) : [];
+    if (items.length === 0) {
+      return <EmptyPanel title="No external records" body="This external section returned no displayable records." />;
+    }
+    return (
+      <div className="studio-agent-overview__grid">
+        {items.slice(0, 12).map((item, index) => (
+          <div key={readString(item.id, `external-item-${index}`)} className="studio-agent-overview__card">
+            <div className="studio-agent-overview__card-icon"><FileText size={15} aria-hidden="true" /></div>
+            <div>
+              <strong>{readString(item.title || item.name || item.external_id, 'External record')}</strong>
+              <span>{externalOwnershipLabel(item.ownership)} · {humanizeToken(item.object_type, 'External object')}</span>
+              {readString(item.status) ? <span>{humanizeToken(item.status)}</span> : null}
+              {readString(item.summary) ? <span>{readString(item.summary)}</span> : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   if (!externalAgent) {
     return (
       <div className="studio-agent-detail-empty" aria-label="Connected agent detail">
@@ -263,6 +357,7 @@ export const ConnectedExternalAgentDetailView = memo(({
                         <p>Connected agents start private, approval-gated, and revocable. Public customer send is not enabled here.</p>
                         <div className="studio-agent-overview__chips" aria-label={`${displayName} boundary`}>
                           <span>{AGENT_STUDIO_OBJECT_LABELS.connected_external_agent}</span>
+                          <span>External-owned</span>
                           <span>{AGENT_VISIBILITY_LABELS.private_workspace}</span>
                           <span>{providerLabel}</span>
                         </div>
@@ -273,6 +368,8 @@ export const ConnectedExternalAgentDetailView = memo(({
                       <AppSurfaceStat label="Trust state" value={humanizeToken(trustState, 'Unverified')} hint="Verified after manifest refresh" />
                       <AppSurfaceStat label="Chat" value={hasChat ? 'Available' : 'Not exposed'} hint="Manifest chat capability" />
                       <AppSurfaceStat label="Endpoint" value={readString(endpointRefs.chat_url) ? 'Backend proxy' : 'Missing'} hint="External endpoint never called from browser" />
+                      <AppSurfaceStat label="Protocols" value={protocols.length > 0 ? protocols.join(', ') : 'Custom HTTP'} hint="Adapter hints only" />
+                      <AppSurfaceStat label="Local connector" value={localConnector.required ? 'Required' : 'Not required'} hint="Private endpoints require Agent Computer" />
                     </AppSurfaceStatGrid>
                     <ListDetailPanel
                       className="studio-panel studio-panel--detail"
@@ -286,6 +383,29 @@ export const ConnectedExternalAgentDetailView = memo(({
                         </div>
                       ) : (
                         <EmptyPanel title="No capabilities verified" body="Refresh the manifest after connecting the endpoint." />
+                      )}
+                    </ListDetailPanel>
+                    <ListDetailPanel
+                      className="studio-panel studio-panel--detail"
+                      eyebrow="External Sections"
+                      title="Provider-owned surfaces"
+                      subtitle="These sections are schema-rendered by Studio. No external frontend code runs here."
+                    >
+                      {externalSections.length > 0 ? (
+                        <div className="studio-agent-overview__grid">
+                          {externalSections.map((section) => (
+                            <div key={section.id} className="studio-agent-overview__card">
+                              <div className="studio-agent-overview__card-icon"><FileText size={15} aria-hidden="true" /></div>
+                              <div>
+                                <strong>{section.title}</strong>
+                                <span>{humanizeToken(section.displayKind)} · {humanizeToken(section.dataEndpointRef)}</span>
+                                {section.capabilityRequired ? <span>Requires {humanizeToken(section.capabilityRequired)}</span> : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <EmptyPanel title="No custom sections declared" body="This connected agent has not exposed provider-owned Studio sections." />
                       )}
                     </ListDetailPanel>
                   </div>
@@ -416,7 +536,42 @@ export const ConnectedExternalAgentDetailView = memo(({
                     <AppSurfaceStat label="Last manifest refresh" value={formatOptionalTimestamp(externalAgent.last_manifest_refresh_at, 'Not refreshed')} hint="Latest backend handshake" />
                     <AppSurfaceStat label="Status" value={humanizeToken(connectionState, 'Unverified')} hint="Current connection state" />
                     <AppSurfaceStat label="Public send" value="Disabled" hint="Customer channels come later" />
+                    <AppSurfaceStat label="External objects" value={objectTypes.length > 0 ? String(objectTypes.length) : 'None'} hint={objectTypes.length > 0 ? objectTypes.join(', ') : 'No object types declared'} />
                   </AppSurfaceStatGrid>
+                  <div className="app-stack-3">
+                    {externalSections.length > 0 ? externalSections.map((section) => {
+                      const payload = sectionPayloads[section.id];
+                      const isLoading = loadingSectionIds.has(section.id);
+                      return (
+                        <ListDetailPanel
+                          key={section.id}
+                          className="studio-panel studio-panel--detail"
+                          eyebrow={humanizeToken(section.displayKind)}
+                          title={section.title}
+                          subtitle="External-owned records loaded through the backend proxy."
+                          actions={(
+                            <AppButton
+                              type="button"
+                              tone="secondary"
+                              onClick={() => { void loadExternalSection(section); }}
+                              disabled={isLoading || !isVerified || isRevoked}
+                            >
+                              {isLoading ? 'Loading...' : payload ? 'Refresh' : 'Load'}
+                            </AppButton>
+                          )}
+                        >
+                          {payload ? renderSectionItems(payload) : (
+                            <EmptyPanel
+                              title="Section not loaded"
+                              body={isVerified ? 'Load this section to inspect external-owned records.' : 'Verify the connection before loading provider-owned records.'}
+                            />
+                          )}
+                        </ListDetailPanel>
+                      );
+                    }) : (
+                      <EmptyPanel title="No external sections" body="Events, logs, artifacts, and generated outputs appear here when the manifest exposes them." />
+                    )}
+                  </div>
                 </ListDetailPanel>
               </MotionTabPanel>
             )}

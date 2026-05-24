@@ -94,6 +94,47 @@ class _HealthHandshakeClient:
         self.closed = True
 
 
+class _SectionDataClient:
+    def __init__(self) -> None:
+        self.gets: list[dict[str, Any]] = []
+
+    async def get(self, url: str, headers: dict[str, str] | None = None) -> _FakeResponse:
+        self.gets.append({"url": url, "headers": headers})
+        if url == "https://example.com/events":
+            return _FakeResponse({
+                "display_kind": "timeline",
+                "object_type": "external_agent_event",
+                "items": [
+                    {
+                        "id": "evt-1",
+                        "title": "Workflow finished",
+                        "status": "ok",
+                        "access_token": "must-not-leak",
+                    }
+                ],
+            })
+        return _FakeResponse({
+            "id": "external-sections",
+            "schema_version": service.EXTERNAL_AGENT_MANIFEST_SCHEMA_VERSION,
+            "capabilities": ["chat", "events"],
+            "endpoints": {
+                "chat": "https://example.com/chat",
+                "events": "https://example.com/events",
+            },
+            "surface_sections": [
+                {
+                    "id": "run_history",
+                    "title": "Run History",
+                    "icon": "workflows",
+                    "capability_required": "events",
+                    "data_endpoint_ref": "events",
+                    "display_kind": "timeline",
+                }
+            ],
+            "objects": ["external_agent_event"],
+        })
+
+
 @pytest.fixture(autouse=True)
 def _reset_local_store():
     service._reset_for_tests()
@@ -185,6 +226,45 @@ async def test_refresh_manifest_enables_private_chat_through_backend_proxy() -> 
     assert http_client.posts[0]["url"] == "https://example.com/external/chat"
     assert http_client.posts[0]["json"]["channel"] == "private_workspace"
     assert http_client.posts[0]["json"]["agent_id"] == created["id"]
+
+
+@pytest.mark.anyio
+async def test_manifest_surface_sections_fetch_external_owned_objects_through_proxy() -> None:
+    http_client = _SectionDataClient()
+    with patch("server_modules.control_plane_repository._scoped_connection", new=_fake_scoped_connection(None)):
+        created = await service.create_connected_external_agent(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            name="Custom section agent",
+            provider_kind="custom",
+            endpoints={"manifest_url": "https://example.com/manifest.json"},
+            manifest={},
+        )
+        refreshed = await service.refresh_connected_external_agent_manifest(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            external_agent_id=created["id"],
+            http_client=http_client,
+        )
+        section = await service.get_connected_external_agent_section_data(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            external_agent_id=created["id"],
+            section_id="run_history",
+            http_client=http_client,
+        )
+
+    assert refreshed["surface_sections"][0]["id"] == "run_history"
+    assert refreshed["object_types"] == ["external_agent_event"]
+    assert section["display_kind"] == "timeline"
+    assert section["section"]["title"] == "Run History"
+    assert section["items"][0]["ownership"] == "external"
+    assert section["items"][0]["object_type"] == "external_agent_event"
+    assert section["items"][0]["raw_redacted"]["access_token"] == "[redacted]"
+    assert [item["url"] for item in http_client.gets] == [
+        "https://example.com/manifest.json",
+        "https://example.com/events",
+    ]
 
 
 @pytest.mark.anyio

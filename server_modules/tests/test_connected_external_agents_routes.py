@@ -193,3 +193,39 @@ async def test_external_agent_chat_requires_owner_scope_and_uses_proxy_service(m
     assert response.json()["reply"] == "hello from external"
     assert captured["minimum_role"] == "owner"
     assert captured["external_agent_id"] == "extagent-1"
+
+
+@pytest.mark.anyio
+async def test_external_agent_section_data_requires_owner_scope_and_uses_proxy_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _build_app()
+    app.dependency_overrides[routes_studio.get_current_user] = _owner_user
+    captured: dict[str, object] = {}
+
+    def fake_enforce_workspace_access(current_user, workspace_id, minimum_role="viewer"):
+        captured["minimum_role"] = minimum_role
+        return workspace_id
+
+    async def fake_get_connected_external_agent_section_data(**kwargs):
+        captured.update(kwargs)
+        return {
+            "external_agent_id": kwargs["external_agent_id"],
+            "section": {"id": kwargs["section_id"], "title": "Agent Logs"},
+            "display_kind": "logs",
+            "items": [],
+        }
+
+    monkeypatch.setattr(routes_studio.auth_module, "enforce_workspace_access", fake_enforce_workspace_access)
+    monkeypatch.setattr(routes_studio.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    monkeypatch.setattr(routes_studio.connected_external_agent_service, "get_connected_external_agent_section_data", fake_get_connected_external_agent_section_data)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/studio/external-agents/extagent-1/sections/agent_logs",
+            params={"workspace_id": "ws-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["section"]["id"] == "agent_logs"
+    assert captured["minimum_role"] == "owner"
+    assert captured["external_agent_id"] == "extagent-1"
+    assert captured["section_id"] == "agent_logs"

@@ -501,15 +501,31 @@ test.describe('deployed agents surface', () => {
         endpoint_refs: {
           manifest_url: 'https://example.com/openclaw/manifest.json',
           chat_url: 'https://example.com/openclaw/chat',
+          events_url: 'https://example.com/openclaw/events',
         },
         capability_manifest: {
-          capabilities: ['chat', 'logs'],
+          capabilities: ['chat', 'logs', 'events'],
           chat: true,
+          events: true,
           logs: true,
         },
+        protocols: [{ kind: 'custom_http', version: '1' }],
+        local_connector: { required: false },
+        surface_sections: [
+          {
+            id: 'run_history',
+            title: 'Run History',
+            icon: 'workflows',
+            capability_required: 'events',
+            data_endpoint_ref: 'events_url',
+            actions_endpoint_ref: null,
+            display_kind: 'timeline',
+          },
+        ],
+        object_types: ['external_agent_event'],
         manifest: {
           id: 'openclaw-gateway',
-          capabilities: ['chat', 'logs'],
+          capabilities: ['chat', 'logs', 'events'],
         },
         last_manifest_refresh_at: '2026-04-13T12:00:00Z',
       },
@@ -765,6 +781,34 @@ test.describe('deployed agents surface', () => {
                 surface_kind: 'connected_external_agent',
                 endpoint: 'chat_url',
               },
+            }),
+          });
+          return;
+        }
+
+        if (segments.length === 6 && segments[4] === 'sections' && segments[5] === 'run_history' && method === 'GET') {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              external_agent_id: externalAgentId,
+              section: {
+                id: 'run_history',
+                title: 'Run History',
+                display_kind: 'timeline',
+              },
+              display_kind: 'timeline',
+              items: [
+                {
+                  id: 'extagent-openclaw:external_agent_event:evt-1',
+                  external_id: 'evt-1',
+                  object_type: 'external_agent_event',
+                  ownership: 'external',
+                  title: 'Workflow finished',
+                  status: 'ok',
+                  summary: 'OpenClaw completed a private owner workflow.',
+                },
+              ],
             }),
           });
           return;
@@ -1236,6 +1280,12 @@ test.describe('deployed agents surface', () => {
     await expect(surface).toContainText(/OpenClaw answered privately/i);
     expect(externalChatBodies).toHaveLength(1);
     expect(externalChatBodies[0].workspace_id).toBe('ws-1');
+    await page.getByRole('tab', { name: /results/i }).click();
+    await expect(surface).toContainText(/run history/i);
+    await page.getByRole('button', { name: /^load$/i }).click();
+    await expect(surface).toContainText(/workflow finished/i);
+    await expect(surface).toContainText(/external-owned/i);
+    await expect(surface).toContainText(/external agent event/i);
     await surface.locator('.studio-agents-nav__agent').filter({ hasText: /mansur macbook/i }).click();
     await expect(surface).toContainText(/runtime resource/i);
     await expect(surface).toContainText(/chat surface/i);

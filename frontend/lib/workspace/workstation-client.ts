@@ -329,6 +329,11 @@ export type ConnectedExternalAgentRecord = Record<string, unknown> & {
   endpoint_refs?: Record<string, unknown> | null;
   secret_ref?: string | null;
   capability_manifest?: Record<string, unknown> | null;
+  manifest_projection?: Record<string, unknown> | null;
+  surface_sections?: Record<string, unknown>[] | null;
+  object_types?: string[] | null;
+  protocols?: Record<string, unknown>[] | null;
+  local_connector?: Record<string, unknown> | null;
   manifest?: Record<string, unknown> | null;
   last_error?: string | null;
   last_manifest_refresh_at?: string | null;
@@ -792,6 +797,7 @@ export type WorkstationClientPaths = {
   studioExternalAgent: (externalAgentId: string) => string;
   studioExternalAgentRefreshManifest: (externalAgentId: string) => string;
   studioExternalAgentChatTurn: (externalAgentId: string) => string;
+  studioExternalAgentSection: (externalAgentId: string, sectionId: string) => string;
   studioExternalAgentDisconnect: (externalAgentId: string) => string;
   deployedAgentMemory: (deployedAgentId: string, limit?: number, offset?: number) => string;
   deployedAgentConversations: (deployedAgentId: string, limit?: number, offset?: number) => string;
@@ -1077,6 +1083,10 @@ export type WorkstationClient = {
     externalAgentId: string;
     message: string;
     recentMessages?: Record<string, unknown>[];
+  }) => Promise<Record<string, unknown> | null>;
+  getConnectedExternalAgentSectionData: (options: {
+    externalAgentId: string;
+    sectionId: string;
   }) => Promise<Record<string, unknown> | null>;
   disconnectConnectedExternalAgent: (options: {
     externalAgentId: string;
@@ -1534,6 +1544,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/studio/external-agents/${encodeURIComponent(externalAgentId)}/refresh-manifest`,
     studioExternalAgentChatTurn: (externalAgentId) =>
       `/api/studio/external-agents/${encodeURIComponent(externalAgentId)}/chat-turn`,
+    studioExternalAgentSection: (externalAgentId, sectionId) =>
+      `/api/studio/external-agents/${encodeURIComponent(externalAgentId)}/sections/${encodeURIComponent(sectionId)}${buildQueryString({ workspace_id: workspaceId })}`,
     studioExternalAgentDisconnect: (externalAgentId) =>
       `/api/studio/external-agents/${encodeURIComponent(externalAgentId)}/disconnect`,
     deployedAgentMemory: (deployedAgentId, limit = 50, offset = 0) =>
@@ -3148,6 +3160,11 @@ export function createWorkstationClient(
           }),
         },
         policy: WRITE_REQUEST_POLICY,
+      }),
+    getConnectedExternalAgentSectionData: ({ externalAgentId, sectionId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioExternalAgentSection(externalAgentId, sectionId),
+        policy: AGENT_STUDIO_READ_REQUEST_POLICY,
       }),
     disconnectConnectedExternalAgent: ({ externalAgentId }) =>
       requestJson<Record<string, unknown>>({

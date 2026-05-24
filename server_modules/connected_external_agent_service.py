@@ -4,6 +4,7 @@ import ipaddress
 import json
 import asyncio
 import os
+import re
 import socket
 import uuid
 from datetime import datetime, timezone
@@ -27,13 +28,16 @@ CONNECTION_STATE_VERIFIED = "verified"
 CONNECTION_STATE_ERROR = "error"
 CONNECTION_STATE_REVOKED = "revoked"
 
+EXTERNAL_AGENT_MANIFEST_SCHEMA_VERSION = "studio.external_agent.v1"
 ALLOWED_PROVIDER_KINDS = {"openclaw", "hermes", "nemoclaw", "custom"}
 EXTERNAL_AGENT_CAPABILITY_CHAT = "chat"
 ALLOWED_EXTERNAL_AGENT_CAPABILITIES = {
     "actions",
     "activity",
+    "artifacts",
     "channels",
     "chat",
+    "devices",
     "events",
     "health",
     "knowledge",
@@ -47,36 +51,122 @@ ALLOWED_EXTERNAL_AGENT_CAPABILITIES = {
     "nodes",
     "skills",
     "tools",
+    "voice_channels",
+    "workflows",
+}
+ALLOWED_PROTOCOL_KINDS = {"custom_http", "a2a", "mcp", "openclaw", "hermes", "nemoclaw"}
+ALLOWED_SECTION_DISPLAY_KINDS = {
+    "approval_queue",
+    "artifact_list",
+    "cards",
+    "key_value",
+    "logs",
+    "table",
+    "timeline",
+}
+ALLOWED_SECTION_ICONS = {
+    "actions",
+    "artifacts",
+    "channels",
+    "devices",
+    "key_value",
+    "logs",
+    "memory",
+    "nodes",
+    "skills",
+    "tools",
+    "workflows",
+}
+ALLOWED_EXTERNAL_OBJECT_TYPES = {
+    "external_agent_action",
+    "external_agent_artifact",
+    "external_agent_channel",
+    "external_agent_event",
+    "external_agent_knowledge_source",
+    "external_agent_memory_item",
+    "external_agent_node",
+    "external_agent_run_result",
+    "external_agent_skill",
+    "external_agent_tool",
+    "external_agent_workflow",
 }
 ALLOWED_MANIFEST_KEYS = {
+    "actions",
     "auth",
     "auth_mode",
     "auth_scheme",
     "auth_type",
+    "artifacts",
     "capabilities",
     "description",
     "endpoint_refs",
     "endpoints",
+    "events",
     "features",
     "health",
     "id",
+    "local_connector",
     "metadata",
     "model",
     "name",
+    "object_types",
+    "objects",
     "protocol",
     "protocol_version",
+    "protocols",
     "provider_kind",
     "runtime",
+    "schema_version",
+    "surface_sections",
     "summary",
+    "trust",
     "version",
 }
 ALLOWED_AUTH_MANIFEST_KEYS = {"auth_mode", "auth_scheme", "auth_type", "header_name", "scheme", "secret_ref", "type"}
-ALLOWED_ENDPOINT_KEYS = {"base_url", "manifest_url", "chat_url", "chat", "health_url", "health", "logs_url", "logs"}
+ALLOWED_ENDPOINT_KEYS = {
+    "actions",
+    "actions_url",
+    "artifacts",
+    "artifacts_url",
+    "base_url",
+    "channels",
+    "channels_url",
+    "chat",
+    "chat_url",
+    "events",
+    "events_url",
+    "health",
+    "health_url",
+    "knowledge",
+    "knowledge_url",
+    "logs",
+    "logs_url",
+    "manifest",
+    "manifest_url",
+    "memory",
+    "memory_url",
+    "mcp",
+    "mcp_url",
+    "nodes",
+    "nodes_url",
+    "runs",
+    "runs_url",
+    "skills",
+    "skills_url",
+    "tools",
+    "tools_url",
+    "voice_channels",
+    "voice_channels_url",
+    "workflows",
+    "workflows_url",
+}
+TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 SECRET_FIELD_MARKERS = {"secret", "token", "password", "api_key", "apikey", "authorization", "bearer"}
 SECRET_FIELD_ALLOWLIST = {"auth", "auth_type", "auth_scheme", "auth_mode", "authentication", "secret_ref"}
 SECRET_RESOLUTION_FIELDS = ["api_key", "access_token", "oauth_token", "token", "authorization", "auth_header", "header_value"]
 MAX_MANIFEST_RESPONSE_BYTES = 256 * 1024
 MAX_CHAT_RESPONSE_BYTES = 256 * 1024
+MAX_SECTION_RESPONSE_BYTES = 256 * 1024
 MAX_CHAT_MESSAGE_CHARS = 16_000
 MAX_RECENT_MESSAGES = 16
 MAX_RECENT_MESSAGE_CHARS = 4_000
@@ -163,6 +253,13 @@ def _normalize_capability_id(value: Any) -> str:
     return _read_string(value).lower().replace("-", "_").replace(" ", "_")
 
 
+def _normalize_token(value: Any, *, field_name: str) -> str:
+    token = _read_string(value).lower().replace("-", "_").replace(" ", "_")
+    if not token or not TOKEN_RE.match(token):
+        raise ValueError(f"{field_name} must be a lowercase token.")
+    return token
+
+
 def _normalize_capabilities(value: Any) -> Dict[str, Any]:
     payload = _coerce_dict(value)
     if not payload and isinstance(value, list):
@@ -192,7 +289,13 @@ def _normalize_capabilities(value: Any) -> Dict[str, Any]:
         "memory_read": "memory_read" in unique or "memory" in unique,
         "memory_write": "memory_write" in unique,
         "actions": "actions" in unique or "tools" in unique,
+        "artifacts": "artifacts" in unique,
+        "events": "events" in unique or "activity" in unique,
         "logs": "logs" in unique or "activity" in unique,
+        "nodes": "nodes" in unique or "devices" in unique,
+        "skills": "skills" in unique,
+        "tools": "tools" in unique,
+        "workflows": "workflows" in unique,
     }
 
 
@@ -260,6 +363,19 @@ def validate_public_https_url(value: Any, *, field_name: str = "endpoint", check
     return url
 
 
+def _canonical_endpoint_key(key: Any) -> str:
+    token = _normalize_token(key, field_name="endpoint_ref")
+    if token == "manifest":
+        return "manifest_url"
+    if token == "chat":
+        return "chat_url"
+    if token == "health":
+        return "health_url"
+    if not token.endswith("_url") and token != "base_url":
+        return f"{token}_url"
+    return token
+
+
 async def _validate_public_https_url_dns(value: Any, *, field_name: str = "endpoint") -> str:
     url = validate_public_https_url(value, field_name=field_name, check_dns=False)
     if not url:
@@ -272,23 +388,12 @@ async def _validate_public_https_url_dns(value: Any, *, field_name: str = "endpo
 
 def _normalize_endpoints(value: Any) -> Dict[str, str]:
     payload = _coerce_dict(value)
-    unexpected = sorted(set(payload.keys()) - ALLOWED_ENDPOINT_KEYS)
-    if unexpected:
-        raise ValueError(f"External agent endpoint refs include unsupported fields: {', '.join(unexpected)}.")
     normalized: Dict[str, str] = {}
-    for source_key, target_key in {
-        "base_url": "base_url",
-        "manifest_url": "manifest_url",
-        "chat_url": "chat_url",
-        "chat": "chat_url",
-        "health_url": "health_url",
-        "health": "health_url",
-        "logs_url": "logs_url",
-        "logs": "logs_url",
-    }.items():
-        if source_key not in payload:
-            continue
-        normalized[target_key] = validate_public_https_url(payload.get(source_key), field_name=source_key)
+    for source_key, source_value in payload.items():
+        target_key = _canonical_endpoint_key(source_key)
+        if target_key not in ALLOWED_ENDPOINT_KEYS:
+            raise ValueError(f"External agent endpoint ref is unsupported: {source_key}.")
+        normalized[target_key] = validate_public_https_url(source_value, field_name=str(source_key))
     if normalized.get("base_url") and not normalized.get("manifest_url"):
         normalized["manifest_url"] = urljoin(normalized["base_url"].rstrip("/") + "/", ".well-known/agent-manifest.json")
     return {key: value for key, value in normalized.items() if value}
@@ -307,6 +412,125 @@ def _manifest_endpoints(manifest: Any) -> Dict[str, str]:
     if not endpoints:
         endpoints = _coerce_dict(payload.get("endpoint_refs"))
     return _normalize_endpoints(endpoints)
+
+
+def _normalize_protocols(value: Any) -> List[Dict[str, str]]:
+    raw_items = _coerce_list(value)
+    if not raw_items:
+        return []
+    out: List[Dict[str, str]] = []
+    for item in raw_items:
+        payload = _coerce_dict(item)
+        kind = _normalize_token(payload.get("kind"), field_name="protocol.kind")
+        if kind not in ALLOWED_PROTOCOL_KINDS:
+            raise ValueError(f"External agent protocol is unsupported: {kind}.")
+        protocol: Dict[str, str] = {"kind": kind}
+        for key in ("version", "agent_card_ref", "server_ref"):
+            value = _read_string(payload.get(key))
+            if value:
+                protocol[key] = value[:240]
+        out.append(protocol)
+    return out
+
+
+def _normalize_external_object_types(value: Any) -> List[str]:
+    raw_items = _coerce_list(value)
+    if not raw_items:
+        return []
+    out: List[str] = []
+    for item in raw_items:
+        token = _normalize_token(item, field_name="external_object_type")
+        if token not in ALLOWED_EXTERNAL_OBJECT_TYPES:
+            raise ValueError(f"External object type is unsupported: {token}.")
+        out.append(token)
+    return sorted(set(out))
+
+
+def _endpoint_key_from_ref(value: Any, *, field_name: str) -> str:
+    token = _canonical_endpoint_key(value)
+    if token not in ALLOWED_ENDPOINT_KEYS:
+        raise ValueError(f"{field_name} references an unsupported endpoint.")
+    return token
+
+
+def _normalize_surface_sections(value: Any, capabilities: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw_items = _coerce_list(value)
+    if not raw_items:
+        return []
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    capability_ids = set(_coerce_list(capabilities.get("capabilities")))
+    for item in raw_items:
+        payload = _coerce_dict(item)
+        section_id = _normalize_token(payload.get("id"), field_name="surface_sections.id")
+        if section_id in seen:
+            raise ValueError(f"Duplicate external surface section id: {section_id}.")
+        seen.add(section_id)
+        title = _read_string(payload.get("title"))
+        if not title:
+            raise ValueError("surface_sections.title is required.")
+        display_kind = _normalize_token(payload.get("display_kind"), field_name="surface_sections.display_kind")
+        if display_kind not in ALLOWED_SECTION_DISPLAY_KINDS:
+            raise ValueError(f"Surface section display_kind is unsupported: {display_kind}.")
+        icon = _normalize_token(payload.get("icon") or display_kind, field_name="surface_sections.icon")
+        if icon not in ALLOWED_SECTION_ICONS:
+            icon = display_kind if display_kind in ALLOWED_SECTION_ICONS else "key_value"
+        capability_required = _read_string(payload.get("capability_required"))
+        if capability_required:
+            capability_required = _normalize_capability_id(capability_required)
+            if capability_required not in capability_ids and not bool(capabilities.get(capability_required)):
+                raise ValueError(f"Surface section requires undeclared capability: {capability_required}.")
+        data_endpoint_ref = _endpoint_key_from_ref(payload.get("data_endpoint_ref"), field_name="surface_sections.data_endpoint_ref")
+        actions_endpoint_ref = _read_string(payload.get("actions_endpoint_ref"))
+        normalized_actions_endpoint_ref = (
+            _endpoint_key_from_ref(actions_endpoint_ref, field_name="surface_sections.actions_endpoint_ref")
+            if actions_endpoint_ref
+            else None
+        )
+        out.append({
+            "id": section_id,
+            "title": title[:120],
+            "icon": icon,
+            "capability_required": capability_required or None,
+            "data_endpoint_ref": data_endpoint_ref,
+            "actions_endpoint_ref": normalized_actions_endpoint_ref,
+            "display_kind": display_kind,
+        })
+    return out
+
+
+def _normalize_local_connector(value: Any) -> Dict[str, Any]:
+    payload = _coerce_dict(value)
+    if not payload:
+        return {"required": False}
+    required = bool(payload.get("required"))
+    return {
+        "required": required,
+        "reason": _read_string(payload.get("reason"))[:240] or None,
+        "agent_computer_id": _read_string(payload.get("agent_computer_id"))[:160] or None,
+        "agent_computer_capability": _read_string(payload.get("agent_computer_capability"))[:120] or None,
+    }
+
+
+def _normalize_manifest_projection(payload: Dict[str, Any]) -> Dict[str, Any]:
+    capabilities = _normalize_capabilities(payload)
+    protocols = _normalize_protocols(payload.get("protocols"))
+    if not protocols and _read_string(payload.get("protocol")):
+        protocols = [{
+            "kind": _normalize_token(payload.get("protocol"), field_name="protocol"),
+            "version": _read_string(payload.get("protocol_version"))[:80] or "",
+        }]
+        if protocols[0]["kind"] not in ALLOWED_PROTOCOL_KINDS:
+            raise ValueError(f"External agent protocol is unsupported: {protocols[0]['kind']}.")
+    objects = _normalize_external_object_types(payload.get("objects") or payload.get("object_types"))
+    return {
+        "schema_version": _read_string(payload.get("schema_version"), EXTERNAL_AGENT_MANIFEST_SCHEMA_VERSION),
+        "protocols": protocols,
+        "capability_manifest": capabilities,
+        "surface_sections": _normalize_surface_sections(payload.get("surface_sections"), capabilities),
+        "object_types": objects,
+        "local_connector": _normalize_local_connector(payload.get("local_connector")),
+    }
 
 
 def _sanitize_manifest(value: Any) -> Dict[str, Any]:
@@ -337,6 +561,7 @@ def _sanitize_manifest(value: Any) -> Dict[str, Any]:
             raise ValueError(f"External agent manifest auth includes unsupported fields: {', '.join(unexpected_auth)}.")
     if _contains_raw_secret(payload):
         raise ValueError("External agent manifests may not contain raw secrets; store a secret_ref instead.")
+    _normalize_manifest_projection(payload)
     return _redact_secret_fields(payload)
 
 
@@ -462,7 +687,8 @@ def _surface_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
     metadata = _coerce_dict(record.get("metadata"))
     manifest = _coerce_dict(record.get("manifest"))
     endpoints = _normalize_endpoints(metadata.get("endpoint_refs") or {})
-    capability_manifest = _normalize_capabilities(metadata.get("capability_manifest") or manifest)
+    projection = _coerce_dict(metadata.get("manifest_projection")) or _normalize_manifest_projection(manifest)
+    capability_manifest = _coerce_dict(projection.get("capability_manifest")) or _normalize_capabilities(metadata.get("capability_manifest") or manifest)
     display_name = _read_string(record.get("label") or record.get("name"), "Connected Agent")
     status = _read_string(record.get("status"), "active")
     connection_state = _read_string(metadata.get("connection_state"), CONNECTION_STATE_UNVERIFIED)
@@ -485,6 +711,11 @@ def _surface_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "endpoint_refs": endpoints,
         "secret_ref": _read_string(_coerce_dict(metadata.get("auth")).get("secret_ref")) or None,
         "capability_manifest": capability_manifest,
+        "manifest_projection": projection,
+        "surface_sections": _coerce_list(projection.get("surface_sections")),
+        "object_types": _coerce_list(projection.get("object_types")),
+        "protocols": _coerce_list(projection.get("protocols")),
+        "local_connector": _coerce_dict(projection.get("local_connector")),
         "manifest": manifest,
         "last_error": _read_string(metadata.get("last_error")) or None,
         "last_manifest_refresh_at": _read_string(metadata.get("last_manifest_refresh_at")) or None,
@@ -617,13 +848,15 @@ def _build_metadata(
     auth_payload = _coerce_dict(current.get("auth"))
     if secret_ref is not None:
         auth_payload = {"secret_ref": _read_string(secret_ref)}
+    projection = _normalize_manifest_projection(manifest)
     return {
         **current,
         "surface_kind": SURFACE_KIND_CONNECTED_EXTERNAL_AGENT,
         "provider_kind": provider_kind,
         "endpoint_refs": dict(endpoints),
         "auth": auth_payload,
-        "capability_manifest": _normalize_capabilities(manifest),
+        "capability_manifest": projection["capability_manifest"],
+        "manifest_projection": projection,
         "connection_state": connection_state,
         "trust_state": connection_state,
         "last_error": last_error,
@@ -808,6 +1041,7 @@ async def update_connected_external_agent(
     async with control_plane_repository._scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         _require_control_plane_or_local_store(connection)
         if connection is None:
+            projection = _normalize_manifest_projection(next_manifest)
             updated = {
                 **current,
                 "name": next_name,
@@ -815,7 +1049,12 @@ async def update_connected_external_agent(
                 "provider_kind": next_provider,
                 "endpoint_refs": next_endpoints,
                 "manifest": next_manifest,
-                "capability_manifest": _normalize_capabilities(next_manifest),
+                "capability_manifest": projection["capability_manifest"],
+                "manifest_projection": projection,
+                "surface_sections": projection["surface_sections"],
+                "object_types": projection["object_types"],
+                "protocols": projection["protocols"],
+                "local_connector": projection["local_connector"],
                 "connection_state": next_connection_state,
                 "trust_state": next_connection_state,
                 "updated_at": now,
@@ -937,11 +1176,17 @@ async def refresh_connected_external_agent_manifest(
     async with control_plane_repository._scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         _require_control_plane_or_local_store(connection)
         if connection is None:
+            projection = _normalize_manifest_projection(manifest_payload)
             updated = {
                 **current,
                 "manifest": manifest_payload,
                 "endpoint_refs": next_endpoints,
-                "capability_manifest": _normalize_capabilities(manifest_payload),
+                "capability_manifest": projection["capability_manifest"],
+                "manifest_projection": projection,
+                "surface_sections": projection["surface_sections"],
+                "object_types": projection["object_types"],
+                "protocols": projection["protocols"],
+                "local_connector": projection["local_connector"],
                 "connection_state": CONNECTION_STATE_VERIFIED,
                 "trust_state": CONNECTION_STATE_VERIFIED,
                 "last_manifest_refresh_at": metadata["last_manifest_refresh_at"],
@@ -1031,6 +1276,138 @@ def _extract_chat_reply(payload: Any) -> str:
         if value:
             return value
     return ""
+
+
+def _find_surface_section(agent: Dict[str, Any], section_id: str) -> Dict[str, Any]:
+    token = _normalize_token(section_id, field_name="section_id")
+    sections = _coerce_list(agent.get("surface_sections"))
+    if not sections:
+        projection = _normalize_manifest_projection(_coerce_dict(agent.get("manifest")))
+        sections = _coerce_list(projection.get("surface_sections"))
+    for section in sections:
+        payload = _coerce_dict(section)
+        if _read_string(payload.get("id")) == token:
+            return payload
+    raise LookupError("External agent section not found.")
+
+
+def _normalize_external_object(item: Any, *, object_type: str, external_agent_id: str) -> Dict[str, Any]:
+    payload = _coerce_dict(item)
+    external_id = _read_string(payload.get("external_id") or payload.get("id"))
+    if not external_id:
+        external_id = f"{object_type}_{uuid.uuid4().hex}"
+    title = _read_string(payload.get("title") or payload.get("name") or payload.get("label"), external_id)
+    return _redact_secret_fields({
+        "id": f"{external_agent_id}:{object_type}:{external_id}",
+        "external_id": external_id,
+        "object_type": object_type,
+        "ownership": "external",
+        "source_agent_id": external_agent_id,
+        "title": title[:200],
+        "status": _read_string(payload.get("status")) or None,
+        "summary": _read_string(payload.get("summary") or payload.get("description"))[:500] or None,
+        "created_at": _read_string(payload.get("created_at")) or None,
+        "updated_at": _read_string(payload.get("updated_at")) or None,
+        "observed_at": _now_iso(),
+        "raw_redacted": payload,
+    })
+
+
+def _validate_section_payload(payload: Dict[str, Any], *, section: Dict[str, Any], external_agent_id: str) -> Dict[str, Any]:
+    display_kind = _read_string(section.get("display_kind"), "key_value")
+    if display_kind not in ALLOWED_SECTION_DISPLAY_KINDS:
+        raise ValueError("External section display kind is unsupported.")
+    response_kind = _read_string(payload.get("display_kind"), display_kind)
+    if response_kind != display_kind:
+        raise ValueError("External section response display kind does not match the manifest.")
+    item_type = _read_string(payload.get("object_type"))
+    items = _coerce_list(payload.get("items"))
+    if len(items) > 100:
+        raise ValueError("External section response cannot include more than 100 items.")
+    normalized_items: List[Any]
+    if item_type:
+        object_type = _normalize_token(item_type, field_name="object_type")
+        if object_type not in ALLOWED_EXTERNAL_OBJECT_TYPES:
+            raise ValueError(f"External object type is unsupported: {object_type}.")
+        normalized_items = [
+            _normalize_external_object(item, object_type=object_type, external_agent_id=external_agent_id)
+            for item in items
+        ]
+    else:
+        normalized_items = [_redact_secret_fields(item) for item in items]
+    return {
+        "section": section,
+        "display_kind": display_kind,
+        "ownership": "external",
+        "items": normalized_items,
+        "columns": _redact_secret_fields(_coerce_list(payload.get("columns"))[:24]),
+        "summary": _redact_secret_fields(_coerce_dict(payload.get("summary"))),
+        "raw_response": _redact_secret_fields({
+            key: value
+            for key, value in payload.items()
+            if key not in {"items", "columns", "summary"}
+        }),
+    }
+
+
+async def get_connected_external_agent_section_data(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    external_agent_id: str,
+    section_id: str,
+    http_client: Optional[httpx.AsyncClient] = None,
+) -> Dict[str, Any]:
+    agent = await get_connected_external_agent(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        external_agent_id=external_agent_id,
+    )
+    if _read_string(agent.get("connection_state")) != CONNECTION_STATE_VERIFIED:
+        raise ValueError("External agent must be verified before section data is available.")
+    if _read_string(agent.get("status")) == CONNECTION_STATE_REVOKED or not bool(agent.get("enabled", True)):
+        raise ValueError("External agent is disconnected.")
+    section = _find_surface_section(agent, section_id)
+    capability_required = _read_string(section.get("capability_required"))
+    capabilities = _coerce_dict(agent.get("capability_manifest"))
+    if capability_required and not (bool(capabilities.get(capability_required)) or capability_required in _coerce_list(capabilities.get("capabilities"))):
+        raise ValueError("External agent section capability is not enabled.")
+    endpoint_ref = _read_string(section.get("data_endpoint_ref"))
+    endpoints = _coerce_dict(agent.get("endpoint_refs"))
+    endpoint_url = await _validate_public_https_url_dns(endpoints.get(endpoint_ref), field_name=endpoint_ref)
+    if not endpoint_url:
+        raise ValueError("External agent section endpoint is missing.")
+    auth_headers = _resolve_auth_headers_for_call(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        agent=agent,
+        target_url=endpoint_url,
+    )
+    close_client = False
+    client = http_client
+    if client is None:
+        client = httpx.AsyncClient(timeout=15.0, follow_redirects=False)
+        close_client = True
+    try:
+        response = await client.get(endpoint_url, headers={"Accept": "application/json", **auth_headers})
+        response.raise_for_status()
+        payload = _json_response_payload(
+            response,
+            max_bytes=MAX_SECTION_RESPONSE_BYTES,
+            label="External section",
+        )
+    except Exception as error:
+        raise ValueError(f"External agent section fetch failed: {error}") from error
+    finally:
+        if close_client:
+            await client.aclose()
+    normalized = _validate_section_payload(payload, section=section, external_agent_id=external_agent_id)
+    return {
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "external_agent_id": external_agent_id,
+        **normalized,
+    }
 
 
 async def chat_with_connected_external_agent(

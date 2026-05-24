@@ -202,6 +202,25 @@ async def chat_with_connected_external_agent(
         _raise_service_error(error)
 
 
+@router.get("/studio/external-agents/{external_agent_id}/sections/{section_id}")
+async def get_connected_external_agent_section_data(
+    external_agent_id: str,
+    section_id: str,
+    workspace_id: str,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id, tenant_id = _workspace_scope(current_user, workspace_id, minimum_role="owner")
+    try:
+        return await connected_external_agent_service.get_connected_external_agent_section_data(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            external_agent_id=external_agent_id,
+            section_id=section_id,
+        )
+    except Exception as error:
+        _raise_service_error(error)
+
+
 @router.post("/studio/external-agents/{external_agent_id}/disconnect")
 async def disconnect_connected_external_agent(
     external_agent_id: str,

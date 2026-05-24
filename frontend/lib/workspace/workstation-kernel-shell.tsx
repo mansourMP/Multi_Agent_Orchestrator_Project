@@ -25,11 +25,6 @@ import {
   persistActiveThread,
 } from '@/lib/workspace/workstation-chat-pane-model';
 import {
-  normalizeSpecialistOverlayTabId,
-  SPECIALIST_OVERLAY_TABS,
-} from '@/lib/workspace/deployed-agents/constants';
-import type { SpecialistOverlayTabId } from '@/lib/workspace/deployed-agents/types';
-import {
   buildWorkspaceRouteHref,
   getWorkspaceNavRouteDefinition,
   type WorkspaceNavDestinationId,
@@ -65,9 +60,25 @@ const MARKETPLACE_TITLEBAR_FILTERS = [
 
 type MarketplaceTitlebarFilter = typeof MARKETPLACE_TITLEBAR_FILTERS[number]['id'];
 
+const STUDIO_TITLEBAR_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'live', label: 'Live' },
+  { id: 'draft', label: 'Draft' },
+  { id: 'needs_attention', label: 'Needs attention' },
+  { id: 'paused', label: 'Paused' },
+] as const;
+
+type StudioTitlebarFilter = typeof STUDIO_TITLEBAR_FILTERS[number]['id'];
+
 function normalizeMarketplaceTitlebarFilter(value: string | null): MarketplaceTitlebarFilter {
   return MARKETPLACE_TITLEBAR_FILTERS.some((filter) => filter.id === value)
     ? value as MarketplaceTitlebarFilter
+    : 'all';
+}
+
+function normalizeStudioTitlebarFilter(value: string | null): StudioTitlebarFilter {
+  return STUDIO_TITLEBAR_FILTERS.some((filter) => filter.id === value)
+    ? value as StudioTitlebarFilter
     : 'all';
 }
 
@@ -79,18 +90,18 @@ function buildMarketplaceCategoryHref(workspaceId: string, filter: MarketplaceTi
   return `${baseHref}?category=${encodeURIComponent(filter)}`;
 }
 
-function buildStudioTabHref(
+function buildStudioFilterHref(
   workspaceId: string,
-  tabId: SpecialistOverlayTabId,
+  filterId: StudioTitlebarFilter,
   searchParams: { toString: () => string },
 ): string {
   const params = new URLSearchParams(searchParams.toString());
-  if (tabId === 'overview') {
-    params.delete('tab');
-    params.delete('studioTab');
+  params.delete('tab');
+  params.delete('studioTab');
+  if (filterId === 'all') {
+    params.delete('studioFilter');
   } else {
-    params.set('tab', tabId);
-    params.delete('studioTab');
+    params.set('studioFilter', filterId);
   }
   const query = params.toString();
   const baseHref = buildWorkspaceRouteHref(workspaceId, 'studio');
@@ -492,7 +503,7 @@ export function WorkstationKernelShell({
     return false;
   };
   const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('category'));
-  const studioTab = normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab'));
+  const studioFilter = normalizeStudioTitlebarFilter(searchParams.get('studioFilter'));
   const applicationTab = normalizeApplicationSurfaceTabId(searchParams.get('tab') || searchParams.get('applicationTab'));
   const titlebarNavigation = activeDestinationId === 'marketplace'
     ? MARKETPLACE_TITLEBAR_FILTERS.map((filter) => (
@@ -509,20 +520,20 @@ export function WorkstationKernelShell({
       >
         <span>{filter.label}</span>
       </Link>
-    ))
+      ))
     : activeDestinationId === 'studio'
-      ? SPECIALIST_OVERLAY_TABS.map((tab) => (
+      ? STUDIO_TITLEBAR_FILTERS.map((filter) => (
         <Link
-          key={tab.id}
-          href={buildStudioTabHref(workspaceId, tab.id, searchParams)}
+          key={filter.id}
+          href={buildStudioFilterHref(workspaceId, filter.id, searchParams)}
           prefetch
-          aria-current={studioTab === tab.id ? 'page' : undefined}
+          aria-current={studioFilter === filter.id ? 'page' : undefined}
           className={joinClassNames(
             'workstation-titlebar__link',
-            studioTab === tab.id && 'workstation-titlebar__link--active',
+            studioFilter === filter.id && 'workstation-titlebar__link--active',
           )}
         >
-          <span>{tab.label}</span>
+          <span>{filter.label}</span>
         </Link>
       ))
     : activeDestinationId === 'applications'
@@ -600,7 +611,7 @@ export function WorkstationKernelShell({
                 <Link
                   href={buildStudioCreateAgentHref(workspaceId, searchParams)}
                   className="workstation-titlebar__link"
-                  title="Add agent"
+                  title="Add Business Agent"
                 >
                   <Plus size={16} aria-hidden="true" />
                   <span>Add agent</span>

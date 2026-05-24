@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
   Brain,
+  Briefcase,
   Check,
   ChevronRight,
   Mic,
@@ -58,6 +59,14 @@ export type ComposerSlashCommand = {
   category?: string;
   keywords?: readonly string[];
   icon: LucideIcon;
+};
+
+export type ComposerActionMenuItem = {
+  id: string;
+  title: string;
+  description: string;
+  icon?: LucideIcon;
+  onSelect: () => void;
 };
 
 function isComposerOptionGroup(option: ComposerModelOption): option is ComposerOptionGroup {
@@ -143,6 +152,7 @@ export function ChatComposer({
   onDismissSmallModelWarning,
   slashCommands = [],
   onSlashCommandSelect,
+  actionMenuItems = [],
   onVoiceTranscribe,
 }: {
   draft: string;
@@ -172,6 +182,7 @@ export function ChatComposer({
   preRunCostEstimate?: ComposerPreRunCostEstimate | null;
   slashCommands?: readonly ComposerSlashCommand[];
   onSlashCommandSelect?: (command: ComposerSlashCommand) => void;
+  actionMenuItems?: readonly ComposerActionMenuItem[];
   onVoiceTranscribe?: (audio: Blob) => Promise<string>;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -560,6 +571,36 @@ export function ChatComposer({
                       />
                     </button>
                   ) : null}
+                  {actionMenuItems.map((item) => {
+                    const Icon = item.icon ?? Briefcase;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className="app-chat-composer__command-item"
+                        onClick={() => {
+                          setActionPaletteOpen(false);
+                          item.onSelect();
+                        }}
+                      >
+                        <Icon size={16} strokeWidth={1.9} aria-hidden="true" />
+                        <span className="app-chat-composer__command-copy">
+                          <span className="app-chat-composer__command-title-row">
+                            <strong>{item.title}</strong>
+                            <span className="app-chat-composer__command-description">
+                              {item.description}
+                            </span>
+                          </span>
+                        </span>
+                        <ChevronRight
+                          className="app-chat-composer__command-chevron"
+                          size={16}
+                          strokeWidth={1.9}
+                          aria-hidden="true"
+                        />
+                      </button>
+                    );
+                  })}
                   {typeof onOpenIntegrations === 'function' ? (
                     <button
                       type="button"

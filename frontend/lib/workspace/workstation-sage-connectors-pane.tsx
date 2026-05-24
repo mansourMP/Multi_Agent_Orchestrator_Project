@@ -1,7 +1,7 @@
 'use client';
 
 import { type ClipboardEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Check, X } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
@@ -1542,6 +1542,7 @@ export function WorkstationSageConnectorsPane({
   const { bootstrap, routeManifest } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const gridColumns = useResponsiveColumns();
   const cacheKey = bootstrap.workspace.id;
   const cachedState = sageConnectorsPaneCache.get(cacheKey) ?? null;
@@ -2138,14 +2139,31 @@ export function WorkstationSageConnectorsPane({
     [integrationGroups, selectedIntegrationId],
   );
 
+  const requestedIntegrationId = useMemo<IntegrationWorkbenchCategoryId | null>(() => {
+    const token = readString(searchParams.get('section') ?? searchParams.get('connection')).toLowerCase();
+    return token === 'ai'
+      || token === 'apps'
+      || token === 'channels'
+      || token === 'computers'
+      || token === 'knowledge'
+      || token === 'skills'
+      || token === 'developer'
+      ? token
+      : null;
+  }, [searchParams]);
+
   useEffect(() => {
     if (integrationGroups.length === 0) {
+      return;
+    }
+    if (requestedIntegrationId && integrationGroups.some((group) => group.id === requestedIntegrationId)) {
+      setSelectedIntegrationId(requestedIntegrationId);
       return;
     }
     if (!integrationGroups.some((group) => group.id === selectedIntegrationId)) {
       setSelectedIntegrationId(integrationGroups[0].id);
     }
-  }, [integrationGroups, selectedIntegrationId]);
+  }, [integrationGroups, requestedIntegrationId, selectedIntegrationId]);
 
   useEffect(() => {
     setConnectorMemoryEnabled((current) => {

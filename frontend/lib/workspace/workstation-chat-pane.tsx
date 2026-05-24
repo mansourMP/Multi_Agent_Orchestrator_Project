@@ -16,6 +16,7 @@ import { PlatformNotification } from '@/lib/ui/platform-notification';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
 import {
   ChatComposer,
+  type ComposerActionMenuItem,
   type ComposerPreRunCostEstimate,
   type ComposerSlashCommand,
 } from '@/lib/workspace/chat-composer';
@@ -1450,6 +1451,14 @@ export function WorkstationChatPane() {
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
   );
+  const studioHref = useMemo(
+    () => routeManifest.routeIndex.studio?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/studio`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.studio],
+  );
+  const studioCreateAgentHref = useMemo(() => {
+    const separator = studioHref.includes('?') ? '&' : '?';
+    return `${studioHref}${separator}createAgent=1`;
+  }, [studioHref]);
   const approvalsHref = useMemo(
     () => routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`,
     [bootstrap.workspace.id, routeManifest.routeIndex.approvals],
@@ -1480,6 +1489,27 @@ export function WorkstationChatPane() {
       }];
     }),
     [routeManifest.routeIndex],
+  );
+  const composerActionMenuItems = useMemo<ComposerActionMenuItem[]>(
+    () => [
+      {
+        id: 'create-business-agent',
+        title: 'Create Business Agent',
+        description: 'Create a worker for a customer, channel, or business workflow.',
+        onSelect: () => {
+          router.push(studioCreateAgentHref);
+        },
+      },
+      {
+        id: 'view-business-agents',
+        title: 'View Business Agents',
+        description: 'Open workers Sage can manage for business workflows.',
+        onSelect: () => {
+          router.push(studioHref);
+        },
+      },
+    ],
+    [router, studioCreateAgentHref, studioHref],
   );
   const gatewayHref = useMemo(
     () => routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/gateway`,
@@ -2881,6 +2911,7 @@ export function WorkstationChatPane() {
         onStop={stopStreamingResponse}
         slashCommands={sageSlashCommands}
         onSlashCommandSelect={handleSlashCommandSelect}
+        actionMenuItems={composerActionMenuItems}
         onOpenIntegrations={() => {
           router.push(integrationsHref);
         }}

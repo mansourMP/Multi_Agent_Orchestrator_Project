@@ -654,7 +654,7 @@ export function WorkstationDeployedAgentAnalyticsPane({
         {renderBusinessInsights()}
         <EmptyPanel
           title="No users have messaged this agent yet."
-          body="Analytics will appear here once customer messages start flowing through this specialist."
+          body="Analytics will appear here once customer messages start flowing through this Business Agent."
         />
       </div>
     );

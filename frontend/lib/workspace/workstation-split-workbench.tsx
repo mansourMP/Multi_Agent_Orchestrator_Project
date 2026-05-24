@@ -167,7 +167,13 @@ export function WorkstationSplitWorkbench({
           onKeyDown={handleResizeKeyDown}
         />
       ) : null}
-      <section className="workstation-split-workbench__main" aria-label={`${ariaLabel} detail`}>
+      <section
+        className={joinClassNames(
+          'workstation-split-workbench__main',
+          !mainHeader && 'workstation-split-workbench__main--no-header',
+        )}
+        aria-label={`${ariaLabel} detail`}
+      >
         {mainHeader ? (
           <div className="workstation-split-workbench__main-header">
             {mainHeader}

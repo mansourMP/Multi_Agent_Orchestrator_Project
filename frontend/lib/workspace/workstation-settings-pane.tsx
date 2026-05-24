@@ -850,7 +850,7 @@ export function WorkstationSettingsPane() {
                     <strong className="settings-detail-card__title">Customer-facing mode</strong>
                   </div>
                   <p className="settings-detail-card__body" style={{ fontSize: 13, color: 'var(--color-muted, #6b7280)', marginBottom: 12 }}>
-                    Customer-facing Studio agents can only use Quiet or Basic mode.
+                    Business Agents can only use Quiet or Basic mode.
                     They never see internal memory, policy details, or tool arguments.
                   </p>
                   <select

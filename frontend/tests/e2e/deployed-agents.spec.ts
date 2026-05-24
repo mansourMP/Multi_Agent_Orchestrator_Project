@@ -502,12 +502,14 @@ test.describe('deployed agents surface', () => {
           manifest_url: 'https://example.com/openclaw/manifest.json',
           chat_url: 'https://example.com/openclaw/chat',
           events_url: 'https://example.com/openclaw/events',
+          sub_agents_url: 'https://example.com/openclaw/sub-agents',
         },
         capability_manifest: {
-          capabilities: ['chat', 'logs', 'events'],
+          capabilities: ['chat', 'logs', 'events', 'sub_agents'],
           chat: true,
           events: true,
           logs: true,
+          sub_agents: true,
         },
         protocols: [{ kind: 'custom_http', version: '1' }],
         local_connector: { required: false },
@@ -515,17 +517,33 @@ test.describe('deployed agents surface', () => {
           {
             id: 'run_history',
             title: 'Run History',
+            description: 'External workflow events from OpenClaw.',
+            category: 'activity',
+            priority: 20,
             icon: 'workflows',
             capability_required: 'events',
             data_endpoint_ref: 'events_url',
             actions_endpoint_ref: null,
             display_kind: 'timeline',
           },
+          {
+            id: 'sub_agents',
+            title: 'Sub-agents',
+            description: 'Workers managed by the external gateway.',
+            category: 'resources',
+            priority: 10,
+            icon: 'sub_agents',
+            capability_required: 'sub_agents',
+            data_endpoint_ref: 'sub_agents_url',
+            actions_endpoint_ref: 'actions_url',
+            display_kind: 'cards',
+            interaction: 'read_only',
+          },
         ],
-        object_types: ['external_agent_event'],
+        object_types: ['external_agent_event', 'external_agent_sub_agent'],
         manifest: {
           id: 'openclaw-gateway',
-          capabilities: ['chat', 'logs', 'events'],
+          capabilities: ['chat', 'logs', 'events', 'sub_agents'],
         },
         last_manifest_refresh_at: '2026-04-13T12:00:00Z',
       },
@@ -807,6 +825,39 @@ test.describe('deployed agents surface', () => {
                   title: 'Workflow finished',
                   status: 'ok',
                   summary: 'OpenClaw completed a private owner workflow.',
+                },
+              ],
+            }),
+          });
+          return;
+        }
+
+        if (segments.length === 6 && segments[4] === 'sections' && segments[5] === 'sub_agents' && method === 'GET') {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              external_agent_id: externalAgentId,
+              section: {
+                id: 'sub_agents',
+                title: 'Sub-agents',
+                display_kind: 'cards',
+                interaction: 'read_only',
+              },
+              display_kind: 'cards',
+              items: [
+                {
+                  id: 'extagent-openclaw:external_agent_sub_agent:researcher',
+                  external_id: 'researcher',
+                  object_type: 'external_agent_sub_agent',
+                  ownership: 'external',
+                  title: 'Research worker',
+                  status: 'ready',
+                  summary: 'Handles research inside OpenClaw.',
+                  raw_redacted: {
+                    provider: 'openclaw',
+                    runtime: 'external',
+                  },
                 },
               ],
             }),
@@ -1281,6 +1332,11 @@ test.describe('deployed agents surface', () => {
     expect(externalChatBodies).toHaveLength(1);
     expect(externalChatBodies[0].workspace_id).toBe('ws-1');
     await page.getByRole('tab', { name: /results/i }).click();
+    await expect(surface).toContainText(/sub-agents/i);
+    await expect(surface).toContainText(/actions declared, approval support not enabled/i);
+    await page.getByRole('button', { name: /^load$/i }).first().click();
+    await expect(surface).toContainText(/research worker/i);
+    await expect(surface).toContainText(/external agent sub agent/i);
     await expect(surface).toContainText(/run history/i);
     await page.getByRole('button', { name: /^load$/i }).click();
     await expect(surface).toContainText(/workflow finished/i);

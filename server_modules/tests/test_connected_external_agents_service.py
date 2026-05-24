@@ -145,6 +145,54 @@ class _SectionDataClient:
         })
 
 
+class _SubAgentSectionClient:
+    def __init__(self) -> None:
+        self.gets: list[dict[str, Any]] = []
+
+    async def get(self, url: str, headers: dict[str, str] | None = None) -> _FakeResponse:
+        self.gets.append({"url": url, "headers": headers})
+        if url == "https://example.com/sub-agents":
+            return _FakeResponse({
+                "display_kind": "cards",
+                "object_type": "external_agent_sub_agent",
+                "items": [
+                    {
+                        "id": "researcher",
+                        "name": "Research worker",
+                        "provider": "hermes",
+                        "runtime": "external",
+                        "status": "ready",
+                        "summary": "Handles web research inside the external runtime.",
+                    }
+                ],
+            })
+        return _FakeResponse({
+            "id": "external-subagents",
+            "schema_version": service.EXTERNAL_AGENT_MANIFEST_SCHEMA_VERSION,
+            "capabilities": ["chat", "sub_agents"],
+            "endpoints": {
+                "chat": "https://example.com/chat",
+                "sub_agents": "https://example.com/sub-agents",
+            },
+            "surface_sections": [
+                {
+                    "id": "sub_agents",
+                    "title": "Sub-agents",
+                    "description": "Workers managed by this external runtime.",
+                    "empty_state": "No external sub-agents are reported yet.",
+                    "category": "resources",
+                    "priority": 10,
+                    "icon": "sub_agents",
+                    "capability_required": "sub_agents",
+                    "data_endpoint_ref": "sub_agents",
+                    "actions_endpoint_ref": "actions",
+                    "display_kind": "cards",
+                }
+            ],
+            "objects": ["external_agent_sub_agent"],
+        })
+
+
 @pytest.fixture(autouse=True)
 def _reset_local_store():
     service._reset_for_tests()
@@ -266,6 +314,8 @@ async def test_manifest_surface_sections_fetch_external_owned_objects_through_pr
 
     assert refreshed["surface_sections"][0]["id"] == "run_history"
     assert refreshed["surface_sections"][0]["interaction"] == "read_only"
+    assert refreshed["surface_sections"][0]["category"] == "activity"
+    assert refreshed["surface_sections"][0]["priority"] == 50
     assert refreshed["object_types"] == ["external_agent_event"]
     assert section["display_kind"] == "timeline"
     assert section["section"]["title"] == "Run History"
@@ -276,6 +326,45 @@ async def test_manifest_surface_sections_fetch_external_owned_objects_through_pr
         "https://example.com/manifest.json",
         "https://example.com/events",
     ]
+
+
+@pytest.mark.anyio
+async def test_manifest_sub_agent_sections_stay_external_owned_and_read_only() -> None:
+    http_client = _SubAgentSectionClient()
+    with patch("server_modules.control_plane_repository._scoped_connection", new=_fake_scoped_connection(None)):
+        created = await service.create_connected_external_agent(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            name="Sub-agent runtime",
+            provider_kind="custom",
+            endpoints={"manifest_url": "https://example.com/manifest.json"},
+            manifest={},
+        )
+        refreshed = await service.refresh_connected_external_agent_manifest(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            external_agent_id=created["id"],
+            http_client=http_client,
+        )
+        section = await service.get_connected_external_agent_section_data(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            external_agent_id=created["id"],
+            section_id="sub_agents",
+            http_client=http_client,
+        )
+
+    surface = refreshed["surface_sections"][0]
+    assert surface["description"] == "Workers managed by this external runtime."
+    assert surface["empty_state"] == "No external sub-agents are reported yet."
+    assert surface["category"] == "resources"
+    assert surface["priority"] == 10
+    assert surface["actions_endpoint_ref"] == "actions_url"
+    assert surface["interaction"] == "read_only"
+    assert refreshed["object_types"] == ["external_agent_sub_agent"]
+    assert section["items"][0]["ownership"] == "external"
+    assert section["items"][0]["object_type"] == "external_agent_sub_agent"
+    assert section["items"][0]["raw_redacted"]["provider"] == "hermes"
 
 
 @pytest.mark.anyio
@@ -411,6 +500,57 @@ async def test_refresh_manifest_rejects_oversized_and_malformed_manifests() -> N
                 external_agent_id=created["id"],
                 http_client=_UnsupportedSchemaManifestClient(),
             )
+
+
+@pytest.mark.anyio
+async def test_surface_section_metadata_is_limited_and_category_is_validated() -> None:
+    long_text = "x" * 220
+    with patch("server_modules.control_plane_repository._scoped_connection", new=_fake_scoped_connection(None)):
+        created = await service.create_connected_external_agent(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            name="Metadata limited agent",
+            provider_kind="custom",
+            endpoints={"events": "https://example.com/events"},
+            manifest={
+                "capabilities": ["events"],
+                "surface_sections": [{
+                    "id": "events",
+                    "title": "Events",
+                    "description": long_text,
+                    "empty_state": long_text,
+                    "category": "outputs",
+                    "priority": 500,
+                    "data_endpoint_ref": "events",
+                    "display_kind": "timeline",
+                }],
+            },
+        )
+
+    section = created["surface_sections"][0]
+    assert section["description"] == "x" * 160
+    assert section["empty_state"] == "x" * 160
+    assert section["category"] == "outputs"
+    assert section["priority"] == 100
+
+    with pytest.raises(ValueError, match="category is unsupported"):
+        await service.create_connected_external_agent(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            name="Bad category agent",
+            provider_kind="custom",
+            endpoints={"events": "https://example.com/events"},
+            manifest={
+                "capabilities": ["events"],
+                "surface_sections": [{
+                    "id": "events",
+                    "title": "Events",
+                    "category": "native",
+                    "data_endpoint_ref": "events",
+                    "display_kind": "timeline",
+                }],
+            },
+        )
 
 
 @pytest.mark.anyio

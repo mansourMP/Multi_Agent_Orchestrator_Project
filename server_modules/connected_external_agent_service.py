@@ -49,6 +49,7 @@ ALLOWED_EXTERNAL_AGENT_CAPABILITIES = {
     "memory_read",
     "memory_write",
     "nodes",
+    "sub_agents",
     "skills",
     "tools",
     "voice_channels",
@@ -64,6 +65,7 @@ ALLOWED_SECTION_DISPLAY_KINDS = {
     "table",
     "timeline",
 }
+ALLOWED_SECTION_CATEGORIES = {"activity", "configuration", "outputs", "resources", "security"}
 ALLOWED_SECTION_ICONS = {
     "actions",
     "artifacts",
@@ -74,6 +76,7 @@ ALLOWED_SECTION_ICONS = {
     "memory",
     "nodes",
     "skills",
+    "sub_agents",
     "tools",
     "workflows",
 }
@@ -87,6 +90,7 @@ ALLOWED_EXTERNAL_OBJECT_TYPES = {
     "external_agent_node",
     "external_agent_run_result",
     "external_agent_skill",
+    "external_agent_sub_agent",
     "external_agent_tool",
     "external_agent_workflow",
 }
@@ -153,6 +157,8 @@ ALLOWED_ENDPOINT_KEYS = {
     "runs_url",
     "skills",
     "skills_url",
+    "sub_agents",
+    "sub_agents_url",
     "tools",
     "tools_url",
     "voice_channels",
@@ -294,6 +300,7 @@ def _normalize_capabilities(value: Any) -> Dict[str, Any]:
         "logs": "logs" in unique or "activity" in unique,
         "nodes": "nodes" in unique or "devices" in unique,
         "skills": "skills" in unique,
+        "sub_agents": "sub_agents" in unique,
         "tools": "tools" in unique,
         "workflows": "workflows" in unique,
     }
@@ -430,7 +437,7 @@ def _normalize_protocols(value: Any) -> List[Dict[str, str]]:
             if value:
                 protocol[key] = value[:240]
         out.append(protocol)
-    return out
+    return sorted(out, key=lambda section: (int(section.get("priority") or 50), str(section.get("title") or "")))
 
 
 def _normalize_external_object_types(value: Any) -> List[str]:
@@ -469,6 +476,16 @@ def _normalize_surface_sections(value: Any, capabilities: Dict[str, Any]) -> Lis
         title = _read_string(payload.get("title"))
         if not title:
             raise ValueError("surface_sections.title is required.")
+        description = _read_string(payload.get("description"))[:160] or None
+        empty_state = _read_string(payload.get("empty_state"))[:160] or None
+        category = _normalize_token(payload.get("category") or "activity", field_name="surface_sections.category")
+        if category not in ALLOWED_SECTION_CATEGORIES:
+            raise ValueError(f"Surface section category is unsupported: {category}.")
+        try:
+            priority = int(payload.get("priority", 50))
+        except (TypeError, ValueError):
+            priority = 50
+        priority = max(0, min(priority, 100))
         display_kind = _normalize_token(payload.get("display_kind"), field_name="surface_sections.display_kind")
         if display_kind not in ALLOWED_SECTION_DISPLAY_KINDS:
             raise ValueError(f"Surface section display_kind is unsupported: {display_kind}.")
@@ -490,6 +507,10 @@ def _normalize_surface_sections(value: Any, capabilities: Dict[str, Any]) -> Lis
         out.append({
             "id": section_id,
             "title": title[:120],
+            "description": description,
+            "empty_state": empty_state,
+            "category": category,
+            "priority": priority,
             "icon": icon,
             "capability_required": capability_required or None,
             "data_endpoint_ref": data_endpoint_ref,

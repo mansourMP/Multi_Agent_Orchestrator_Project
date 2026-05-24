@@ -38,6 +38,10 @@ export type ExternalAgentChatSessionState = {
 type ExternalSurfaceSection = {
   id: string;
   title: string;
+  description: string;
+  emptyState: string;
+  category: string;
+  priority: number;
   icon: string;
   capabilityRequired: string;
   dataEndpointRef: string;
@@ -89,6 +93,10 @@ function normalizeSurfaceSections(value: unknown): ExternalSurfaceSection[] {
     return {
       id: readString(record.id),
       title: readString(record.title, 'External section'),
+      description: readString(record.description),
+      emptyState: readString(record.empty_state),
+      category: readString(record.category, 'activity'),
+      priority: Number.isFinite(Number(record.priority)) ? Number(record.priority) : 50,
       icon: readString(record.icon, 'key_value'),
       capabilityRequired: readString(record.capability_required),
       dataEndpointRef: readString(record.data_endpoint_ref),
@@ -96,7 +104,8 @@ function normalizeSurfaceSections(value: unknown): ExternalSurfaceSection[] {
       displayKind: readString(record.display_kind, 'key_value'),
       interaction: readString(record.interaction, 'read_only'),
     };
-  }).filter((item) => item.id && item.dataEndpointRef);
+  }).filter((item) => item.id && item.dataEndpointRef)
+    .sort((left, right) => left.priority - right.priority || left.title.localeCompare(right.title));
 }
 
 function externalOwnershipLabel(value: unknown): string {
@@ -105,6 +114,21 @@ function externalOwnershipLabel(value: unknown): string {
 
 function sectionCacheKey(externalAgentId: string, sectionId: string): string {
   return `${externalAgentId}:${sectionId}`;
+}
+
+function readSectionItems(payload: Record<string, unknown>): Record<string, unknown>[] {
+  return Array.isArray(payload.items) ? payload.items.map(readRecord) : [];
+}
+
+function externalItemSummary(item: Record<string, unknown>): string {
+  const raw = readRecord(item.raw_redacted);
+  const parts = [
+    externalOwnershipLabel(item.ownership),
+    humanizeToken(item.object_type, 'External object'),
+    readString(item.external_id) ? `ID ${readString(item.external_id)}` : '',
+    readString(raw.provider || raw.provider_kind) ? humanizeToken(raw.provider || raw.provider_kind) : '',
+  ].filter(Boolean);
+  return parts.join(' · ');
 }
 
 export const ConnectedExternalAgentDetailView = memo(({
@@ -275,24 +299,70 @@ export const ConnectedExternalAgentDetailView = memo(({
     }
   }
 
-  function renderSectionItems(payload: Record<string, unknown>) {
-    const items = Array.isArray(payload.items) ? payload.items.map(readRecord) : [];
+  function renderExternalRecordCard(item: Record<string, unknown>, index: number) {
+    const raw = readRecord(item.raw_redacted);
+    return (
+      <div key={readString(item.id, `external-item-${index}`)} className="studio-agent-overview__card">
+        <div className="studio-agent-overview__card-icon"><FileText size={15} aria-hidden="true" /></div>
+        <div>
+          <strong>{readString(item.title || item.name || item.external_id, 'External record')}</strong>
+          <span>{externalItemSummary(item)}</span>
+          {readString(item.status) ? <span>{humanizeToken(item.status)}</span> : null}
+          {readString(item.summary) ? <span>{readString(item.summary)}</span> : null}
+          {readString(raw.runtime || raw.runtime_kind) ? <span>{humanizeToken(raw.runtime || raw.runtime_kind)}</span> : null}
+        </div>
+      </div>
+    );
+  }
+
+  function renderSectionItems(payload: Record<string, unknown>, section: ExternalSurfaceSection) {
+    const items = readSectionItems(payload);
     if (items.length === 0) {
-      return <EmptyPanel title="No external records" body="This external section returned no displayable records." />;
+      return (
+        <EmptyPanel
+          title="No external records"
+          body={section.emptyState || 'This external section returned no displayable records.'}
+        />
+      );
+    }
+    if (section.displayKind === 'key_value') {
+      const summary = readRecord(payload.summary);
+      const summaryEntries = Object.entries(summary).slice(0, 12);
+      return (
+        <div className="app-stack-3">
+          {summaryEntries.length > 0 ? (
+            <AppSurfaceStatGrid>
+              {summaryEntries.map(([key, value]) => (
+                <AppSurfaceStat
+                  key={key}
+                  label={humanizeToken(key, key)}
+                  value={readString(value, 'Not set')}
+                  hint="External-owned value"
+                />
+              ))}
+            </AppSurfaceStatGrid>
+          ) : null}
+          <div className="studio-agent-overview__grid">
+            {items.slice(0, 12).map(renderExternalRecordCard)}
+          </div>
+        </div>
+      );
+    }
+    if (section.displayKind === 'logs') {
+      return (
+        <div className="studio-external-chat__transcript">
+          {items.slice(0, 24).map((item, index) => (
+            <div key={readString(item.id, `external-log-${index}`)} className="studio-external-chat__message">
+              <span>{readString(item.status) ? humanizeToken(item.status) : 'External log'} · {readString(item.updated_at || item.created_at || item.observed_at)}</span>
+              <p>{readString(item.summary || item.title, 'External log entry')}</p>
+            </div>
+          ))}
+        </div>
+      );
     }
     return (
       <div className="studio-agent-overview__grid">
-        {items.slice(0, 12).map((item, index) => (
-          <div key={readString(item.id, `external-item-${index}`)} className="studio-agent-overview__card">
-            <div className="studio-agent-overview__card-icon"><FileText size={15} aria-hidden="true" /></div>
-            <div>
-              <strong>{readString(item.title || item.name || item.external_id, 'External record')}</strong>
-              <span>{externalOwnershipLabel(item.ownership)} · {humanizeToken(item.object_type, 'External object')}</span>
-              {readString(item.status) ? <span>{humanizeToken(item.status)}</span> : null}
-              {readString(item.summary) ? <span>{readString(item.summary)}</span> : null}
-            </div>
-          </div>
-        ))}
+        {items.slice(0, 12).map(renderExternalRecordCard)}
       </div>
     );
   }
@@ -397,9 +467,9 @@ export const ConnectedExternalAgentDetailView = memo(({
                     </ListDetailPanel>
                     <ListDetailPanel
                       className="studio-panel studio-panel--detail"
-                      eyebrow="External Sections"
+                      eyebrow="Provider-owned sections"
                       title="Provider-owned surfaces"
-                      subtitle="These sections are schema-rendered by Studio. No external frontend code runs here."
+                      subtitle="These read-only sections are schema-rendered by Studio. No external frontend code runs here."
                     >
                       {externalSections.length > 0 ? (
                         <div className="studio-agent-overview__grid">
@@ -408,9 +478,10 @@ export const ConnectedExternalAgentDetailView = memo(({
                               <div className="studio-agent-overview__card-icon"><FileText size={15} aria-hidden="true" /></div>
                               <div>
                                 <strong>{section.title}</strong>
-                                <span>{humanizeToken(section.displayKind)} · {humanizeToken(section.interaction, 'Read only')}</span>
+                                <span>{humanizeToken(section.category)} · {humanizeToken(section.displayKind)} · {humanizeToken(section.interaction, 'Read only')}</span>
+                                {section.description ? <span>{section.description}</span> : null}
                                 {section.capabilityRequired ? <span>Requires {humanizeToken(section.capabilityRequired)}</span> : null}
-                                {section.actionsEndpointRef ? <span>Actions declared, disabled here</span> : null}
+                                {section.actionsEndpointRef ? <span>Actions declared, approval support not enabled</span> : null}
                               </div>
                             </div>
                           ))}
@@ -558,10 +629,10 @@ export const ConnectedExternalAgentDetailView = memo(({
                         <ListDetailPanel
                           key={section.id}
                           className="studio-panel studio-panel--detail"
-                          eyebrow={humanizeToken(section.displayKind)}
+                          eyebrow={`${humanizeToken(section.category)} · ${humanizeToken(section.displayKind)}`}
                           title={section.title}
                           subtitle={section.actionsEndpointRef
-                            ? 'External-owned records load read-only. Action endpoints are disabled in this pass.'
+                            ? 'External-owned records load read-only. Actions declared, approval support not enabled.'
                             : 'External-owned records loaded read-only through the backend proxy.'}
                           actions={(
                             <AppButton
@@ -574,7 +645,7 @@ export const ConnectedExternalAgentDetailView = memo(({
                             </AppButton>
                           )}
                         >
-                          {payload ? renderSectionItems(payload) : (
+                          {payload ? renderSectionItems(payload, section) : (
                             <EmptyPanel
                               title="Section not loaded"
                               body={isVerified ? 'Load this section to inspect external-owned records.' : 'Verify the connection before loading provider-owned records.'}

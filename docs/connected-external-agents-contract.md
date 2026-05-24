@@ -20,12 +20,13 @@ Provider names such as OpenClaw, NemoClaw, Hermes, A2A, MCP, laptop-local agents
   "protocols": [
     { "kind": "custom_http", "version": "1" }
   ],
-  "capabilities": ["chat", "events", "artifacts"],
+  "capabilities": ["chat", "events", "artifacts", "sub_agents"],
   "endpoints": {
     "manifest": "https://agent.example.com/.well-known/agent-manifest.json",
     "chat": "https://agent.example.com/chat",
     "events": "https://agent.example.com/events",
-    "artifacts": "https://agent.example.com/artifacts"
+    "artifacts": "https://agent.example.com/artifacts",
+    "sub_agents": "https://agent.example.com/sub-agents"
   },
   "local_connector": {
     "required": false,
@@ -37,6 +38,10 @@ Provider names such as OpenClaw, NemoClaw, Hermes, A2A, MCP, laptop-local agents
     {
       "id": "agent_logs",
       "title": "Agent Logs",
+      "description": "Recent events from the external runtime.",
+      "empty_state": "No events are reported yet.",
+      "category": "activity",
+      "priority": 50,
       "icon": "logs",
       "capability_required": "events",
       "data_endpoint_ref": "events",
@@ -44,7 +49,7 @@ Provider names such as OpenClaw, NemoClaw, Hermes, A2A, MCP, laptop-local agents
       "display_kind": "logs"
     }
   ],
-  "objects": ["external_agent_event", "external_agent_artifact"]
+  "objects": ["external_agent_event", "external_agent_artifact", "external_agent_sub_agent"]
 }
 ```
 
@@ -73,12 +78,24 @@ Optional fields:
 
 - `icon`
 - `capability_required`
+- `description`
+- `empty_state`
+- `category`
+- `priority`
 - `actions_endpoint_ref`
 
 Studio renders every declared section as read-only in this pass. `actions_endpoint_ref`
 may be stored as future contract metadata, but the frontend does not call it and the
 backend does not expose a section action route until approval, audit, and revoke
 semantics are implemented.
+
+Supported `category` values:
+
+- `activity`
+- `resources`
+- `configuration`
+- `outputs`
+- `security`
 
 Supported `display_kind` values:
 
@@ -108,3 +125,83 @@ Section endpoint responses must be JSON objects. List-like displays should retur
 ```
 
 Studio normalizes returned records as external-owned objects. They do not become native Studio agents, native tools, native memory items, or native deployed-agent conversations.
+
+## Provider-Owned Examples
+
+External sub-agents:
+
+```json
+{
+  "id": "sub_agents",
+  "title": "Sub-agents",
+  "description": "Workers managed by this external runtime.",
+  "category": "resources",
+  "capability_required": "sub_agents",
+  "data_endpoint_ref": "sub_agents",
+  "display_kind": "cards"
+}
+```
+
+Hermes-style skills:
+
+```json
+{
+  "id": "hermes_skills",
+  "title": "Hermes Skills",
+  "category": "configuration",
+  "capability_required": "skills",
+  "data_endpoint_ref": "skills",
+  "display_kind": "table"
+}
+```
+
+OpenClaw-style nodes:
+
+```json
+{
+  "id": "openclaw_nodes",
+  "title": "OpenClaw Nodes",
+  "category": "resources",
+  "capability_required": "nodes",
+  "data_endpoint_ref": "nodes",
+  "display_kind": "cards"
+}
+```
+
+MCP tools:
+
+```json
+{
+  "id": "mcp_tools",
+  "title": "MCP Tools",
+  "category": "configuration",
+  "capability_required": "mcp",
+  "data_endpoint_ref": "mcp",
+  "display_kind": "table"
+}
+```
+
+Generated artifacts and run history:
+
+```json
+[
+  {
+    "id": "generated_artifacts",
+    "title": "Generated Artifacts",
+    "category": "outputs",
+    "capability_required": "artifacts",
+    "data_endpoint_ref": "artifacts",
+    "display_kind": "artifact_list"
+  },
+  {
+    "id": "run_history",
+    "title": "Run History",
+    "category": "activity",
+    "capability_required": "events",
+    "data_endpoint_ref": "events",
+    "display_kind": "timeline"
+  }
+]
+```
+
+All records returned by these sections remain external-owned display objects. They do not become native Studio agents, native tools, native memory items, or native deployed-agent conversations.

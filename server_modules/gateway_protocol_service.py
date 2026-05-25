@@ -891,6 +891,8 @@ async def handle_gateway_websocket(
                     checkpoint_cursor=payload.get("checkpoint_cursor"),
                     metadata={
                         "personal_channels": payload.get("personal_channels"),
+                        "personal_channel_manifests": payload.get("personal_channel_manifests"),
+                        "personal_channel_health": payload.get("personal_channel_health"),
                     },
                 )
                 next_health_state = str(payload.get("health_state") or registration.get("metadata", {}).get("health_state") or "").strip().lower()

@@ -6,10 +6,12 @@ from uuid import uuid4
 from server_modules import (
     channel_blocking_policy_service,
     channel_lane_contract_service,
+    gateway_state_repository,
     gateway_execution_service,
     kill_switch_gate,
     personal_channel_sage_bridge_service,
     personal_channels_repository,
+    secret_redaction_service,
     security_audit_service,
 )
 
@@ -27,6 +29,31 @@ TELEGRAM_PERSONAL_CONFIGURE_CAPABILITY = "channel.telegram.personal.configure"
 WHATSAPP_PERSONAL_CONFIGURE_CAPABILITY = "channel.whatsapp.personal.configure"
 WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX = "whatsapp_personal:noreply:"
 TELEGRAM_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX = "telegram_personal:noreply:"
+
+LOCAL_BRIDGE_PERSONAL_CHANNELS: Dict[str, Dict[str, str]] = {
+    "signal_personal": {"provider": "signal_local_bridge", "label": "Signal"},
+    "imessage_personal": {"provider": "bluebubbles_local_bridge", "label": "iMessage"},
+    "wechat_personal": {"provider": "wechat_local_bridge", "label": "WeChat"},
+}
+
+
+_LOCAL_BRIDGE_PERSONAL_CHANNEL_COPY: Dict[str, Dict[str, str]] = {
+    "signal_personal": {
+        "status_label": "Bridge required",
+        "detail": "Signal runs through an Agent Computer local bridge.",
+        "next_step": "Connect an Agent Computer with a Signal bridge to enable Sage messaging.",
+    },
+    "imessage_personal": {
+        "status_label": "Mac bridge required",
+        "detail": "iMessage runs through a user-owned Mac Agent Computer bridge.",
+        "next_step": "Connect a Mac Agent Computer with an iMessage bridge to enable Sage messaging.",
+    },
+    "wechat_personal": {
+        "status_label": "Bridge required",
+        "detail": "WeChat personal runs through an Agent Computer local bridge.",
+        "next_step": "Connect an Agent Computer with a WeChat bridge to enable Sage messaging.",
+    },
+}
 
 
 # ── Handler registry ──────────────────────────────────────────────────
@@ -225,9 +252,117 @@ class _TelegramPersonalChannelHandler(PersonalChannelHandler):
         )
 
 
+class _LocalBridgePersonalChannelHandler(PersonalChannelHandler):
+    """Generic Sage personal-channel handler for Agent Computer local bridges."""
+
+    def __init__(self, channel_key: str, provider: str, label: str) -> None:
+        self._channel_key = channel_key
+        self._provider = provider
+        self._label = label
+
+    @property
+    def channel_key(self) -> str:
+        return self._channel_key
+
+    @property
+    def provider(self) -> str:
+        return self._provider
+
+    def build_state_sync_payload(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "linked_name": str(message.get("linked_name") or message.get("push_name") or "").strip() or None,
+        }
+
+    def audit_action_prefix(self) -> str:
+        return self._channel_key.split("_", 1)[0]
+
+    async def handle_inbound(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return await _handle_local_bridge_gateway_channel_inbound(
+            gateway_id=gateway_id,
+            registration=registration,
+            payload=payload,
+            channel_key=self._channel_key,
+            provider=self._provider,
+            label=self._label,
+        )
+
+    async def deliver_reply(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        inbound: Dict[str, Any],
+        remote_jid: str,
+        external_message_id: str,
+        text: str,
+        push_name: Optional[str],
+        duplicate: bool,
+    ) -> Dict[str, Any]:
+        return await _deliver_local_bridge_personal_reply(
+            gateway_id=gateway_id,
+            registration=registration,
+            inbound=inbound,
+            remote_jid=remote_jid,
+            external_message_id=external_message_id,
+            text=text,
+            push_name=push_name,
+            duplicate=duplicate,
+            channel_key=self._channel_key,
+            provider=self._provider,
+            label=self._label,
+        )
+
+    async def send_message(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        remote_jid: str,
+        text: str,
+        idempotency_key: str,
+        reply_to_external_message_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await send_local_bridge_personal_message(
+            gateway_id=gateway_id,
+            registration=registration,
+            channel_key=self._channel_key,
+            provider=self._provider,
+            remote_jid=remote_jid,
+            text=text,
+            idempotency_key=idempotency_key,
+            reply_to_external_message_id=reply_to_external_message_id,
+        )
+
+    def get_view(self, gateway_id: str) -> Dict[str, Any]:
+        return get_gateway_personal_channel_surfaces(gateway_id)
+
+    async def configure(
+        self,
+        *,
+        gateway_id: str,
+        registration: Dict[str, Any],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        raise ValueError(f"{self._label} is configured on Agent Computer through its local bridge.")
+
+
 _handler_registry = PersonalChannelHandlerRegistry()
 _handler_registry.register(_WhatsAppPersonalChannelHandler())
 _handler_registry.register(_TelegramPersonalChannelHandler())
+for _channel_key, _channel_spec in LOCAL_BRIDGE_PERSONAL_CHANNELS.items():
+    _handler_registry.register(
+        _LocalBridgePersonalChannelHandler(
+            _channel_key,
+            _channel_spec["provider"],
+            _channel_spec["label"],
+        )
+    )
 
 
 def _sender_role_from_message(message: Dict[str, Any]) -> Optional[str]:
@@ -335,6 +470,192 @@ def _control_command_block_result(
         "outbound": None,
         "blocked": True,
         "policy": command_check,
+    }
+
+
+def _as_mapping(value: Any) -> Dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _as_record_list(value: Any) -> list[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _manifest_channel_key(item: Dict[str, Any]) -> str:
+    return str(item.get("channel_key") or item.get("channelKey") or "").strip()
+
+
+def _records_by_channel(items: Any) -> Dict[str, Dict[str, Any]]:
+    records: Dict[str, Dict[str, Any]] = {}
+    for item in _as_record_list(items):
+        channel_key = _manifest_channel_key(item)
+        if channel_key:
+            records[channel_key] = item
+    return records
+
+
+def _boolish(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    token = str(value).strip().lower()
+    if token in {"true", "1", "yes", "y", "on"}:
+        return True
+    if token in {"false", "0", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _personal_channel_state(gateway_id: str, channel_key: str) -> Optional[Dict[str, Any]]:
+    normalized_gateway_id = str(gateway_id or "").strip()
+    if channel_key == WHATSAPP_PERSONAL_CHANNEL_KEY:
+        return personal_channels_repository.get_whatsapp_state(
+            normalized_gateway_id,
+            channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+        )
+    if channel_key == TELEGRAM_PERSONAL_CHANNEL_KEY:
+        return personal_channels_repository.get_telegram_state(
+            normalized_gateway_id,
+            channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
+        )
+    return None
+
+
+def _recent_message_count(gateway_id: str, channel_key: str) -> int:
+    if channel_key not in {WHATSAPP_PERSONAL_CHANNEL_KEY, TELEGRAM_PERSONAL_CHANNEL_KEY}:
+        return 0
+    return len(
+        personal_channels_repository.list_recent_gateway_messages(
+            str(gateway_id or "").strip(),
+            channel_key=channel_key,
+        )
+    )
+
+
+def _safe_state_summary(state: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(state, dict):
+        return None
+    metadata = _as_mapping(state.get("metadata"))
+    summary = {
+        "status": str(state.get("status") or "").strip() or None,
+        "linked_name": str(state.get("linked_name") or "").strip() or None,
+        "linked_username": str(state.get("linked_username") or "").strip() or None,
+        "connected_at": str(state.get("connected_at") or "").strip() or None,
+        "updated_at": metadata.get("updated_at"),
+        "retryable": bool(metadata.get("retryable")),
+    }
+    return secret_redaction_service.sanitize_mapping({key: value for key, value in summary.items() if value is not None})
+
+
+def _connected_identity_label(channel_key: str, state: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(state, dict):
+        return None
+    for key in ("linked_name", "linked_username"):
+        value = str(state.get(key) or "").strip()
+        if value:
+            return secret_redaction_service.redact_text(value)
+    status = str(state.get("status") or "").strip().lower()
+    if status == "connected":
+        if channel_key == TELEGRAM_PERSONAL_CHANNEL_KEY:
+            return "Linked Telegram account"
+        if channel_key == WHATSAPP_PERSONAL_CHANNEL_KEY:
+            return "Linked WhatsApp account"
+    return None
+
+
+def get_gateway_personal_channel_surfaces(gateway_id: str) -> Dict[str, Any]:
+    """Return safe per-channel capability/status projection for a paired Agent Computer.
+
+    This is intentionally broader than the WhatsApp/Telegram detail endpoints:
+    it includes local-bridge personal channels such as Signal, iMessage, and
+    WeChat, while keeping them scoped to Sage/Agent Computer rather than Studio
+    business/customer connectors.
+    """
+
+    normalized_gateway_id = str(gateway_id or "").strip()
+    registration = gateway_state_repository.get_gateway_registration(normalized_gateway_id)
+    if not registration:
+        raise ValueError("Gateway registration was not found.")
+
+    metadata = _as_mapping(registration.get("metadata"))
+    manifests_by_key = _records_by_channel(metadata.get("personal_channel_manifests"))
+    health_by_key = _records_by_channel(metadata.get("personal_channel_health"))
+    catalog_by_key = {item["channel_key"]: dict(item) for item in channel_lane_contract_service.personal_channel_catalog()}
+    platform_by_key = {
+        item["channel_key"]: dict(item)
+        for item in channel_lane_contract_service.platform_channel_catalog("sage")
+        if channel_lane_contract_service.is_personal_channel_key(str(item.get("channel_key") or ""))
+    }
+
+    items: list[Dict[str, Any]] = []
+    for channel_key, catalog in catalog_by_key.items():
+        spec = channel_lane_contract_service.assert_personal_gateway_channel(channel_key)
+        manifest = manifests_by_key.get(channel_key, {})
+        health = health_by_key.get(channel_key, {})
+        platform = platform_by_key.get(channel_key, {})
+        state = _personal_channel_state(normalized_gateway_id, channel_key)
+        state_status = str((state or {}).get("status") or "").strip()
+        health_status = str(health.get("status") or "").strip()
+        manifest_status = str(manifest.get("status") or "").strip()
+        status = state_status or health_status or manifest_status or str(platform.get("status") or catalog.get("stage") or "agent_computer_bridge").strip()
+        live_capable = _boolish(
+            manifest.get("live_capable")
+            if "live_capable" in manifest
+            else manifest.get("liveCapable")
+            if "liveCapable" in manifest
+            else platform.get("live_capable", spec.get("live_capable")),
+            default=str(spec.get("live_capable") or "").strip().lower() == "true",
+        )
+        connected = bool(state_status == "connected" or health.get("connected") is True)
+        running = bool(health.get("running") is True)
+        items.append(
+            {
+                "channel_key": channel_key,
+                "label": str(manifest.get("label") or platform.get("label") or catalog.get("label") or channel_key).strip(),
+                "provider": str(manifest.get("provider") or platform.get("provider") or spec.get("provider") or "").strip(),
+                "runtime_lane": str(manifest.get("runtime_lane") or manifest.get("runtimeLane") or spec.get("runtime_lane") or "").strip(),
+                "stage": str(manifest.get("stage") or platform.get("stage") or catalog.get("stage") or "").strip(),
+                "status": status,
+                "status_label": _LOCAL_BRIDGE_PERSONAL_CHANNEL_COPY.get(channel_key, {}).get("status_label"),
+                "live_capable": live_capable,
+                "requires_agent_computer": _boolish(
+                    manifest.get("requires_agent_computer")
+                    if "requires_agent_computer" in manifest
+                    else manifest.get("requiresAgentComputer")
+                    if "requiresAgentComputer" in manifest
+                    else platform.get("requires_agent_computer", True),
+                    default=True,
+                ),
+                "connected": connected,
+                "running": running,
+                "connected_identity": _connected_identity_label(channel_key, state),
+                "recent_message_count": _recent_message_count(normalized_gateway_id, channel_key),
+                "capabilities": secret_redaction_service.sanitize_value(
+                    manifest.get("capabilities")
+                    if isinstance(manifest.get("capabilities"), list)
+                    else platform.get("capabilities", []),
+                ),
+                "chat_types": secret_redaction_service.sanitize_value(
+                    manifest.get("chat_types")
+                    if isinstance(manifest.get("chat_types"), list)
+                    else [],
+                ),
+                "media": secret_redaction_service.sanitize_mapping(_as_mapping(manifest.get("media"))),
+                "safety": secret_redaction_service.sanitize_mapping(_as_mapping(manifest.get("safety"))),
+                "manifest": secret_redaction_service.sanitize_mapping(manifest),
+                "health": secret_redaction_service.sanitize_mapping(health),
+                "state": _safe_state_summary(state),
+                "detail": _LOCAL_BRIDGE_PERSONAL_CHANNEL_COPY.get(channel_key, {}).get("detail"),
+                "next_step": _LOCAL_BRIDGE_PERSONAL_CHANNEL_COPY.get(channel_key, {}).get("next_step"),
+            }
+        )
+
+    return {
+        "gateway_id": normalized_gateway_id,
+        "items": items,
     }
 
 
@@ -884,6 +1205,254 @@ async def _handle_telegram_gateway_channel_inbound(
         idempotency_key=f"personal_channel.telegram.automatic_reply.success:{gateway_id}:{idempotency_key}",
     )
     return {"duplicate": not created, "inbound": refreshed_inbound or inbound, "outbound": delivered}
+
+
+async def _deliver_local_bridge_personal_reply(
+    *,
+    gateway_id: str,
+    registration: Dict[str, Any],
+    inbound: Dict[str, Any],
+    remote_jid: str,
+    external_message_id: str,
+    text: str,
+    push_name: Optional[str],
+    duplicate: bool,
+    channel_key: str,
+    provider: str,
+    label: str,
+    trace_id: str = "",
+) -> Dict[str, Any]:
+    no_reply_prefix = f"{channel_key}:noreply:"
+    reply_idempotency_key = str(inbound.get("reply_idempotency_key") or "").strip() or None
+    if reply_idempotency_key and reply_idempotency_key.startswith(no_reply_prefix):
+        return {"duplicate": duplicate, "inbound": inbound, "outbound": None}
+
+    outbound: Optional[Dict[str, Any]] = None
+    idempotency_key = reply_idempotency_key or f"{channel_key}:{external_message_id}"
+    if reply_idempotency_key:
+        outbound = personal_channels_repository.get_outbound_message(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=channel_key,
+            idempotency_key=reply_idempotency_key,
+        )
+    if outbound and str(outbound.get("status") or "").strip() == "delivered":
+        personal_channels_repository.mark_inbound_processed(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=channel_key,
+            external_message_id=external_message_id,
+            reply_idempotency_key=idempotency_key,
+        )
+        return {"duplicate": duplicate, "inbound": inbound, "outbound": outbound}
+
+    if outbound is None:
+        reply = await personal_channel_sage_bridge_service.build_personal_channel_reply_async(
+            surface_channel=channel_key,
+            workspace_id=str(registration.get("workspace_id") or "").strip(),
+            gateway_id=str(gateway_id or "").strip(),
+            remote_jid=remote_jid,
+            text=text,
+            push_name=push_name,
+            fallback_label=label,
+        )
+        if not reply or not str(reply.get("text") or "").strip():
+            no_reply_idempotency_key = f"{no_reply_prefix}{external_message_id}"
+            refreshed_inbound = personal_channels_repository.mark_inbound_processed(
+                gateway_id=str(gateway_id or "").strip(),
+                channel_key=channel_key,
+                external_message_id=external_message_id,
+                reply_idempotency_key=no_reply_idempotency_key,
+            )
+            _emit_automatic_reply_audit(
+                action=f"personal_channel.{channel_key.split('_', 1)[0]}.automatic_reply",
+                status="skipped",
+                registration=registration,
+                gateway_id=gateway_id,
+                channel_key=channel_key,
+                provider=provider,
+                detail=f"Automatic {label} personal reply was skipped because Sage returned no reply.",
+                metadata={"remote_jid": remote_jid, "inbound_external_message_id": external_message_id},
+                trace_id=trace_id,
+                idempotency_key=f"personal_channel.{channel_key}.automatic_reply.skipped:{gateway_id}:{external_message_id}",
+            )
+            return {"duplicate": duplicate, "inbound": refreshed_inbound or inbound, "outbound": None}
+
+        outbound, _ = personal_channels_repository.create_or_get_outbound_message(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=channel_key,
+            idempotency_key=idempotency_key,
+            remote_jid=remote_jid,
+            text=str(reply.get("text") or "").strip(),
+            reply_to_external_message_id=external_message_id,
+            metadata={"reply_source": str(reply.get("source") or "").strip() or None},
+        )
+
+    if str(outbound.get("status") or "").strip() == "delivered":
+        personal_channels_repository.mark_inbound_processed(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=channel_key,
+            external_message_id=external_message_id,
+            reply_idempotency_key=idempotency_key,
+        )
+        return {"duplicate": duplicate, "inbound": inbound, "outbound": outbound}
+
+    from server_modules import gateway_protocol_service
+
+    dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        provider=provider,
+        remote_jid=str(outbound.get("remote_jid") or remote_jid).strip(),
+        text=str(outbound.get("text") or "").strip(),
+        idempotency_key=idempotency_key,
+        reply_to_external_message_id=(
+            str(outbound.get("reply_to_external_message_id") or "").strip() or external_message_id
+        ),
+    )
+    delivered = personal_channels_repository.mark_outbound_delivered(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        idempotency_key=idempotency_key,
+        external_message_id=str(dispatch_result.get("external_message_id") or "").strip() or None,
+        metadata={"dispatch_result": dispatch_result},
+    )
+    refreshed_inbound = personal_channels_repository.mark_inbound_processed(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        external_message_id=external_message_id,
+        reply_idempotency_key=idempotency_key,
+    )
+    _emit_automatic_reply_audit(
+        action=f"personal_channel.{channel_key.split('_', 1)[0]}.automatic_reply",
+        status="success",
+        registration=registration,
+        gateway_id=gateway_id,
+        channel_key=channel_key,
+        provider=provider,
+        detail=f"Automatic {label} personal reply was dispatched through the paired gateway.",
+        metadata={
+            "remote_jid": remote_jid,
+            "inbound_external_message_id": external_message_id,
+            "reply_text_length": len(str(outbound.get("text") or "")),
+            "outbound_external_message_id": str(dispatch_result.get("external_message_id") or "").strip() or None,
+        },
+        trace_id=trace_id,
+        idempotency_key=f"personal_channel.{channel_key}.automatic_reply.success:{gateway_id}:{idempotency_key}",
+    )
+    return {"duplicate": duplicate, "inbound": refreshed_inbound or inbound, "outbound": delivered}
+
+
+async def _handle_local_bridge_gateway_channel_inbound(
+    *,
+    gateway_id: str,
+    registration: Dict[str, Any],
+    payload: Dict[str, Any],
+    channel_key: str,
+    provider: str,
+    label: str,
+) -> Dict[str, Any]:
+    kill_switch_gate.assert_not_killed(gateway_id=gateway_id)
+    channel_lane_contract_service.assert_personal_gateway_channel(
+        channel_key,
+        str(payload.get("provider") or provider).strip() or provider,
+    )
+    trace_id = str(payload.get("trace_id") or "").strip()
+    message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+    external_message_id = str(message.get("external_message_id") or "").strip()
+    remote_jid = str(message.get("remote_jid") or "").strip()
+    text = str(message.get("text") or "").strip()
+    if not external_message_id or not remote_jid or not text:
+        raise ValueError("channel.inbound requires external_message_id, remote_jid, and text.")
+    inbound, created = personal_channels_repository.record_inbound_message(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        external_message_id=external_message_id,
+        remote_jid=remote_jid,
+        sender_jid=str(message.get("sender_jid") or "").strip() or None,
+        push_name=str(message.get("push_name") or "").strip() or None,
+        text=text,
+        metadata={
+            "provider": provider,
+            "received_at": str(message.get("received_at") or "").strip() or None,
+            "from_me": bool(message.get("from_me")),
+            "agent_computer_bridge": True,
+        },
+    )
+    blocked_result = _control_command_block_result(
+        gateway_id=gateway_id,
+        registration=registration,
+        inbound=inbound,
+        channel_key=channel_key,
+        provider=provider,
+        external_message_id=external_message_id,
+        remote_jid=remote_jid,
+        text=text,
+        sender_role=_sender_role_from_message(message),
+        duplicate=not created,
+        no_reply_prefix=f"{channel_key}:noreply:",
+        trace_id=trace_id,
+    )
+    if blocked_result is not None:
+        return blocked_result
+    return await _deliver_local_bridge_personal_reply(
+        gateway_id=gateway_id,
+        registration=registration,
+        inbound=inbound,
+        remote_jid=remote_jid,
+        external_message_id=external_message_id,
+        text=text,
+        push_name=str(message.get("push_name") or "").strip() or None,
+        duplicate=not created,
+        channel_key=channel_key,
+        provider=provider,
+        label=label,
+        trace_id=trace_id,
+    )
+
+
+async def send_local_bridge_personal_message(
+    *,
+    gateway_id: str,
+    registration: Dict[str, Any],
+    channel_key: str,
+    provider: str,
+    remote_jid: str,
+    text: str,
+    idempotency_key: str,
+    reply_to_external_message_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    kill_switch_gate.assert_not_killed(gateway_id=gateway_id)
+    channel_lane_contract_service.assert_personal_gateway_channel(channel_key, provider)
+    outbound, _ = personal_channels_repository.create_or_get_outbound_message(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        idempotency_key=str(idempotency_key or "").strip(),
+        remote_jid=str(remote_jid or "").strip(),
+        text=str(text or "").strip(),
+        reply_to_external_message_id=str(reply_to_external_message_id or "").strip() or None,
+        metadata={"source": "manual_api", "agent_computer_bridge": True},
+    )
+    if str(outbound.get("status") or "").strip() == "delivered":
+        return outbound
+
+    from server_modules import gateway_protocol_service
+
+    dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        provider=provider,
+        remote_jid=str(remote_jid or "").strip(),
+        text=str(text or "").strip(),
+        idempotency_key=str(idempotency_key or "").strip(),
+        reply_to_external_message_id=str(reply_to_external_message_id or "").strip() or None,
+    )
+    delivered = personal_channels_repository.mark_outbound_delivered(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        idempotency_key=str(idempotency_key or "").strip(),
+        external_message_id=str(dispatch_result.get("external_message_id") or "").strip() or None,
+        metadata={"dispatch_result": dispatch_result},
+    )
+    return delivered or outbound
 
 
 async def send_whatsapp_personal_message(

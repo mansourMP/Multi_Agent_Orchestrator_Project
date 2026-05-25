@@ -129,11 +129,7 @@ export interface AgentDetailViewProps {
   isLoadingAnalytics: boolean;
   selectedAgentMetrics: AgentOperationalMetrics | null;
   selectedTelegramReadiness: TelegramReadinessSnapshot | null;
-  isLoadingTelegramReadiness: boolean;
   onOpenEditWizard: () => void;
-  onDeploy: () => void;
-  onPause: () => void;
-  busyAgentId: string | null;
   hasGatewayOnlineTarget: boolean;
   hasCloudComputerAvailableTarget: boolean;
   isLoadingDetail: boolean;
@@ -172,11 +168,7 @@ export const AgentDetailView = memo(({
   isLoadingAnalytics,
   selectedAgentMetrics,
   selectedTelegramReadiness,
-  isLoadingTelegramReadiness,
   onOpenEditWizard,
-  onDeploy,
-  onPause,
-  busyAgentId,
   hasGatewayOnlineTarget,
   hasCloudComputerAvailableTarget,
   isLoadingDetail,
@@ -525,13 +517,16 @@ export const AgentDetailView = memo(({
     );
   }
 
+  const showSectionRail = currentStudioSubview === 'agents';
+
   return (
     <div className="app-stack-4 studio-agent-detail-motion">
       <div className={joinClassNames(
         'studio-agent-detail-layout',
+        showSectionRail && 'studio-agent-detail-layout--with-rail',
         currentStudioSubview !== 'agents' && 'studio-agent-detail-layout--single',
       )}>
-        {currentStudioSubview === 'agents' ? (
+        {showSectionRail ? (
           <nav className="studio-agent-detail-tabs studio-agent-detail-tabs--rail" role="tablist" aria-label="Business Agent sections">
             {SPECIALIST_OVERLAY_TABS.map((tab) => {
               const SectionIcon = AGENT_SECTION_ICONS[tab.id];
@@ -905,6 +900,7 @@ export const AgentDetailView = memo(({
             hasGatewayOnlineTarget={hasGatewayOnlineTarget}
             hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
             workspaceId={workspaceId}
+            selectedAgentId={selectedAgentId}
           />
         </ListDetailPanel>
         </MotionTabPanel>
@@ -935,34 +931,6 @@ export const AgentDetailView = memo(({
           eyebrow="Command Center"
           title={readString(selectedAgent.name, 'Assistant overview')}
           subtitle="Identity, launch readiness, and live performance signals."
-          actions={(
-            <div className="app-inline-actions app-inline-actions--tight">
-              <AppButton
-                type="button"
-                onClick={onDeploy}
-                disabled={
-                  busyAgentId === selectedAgentId ||
-                  !launchReady ||
-                  readString(selectedAgent.deployment_state).toLowerCase() === 'live' ||
-                  (selectedAgentNeedsTelegramReadiness && isLoadingTelegramReadiness) ||
-                  (selectedAgentNeedsTelegramReadiness && !selectedTelegramReadiness) ||
-                  (selectedAgentNeedsTelegramReadiness && selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true) ||
-                  Boolean(selectedAgentModelDeployBlocker) ||
-                  Boolean(selectedAgentSelfHostedDeployBlocker)
-                }
-              >
-                Go live
-              </AppButton>
-              <AppButton
-                type="button"
-                tone="danger"
-                onClick={onPause}
-                disabled={busyAgentId === selectedAgentId || readString(selectedAgent.deployment_state).toLowerCase() === 'paused'}
-              >
-                Pause
-              </AppButton>
-            </div>
-          )}
         >
           {isLoadingDetail ? (
             <div className="app-stack-3">

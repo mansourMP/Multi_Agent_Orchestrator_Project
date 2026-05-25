@@ -6,6 +6,10 @@ export const APPLICATION_SURFACE_TABS: readonly { id: ApplicationSurfaceTabId; l
   { id: 'my_apps', label: 'Create app' },
 ];
 
+export const APPLICATION_TITLEBAR_TABS: readonly { id: ApplicationSurfaceTabId; label: string }[] = [
+  { id: 'installed', label: 'Apps' },
+];
+
 export function normalizeApplicationSurfaceTabId(value: string | null | undefined): ApplicationSurfaceTabId {
   return APPLICATION_SURFACE_TABS.some((tab) => tab.id === value)
     ? value as ApplicationSurfaceTabId

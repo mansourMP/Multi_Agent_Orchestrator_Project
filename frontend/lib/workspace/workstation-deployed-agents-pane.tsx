@@ -129,49 +129,6 @@ function useStableEvent<TArgs extends unknown[], TResult>(
   return useCallback((...args: TArgs) => handlerRef.current(...args), []);
 }
 
-type StudioRosterFilterId = 'all' | 'live' | 'draft' | 'needs_attention' | 'paused';
-
-function normalizeStudioRosterFilter(value: string | null): StudioRosterFilterId {
-  return value === 'live' || value === 'draft' || value === 'needs_attention' || value === 'paused'
-    ? value
-    : 'all';
-}
-
-function agentDeploymentState(agent: DeployedAgentRecord): string {
-  return readString(agent.deployment_state ?? agent.status, 'draft').toLowerCase();
-}
-
-function agentNeedsAttention(agent: DeployedAgentRecord): boolean {
-  const config = readRecord(agent.config);
-  const metadata = readRecord(agent.metadata);
-  const state = agentDeploymentState(agent);
-  const error = readString(
-    agent.last_error
-    ?? config.last_error
-    ?? metadata.last_error
-    ?? config.blocker
-    ?? metadata.blocker,
-  );
-  return Boolean(error) || /attention|blocked|error|failed|invalid/.test(state);
-}
-
-function agentMatchesStudioRosterFilter(agent: DeployedAgentRecord, filter: StudioRosterFilterId): boolean {
-  const state = agentDeploymentState(agent);
-  if (filter === 'live') {
-    return state === 'live';
-  }
-  if (filter === 'paused') {
-    return state === 'paused' || state === 'disabled' || state === 'inactive' || state === 'suspended';
-  }
-  if (filter === 'needs_attention') {
-    return agentNeedsAttention(agent);
-  }
-  if (filter === 'draft') {
-    return state !== 'live' && state !== 'paused' && state !== 'disabled' && state !== 'inactive' && state !== 'suspended';
-  }
-  return true;
-}
-
 function agentMatchesStudioRosterQuery(agent: DeployedAgentRecord, query: string): boolean {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) {
@@ -195,27 +152,6 @@ function agentMatchesStudioRosterQuery(agent: DeployedAgentRecord, query: string
     .map((value) => readString(value).toLowerCase())
     .filter(Boolean);
   return searchable.some((value) => value.includes(normalizedQuery));
-}
-
-const STUDIO_ROSTER_FILTER_IDS: ReadonlyArray<StudioRosterFilterId> = [
-  'all',
-  'live',
-  'draft',
-  'needs_attention',
-  'paused',
-];
-
-function buildStudioRosterFilterCounts(agents: DeployedAgentRecord[]): Record<StudioRosterFilterId, number> {
-  return STUDIO_ROSTER_FILTER_IDS.reduce((counts, filter) => {
-    counts[filter] = agents.filter((agent) => agentMatchesStudioRosterFilter(agent, filter)).length;
-    return counts;
-  }, {
-    all: 0,
-    live: 0,
-    draft: 0,
-    needs_attention: 0,
-    paused: 0,
-  } as Record<StudioRosterFilterId, number>);
 }
 
 function StudioAgentStartPanel({
@@ -498,10 +434,6 @@ export function WorkstationDeployedAgentsPane({
     [searchParams],
   );
   const requestedCreateAgent = searchParams.get('createAgent') === '1';
-  const studioRosterFilter = useMemo(
-    () => normalizeStudioRosterFilter(searchParams.get('studioFilter')),
-    [searchParams],
-  );
   const requestedOverlayTab = useMemo(
     () => normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab')),
     [searchParams],
@@ -512,6 +444,15 @@ export function WorkstationDeployedAgentsPane({
     const query = params.toString();
     router.replace(`${pathname}${query ? `?${query}` : ''}`, { scroll: false });
   }, [pathname, router, searchParams]);
+
+  useEffect(() => {
+    if (!searchParams.has('studioFilter')) {
+      return;
+    }
+    replaceStudioQuery((params) => {
+      params.delete('studioFilter');
+    });
+  }, [replaceStudioQuery, searchParams]);
 
   const selectOverlayTab = useCallback((nextTab: SpecialistOverlayTabId) => {
     setOverlayTab(nextTab);
@@ -525,20 +466,6 @@ export function WorkstationDeployedAgentsPane({
       }
     });
   }, [replaceStudioQuery]);
-  const selectStudioRosterFilter = useCallback((nextFilter: StudioRosterFilterId) => {
-    setSelectedExternalAgentId(null);
-    setSelectedAgentComputerId(null);
-    replaceStudioQuery((params) => {
-      params.delete('agent');
-      params.delete('tab');
-      params.delete('studioTab');
-      if (nextFilter === 'all') {
-        params.delete('studioFilter');
-      } else {
-        params.set('studioFilter', nextFilter);
-      }
-    });
-  }, [replaceStudioQuery]);
   const openSelectedAgentDetail = useCallback((agentId: string) => {
     const normalizedAgentId = readString(agentId);
     if (!normalizedAgentId) {
@@ -549,6 +476,7 @@ export function WorkstationDeployedAgentsPane({
     setSelectedAgentComputerId(null);
     replaceStudioQuery((params) => {
       params.set('agent', normalizedAgentId);
+      params.delete('studioFilter');
       params.delete('tab');
       params.delete('studioTab');
       params.delete('createAgent');
@@ -562,6 +490,7 @@ export function WorkstationDeployedAgentsPane({
     setSelectedAgentComputerId(null);
     replaceStudioQuery((params) => {
       params.delete('agent');
+      params.delete('studioFilter');
       params.delete('tab');
       params.delete('studioTab');
     });
@@ -1495,6 +1424,7 @@ export function WorkstationDeployedAgentsPane({
     setOverlayTab('overview');
     replaceStudioQuery((params) => {
       params.delete('agent');
+      params.delete('studioFilter');
       params.delete('tab');
       params.delete('studioTab');
       params.delete('createAgent');
@@ -1511,6 +1441,7 @@ export function WorkstationDeployedAgentsPane({
     setOverlayTab('overview');
     replaceStudioQuery((params) => {
       params.delete('agent');
+      params.delete('studioFilter');
       params.delete('tab');
       params.delete('studioTab');
       params.delete('createAgent');
@@ -1621,14 +1552,7 @@ export function WorkstationDeployedAgentsPane({
     () => agents.filter((agent) => agentMatchesStudioRosterQuery(agent, studioRosterQuery)),
     [agents, studioRosterQuery],
   );
-  const studioRosterFilterCounts = useMemo(
-    () => buildStudioRosterFilterCounts(searchedAgents),
-    [searchedAgents],
-  );
-  const filteredAgents = useMemo(
-    () => searchedAgents.filter((agent) => agentMatchesStudioRosterFilter(agent, studioRosterFilter)),
-    [searchedAgents, studioRosterFilter],
-  );
+  const filteredAgents = searchedAgents;
   const filteredConnectedExternalAgents = useMemo(() => {
     const normalizedQuery = studioRosterQuery.trim().toLowerCase();
     if (!normalizedQuery) {
@@ -1653,6 +1577,8 @@ export function WorkstationDeployedAgentsPane({
       computer.runtimeProfileId,
     ].some((value) => readString(value).toLowerCase().includes(normalizedQuery)));
   }, [runtimeAttachments, studioRosterQuery]);
+  const totalStudioObjectCount = agents.length + connectedExternalAgents.length + runtimeAttachments.length;
+  const visibleStudioObjectCount = filteredAgents.length + filteredConnectedExternalAgents.length + filteredAgentComputers.length;
 
   return (
     <WorkstationSurfaceRoot surface="deployed-agents">
@@ -1721,11 +1647,8 @@ export function WorkstationDeployedAgentsPane({
               isAgentListUnavailable={isAgentListUnavailable}
               rosterSearchQuery={studioRosterQuery}
               onChangeRosterSearch={setStudioRosterQuery}
-              rosterFilter={studioRosterFilter}
-              onChangeRosterFilter={selectStudioRosterFilter}
-              rosterFilterCounts={studioRosterFilterCounts}
-              totalAgentCount={agents.length}
-              visibleAgentCount={filteredAgents.length}
+              totalStudioObjectCount={totalStudioObjectCount}
+              visibleStudioObjectCount={visibleStudioObjectCount}
             />
           )}
         >
@@ -1760,7 +1683,7 @@ export function WorkstationDeployedAgentsPane({
             ) : filteredAgents.length === 0 && filteredConnectedExternalAgents.length === 0 && filteredAgentComputers.length === 0 ? (
               <div className="studio-agent-detail-empty" aria-label="No matching Business Agents">
                 <strong>No Studio objects match this filter</strong>
-                <span>Adjust search or status filters to bring agents and runtime resources back into the roster.</span>
+                <span>Adjust search or object type filters to bring agents and runtime resources back into the roster.</span>
                 <AppButton type="button" tone="secondary" onClick={handleRefreshAgentsEvent}>
                   Refresh
                 </AppButton>
@@ -1839,11 +1762,7 @@ export function WorkstationDeployedAgentsPane({
                 isLoadingAnalytics={isLoadingAnalytics}
                 selectedAgentMetrics={selectedAgentMetrics}
                 selectedTelegramReadiness={selectedTelegramReadiness}
-                isLoadingTelegramReadiness={isLoadingTelegramReadiness}
                 onOpenEditWizard={openEditWizard}
-                onDeploy={handleDeploy}
-                onPause={handlePause}
-                busyAgentId={busyAgentId}
                 hasGatewayOnlineTarget={hasGatewayOnlineTarget}
                 hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
                 isLoadingDetail={isLoadingDetail}

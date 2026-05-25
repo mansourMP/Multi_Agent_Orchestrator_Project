@@ -630,6 +630,80 @@ export type DeployedAgentTelegramReadinessRecord = Record<string, unknown> & {
   whatsapp?: Record<string, unknown> | null;
 };
 
+export type ChannelCatalogItemRecord = Record<string, unknown> & {
+  channel_key?: string | null;
+  binding_channel_key?: string | null;
+  label?: string | null;
+  provider?: string | null;
+  connector_id?: string | null;
+  account_provider?: string | null;
+  runtime_lane?: string | null;
+  category?: string | null;
+  surface_kind?: string | null;
+  product_surface?: string | null;
+  navigation_group?: string | null;
+  extension_kind?: string | null;
+  ownership_boundary?: string | null;
+  conversation_capable?: boolean | null;
+  work_system_capable?: boolean | null;
+  status?: string | null;
+  stage?: string | null;
+  live_capable?: boolean | null;
+  launch_allowed?: boolean | null;
+  requires_agent_computer?: boolean | null;
+  surface_support?: string[] | null;
+  capabilities?: string[] | null;
+};
+
+export type ChannelAccountRecord = Record<string, unknown> & {
+  id?: string | null;
+  account_ref?: string | null;
+  secret_ref?: string | null;
+  credential_id?: string | null;
+  provider?: string | null;
+  label?: string | null;
+  scope?: string | null;
+  runtime_lane?: string | null;
+  status?: string | null;
+  gateway_id?: string | null;
+  requires_agent_computer?: boolean | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+export type AgentChannelBindingRecord = Record<string, unknown> & {
+  channel_key?: string | null;
+  catalog_id?: string | null;
+  label?: string | null;
+  provider?: string | null;
+  connector_id?: string | null;
+  account_ref?: string | null;
+  account_label?: string | null;
+  account_status?: string | null;
+  endpoint_key?: string | null;
+  enabled?: boolean | null;
+  status?: string | null;
+  runtime_lane?: string | null;
+  launch_allowed?: boolean | null;
+  live_capable?: boolean | null;
+};
+
+export type ChannelCatalogPayload = Record<string, unknown> & {
+  items?: ChannelCatalogItemRecord[] | null;
+  reserved?: Record<string, unknown>[] | null;
+  count?: number | null;
+};
+
+export type ChannelAccountPayload = Record<string, unknown> & {
+  items?: ChannelAccountRecord[] | null;
+  count?: number | null;
+};
+
+export type AgentChannelBindingsPayload = Record<string, unknown> & {
+  deployed_agent_id?: string | null;
+  items?: AgentChannelBindingRecord[] | null;
+  count?: number | null;
+};
+
 export type WorkstationPlatformAnalyticsDeploymentRecord = Record<string, unknown> & {
   deployed_agent_id?: string | null;
   name?: string | null;
@@ -793,6 +867,10 @@ export type WorkstationClientPaths = {
     action: DeployedAgentBusinessInsightAction,
   ) => string;
   studioAgentSurfaces: string;
+  studioChannelCatalog: string;
+  studioChannelAccounts: string;
+  studioAgentChannelBindings: (deployedAgentId: string) => string;
+  studioAgentChannelBindingAction: (deployedAgentId: string, channelKey: string, action: 'pause' | 'resume' | 'revoke' | 'test') => string;
   studioExternalAgents: string;
   studioExternalAgent: (externalAgentId: string) => string;
   studioExternalAgentRefreshManifest: (externalAgentId: string) => string;
@@ -1060,6 +1138,41 @@ export type WorkstationClient = {
   }) => Promise<Record<string, unknown> | null>;
   listDeployedAgents: (options?: { deploymentState?: string | null }) => Promise<Record<string, unknown>>;
   listStudioAgentSurfaces: () => Promise<StudioAgentSurfacesPayload>;
+  listStudioChannelCatalog: () => Promise<ChannelCatalogPayload>;
+  listStudioChannelAccounts: () => Promise<ChannelAccountPayload>;
+  createStudioChannelAccount: (options: {
+    provider: string;
+    label: string;
+    credentials: Record<string, unknown>;
+    metadata?: Record<string, unknown> | null;
+    skipValidation?: boolean;
+  }) => Promise<Record<string, unknown> | null>;
+  listAgentChannelBindings: (options: {
+    deployedAgentId: string;
+  }) => Promise<AgentChannelBindingsPayload>;
+  createAgentChannelBinding: (options: {
+    deployedAgentId: string;
+    catalogId: string;
+    accountRef?: string | null;
+    endpointKey?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  pauseAgentChannelBinding: (options: {
+    deployedAgentId: string;
+    channelKey: string;
+  }) => Promise<Record<string, unknown> | null>;
+  resumeAgentChannelBinding: (options: {
+    deployedAgentId: string;
+    channelKey: string;
+  }) => Promise<Record<string, unknown> | null>;
+  revokeAgentChannelBinding: (options: {
+    deployedAgentId: string;
+    channelKey: string;
+  }) => Promise<Record<string, unknown> | null>;
+  testAgentChannelBinding: (options: {
+    deployedAgentId: string;
+    channelKey: string;
+    message?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
   listConnectedExternalAgents: () => Promise<Record<string, unknown>>;
   createConnectedExternalAgent: (options: {
     name: string;
@@ -1536,6 +1649,14 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       })}`,
     studioAgentSurfaces:
       `/api/studio/agent-surfaces${buildQueryString({ workspace_id: workspaceId })}`,
+    studioChannelCatalog:
+      `/api/studio/channel-catalog${buildQueryString({ workspace_id: workspaceId })}`,
+    studioChannelAccounts:
+      `/api/studio/channel-accounts${buildQueryString({ workspace_id: workspaceId })}`,
+    studioAgentChannelBindings: (deployedAgentId) =>
+      `/api/studio/agents/${encodeURIComponent(deployedAgentId)}/channel-bindings${buildQueryString({ workspace_id: workspaceId })}`,
+    studioAgentChannelBindingAction: (deployedAgentId, channelKey, action) =>
+      `/api/studio/agents/${encodeURIComponent(deployedAgentId)}/channel-bindings/${encodeURIComponent(channelKey)}/${action}`,
     studioExternalAgents:
       `/api/studio/external-agents${buildQueryString({ workspace_id: workspaceId })}`,
     studioExternalAgent: (externalAgentId) =>
@@ -3096,6 +3217,97 @@ export function createWorkstationClient(
         path: paths.studioAgentSurfaces,
         policy: AGENT_STUDIO_READ_REQUEST_POLICY,
       }) as Promise<StudioAgentSurfacesPayload>,
+    listStudioChannelCatalog: () =>
+      requestJson<ChannelCatalogPayload>({
+        path: paths.studioChannelCatalog,
+        policy: AGENT_STUDIO_READ_REQUEST_POLICY,
+      }) as Promise<ChannelCatalogPayload>,
+    listStudioChannelAccounts: () =>
+      requestJson<ChannelAccountPayload>({
+        path: paths.studioChannelAccounts,
+        policy: AGENT_STUDIO_READ_REQUEST_POLICY,
+      }) as Promise<ChannelAccountPayload>,
+    createStudioChannelAccount: ({ provider, label, credentials, metadata = null, skipValidation = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioChannelAccounts,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            provider,
+            label,
+            credentials,
+            metadata: metadata ?? {},
+            skip_validation: Boolean(skipValidation),
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    listAgentChannelBindings: ({ deployedAgentId }) =>
+      requestJson<AgentChannelBindingsPayload>({
+        path: paths.studioAgentChannelBindings(deployedAgentId),
+        policy: AGENT_STUDIO_READ_REQUEST_POLICY,
+      }) as Promise<AgentChannelBindingsPayload>,
+    createAgentChannelBinding: ({ deployedAgentId, catalogId, accountRef = null, endpointKey = null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioAgentChannelBindings(deployedAgentId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            catalog_id: catalogId,
+            account_ref: accountRef,
+            endpoint_key: endpointKey,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    pauseAgentChannelBinding: ({ deployedAgentId, channelKey }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioAgentChannelBindingAction(deployedAgentId, channelKey, 'pause'),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({ workspace_id: scope.workspaceId }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    resumeAgentChannelBinding: ({ deployedAgentId, channelKey }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioAgentChannelBindingAction(deployedAgentId, channelKey, 'resume'),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({ workspace_id: scope.workspaceId }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    revokeAgentChannelBinding: ({ deployedAgentId, channelKey }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioAgentChannelBindingAction(deployedAgentId, channelKey, 'revoke'),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({ workspace_id: scope.workspaceId }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    testAgentChannelBinding: ({ deployedAgentId, channelKey, message = 'Studio channel binding test' }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.studioAgentChannelBindingAction(deployedAgentId, channelKey, 'test'),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            message: message || 'Studio channel binding test',
+            dry_run: true,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
     listConnectedExternalAgents: () =>
       requestJson<Record<string, unknown>>({
         path: paths.studioExternalAgents,

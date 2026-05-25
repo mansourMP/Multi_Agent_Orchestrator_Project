@@ -48,6 +48,135 @@ def _compact_trace_text(value: Any, limit: int = 280) -> str:
     return f"{text[: max(0, limit - 1)].rstrip()}…"
 
 
+_ASSISTANT_SHELL_PLAN_RE = re.compile(
+    r"```(?:bash|sh|shell|zsh)?\s*\n(.*?)```",
+    re.I | re.S,
+)
+_ASSISTANT_INLINE_SHELL_PLAN_RE = re.compile(
+    r"`([^`\n]*(?:&&|\|\||\||2>/dev/null|/Applications|/etc/os-release|uname\b|sw_vers\b|sysctl\b|brew\b|df\b|whoami\b|pwd\b|ls\b)[^`\n]*)`",
+    re.I,
+)
+_ASSISTANT_SHELL_LINE_RE = re.compile(
+    r"^(?:#|\$|(?:sudo\s+)?(?:bash|sh|zsh|pwd|whoami|uname|sw_vers|sysctl|df|du|ls|brew|cat|echo|find|mdfind|system_profiler|ioreg|ps|pgrep|osascript|open)\b)",
+    re.I,
+)
+_ASSISTANT_SHELL_LINE_HINT_RE = re.compile(
+    r"(?:&&|\|\||\||2>/dev/null|/Applications|/etc/os-release|hw\.memsize|brew\s+list|sw_vers)",
+    re.I,
+)
+_ASSISTANT_SHELL_PLAN_MARKERS = (
+    "running the command",
+    "running the commands",
+    "run the command",
+    "run the commands",
+    "run these commands",
+    "run the following commands",
+    "let me check",
+    "let me get",
+    "let me run",
+    "let me re-run",
+    "let me rerun",
+    "let me see what",
+    "re-run them",
+    "rerun them",
+    "commands ran",
+    "output didn't come through",
+    "output did not come through",
+    "show you the results directly",
+    "i'll grab",
+    "i will grab",
+)
+
+
+def _has_shell_exec_tool(tools: List[Dict[str, Any]]) -> bool:
+    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    return "shell__exec" in tool_names
+
+
+def _normalize_assistant_shell_line(raw_line: Any) -> str:
+    line = str(raw_line or "").strip()
+    line = line.strip("`").strip()
+    line = re.sub(r"^(?:bash|sh|zsh)\s+(?!-)", "", line, count=1, flags=re.I).strip()
+    if line.startswith("$ "):
+        line = line[2:].strip()
+    return line
+
+
+def _looks_like_assistant_shell_line(line: str) -> bool:
+    value = str(line or "").strip()
+    if not value or value in {"```", "```bash", "```sh", "```shell", "```zsh"}:
+        return False
+    if len(value) > 1500:
+        return False
+    if _ASSISTANT_SHELL_LINE_RE.search(value):
+        return True
+    return bool(_ASSISTANT_SHELL_LINE_HINT_RE.search(value))
+
+
+def _extract_assistant_shell_command_blocks(text: str) -> List[str]:
+    command_blocks: List[str] = []
+    for match in _ASSISTANT_SHELL_PLAN_RE.finditer(text):
+        block = str(match.group(1) or "").strip()
+        if not block:
+            continue
+        lines = []
+        for raw_line in block.splitlines():
+            line = _normalize_assistant_shell_line(raw_line)
+            if line:
+                lines.append(line)
+        if lines:
+            command_blocks.append("\n".join(lines))
+    if command_blocks:
+        return command_blocks
+
+    for match in _ASSISTANT_INLINE_SHELL_PLAN_RE.finditer(text):
+        line = _normalize_assistant_shell_line(match.group(1))
+        if _looks_like_assistant_shell_line(line):
+            command_blocks.append(line)
+    if command_blocks:
+        return command_blocks
+
+    current_block: List[str] = []
+    for raw_line in text.splitlines():
+        line = _normalize_assistant_shell_line(raw_line)
+        if _looks_like_assistant_shell_line(line):
+            current_block.append(line)
+            continue
+        if current_block:
+            command_blocks.append("\n".join(current_block))
+            current_block = []
+    if current_block:
+        command_blocks.append("\n".join(current_block))
+    return command_blocks
+
+
+def _extract_assistant_shell_plan_tool_call(
+    reply: Any,
+    tools: List[Dict[str, Any]],
+) -> tuple[str, List[Dict[str, Any]]]:
+    text = str(reply or "").strip()
+    if not text:
+        return "", []
+    if not _has_shell_exec_tool(tools):
+        return text, []
+    normalized = " ".join(text.lower().split())
+    if not any(marker in normalized for marker in _ASSISTANT_SHELL_PLAN_MARKERS):
+        return text, []
+    command_blocks = _extract_assistant_shell_command_blocks(text)
+    command = "\n\n".join(command_blocks).strip()
+    if not command or len(command) > 5000:
+        return text, []
+    return "", [
+        {
+            "name": "shell__exec",
+            "arguments": {
+                "command": command,
+                "description": "Run the local checks Sage prepared.",
+            },
+        }
+    ]
+
+
 def _trace_raw_event(envelope: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not isinstance(envelope, dict):
         return None
@@ -303,6 +432,7 @@ def stream_provider_backed_direct_chat(
     trace_context: Optional[Any],
     resolved_chat_max_iterations: int,
     direct_tool_result_summary_system_message: str,
+    assistant_plan_tools: Optional[List[Dict[str, Any]]] = None,
 ) -> Iterator[Dict[str, Any]]:
     usage_masked: Dict[str, Any] = {}
     attempted_providers = ""
@@ -339,6 +469,8 @@ def stream_provider_backed_direct_chat(
     planning_item_id = uuid.uuid4().hex
     assistant_message_id = uuid.uuid4().hex
     health_safety_context = healthguide_safety_service.resolve_health_safety_context(session_ctx=session_ctx)
+    effective_assistant_plan_tools = assistant_plan_tools if assistant_plan_tools is not None else tools
+    buffer_assistant_tool_plans = _has_shell_exec_tool(effective_assistant_plan_tools)
     trace_started_raw = _emit_trace_event(
         trace_context,
         event_type="trace.started",
@@ -492,18 +624,19 @@ def stream_provider_backed_direct_chat(
                 delta = response_leak_guard_service.guard_stream_delta(event.get("delta") or "")
                 if delta:
                     iteration_reply += delta
-                    yield {"type": "chunk", "delta": delta}
-                    trace_delta = _emit_trace_event(
-                        trace_context,
-                        event_type="assistant.message.delta",
-                        data={
-                            "message_id": assistant_message_id,
-                            "delta": delta,
-                        },
-                        persisted=False,
-                    )
-                    if trace_delta is not None:
-                        yield trace_delta
+                    if not buffer_assistant_tool_plans:
+                        yield {"type": "chunk", "delta": delta}
+                        trace_delta = _emit_trace_event(
+                            trace_context,
+                            event_type="assistant.message.delta",
+                            data={
+                                "message_id": assistant_message_id,
+                                "delta": delta,
+                            },
+                            persisted=False,
+                        )
+                        if trace_delta is not None:
+                            yield trace_delta
                 continue
             if event_type == "result":
                 final_reply = str(event.get("reply") or "").strip() or iteration_reply
@@ -513,6 +646,13 @@ def stream_provider_backed_direct_chat(
                 actual_provider = str(event.get("provider") or actual_provider or "").strip() or actual_provider
                 actual_model = str(event.get("model") or actual_model or "").strip() or actual_model
                 iteration_tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
+                if not iteration_tool_calls:
+                    final_reply, assistant_shell_plan_tool_calls = _extract_assistant_shell_plan_tool_call(
+                        final_reply,
+                        effective_assistant_plan_tools,
+                    )
+                    if assistant_shell_plan_tool_calls:
+                        iteration_tool_calls = assistant_shell_plan_tool_calls
                 yield services.thinking_step_payload(
                     thinking_iteration,
                     "done",

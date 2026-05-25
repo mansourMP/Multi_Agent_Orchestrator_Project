@@ -8,6 +8,8 @@
     "build": "./node_modules/.bin/tsc -p tsconfig.json",
     "typecheck": "./node_modules/.bin/tsc -p tsconfig.json --noEmit",
     "test": "npm run build --silent && node --test dist/__tests__/*.test.js",
+    "dev:bridge": "npm run build --silent && node dist/dev/local-bridge-harness.js",
+    "signal:bridge": "npm run build --silent && node dist/bridges/signal-cli-bridge.js",
     "start": "node dist/index.js"
   },
   "engines": {

@@ -10,6 +10,7 @@ from server_modules import (
     deployed_agent_service,
     gateway_approval_service,
     gateway_state_repository,
+    personal_channels_service,
     personal_channels_repository,
     provider_catalog_service,
 )
@@ -342,6 +343,56 @@ def _summarize_quota_health(
     }
 
 
+def _summarize_personal_channel_health(gateway_id: str) -> Dict[str, Any]:
+    try:
+        payload = personal_channels_service.get_gateway_personal_channel_surfaces(gateway_id)
+    except Exception as exc:
+        return {
+            "status": "warn",
+            "summary": f"Personal channel readiness is unavailable: {str(exc).strip() or 'unknown error'}.",
+            "count": 0,
+            "connected_count": 0,
+            "running_count": 0,
+            "items": [],
+        }
+
+    items = [
+        dict(item)
+        for item in list(payload.get("items") or [])
+        if isinstance(item, dict)
+    ]
+    connected_items = [item for item in items if bool(item.get("connected"))]
+    running_items = [item for item in items if bool(item.get("running"))]
+    issue_items = [
+        item for item in items
+        if bool(item.get("live_capable"))
+        and not bool(item.get("connected"))
+        and _text(item.get("status")).lower() in {"unavailable", "error", "failed", "fail"}
+    ]
+
+    if not items:
+        status = "warn"
+        summary = "No personal messaging channel manifests are available from Agent Computer."
+    elif issue_items:
+        status = "warn"
+        summary = f"{len(issue_items)} personal messaging channel(s) report bridge errors."
+    elif connected_items:
+        status = "pass"
+        summary = f"{len(connected_items)} personal messaging channel(s) connected on Agent Computer."
+    else:
+        status = "warn"
+        summary = "Personal messaging channels are available, but none are connected yet."
+
+    return {
+        "status": status,
+        "summary": summary,
+        "count": len(items),
+        "connected_count": len(connected_items),
+        "running_count": len(running_items),
+        "items": items,
+    }
+
+
 def gateway_doctor_payload(gateway_id: str, *, force_provider_probe: bool = False, trace_id: Optional[str] = None) -> Dict[str, Any]:
     registration = gateway_state_repository.get_gateway_registration(gateway_id)
     if not registration:
@@ -455,6 +506,20 @@ def gateway_doctor_payload(gateway_id: str, *, force_provider_probe: bool = Fals
                 ),
             }
         )
+    personal_channel_health = _summarize_personal_channel_health(gateway_id)
+    checks.append(
+        {
+            "id": "personal_messaging_channels",
+            "status": _text(personal_channel_health.get("status"), "warn"),
+            "summary": _text(
+                personal_channel_health.get("summary"),
+                "Personal messaging channel readiness is unavailable.",
+            ),
+            "connected_count": int(personal_channel_health.get("connected_count") or 0),
+            "running_count": int(personal_channel_health.get("running_count") or 0),
+            "count": int(personal_channel_health.get("count") or 0),
+        }
+    )
     active_browser_sessions = [
         item
         for item in browser_sessions
@@ -641,6 +706,7 @@ def gateway_doctor_payload(gateway_id: str, *, force_provider_probe: bool = Fals
         },
         "whatsapp_personal": whatsapp_state,
         "telegram_personal": telegram_state,
+        "personal_channels": personal_channel_health,
         "browser": {
             "status": "pass" if active_browser_sessions else ("warn" if browser_sessions else "pass"),
             "summary": (

@@ -316,6 +316,38 @@ async def build_telegram_personal_reply_async(
     )
 
 
+async def build_personal_channel_reply_async(
+    *,
+    surface_channel: str,
+    workspace_id: str,
+    gateway_id: str,
+    remote_jid: str,
+    text: str,
+    push_name: Optional[str] = None,
+    fallback_label: str = "channel",
+) -> Optional[Dict[str, Any]]:
+    unified = await _build_unified_sage_personal_reply_async(
+        surface_channel=surface_channel,
+        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+        remote_jid=remote_jid,
+        text=text,
+        push_name=push_name,
+        fallback_label=fallback_label,
+    )
+    if unified is not None:
+        return unified
+    return _build_personal_reply(
+        surface_channel=surface_channel,
+        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+        remote_jid=remote_jid,
+        text=text,
+        push_name=push_name,
+        fallback_label=fallback_label,
+    )
+
+
 def build_whatsapp_personal_reply(
     *,
     workspace_id: str,

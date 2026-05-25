@@ -17,3 +17,14 @@ def test_guard_model_response_marks_red_private_context() -> None:
     assert "red_sensitivity_label" in result.findings
     assert "private_memory_marker" in result.findings
     assert "RAW_MEMORY" not in result.text
+
+
+def test_guard_model_response_removes_internal_tool_markup() -> None:
+    result = response_leak_guard_service.guard_model_response(
+        "Let me check.\n<||DSML||tool_calls><||DSML||invoke name=\"bash\">secret command</||DSML||invoke>"
+    )
+
+    assert result.redacted is True
+    assert "internal_tool_markup" in result.findings
+    assert result.text == "Let me check."
+    assert "DSML" not in result.text

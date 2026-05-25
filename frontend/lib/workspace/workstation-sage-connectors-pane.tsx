@@ -135,6 +135,14 @@ type GatewayDoctorPayload = Record<string, unknown> & {
   status?: string | null;
   browser?: Record<string, unknown> | null;
   browser_attach?: Record<string, unknown> | null;
+  personal_channels?: {
+    status?: string | null;
+    summary?: string | null;
+    count?: number | null;
+    connected_count?: number | null;
+    running_count?: number | null;
+    items?: Array<Record<string, unknown>>;
+  } | null;
 };
 
 type PersonalChannelStateRecord = Record<string, unknown> & {
@@ -154,11 +162,37 @@ type PersonalChannelViewPayload = Record<string, unknown> & {
   recent_messages?: Array<Record<string, unknown>>;
 };
 
+type PersonalChannelSurfaceRecord = Record<string, unknown> & {
+  channel_key?: string | null;
+  label?: string | null;
+  provider?: string | null;
+  stage?: string | null;
+  status?: string | null;
+  status_label?: string | null;
+  live_capable?: boolean | null;
+  connected?: boolean | null;
+  running?: boolean | null;
+  connected_identity?: string | null;
+  detail?: string | null;
+  next_step?: string | null;
+};
+
+type PersonalChannelSurfacesPayload = Record<string, unknown> & {
+  items?: PersonalChannelSurfaceRecord[];
+};
+
 type PersonalCardStatusTone = 'neutral' | 'connected' | 'warning' | 'danger';
 type PersonalCommunicationChannel = 'telegram' | 'whatsapp';
 
 type PersonalCardRecord = {
-  id: 'device' | 'browser' | 'telegram_personal' | 'whatsapp_personal' | 'signal_personal' | 'imessage_personal';
+  id:
+    | 'device'
+    | 'browser'
+    | 'telegram_personal'
+    | 'whatsapp_personal'
+    | 'signal_personal'
+    | 'imessage_personal'
+    | 'wechat_personal';
   label: string;
   image: string;
   detail: string;
@@ -245,6 +279,7 @@ type SageConnectorsPaneCache = {
   doctor: GatewayDoctorPayload | null;
   whatsappPersonal: PersonalChannelViewPayload | null;
   telegramPersonal: PersonalChannelViewPayload | null;
+  personalChannelSurfaces: PersonalChannelSurfaceRecord[];
   hostedSageAi: HostedSageAiSnapshot;
   mcpServers: McpServerRecord[];
 };
@@ -418,6 +453,16 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Pages', 'Search'],
     summary: 'Use Notion when Sage should search notes, docs, and workspace pages.',
     setupHint: 'Connect Notion to make workspace pages available to Sage.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'linear',
+    label: 'Linear',
+    image: '',
+    connectorIds: ['linear'],
+    capabilityTags: ['Issues', 'Projects'],
+    summary: 'Linear lets Sage read, create, and update issue work when connected.',
+    setupHint: 'Connect Linear when Sage should help with product and engineering task flow.',
     surfaceScope: 'all',
   },
   {
@@ -1494,36 +1539,91 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
   };
 }
 
-function summarizePlannedSignalPersonalState(): {
+function summarizePersonalSurfaceState(
+  surface: PersonalChannelSurfaceRecord | null | undefined,
+  fallback: {
+    statusLabel: string;
+    statusTone: PersonalCardStatusTone;
+    detail: string;
+    summary: string;
+    nextStep: string | null;
+  },
+): {
   statusLabel: string;
   statusTone: PersonalCardStatusTone;
   detail: string;
   summary: string;
   nextStep: string | null;
 } {
+  if (!surface) {
+    return fallback;
+  }
+  const status = readString(surface.status).toLowerCase();
+  const label = readString(surface.label, 'This channel');
+  const connected = surface.connected === true;
+  const liveCapable = surface.live_capable === true;
+  const detail = readString(surface.detail)
+    || (connected
+      ? `${label} is connected on Agent Computer.`
+      : `${label} is ${status ? status.replace(/_/g, ' ') : 'available'} on Agent Computer.`);
   return {
-    statusLabel: 'Coming next',
-    statusTone: 'neutral',
-    detail: 'Signal is planned for Connected Computer.',
-    summary: 'Signal will appear beside Telegram and WhatsApp when it is ready for the selected computer.',
-    nextStep: 'Use Telegram or WhatsApp today from Connected Computer.',
+    statusLabel: readString(surface.status_label)
+      || (connected ? 'Connected' : liveCapable ? 'Available' : fallback.statusLabel),
+    statusTone: connected ? 'connected' : status.includes('error') || status.includes('blocked') ? 'danger' : status.includes('connecting') ? 'warning' : 'neutral',
+    detail,
+    summary: liveCapable
+      ? `${label} is an Agent Computer personal channel. It is separate from Studio business/customer channels.`
+      : `${label} is listed as an Agent Computer channel, but setup and send stay disabled until its local adapter is ready.`,
+    nextStep: readOptionalString(surface.next_step) ?? fallback.nextStep,
   };
 }
 
-function summarizePlannedIMessagePersonalState(): {
+function summarizePlannedSignalPersonalState(surface?: PersonalChannelSurfaceRecord | null): {
   statusLabel: string;
   statusTone: PersonalCardStatusTone;
   detail: string;
   summary: string;
   nextStep: string | null;
 } {
-  return {
-    statusLabel: 'Later',
+  return summarizePersonalSurfaceState(surface, {
+    statusLabel: 'Bridge required',
     statusTone: 'neutral',
-    detail: 'iMessage is planned for a future Connected Computer update.',
-    summary: 'iMessage will only ship once it is reliable enough for a user-owned Mac workflow.',
-    nextStep: 'Keep using Telegram or WhatsApp until iMessage is ready.',
-  };
+    detail: 'Signal runs through Agent Computer.',
+    summary: 'Signal is a Sage personal channel. It needs a local bridge on the selected Agent Computer and stays separate from Studio business channels.',
+    nextStep: 'Connect an Agent Computer with a Signal bridge to enable Sage messaging.',
+  });
+}
+
+function summarizePlannedIMessagePersonalState(surface?: PersonalChannelSurfaceRecord | null): {
+  statusLabel: string;
+  statusTone: PersonalCardStatusTone;
+  detail: string;
+  summary: string;
+  nextStep: string | null;
+} {
+  return summarizePersonalSurfaceState(surface, {
+    statusLabel: 'Mac bridge required',
+    statusTone: 'neutral',
+    detail: 'iMessage runs through a Mac Agent Computer.',
+    summary: 'iMessage is a Sage personal channel. It needs a local Mac bridge and stays separate from Studio business channels.',
+    nextStep: 'Connect a Mac Agent Computer with an iMessage bridge to enable Sage messaging.',
+  });
+}
+
+function summarizeWeChatPersonalState(surface?: PersonalChannelSurfaceRecord | null): {
+  statusLabel: string;
+  statusTone: PersonalCardStatusTone;
+  detail: string;
+  summary: string;
+  nextStep: string | null;
+} {
+  return summarizePersonalSurfaceState(surface, {
+    statusLabel: 'Bridge required',
+    statusTone: 'neutral',
+    detail: 'WeChat personal runs through Agent Computer.',
+    summary: 'WeChat is a Sage personal channel. It needs a local bridge on the selected Agent Computer and stays separate from Studio business channels.',
+    nextStep: 'Connect an Agent Computer with a WeChat bridge to enable Sage messaging.',
+  });
 }
 
 export function WorkstationSageConnectorsPane({
@@ -1556,6 +1656,7 @@ export function WorkstationSageConnectorsPane({
   const [doctor, setDoctor] = useState<GatewayDoctorPayload | null>(() => cachedState?.doctor ?? null);
   const [whatsappPersonal, setWhatsappPersonal] = useState<PersonalChannelViewPayload | null>(() => cachedState?.whatsappPersonal ?? null);
   const [telegramPersonal, setTelegramPersonal] = useState<PersonalChannelViewPayload | null>(() => cachedState?.telegramPersonal ?? null);
+  const [personalChannelSurfaces, setPersonalChannelSurfaces] = useState<PersonalChannelSurfaceRecord[]>(() => cachedState?.personalChannelSurfaces ?? []);
   const [hostedSageAi, setHostedSageAi] = useState<HostedSageAiSnapshot>(() => cachedState?.hostedSageAi ?? DEFAULT_HOSTED_SAGE_AI);
   const [mcpServers, setMcpServers] = useState<McpServerRecord[]>(() => cachedState?.mcpServers ?? []);
   const [isLoading, setIsLoading] = useState(() => cachedState === null);
@@ -1605,9 +1706,10 @@ export function WorkstationSageConnectorsPane({
             doctor: null,
             whatsappPersonal: null,
             telegramPersonal: null,
+            personalChannelSurfaces: [],
           };
         }
-        const [doctorPayload, whatsappPayload, telegramPayload] = await Promise.all([
+        const [doctorPayload, whatsappPayload, telegramPayload, channelSurfacesPayload] = await Promise.all([
           services.client.requestJson<GatewayDoctorPayload>({
             path: `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/doctor`,
             allowStatuses: [403, 404],
@@ -1620,6 +1722,10 @@ export function WorkstationSageConnectorsPane({
             path: `/api/personal-channels/telegram/gateways/${encodeURIComponent(gatewayId)}`,
             allowStatuses: [403, 404],
           }),
+          services.client.requestJson<PersonalChannelSurfacesPayload>({
+            path: `/api/personal-channels/gateways/${encodeURIComponent(gatewayId)}/channels`,
+            allowStatuses: [403, 404],
+          }),
         ]);
         return {
           gateways: registrationItems,
@@ -1627,6 +1733,9 @@ export function WorkstationSageConnectorsPane({
           doctor: doctorPayload,
           whatsappPersonal: whatsappPayload,
           telegramPersonal: telegramPayload,
+          personalChannelSurfaces: Array.isArray(channelSurfacesPayload?.items)
+            ? channelSurfacesPayload.items.filter((item): item is PersonalChannelSurfaceRecord => Boolean(item) && typeof item === 'object')
+            : [],
         };
       })(),
     ]);
@@ -1638,6 +1747,7 @@ export function WorkstationSageConnectorsPane({
       doctor: null,
       whatsappPersonal: null,
       telegramPersonal: null,
+      personalChannelSurfaces: [],
     };
     const normalizedProviders = normalizeProviderCatalog(catalogPayload);
     const nextState: SageConnectorsPaneCache = {
@@ -1650,6 +1760,7 @@ export function WorkstationSageConnectorsPane({
       doctor: gatewayPayload.doctor,
       whatsappPersonal: gatewayPayload.whatsappPersonal,
       telegramPersonal: gatewayPayload.telegramPersonal,
+      personalChannelSurfaces: gatewayPayload.personalChannelSurfaces,
       hostedSageAi: normalizeHostedSageAi(catalogPayload),
       mcpServers: mcpResult.status === 'fulfilled' ? normalizeMcpServers(mcpResult.value) : [],
     };
@@ -1663,6 +1774,7 @@ export function WorkstationSageConnectorsPane({
     setDoctor(nextState.doctor);
     setWhatsappPersonal(nextState.whatsappPersonal);
     setTelegramPersonal(nextState.telegramPersonal);
+    setPersonalChannelSurfaces(nextState.personalChannelSurfaces);
     setHostedSageAi(nextState.hostedSageAi);
     setMcpServers(nextState.mcpServers);
 
@@ -1872,14 +1984,25 @@ export function WorkstationSageConnectorsPane({
     [gateways, selectedGatewayId],
   );
   const showPersonalSurface = surface === 'sage';
+  const personalChannelSurfaceByKey = useMemo(() => {
+    const byKey = new Map<string, PersonalChannelSurfaceRecord>();
+    personalChannelSurfaces.forEach((item) => {
+      const key = readString(item.channel_key).toLowerCase();
+      if (key) {
+        byKey.set(key, item);
+      }
+    });
+    return byKey;
+  }, [personalChannelSurfaces]);
 
   const personalCards = useMemo<PersonalCardRecord[]>(() => {
     const device = summarizeGatewayState(selectedGateway, doctor);
     const browser = summarizeBrowserState(selectedGateway, doctor);
     const telegram = summarizeTelegramPersonalState(selectedGateway, telegramPersonal);
     const whatsapp = summarizeWhatsappPersonalState(selectedGateway, whatsappPersonal);
-    const signal = summarizePlannedSignalPersonalState();
-    const imessage = summarizePlannedIMessagePersonalState();
+    const signal = summarizePlannedSignalPersonalState(personalChannelSurfaceByKey.get('signal_personal'));
+    const imessage = summarizePlannedIMessagePersonalState(personalChannelSurfaceByKey.get('imessage_personal'));
+    const wechat = summarizeWeChatPersonalState(personalChannelSurfaceByKey.get('wechat_personal'));
     return [
       { id: 'device', label: 'Connected Computer', image: '', ...device },
       { id: 'browser', label: 'Use my browser', image: '', ...browser },
@@ -1887,15 +2010,17 @@ export function WorkstationSageConnectorsPane({
       { id: 'whatsapp_personal', label: 'Your WhatsApp', image: '/integrations/whatsapp.png', ...whatsapp },
       { id: 'signal_personal', label: 'Signal', image: '', ...signal },
       { id: 'imessage_personal', label: 'iMessage', image: '', ...imessage },
+      { id: 'wechat_personal', label: 'WeChat', image: '', ...wechat },
     ];
-  }, [doctor, selectedGateway, telegramPersonal, whatsappPersonal]);
+  }, [doctor, personalChannelSurfaceByKey, selectedGateway, telegramPersonal, whatsappPersonal]);
 
   const communicationPersonalCards = useMemo(
     () => personalCards.filter((card) =>
       card.id === 'telegram_personal'
       || card.id === 'whatsapp_personal'
       || card.id === 'signal_personal'
-      || card.id === 'imessage_personal',
+      || card.id === 'imessage_personal'
+      || card.id === 'wechat_personal',
     ),
     [personalCards],
   );
@@ -2022,6 +2147,9 @@ export function WorkstationSageConnectorsPane({
         card.id === 'gmail'
         || card.id === 'google_calendar'
         || card.id === 'microsoft_365'
+        || card.id === 'github'
+        || card.id === 'linear'
+        || card.id === 'notion'
         || card.id === 'webhook',
       )
       .map(connectorAsExternalCard),
@@ -2060,9 +2188,9 @@ export function WorkstationSageConnectorsPane({
     if (appCards.length > 0) {
       groups.push({
         id: 'apps',
-        label: 'Apps',
-        description: 'Work apps and account connections.',
-        detail: 'Gmail, calendar, workspace apps, and webhooks.',
+        label: 'Connected Apps',
+        description: 'Work systems Sage can read or act inside.',
+        detail: 'Gmail, calendar, workspace apps, GitHub, Notion, and webhooks.',
         countLabel: `${appCards.length}`,
         statusTone: appCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
       });
@@ -2070,10 +2198,10 @@ export function WorkstationSageConnectorsPane({
     if (channelCards.length > 0) {
       groups.push({
         id: 'channels',
-        label: 'Channels',
-        description: 'Places Sage can talk or receive messages.',
+        label: showPersonalSurface ? 'Personal Messaging' : 'Business Channels',
+        description: showPersonalSurface ? 'Places you can talk to Sage.' : 'Places customers can talk to an agent.',
         detail: surface === 'sage'
-          ? 'Personal and team message channels.'
+          ? 'Telegram, WhatsApp, Signal, iMessage, and WeChat through Agent Computer.'
           : 'Customer-facing message channels.',
         countLabel: `${channelCards.length}`,
         statusTone: channelCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
@@ -2111,9 +2239,9 @@ export function WorkstationSageConnectorsPane({
     }
     groups.push({
       id: 'developer',
-      label: 'Developer tools',
-      description: 'Custom tool connections.',
-      detail: 'Tool servers, custom APIs, and webhooks.',
+      label: 'Extensions',
+      description: 'Plugin-style adapters and custom tools.',
+      detail: 'MCP servers, custom APIs, and future adapter packs.',
       countLabel: mcpServers.length > 0 ? `${mcpServers.length}` : 'Custom',
       statusTone: mcpServers.some((server) => server.enabled !== false) ? 'connected' : 'neutral',
     });
@@ -3097,7 +3225,9 @@ export function WorkstationSageConnectorsPane({
 
   function renderPersonalExpand(record: PersonalCardRecord) {
     const showChannelActions = record.id === 'telegram_personal' || record.id === 'whatsapp_personal';
-    const plannedChannel = record.id === 'signal_personal' || record.id === 'imessage_personal';
+    const bridgeChannel = record.id === 'signal_personal'
+      || record.id === 'imessage_personal'
+      || record.id === 'wechat_personal';
     const channel = record.channel ?? null;
     const channelDraft = channel ? channelDrafts[channel] : null;
     const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
@@ -3151,7 +3281,7 @@ export function WorkstationSageConnectorsPane({
                 openGatewaySurface();
               }}
             >
-              {plannedChannel
+              {bridgeChannel
                 ? 'Open computer setup'
                 : record.statusLabel === 'Connect computer'
                 ? 'Connect a computer'
@@ -3305,7 +3435,7 @@ export function WorkstationSageConnectorsPane({
             </div>
           </div>
           <div className="sage-computer-connect__capabilities" aria-label="Included local capabilities">
-            {['Browser', 'Files', 'Shell', 'Screenshots', 'Personal apps', 'Telegram/WhatsApp', 'Local AI'].map((label) => (
+            {['Browser', 'Files', 'Shell', 'Screenshots', 'Personal apps', 'Messaging bridges', 'Local AI'].map((label) => (
               <span key={label}>{label}</span>
             ))}
           </div>
@@ -3365,7 +3495,7 @@ export function WorkstationSageConnectorsPane({
         </div>
         {record.definition.surfaceScope === 'studio_only' ? (
           <div className="sage-unified-expand__text">
-            This app is for shared business channels. Personal Telegram and WhatsApp stay in Communication.
+            This connector belongs to the business channel lane. Personal messaging stays in Personal Messaging through Agent Computer.
           </div>
         ) : null}
         {record.connected ? (
@@ -3688,6 +3818,17 @@ export function WorkstationSageConnectorsPane({
     const connected = device?.statusTone === 'connected';
     const statusTone = device?.statusTone ?? 'warning';
     const statusClass = personalStatusClassName({ statusTone });
+    const personalDoctor = doctor?.personal_channels && typeof doctor.personal_channels === 'object'
+      ? doctor.personal_channels
+      : null;
+    const personalDoctorStatus = readString(personalDoctor?.status, 'warn').toLowerCase();
+    const personalDoctorTone: PersonalCardStatusTone = personalDoctorStatus === 'pass' || personalDoctorStatus === 'healthy'
+      ? 'connected'
+      : personalDoctorStatus === 'fail' || personalDoctorStatus === 'blocked'
+        ? 'danger'
+        : 'warning';
+    const personalDoctorCount = readInteger(personalDoctor?.count, communicationPersonalCards.length);
+    const personalDoctorConnectedCount = readInteger(personalDoctor?.connected_count, communicationPersonalCards.filter((card) => card.statusTone === 'connected').length);
     return (
       <section className="sage-unified-section sage-agent-computer">
         <p className="sage-unified-section__label">Agent Computer</p>
@@ -3707,6 +3848,26 @@ export function WorkstationSageConnectorsPane({
             </span>
             <AppButton type="button" onClick={openComputerConnectSheet}>
               {connected ? 'Manage' : 'Connect'}
+            </AppButton>
+          </div>
+          <div className="sage-agent-computer__setting">
+            <div className="sage-agent-computer__copy">
+              <strong>Personal messaging doctor</strong>
+              <span>{readString(personalDoctor?.summary, 'Telegram, WhatsApp, Signal, iMessage, and WeChat readiness appears here after Agent Computer reports health.')}</span>
+            </div>
+            <span className={joinClassNames('sage-unified-card__status', personalStatusClassName({ statusTone: personalDoctorTone }))}>
+              {personalDoctorTone === 'connected' ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
+              {personalDoctorConnectedCount}/{personalDoctorCount} connected
+            </span>
+            <AppButton
+              type="button"
+              tone="secondary"
+              onClick={() => {
+                setSelectedIntegrationId('channels');
+                setExpandedCardId(null);
+              }}
+            >
+              Review
             </AppButton>
           </div>
           <div className="sage-agent-computer__setting">

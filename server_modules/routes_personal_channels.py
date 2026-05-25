@@ -191,6 +191,24 @@ async def _request_personal_channel_send_approval(
     )
 
 
+@router.get("/personal-channels/gateways/{gateway_id}/channels")
+async def get_personal_gateway_channel_surfaces(
+    request: Request,
+    gateway_id: str,
+    current_user=Depends(require_api_key),
+):
+    channel_lane_contract_service.assert_personal_route_path(str(request.url.path))
+    _require_accessible_gateway_registration(
+        gateway_id,
+        current_user,
+        minimum_role="viewer",
+    )
+    try:
+        return personal_channels_service.get_gateway_personal_channel_surfaces(gateway_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/personal-channels/whatsapp/gateways/{gateway_id}")
 async def get_whatsapp_personal_gateway_status(
     request: Request,

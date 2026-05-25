@@ -12,6 +12,10 @@ _RED_MEMORY_PATTERNS: Tuple[tuple[str, re.Pattern[str]], ...] = (
     ("private_memory_marker", re.compile(r"\b(RED_MEMORY|PRIVATE_MEMORY|SAGE_PRIVATE_CONTEXT|RAW_MEMORY)\b", re.I)),
     ("secret_instruction_leak", re.compile(r"\b(system prompt|developer instructions?|hidden instructions?|internal policy)\b\s*[:=-]", re.I)),
 )
+_INTERNAL_TOOL_MARKUP_RE = re.compile(
+    r"<\s*\|\s*\|\s*DSML(?:\s*\|\s*\|\s*tool_calls\s*>?)?.*",
+    re.I | re.S,
+)
 
 
 @dataclass(frozen=True)
@@ -31,11 +35,17 @@ class ResponseLeakGuardResult:
 
 def guard_model_response(value: Any) -> ResponseLeakGuardResult:
     raw = str(value or "")
-    findings = [name for name, pattern in _RED_MEMORY_PATTERNS if pattern.search(raw)]
-    redacted = secret_redaction_service.redact_text(raw)
-    redacted_changed = redacted != raw
+    removed_internal_tool_markup = bool(_INTERNAL_TOOL_MARKUP_RE.search(raw))
+    without_internal_tool_markup = (
+        _INTERNAL_TOOL_MARKUP_RE.sub("", raw).strip()
+        if removed_internal_tool_markup
+        else raw
+    )
+    findings = [name for name, pattern in _RED_MEMORY_PATTERNS if pattern.search(without_internal_tool_markup)]
+    redacted = secret_redaction_service.redact_text(without_internal_tool_markup)
+    redacted_changed = redacted != without_internal_tool_markup
     if findings:
-        guarded = raw
+        guarded = without_internal_tool_markup
         for _name, pattern in _RED_MEMORY_PATTERNS:
             guarded = pattern.sub("[redacted-private-context]", guarded)
         guarded = secret_redaction_service.redact_text(guarded)
@@ -43,13 +53,20 @@ def guard_model_response(value: Any) -> ResponseLeakGuardResult:
             text=guarded,
             redacted=True,
             blocked=False,
-            findings=tuple(sorted(set([*findings, *([] if not redacted_changed else ["secret_pattern"])]))),
+            findings=tuple(sorted(set([
+                *findings,
+                *([] if not redacted_changed else ["secret_pattern"]),
+                *(["internal_tool_markup"] if removed_internal_tool_markup else []),
+            ]))),
         )
     return ResponseLeakGuardResult(
         text=redacted,
-        redacted=redacted_changed,
+        redacted=redacted_changed or removed_internal_tool_markup,
         blocked=False,
-        findings=("secret_pattern",) if redacted_changed else (),
+        findings=tuple([
+            *(["internal_tool_markup"] if removed_internal_tool_markup else []),
+            *(["secret_pattern"] if redacted_changed else []),
+        ]),
     )
 
 

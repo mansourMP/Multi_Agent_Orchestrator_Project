@@ -2,21 +2,68 @@
 
 ## Status
 
-Documentation-only strategy. No implementation in this commit.
+Implementation started. The cloud catalog, Agent Computer personal-channel
+runtime contract, generic personal-channel surface projection, and local-bridge
+adapter contract now exist. Signal now has a real signal-cli JSON-RPC bridge
+wrapper behind the same contract; iMessage and WeChat still need bridge-specific
+proof.
 
 ## Core Rule
 
-Personal/private channels belong to Sage through Gateway.
+Personal/private channels belong to Sage through Agent Computer.
 Business/customer channels belong to Studio Agents through official cloud connectors.
+Connected Apps are work systems, not chat surfaces. Extension/plugin packages may
+provide channels, apps, tools, runtime capabilities, or safe external sections,
+but those surfaces remain separate in UI and permissions.
 
 ## Main Agent / Sage Channels
 
 - Web Chat
-- Telegram personal via Gateway
-- WhatsApp personal via Gateway
+- Telegram personal through Agent Computer
+- WhatsApp personal through Agent Computer
 - Email
 - Later: Slack, Discord, Matrix
-- Experimental/deferred: Signal, iMessage, WeChat, Zalo, voice
+- Signal, iMessage, and WeChat through Agent Computer local bridges
+- Later: Zalo, voice
+
+## Signal Agent Computer Bridge
+
+The Signal bridge is an Agent Computer process that wraps a local signal-cli
+JSON-RPC daemon. It exposes the same local bridge contract used by the gateway:
+
+- `GET /health`
+- `POST /messages`
+- `GET /events?channel_key=signal_personal`
+
+Run signal-cli in daemon HTTP mode first, then start:
+
+```bash
+cd empyralis-gateway
+EMPYRALIS_SIGNAL_CLI_RPC_URL=http://127.0.0.1:8080 \
+EMPYRALIS_SIGNAL_CLI_ACCOUNT=+15551234567 \
+npm run signal:bridge
+```
+
+Then point the gateway at the bridge URL printed by the process:
+
+```bash
+export EMPYRALIS_SIGNAL_BRIDGE_URL=http://127.0.0.1:8901
+```
+
+This proves the platform-owned bridge boundary without making Signal a Studio
+business/customer channel. It remains Sage-only and Agent Computer-only.
+
+## Agent Computer Doctor
+
+The gateway doctor now treats personal messaging as a first-class Agent Computer
+readiness surface. It aggregates Telegram, WhatsApp, Signal, iMessage, and
+WeChat from the live Agent Computer manifest/health payload and keeps that
+readiness separate from Studio business channels.
+
+This is the OpenClaw-style direction we should copy: every local channel or node
+reports a manifest, health snapshot, issues, and connected state. The platform
+shows those facts and can block unsafe work, but it does not pretend those
+personal bridges are cloud customer channels.
 
 ## Studio Agent Channels
 
@@ -53,17 +100,17 @@ Business/customer channels belong to Studio Agents through official cloud connec
 
 ### Avoid for production
 
-1. WeChat personal
-2. Zalo personal
-3. Signal automation
-4. iMessage / BlueBubbles production
+1. WeChat personal as a cloud/customer channel
+2. Zalo personal as a cloud/customer channel
+3. Signal automation outside Agent Computer
+4. iMessage / BlueBubbles outside a user-owned Mac runtime
 5. Baileys for public Studio production
 
 ## Existing Personal Channels
 
 Keep Telegram personal and WhatsApp Baileys personal for Sage-only closed/local pilot use.
 Do not expose them as production Studio Agent channels.
-Label them as Personal Gateway channels.
+Label them as personal Agent Computer channels.
 
 Telegram MTProto and WhatsApp Baileys are reverse-engineered protocols with TOS risk.
 They are acceptable for a closed pilot with a single owner/operator but must not be
@@ -86,7 +133,11 @@ and a generic dispatch layer but duplicate ~2,000 lines of code across:
 
 On the Python cloud side, `personal_channels_service.py` has structurally identical
 handlers for WhatsApp and Telegram (~80 lines each, duplicated across 5 function pairs).
-Health checks and state repository tables are also per-channel hardcoded.
+The generic `/personal-channels/gateways/{gateway_id}/channels` projection now
+reports live personal-channel manifests from Agent Computer. Telegram and
+WhatsApp have native local runtimes; Signal has a signal-cli local bridge
+wrapper; iMessage and WeChat use the generic local-bridge runtime
+(`EMPYRALIS_*_BRIDGE_URL`) until bridge-specific wrappers are proven.
 
 Adding a third channel today requires touching ~11 files and writing ~300 lines of
 near-duplicate code.
@@ -118,9 +169,9 @@ near-duplicate code.
 
 ### TypeScript (local gateway)
 
-- `ChannelRuntime` interface — formal `implements` enforcement
-- `ChannelCapabilityManifest` — typed capability declarations per channel
-- `ChannelHealthSnapshot` — standardized health shape
+- `PersonalChannelRuntime` interface — formal runtime boundary
+- `PersonalChannelCapabilityManifest` — typed capability declarations per channel
+- `PersonalChannelHealthSnapshot` — standardized health shape
 - `ChannelEventPublisher` — typed event bus
 - `ChannelRedactor` — shared credential redaction with channel-specific key lists
 - `ChannelDedupeStore` — generic outbound store parameterized by record type

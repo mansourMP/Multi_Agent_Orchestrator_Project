@@ -24,6 +24,10 @@ import {
   TelegramSessionStore,
 } from "./session-store";
 import { PersonalChannelConfigStore } from "../personal-config-store";
+import type {
+  PersonalChannelCapabilityManifest,
+  PersonalChannelHealthSnapshot,
+} from "../personal-runtime";
 
 type DynamicImport = <T>(specifier: string) => Promise<T>;
 const dynamicImport = new Function("specifier", "return import(specifier)") as DynamicImport;
@@ -118,6 +122,46 @@ export class TelegramPersonalRuntime {
 
   supportsChannel(channelKey: string): boolean {
     return String(channelKey || "").trim() === TELEGRAM_PERSONAL_CHANNEL_KEY;
+  }
+
+  getManifest(): PersonalChannelCapabilityManifest {
+    return {
+      channelKey: TELEGRAM_PERSONAL_CHANNEL_KEY,
+      label: "Telegram Personal",
+      provider: TELEGRAM_PERSONAL_PROVIDER,
+      runtimeLane: "personal_gateway",
+      stage: "live",
+      status: "live",
+      liveCapable: true,
+      requiresAgentComputer: true,
+      sessionOwner: "paired_gateway",
+      setupKind: "phone_login",
+      capabilities: ["configure", "inbound", "outbound", "text", "groups"],
+      chatTypes: ["dm", "group"],
+      media: { text: true, images: false, files: false, reactions: false, voice: false },
+      safety: {
+        ownerPairingRequired: true,
+        allowlistRequired: true,
+        studioBusinessAllowed: false,
+        customerPublicSendAllowed: false,
+      },
+      notes: ["Owner/private channel for Sage through Agent Computer. Not a Studio business channel."],
+    };
+  }
+
+  async getHealthSnapshot(): Promise<PersonalChannelHealthSnapshot> {
+    const snapshot = await this.sessionStore.load();
+    return {
+      channelKey: TELEGRAM_PERSONAL_CHANNEL_KEY,
+      provider: TELEGRAM_PERSONAL_PROVIDER,
+      status: snapshot.status,
+      running: this.started,
+      connected: Boolean(this.client) && snapshot.status === "connected",
+      reconnectAttempts: this.reconnectAttempts,
+      lastEventAt: snapshot.updatedAt,
+      lastError: snapshot.lastDisconnectReason,
+      issues: snapshot.status === "connected" ? [] : ["telegram_personal_not_connected"],
+    };
   }
 
   setPublisher(publisher: TelegramGatewayPublisher): void {

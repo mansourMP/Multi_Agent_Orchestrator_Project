@@ -36,6 +36,10 @@ import {
   WHATSAPP_PERSONAL_PROVIDER,
 } from "./session-store";
 import { PersonalChannelConfigStore } from "../personal-config-store";
+import type {
+  PersonalChannelCapabilityManifest,
+  PersonalChannelHealthSnapshot,
+} from "../personal-runtime";
 
 type DynamicImport = <T>(specifier: string) => Promise<T>;
 const dynamicImport = new Function("specifier", "return import(specifier)") as DynamicImport;
@@ -144,6 +148,46 @@ export class WhatsAppPersonalRuntime {
 
   supportsChannel(channelKey: string): boolean {
     return String(channelKey || "").trim() === WHATSAPP_PERSONAL_CHANNEL_KEY;
+  }
+
+  getManifest(): PersonalChannelCapabilityManifest {
+    return {
+      channelKey: WHATSAPP_PERSONAL_CHANNEL_KEY,
+      label: "WhatsApp Personal",
+      provider: WHATSAPP_PERSONAL_PROVIDER,
+      runtimeLane: "personal_gateway",
+      stage: "live",
+      status: "live",
+      liveCapable: true,
+      requiresAgentComputer: true,
+      sessionOwner: "paired_gateway",
+      setupKind: "qr_pairing",
+      capabilities: ["configure", "inbound", "outbound", "text", "groups"],
+      chatTypes: ["dm", "group"],
+      media: { text: true, images: false, files: false, reactions: false, voice: false },
+      safety: {
+        ownerPairingRequired: true,
+        allowlistRequired: true,
+        studioBusinessAllowed: false,
+        customerPublicSendAllowed: false,
+      },
+      notes: ["Owner/private channel for Sage through Agent Computer. Use WhatsApp Business for Studio."],
+    };
+  }
+
+  async getHealthSnapshot(): Promise<PersonalChannelHealthSnapshot> {
+    const snapshot = await this.sessionStore.load();
+    return {
+      channelKey: WHATSAPP_PERSONAL_CHANNEL_KEY,
+      provider: WHATSAPP_PERSONAL_PROVIDER,
+      status: snapshot.status,
+      running: this.started,
+      connected: Boolean(this.socket) && snapshot.status === "connected",
+      reconnectAttempts: this.reconnectAttempts,
+      lastEventAt: snapshot.updatedAt,
+      lastError: snapshot.lastDisconnectReason,
+      issues: snapshot.status === "connected" ? [] : ["whatsapp_personal_not_connected"],
+    };
   }
 
   setPublisher(publisher: WhatsAppGatewayPublisher): void {

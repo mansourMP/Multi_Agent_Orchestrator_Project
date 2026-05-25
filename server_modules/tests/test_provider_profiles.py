@@ -166,6 +166,35 @@ class ProviderProfilesTests(unittest.TestCase):
         self.assertEqual(ollama["issue_code"], "local_gateway_required")
         self.assertFalse(ollama["usable"])
 
+    def test_workspace_live_gateway_available_falls_back_to_default_only_in_local_env(self) -> None:
+        def _registrations(workspace_id, include_revoked=False):
+            if workspace_id == "default":
+                return [{"gateway_id": "gw-local", "status": "active"}]
+            return []
+
+        with patch.dict(os.environ, {"ORION_ENV": "local"}, clear=False), patch(
+            "server_modules.gateway_state_repository.list_workspace_gateway_registrations",
+            side_effect=_registrations,
+        ) as list_registrations, patch(
+            "server_modules.gateway_protocol_service.gateway_connection_is_live",
+            return_value=True,
+        ):
+            self.assertTrue(provider_profiles.workspace_live_gateway_available("ws-1"))
+
+        self.assertEqual(
+            [call.args[0] for call in list_registrations.call_args_list],
+            ["ws-1", "default"],
+        )
+
+    def test_workspace_live_gateway_available_does_not_default_fallback_in_production(self) -> None:
+        with patch.dict(os.environ, {"ORION_ENV": "production"}, clear=False), patch(
+            "server_modules.gateway_state_repository.list_workspace_gateway_registrations",
+            return_value=[],
+        ) as list_registrations:
+            self.assertFalse(provider_profiles.workspace_live_gateway_available("ws-1"))
+
+        self.assertEqual([call.args[0] for call in list_registrations.call_args_list], ["ws-1"])
+
     def test_build_masked_usage_falls_back_to_deepseek_provider_rates(self) -> None:
         usage = provider_profiles.build_masked_usage(
             "deepseek",

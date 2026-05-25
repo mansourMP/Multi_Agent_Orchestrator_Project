@@ -15,6 +15,10 @@ import { GatewayCapabilityRouter } from "./supervisor/capability-router";
 import { WhatsAppPersonalRuntime } from "./channels/whatsapp/runtime";
 import { TelegramPersonalRuntime } from "./channels/telegram/runtime";
 import { PersonalChannelRuntimeRegistry } from "./channels/personal-runtime";
+import {
+  LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS,
+  LocalBridgePersonalChannelRuntime,
+} from "./channels/local-bridge-runtime";
 import { GatewayBrowserWorker } from "./browser/worker";
 import { GatewayBrowserRuntime } from "./browser/runtime";
 
@@ -97,6 +101,7 @@ async function main(): Promise<void> {
   const personalChannelRuntimes = new PersonalChannelRuntimeRegistry([
     whatsappRuntime,
     telegramRuntime,
+    ...LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.map((config) => new LocalBridgePersonalChannelRuntime(config)),
   ]);
   const capabilityRouter = new GatewayCapabilityRouter(
     supervisorClient,

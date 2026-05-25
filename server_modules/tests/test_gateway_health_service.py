@@ -362,6 +362,106 @@ class GatewayHealthServiceTests(unittest.TestCase):
         self.assertEqual(payload["browser_attach"]["pending_count"], 1)
         self.assertEqual(payload["browser_attach"]["approval_required_count"], 1)
 
+    def test_gateway_doctor_payload_includes_agent_computer_personal_channel_readiness(self) -> None:
+        registration = {
+            "gateway_id": "gw-personal-channels",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "journal_cursor": 0,
+            "checkpoint_cursor": 0,
+            "metadata": {
+                "personal_channel_manifests": [
+                    {
+                        "channel_key": "signal_personal",
+                        "label": "Signal Personal",
+                        "provider": "signal_local_bridge",
+                        "stage": "live",
+                        "status": "connected",
+                        "live_capable": True,
+                        "api_token": "must-not-leak",
+                    },
+                    {
+                        "channel_key": "imessage_personal",
+                        "label": "iMessage Personal",
+                        "provider": "bluebubbles_local_bridge",
+                        "stage": "live",
+                        "status": "not_configured",
+                        "live_capable": True,
+                    },
+                ],
+                "personal_channel_health": [
+                    {
+                        "channel_key": "signal_personal",
+                        "provider": "signal_local_bridge",
+                        "status": "connected",
+                        "running": True,
+                        "connected": True,
+                    }
+                ],
+            },
+        }
+        latest_session = {
+            "status": "connected",
+            "last_heartbeat_at": "2099-01-01T00:00:00Z",
+            "last_seq": 0,
+            "last_ack": 0,
+            "metadata": {"health_state": "healthy"},
+        }
+
+        with patch(
+            "server_modules.gateway_health_service.gateway_state_repository.get_gateway_registration",
+            return_value=registration,
+        ), patch(
+            "server_modules.gateway_health_service.gateway_state_repository.get_latest_gateway_session",
+            return_value=latest_session,
+        ), patch(
+            "server_modules.gateway_health_service.gateway_state_repository.list_gateway_browser_sessions",
+            return_value=[],
+        ), patch(
+            "server_modules.gateway_health_service.gateway_state_repository.list_gateway_events",
+            return_value=[],
+        ), patch(
+            "server_modules.gateway_health_service.gateway_approval_service.list_gateway_tool_approvals",
+            return_value={"pending_count": 0, "retryable_count": 0},
+        ), patch(
+            "server_modules.gateway_health_service.personal_channels_repository.get_whatsapp_state",
+            return_value=None,
+        ), patch(
+            "server_modules.gateway_health_service.personal_channels_repository.get_telegram_state",
+            return_value=None,
+        ), patch(
+            "server_modules.personal_channels_service.personal_channels_repository.list_recent_gateway_messages",
+            return_value=[],
+        ), patch(
+            "server_modules.gateway_health_service.control_plane_repository.get_workspace_by_id",
+            new=AsyncMock(return_value={"workspace_id": "ws-1", "tenant_id": "tenant-1"}),
+        ), patch(
+            "server_modules.gateway_health_service.control_plane_repository.list_deployed_agents_for_workspace",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "server_modules.gateway_health_service.provider_catalog_service.list_workspace_provider_catalog",
+            new=AsyncMock(return_value={"providers": []}),
+        ), patch(
+            "server_modules.gateway_health_service.billing_service.workspace_billing_summary_for_workspace_id",
+            return_value={
+                "limits": {"max_specialists": 1, "hosted_runtime_minutes_monthly": 0, "hosted_ai_enabled": False},
+                "usage": {"specialists_in_use": 0, "hosted_runtime_minutes_monthly": 0},
+                "subscription": {"effective_plan_id": "free"},
+            },
+        ):
+            payload = gateway_health_service.gateway_doctor_payload("gw-personal-channels")
+
+        personal_channels = payload["personal_channels"]
+        by_key = {item["channel_key"]: item for item in personal_channels["items"]}
+        self.assertEqual(personal_channels["connected_count"], 1)
+        self.assertEqual(by_key["signal_personal"]["status"], "connected")
+        self.assertTrue(by_key["signal_personal"]["running"])
+        self.assertEqual(by_key["signal_personal"]["manifest"]["api_token"], "[redacted]")
+        self.assertIn("imessage_personal", by_key)
+        check_ids = {item["id"] for item in payload["checks"]}
+        self.assertIn("personal_messaging_channels", check_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

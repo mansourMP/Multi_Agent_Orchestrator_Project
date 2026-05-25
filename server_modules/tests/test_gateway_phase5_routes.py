@@ -127,7 +127,7 @@ class GatewayPhase5RoutesTests(unittest.TestCase):
                 "device_id": "device-local-1",
                 "display_name": "Mansur Mac",
                 "platform": "macos-arm64",
-                "capabilities": ["computer_control.click", "screenshot.capture"],
+                "capabilities": ["computer_control.click", "computer_control.list_apps", "screenshot.capture"],
             },
         )
         self.assertEqual(registration_response.status_code, 200)
@@ -218,6 +218,24 @@ class GatewayPhase5RoutesTests(unittest.TestCase):
         self.assertIn("gateway.approval.executed", event_types)
 
         self.assertGreaterEqual(self.activity_append.await_count, 3)
+
+    def test_advertised_inventory_tool_enters_approval_flow(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        approval_response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/tools/execute",
+            json={
+                "capability_id": "computer_control.list_apps",
+                "arguments": {},
+                "run_id": "run-list-apps-1",
+                "trace_id": "trace-list-apps-1",
+                "request_id": "req-list-apps-1",
+            },
+        )
+        self.assertEqual(approval_response.status_code, 202)
+        approval_payload = approval_response.json()
+        self.assertEqual(approval_payload["status"], "approval_required")
+        self.assertEqual(approval_payload["approval"]["capability_id"], "computer_control.list_apps")
 
     def test_gateway_doctor_reports_degraded_offline_and_resume_state(self) -> None:
         registration_payload = self._register_gateway()

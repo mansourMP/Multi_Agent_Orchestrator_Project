@@ -6,6 +6,76 @@ from server_modules import direct_chat_generation_service
 
 
 class DirectChatGenerationServiceTests(unittest.TestCase):
+    def test_extract_assistant_shell_plan_tool_call_converts_command_blocks(self) -> None:
+        reply = (
+            "Running the commands now.\n\n"
+            "```bash\n"
+            "uname -a && sw_vers\n"
+            "```\n\n"
+            "```bash\n"
+            "# apps\n"
+            "ls /Applications | head -20\n"
+            "```"
+        )
+
+        clean_reply, tool_calls = direct_chat_generation_service._extract_assistant_shell_plan_tool_call(
+            reply,
+            [{"name": "shell__exec", "parameters": {"type": "object"}}],
+        )
+
+        self.assertEqual(clean_reply, "")
+        self.assertEqual(tool_calls[0]["name"], "shell__exec")
+        self.assertIn("uname -a && sw_vers", tool_calls[0]["arguments"]["command"])
+        self.assertIn("ls /Applications | head -20", tool_calls[0]["arguments"]["command"])
+
+    def test_extract_assistant_shell_plan_tool_call_converts_inline_command_blocks(self) -> None:
+        reply = (
+            "Looks like the commands ran but the output didn't come through clearly. "
+            "Let me re-run them and show you the results directly.\n\n"
+            "`uname -a && echo \"===OS===\" && sw_vers 2>/dev/null || cat /etc/os-release 2>/dev/null`\n\n"
+            "`echo \"===CPU & RAM===\" && sysctl -n hw.memsize 2>/dev/null && echo \"bytes RAM\"`\n\n"
+            "`echo \"===APPLICATIONS===\" && ls /Applications 2>/dev/null | head -80`"
+        )
+
+        clean_reply, tool_calls = direct_chat_generation_service._extract_assistant_shell_plan_tool_call(
+            reply,
+            [{"name": "shell__exec", "parameters": {"type": "object"}}],
+        )
+
+        self.assertEqual(clean_reply, "")
+        self.assertEqual(tool_calls[0]["name"], "shell__exec")
+        command = tool_calls[0]["arguments"]["command"]
+        self.assertIn("uname -a", command)
+        self.assertIn("sysctl -n hw.memsize", command)
+        self.assertIn("ls /Applications", command)
+
+    def test_extract_assistant_shell_plan_tool_call_normalizes_language_prefixed_inline_commands(self) -> None:
+        reply = (
+            "Let me run them fresh and capture the output properly this time. "
+            "`bash uname -a && echo \"---OS---\" && sw_vers 2>/dev/null` "
+            "`bash echo \"---DISK---\" && df -h / 2>/dev/null`"
+        )
+
+        clean_reply, tool_calls = direct_chat_generation_service._extract_assistant_shell_plan_tool_call(
+            reply,
+            [{"name": "shell__exec", "parameters": {"type": "object"}}],
+        )
+
+        self.assertEqual(clean_reply, "")
+        command = tool_calls[0]["arguments"]["command"]
+        self.assertIn("uname -a", command)
+        self.assertIn("df -h /", command)
+        self.assertNotIn("bash uname", command)
+        self.assertNotIn("bash echo", command)
+
+    def test_extract_assistant_shell_plan_tool_call_ignores_without_shell_tool(self) -> None:
+        reply = "Running the commands now.\n\n```bash\nuname -a\n```"
+
+        clean_reply, tool_calls = direct_chat_generation_service._extract_assistant_shell_plan_tool_call(reply, [])
+
+        self.assertEqual(clean_reply, reply)
+        self.assertEqual(tool_calls, [])
+
     def _services(self, *, stream_events):
         return direct_chat_generation_service.DirectChatGenerationServices(
             thinking_step_payload=lambda iteration, status, detail=None: {
@@ -38,6 +108,95 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
             capture_exception=lambda exc: None,
             generate_chat_reply_stream_with_provider_fallback=lambda **kwargs: iter(stream_events),
         )
+
+    def test_stream_provider_backed_direct_chat_buffers_shell_plan_chunks(self) -> None:
+        command_reply = (
+            "Looks like the commands ran but the output didn't come through clearly. "
+            "Let me re-run them and show you the results directly.\n\n"
+            "```bash\n"
+            "uname -a && sw_vers\n"
+            "```\n\n"
+            "```bash\n"
+            "ls /Applications | head -20\n"
+            "```"
+        )
+        stream_rounds = iter(
+            [
+                [
+                    {"type": "chunk", "delta": command_reply[:80]},
+                    {"type": "chunk", "delta": command_reply[80:]},
+                    {
+                        "type": "result",
+                        "reply": command_reply,
+                        "usage_masked": {"provider": "openai"},
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "openai",
+                        "error": "",
+                        "tool_calls": [],
+                    },
+                ],
+                [
+                    {
+                        "type": "result",
+                        "reply": "The local command finished.",
+                        "usage_masked": {"provider": "openai"},
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "openai",
+                        "error": "",
+                        "tool_calls": [],
+                    }
+                ],
+            ]
+        )
+        services = self._services(stream_events=[])
+        services.generate_chat_reply_stream_with_provider_fallback = lambda **kwargs: iter(next(stream_rounds))
+        executed: list[str] = []
+
+        def _execute_single_direct_tool_call(**kwargs):
+            command = kwargs.get("tool_call", {}).get("arguments", {}).get("command", "")
+            executed.append(command)
+            return "Darwin\nApplications"
+
+        services.execute_single_direct_tool_call = _execute_single_direct_tool_call
+
+        events = list(
+            direct_chat_generation_service.stream_provider_backed_direct_chat(
+                services=services,
+                context={"provider": "openai"},
+                metadata={"provider": "openai", "model": "gpt-5.4"},
+                system_prompt="System prompt",
+                normalized_workspace_id="default",
+                normalized_requested_provider="openai",
+                normalized_requested_model="gpt-5.4",
+                normalized_reasoning_effort="medium",
+                normalized_thread_id="thread-1",
+                normalized_message="Check my machine.",
+                compacted_prior_messages=[],
+                prior_messages_used=False,
+                history_mode="none",
+                connected_systems=[],
+                tool_capabilities=[],
+                availability_payload={"ai_ready": True},
+                tools=[],
+                direct_chat_credentials={},
+                proactive_suggestions=[],
+                tool_loop_session_key="session-1",
+                fallback_reason=None,
+                session_ctx=None,
+                trace_context=None,
+                resolved_chat_max_iterations=3,
+                direct_tool_result_summary_system_message="Summarize tool results.",
+                assistant_plan_tools=[{"name": "shell__exec"}],
+            )
+        )
+
+        streamed_text = "".join(str(event.get("delta") or "") for event in events if event.get("type") == "chunk")
+        self.assertNotIn("uname -a", streamed_text)
+        self.assertTrue(executed)
+        self.assertIn("uname -a && sw_vers", executed[0])
+        self.assertEqual(events[-1]["payload"]["reply"], "The local command finished.")
 
     def test_stream_provider_backed_direct_chat_returns_final_answer(self) -> None:
         events = list(

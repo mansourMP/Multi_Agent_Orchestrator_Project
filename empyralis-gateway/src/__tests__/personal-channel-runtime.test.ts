@@ -1,0 +1,276 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  PersonalChannelRuntimeRegistry,
+  type PersonalChannelCapabilityManifest,
+  type PersonalChannelRuntime,
+} from "../channels/personal-runtime";
+import {
+  LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS,
+  LOCAL_BRIDGE_PERSONAL_CHANNEL_MANIFESTS,
+  LocalBridgePersonalChannelRuntime,
+} from "../channels/local-bridge-runtime";
+import { startLocalBridgeHarness } from "../dev/local-bridge-harness";
+
+async function eventually(assertion: () => void | Promise<void>, timeoutMs = 500): Promise<void> {
+  const startedAt = Date.now();
+  let lastError: unknown;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      await assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error("Timed out waiting for assertion.");
+}
+
+function liveManifest(): PersonalChannelCapabilityManifest {
+  return {
+    channelKey: "telegram_personal",
+    label: "Telegram Personal",
+    provider: "telegram_gramjs",
+    runtimeLane: "personal_gateway",
+    stage: "live",
+    status: "live",
+    liveCapable: true,
+    requiresAgentComputer: true,
+    sessionOwner: "paired_gateway",
+    setupKind: "phone_login",
+    capabilities: ["configure", "inbound", "outbound"],
+    chatTypes: ["dm", "group"],
+    media: { text: true },
+    safety: {
+      ownerPairingRequired: true,
+      allowlistRequired: true,
+      studioBusinessAllowed: false,
+      customerPublicSendAllowed: false,
+    },
+  };
+}
+
+function fakeLiveRuntime(): PersonalChannelRuntime {
+  const manifest = liveManifest();
+  return {
+    requestedCapabilities: () => [
+      "channel.telegram.personal.configure",
+      "channel.telegram.personal.outbound",
+    ],
+    supportsCapability: (capabilityId: string) => capabilityId === "channel.telegram.personal.configure",
+    handleCapabilityInvoke: async () => ({ ok: true }),
+    supportsChannel: (channelKey: string) => channelKey === manifest.channelKey,
+    handleChannelOutbound: async () => ({ ok: true }),
+    handleGatewayConnected: async () => undefined,
+    handleGatewayDisconnected: async () => undefined,
+    start: async () => undefined,
+    stop: async () => undefined,
+    getManifest: () => manifest,
+    getHealthSnapshot: () => ({
+      channelKey: manifest.channelKey,
+      provider: manifest.provider,
+      status: "connected",
+      running: true,
+      connected: true,
+      reconnectAttempts: 0,
+    }),
+  };
+}
+
+test("personal channel registry exposes live and local-bridge channel manifests", async () => {
+  const signalConfig = LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.find(
+    (item) => item.channelKey === "signal_personal",
+  );
+  assert.ok(signalConfig);
+  const registry = new PersonalChannelRuntimeRegistry([
+    fakeLiveRuntime(),
+    new LocalBridgePersonalChannelRuntime(signalConfig),
+  ]);
+
+  assert.deepEqual(registry.requestedCapabilities(), ["channel.telegram.personal.configure"]);
+  assert.equal(registry.runtimeForChannel("telegram_personal")?.getManifest?.().liveCapable, true);
+  assert.equal(registry.runtimeForChannel("signal_personal")?.getManifest?.().liveCapable, true);
+
+  const manifests = registry.channelManifests();
+  assert.equal(manifests.length, 2);
+  assert.equal(manifests.find((item) => item.channelKey === "signal_personal")?.status, "not_configured");
+
+  const health = await registry.healthSnapshots();
+  assert.equal(health.find((item) => item.channelKey === "telegram_personal")?.connected, true);
+  assert.deepEqual(
+    health.find((item) => item.channelKey === "signal_personal")?.issues,
+    ["signal_personal_bridge_not_configured"],
+  );
+});
+
+test("local bridge personal channel runtime fails closed until bridge is configured", async () => {
+  const wechatConfig = LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.find(
+    (item) => item.channelKey === "wechat_personal",
+  );
+  assert.ok(wechatConfig);
+  const runtime = new LocalBridgePersonalChannelRuntime(wechatConfig);
+
+  assert.equal(runtime.supportsChannel("wechat_personal"), true);
+  assert.equal(runtime.supportsCapability("channel.wechat.personal.outbound"), false);
+  await assert.rejects(
+    () =>
+      runtime.handleChannelOutbound({
+        id: "req-1",
+        kind: "request",
+        protocolVersion: "v1alpha2",
+        type: "channel.outbound",
+        ts: new Date().toISOString(),
+        scope: { tenant_id: "t1", workspace_id: "w1", user_id: "u1", device_id: "d1", gateway_id: "g1" },
+        payload: {
+          channel_key: "wechat_personal",
+          provider: "wechat_local_bridge",
+          idempotency_key: "idem-1",
+          remote_jid: "peer",
+          text: "hello",
+        },
+      }),
+    /bridge is not configured/,
+  );
+});
+
+test("local bridge personal channel runtime sends through configured bridge", async () => {
+  const signalConfig = LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.find(
+    (item) => item.channelKey === "signal_personal",
+  );
+  assert.ok(signalConfig);
+  const previousUrl = process.env.EMPYRALIS_SIGNAL_BRIDGE_URL;
+  process.env.EMPYRALIS_SIGNAL_BRIDGE_URL = "https://signal-bridge.local";
+  const previousFetch = globalThis.fetch;
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({
+      url: String(url),
+      body: JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+    });
+    return new Response(JSON.stringify({ delivered: true, external_message_id: "sig-msg-1" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    const runtime = new LocalBridgePersonalChannelRuntime(signalConfig);
+    const result = await runtime.handleChannelOutbound({
+      id: "req-1",
+      kind: "request",
+      protocolVersion: "v1alpha2",
+      type: "channel.outbound",
+      ts: new Date().toISOString(),
+      scope: { tenant_id: "t1", workspace_id: "w1", user_id: "u1", device_id: "d1", gateway_id: "g1" },
+      payload: {
+        channel_key: "signal_personal",
+        provider: "signal_local_bridge",
+        idempotency_key: "idem-1",
+        remote_jid: "peer",
+        text: "hello",
+      },
+    });
+
+    assert.equal(result.delivered, true);
+    assert.equal(result.external_message_id, "sig-msg-1");
+    assert.equal(calls[0].url, "https://signal-bridge.local/messages");
+    assert.equal(calls[0].body.channel_key, "signal_personal");
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousUrl === undefined) {
+      delete process.env.EMPYRALIS_SIGNAL_BRIDGE_URL;
+    } else {
+      process.env.EMPYRALIS_SIGNAL_BRIDGE_URL = previousUrl;
+    }
+  }
+});
+
+test("local bridge manifest list includes Signal, iMessage, and WeChat as live-capable", () => {
+  const byKey = new Map(LOCAL_BRIDGE_PERSONAL_CHANNEL_MANIFESTS.map((item) => [item.channelKey, item]));
+  assert.equal(byKey.get("signal_personal")?.liveCapable, true);
+  assert.equal(byKey.get("imessage_personal")?.liveCapable, true);
+  assert.equal(byKey.get("wechat_personal")?.liveCapable, true);
+});
+
+test("local bridge harness proves health, outbound, and inbound event contract", async () => {
+  const signalConfig = LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.find(
+    (item) => item.channelKey === "signal_personal",
+  );
+  assert.ok(signalConfig);
+  const harness = await startLocalBridgeHarness();
+  const previousUrl = process.env.EMPYRALIS_SIGNAL_BRIDGE_URL;
+  const previousPollMs = process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS;
+  process.env.EMPYRALIS_SIGNAL_BRIDGE_URL = harness.url;
+  process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS = "25";
+  const runtime = new LocalBridgePersonalChannelRuntime(signalConfig);
+  const inbound: unknown[] = [];
+  runtime.setPublisher({
+    publishStateUpdate: async () => undefined,
+    publishEvent: async (_type, payload) => {
+      inbound.push(payload);
+    },
+  });
+  try {
+    const health = await runtime.getHealthSnapshot();
+    assert.equal(health.connected, true);
+    assert.equal(health.status, "connected");
+
+    const result = await runtime.handleChannelOutbound({
+      id: "req-1",
+      kind: "request",
+      protocolVersion: "v1alpha2",
+      type: "channel.outbound",
+      ts: new Date().toISOString(),
+      scope: { tenant_id: "t1", workspace_id: "w1", user_id: "u1", device_id: "d1", gateway_id: "g1" },
+      payload: {
+        channel_key: "signal_personal",
+        provider: "signal_local_bridge",
+        idempotency_key: "idem-harness-1",
+        remote_jid: "signal-peer",
+        text: "hello through harness",
+      },
+    });
+    assert.equal(result.delivered, true);
+    assert.equal(harness.sentMessages()[0].text, "hello through harness");
+    const sentResponse = await fetch(`${harness.url}/sent`);
+    const sentPayload = await sentResponse.json() as { items?: Array<{ idempotency_key?: string }> };
+    assert.equal(sentPayload.items?.[0]?.idempotency_key, "idem-harness-1");
+
+    await runtime.start();
+    const eventResponse = await fetch(`${harness.url}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        channel_key: "signal_personal",
+        external_message_id: "incoming-1",
+        remote_jid: "signal-peer",
+        push_name: "Mansur",
+        text: "hello sage",
+      }),
+    });
+    assert.equal(eventResponse.ok, true);
+    await eventually(() => {
+      assert.equal(inbound.length, 1);
+      const payload = inbound[0] as { channel_key?: string; message?: { text?: string } };
+      assert.equal(payload.channel_key, "signal_personal");
+      assert.equal(payload.message?.text, "hello sage");
+    });
+  } finally {
+    await runtime.stop();
+    await harness.close();
+    if (previousUrl === undefined) {
+      delete process.env.EMPYRALIS_SIGNAL_BRIDGE_URL;
+    } else {
+      process.env.EMPYRALIS_SIGNAL_BRIDGE_URL = previousUrl;
+    }
+    if (previousPollMs === undefined) {
+      delete process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS;
+    } else {
+      process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS = previousPollMs;
+    }
+  }
+});

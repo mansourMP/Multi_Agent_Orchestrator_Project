@@ -1,5 +1,6 @@
 import sys
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,87 @@ import orion_local_worker_llm as worker_llm
 
 
 class OrionLocalWorkerLlmDirectToolTests(unittest.TestCase):
+    def test_extract_dsml_tool_call_from_codex_text(self):
+        text = (
+            "Let me check that.\n\n"
+            "<||DSML||tool_calls>"
+            "<||DSML||invoke name=\"bash\">"
+            "<||DSML||parameter name=\"description\" string=\"true\">Check current directory</||DSML||parameter>"
+            "<||DSML||parameter name=\"command\" string=\"true\">pwd && uname -a</||DSML||parameter>"
+            "</||DSML||invoke>"
+        )
+
+        clean_text, tool_calls = worker_llm.extract_dsml_tool_calls_from_text(text)
+
+        self.assertEqual(clean_text, "Let me check that.")
+        self.assertEqual(tool_calls, [
+            {
+                "name": "shell__exec",
+                "arguments": {
+                    "command": "pwd && uname -a",
+                    "description": "Check current directory",
+                },
+            }
+        ])
+
+    def test_extract_spaced_dsml_tool_call_from_codex_text(self):
+        text = (
+            "One moment.\n"
+            "< | | DSML | | tool_calls>"
+            "< | | DSML | | invoke name=\"bash\">"
+            "< | | DSML | | parameter name=\"command\" string=\"true\">ls -la</ | | DSML | | parameter>"
+            "</ | | DSML | | invoke>"
+        )
+
+        clean_text, tool_calls = worker_llm.extract_dsml_tool_calls_from_text(text)
+
+        self.assertEqual(clean_text, "One moment.")
+        self.assertEqual(tool_calls[0]["name"], "shell__exec")
+        self.assertEqual(tool_calls[0]["arguments"]["command"], "ls -la")
+
+    def test_codex_backend_buffers_dsml_text_instead_of_streaming_it(self):
+        class FakeSseResponse:
+            def __init__(self, chunks):
+                self._chunks = list(chunks)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _size):
+                if not self._chunks:
+                    return b""
+                return self._chunks.pop(0)
+
+        dsml_text = (
+            "Let me check.\n"
+            "< | | DSML | | tool_calls>"
+            "< | | DSML | | invoke name=\"bash\">"
+            "< | | DSML | | parameter name=\"command\" string=\"true\">pwd</ | | DSML | | parameter>"
+            "</ | | DSML | | invoke>"
+        )
+        events = [
+            {"type": "response.output_text.delta", "delta": dsml_text},
+            {"type": "response.completed", "response": {"usage": {"input_tokens": 1}}},
+        ]
+        payload = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode("utf-8")
+
+        with patch("urllib.request.urlopen", return_value=FakeSseResponse([payload])):
+            parsed_events = list(worker_llm.iter_openai_codex_backend_events(
+                "system",
+                "check my laptop",
+                credential_override={"oauth_token": "token", "account_id": "acct"},
+                tools=[],
+            ))
+
+        self.assertEqual(len(parsed_events), 1)
+        self.assertEqual(parsed_events[0]["type"], "done")
+        self.assertEqual(parsed_events[0]["text"], "Let me check.")
+        self.assertEqual(parsed_events[0]["tool_calls"][0]["name"], "shell__exec")
+        self.assertEqual(parsed_events[0]["tool_calls"][0]["arguments"]["command"], "pwd")
+
     def test_resolve_requested_tools_prefers_metadata(self):
         tools = worker_llm.resolve_requested_tools(
             {"tools": [{"name": "context_only", "parameters": {"type": "object"}}]},

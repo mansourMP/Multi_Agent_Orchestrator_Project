@@ -1237,6 +1237,80 @@ class GatewayRoutesTests(unittest.TestCase):
         send_message_mock.assert_not_awaited()
         self.assertEqual(approval_mock.await_args.kwargs["capability_id"], "channel.telegram.personal.send")
 
+    def test_personal_gateway_channel_surfaces_project_live_and_reserved_channels(self) -> None:
+        registration_payload = self._register_gateway_with_mode(gateway_id="gateway-channel-surfaces")
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        gateway_state_repository.update_gateway_registration_state(
+            gateway_id=gateway_id,
+            metadata={
+                "personal_channel_manifests": [
+                    {
+                        "channel_key": "telegram_personal",
+                        "label": "Telegram Personal",
+                        "provider": "telegram_gramjs",
+                        "runtime_lane": "personal_gateway",
+                        "stage": "live",
+                        "status": "connected",
+                        "live_capable": True,
+                        "capabilities": ["inbound", "outbound", "text"],
+                    },
+                    {
+                        "channel_key": "signal_personal",
+                        "label": "Signal Personal",
+                        "provider": "signal_local_bridge",
+                        "stage": "live",
+                        "status": "not_configured",
+                        "live_capable": True,
+                        "api_token": "sk-super-secret-token",
+                    },
+                ],
+                "personal_channel_health": [
+                    {
+                        "channel_key": "telegram_personal",
+                        "provider": "telegram_gramjs",
+                        "status": "connected",
+                        "running": True,
+                        "connected": True,
+                    },
+                    {
+                        "channel_key": "signal_personal",
+                        "provider": "signal_local_bridge",
+                        "status": "not_configured",
+                        "running": False,
+                        "connected": False,
+                    },
+                ],
+            },
+        )
+        personal_channels_repository.upsert_telegram_state(
+            gateway_id=gateway_id,
+            tenant_id="default",
+            workspace_id="default",
+            user_id="owner-1",
+            channel_key="telegram_personal",
+            provider="telegram_gramjs",
+            status="connected",
+            linked_username="mansur",
+            connected_at="2026-05-25T00:00:00Z",
+        )
+
+        response = self.client.get(f"/api/personal-channels/gateways/{gateway_id}/channels")
+
+        self.assertEqual(response.status_code, 200)
+        by_key = {item["channel_key"]: item for item in response.json()["items"]}
+        self.assertEqual(
+            set(by_key),
+            {"telegram_personal", "whatsapp_personal", "signal_personal", "imessage_personal", "wechat_personal"},
+        )
+        self.assertTrue(by_key["telegram_personal"]["connected"])
+        self.assertTrue(by_key["telegram_personal"]["running"])
+        self.assertEqual(by_key["telegram_personal"]["connected_identity"], "mansur")
+        self.assertEqual(by_key["signal_personal"]["status"], "not_configured")
+        self.assertTrue(by_key["signal_personal"]["live_capable"])
+        self.assertEqual(by_key["signal_personal"]["manifest"]["api_token"], "[redacted]")
+        self.assertEqual(by_key["imessage_personal"]["status"], "agent_computer_bridge")
+        self.assertEqual(by_key["wechat_personal"]["status"], "agent_computer_bridge")
+
     def test_rotate_token_rejects_stale_gateway_token(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]

@@ -26,7 +26,7 @@ import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
-const KIND_FILTERS = ['all', 'agent_template', 'skill', 'connector', 'bundle'] as const;
+const KIND_FILTERS = ['agent_template', 'skill', 'connector', 'bundle'] as const;
 const COMPOSER_KINDS = ['app'] as const;
 const VERIFICATION_OPTIONS = ['unverified', 'partner', 'verified'] as const;
 const REVIEW_OPTIONS = ['pending', 'approved', 'restricted'] as const;
@@ -44,9 +44,6 @@ function isVisibleMarketplaceKind(kind: string): boolean {
 
 function marketplaceKindMatchesFilter(kind: string, filter: KindFilter): boolean {
   const normalized = kind.trim().toLowerCase();
-  if (filter === 'all') {
-    return isVisibleMarketplaceKind(normalized);
-  }
   if (filter === 'bundle') {
     return normalized === 'bundle';
   }
@@ -60,7 +57,7 @@ function marketplaceApiKindForFilter(filter: KindFilter): string | null {
 }
 
 function normalizeMarketplaceKindFilter(value: string | null): KindFilter {
-  return KIND_FILTERS.some((filter) => filter === value) ? value as KindFilter : 'all';
+  return KIND_FILTERS.some((filter) => filter === value) ? value as KindFilter : 'agent_template';
 }
 
 type BaseComposerDraft = {
@@ -1000,12 +997,7 @@ export function MarketplacePane() {
           },
         };
         await services.client.registerMarketplaceApp(payload);
-        if (kindFilter !== 'all') {
-          setKindFilter('all');
-          await loadMarketplacePackages('all');
-        } else {
-          await loadMarketplacePackages(kindFilter);
-        }
+        await loadMarketplacePackages(kindFilter);
         setSelectedPackageId(null);
         setComposerStatus('Governed app package registered. Install it into the shell when you are ready.');
         setAppDraft(DEFAULT_APP_DRAFT);

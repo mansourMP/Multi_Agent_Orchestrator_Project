@@ -245,12 +245,25 @@ def ollama_local_status(*, timeout: int = 5) -> Dict[str, Any]:
     }
 
 
-def workspace_live_gateway_available(workspace_id: str) -> bool:
-    try:
-        from server_modules import gateway_protocol_service, gateway_state_repository
-    except Exception:
-        return False
+_LOCAL_GATEWAY_FALLBACK_ENVS = {"dev", "development", "local", "test", "testing"}
 
+
+def _local_gateway_workspace_fallback_enabled() -> bool:
+    token = (
+        os.getenv("ORION_ENV")
+        or os.getenv("ENV")
+        or os.getenv("NODE_ENV")
+        or ""
+    ).strip().lower()
+    return token in _LOCAL_GATEWAY_FALLBACK_ENVS
+
+
+def _workspace_live_gateway_available_for_id(
+    workspace_id: str,
+    *,
+    gateway_protocol_service: Any,
+    gateway_state_repository: Any,
+) -> bool:
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
     try:
         registrations = gateway_state_repository.list_workspace_gateway_registrations(
@@ -270,6 +283,28 @@ def workspace_live_gateway_available(workspace_id: str) -> bool:
             continue
         if gateway_protocol_service.gateway_connection_is_live(gateway_id):
             return True
+    return False
+
+
+def workspace_live_gateway_available(workspace_id: str) -> bool:
+    try:
+        from server_modules import gateway_protocol_service, gateway_state_repository
+    except Exception:
+        return False
+
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    if _workspace_live_gateway_available_for_id(
+        normalized_workspace_id,
+        gateway_protocol_service=gateway_protocol_service,
+        gateway_state_repository=gateway_state_repository,
+    ):
+        return True
+    if normalized_workspace_id != "default" and _local_gateway_workspace_fallback_enabled():
+        return _workspace_live_gateway_available_for_id(
+            "default",
+            gateway_protocol_service=gateway_protocol_service,
+            gateway_state_repository=gateway_state_repository,
+        )
     return False
 
 

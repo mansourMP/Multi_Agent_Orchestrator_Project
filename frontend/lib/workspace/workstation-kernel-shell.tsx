@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { BookOpen, Bot, Brain, Compass, LayoutGrid, Link2, ListTodo, Menu, MessageSquare, Monitor, Package, Plus } from 'lucide-react';
+import { Bell, BookOpen, Bot, Brain, ChevronDown, Compass, LayoutGrid, Link2, ListTodo, Menu, MessageSquare, Monitor, Package, Plus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
@@ -540,6 +540,7 @@ export function WorkstationKernelShell({
     return 'chat';
   }, [activeDestinationId, activeRouteId]);
   const workspaceLabel = bootstrap.workspace.label;
+  const accountInitial = String(bootstrap.account.displayName || bootstrap.account.email || 'You').trim().charAt(0).toUpperCase() || 'Y';
   const contextRoutes = useMemo(() => {
     if (activeDestinationId === 'sage' && (!activeRouteId || !SAGE_TITLEBAR_NAV_ROUTE_IDS.has(activeRouteId))) {
       return [];
@@ -660,6 +661,8 @@ export function WorkstationKernelShell({
           <span>{tab.label}</span>
         </Link>
       ))
+    : activeDestinationId === 'sage'
+      ? null
     : contextRoutes.length > 0
       ? contextRoutes.map((route) => (
         route.id === 'activity' ? (
@@ -704,7 +707,10 @@ export function WorkstationKernelShell({
         <WorkstationTitlebar
           surfaceLabel=""
           surfaceControl={activeDestinationId === 'sage' ? (
-            <span className="workstation-titlebar__mobile-surface-label">Sage</span>
+            <span className="workstation-titlebar__product-selector">
+              <span>Sage 1.0 Lite</span>
+              <ChevronDown size={15} strokeWidth={2.1} aria-hidden="true" />
+            </span>
           ) : (
             <span className="workstation-titlebar__surface-empty" aria-hidden="true" />
           )}
@@ -740,6 +746,27 @@ export function WorkstationKernelShell({
                 >
                   <Plus size={16} aria-hidden="true" />
                 </Link>
+              ) : activeDestinationId === 'sage' ? (
+                <>
+                  {routeManifest.routeIndex.notifications ? (
+                    <Link
+                      href={routeManifest.routeIndex.notifications.href}
+                      className="workstation-titlebar__link workstation-titlebar__link--icon workstation-titlebar__link--notification"
+                      title="Notifications"
+                      aria-label="Notifications"
+                    >
+                      <Bell size={17} aria-hidden="true" />
+                    </Link>
+                  ) : null}
+                  <Link
+                    href="/settings/account"
+                    className="workstation-titlebar__account-avatar"
+                    title={bootstrap.account.displayName || bootstrap.account.email || 'Account'}
+                    aria-label="Account"
+                  >
+                    {accountInitial}
+                  </Link>
+                </>
               ) : routeManifest.routeIndex.gateway ? (
                 <Link
                   href={routeManifest.routeIndex.gateway.href}

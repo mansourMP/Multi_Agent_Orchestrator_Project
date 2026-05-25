@@ -132,6 +132,101 @@ def format_direct_tool_result(result: Dict[str, Any]) -> str:
         return str(result)
 
 
+def _compact_shell_command(command: str) -> str:
+    return " ".join(str(command or "").split()).strip().lower()
+
+
+def _first_non_empty(values: List[str]) -> str:
+    for value in values:
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+    return ""
+
+
+def _section_from_marker_output(output: str, marker: str) -> List[str]:
+    lines = str(output or "").replace("\r", "").split("\n")
+    capture = False
+    section: List[str] = []
+    wanted = marker.strip().lower()
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line.startswith("===") and line.endswith("==="):
+            current = line.strip("=").strip().lower()
+            if capture:
+                break
+            capture = current == wanted
+            continue
+        if capture and line:
+            section.append(line)
+    return section
+
+
+def _format_ram_bytes(value: str) -> str:
+    token = str(value or "").strip()
+    try:
+        bytes_value = int(token)
+    except ValueError:
+        return token
+    if bytes_value <= 0:
+        return token
+    gib = bytes_value / float(1024 ** 3)
+    label = f"{gib:.0f}" if abs(gib - round(gib)) < 0.05 else f"{gib:.1f}"
+    return f"{label} GB RAM"
+
+
+def _format_sw_vers(lines: List[str]) -> str:
+    values: Dict[str, str] = {}
+    for line in lines:
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip().lower()] = value.strip()
+    name = values.get("productname", "")
+    version = values.get("productversion", "")
+    build = values.get("buildversion", "")
+    if name and version and build:
+        return f"{name} {version} ({build})"
+    if name and version:
+        return f"{name} {version}"
+    return _first_non_empty(lines)
+
+
+def _format_local_system_info_output(output: str) -> str:
+    os_lines = _section_from_marker_output(output, "OS")
+    cpu = _first_non_empty(_section_from_marker_output(output, "CPU"))
+    ram = _format_ram_bytes(_first_non_empty(_section_from_marker_output(output, "RAM_BYTES")))
+    cores = _first_non_empty(_section_from_marker_output(output, "CORES"))
+    disk_lines = _section_from_marker_output(output, "DISK")
+    disk = disk_lines[-1] if disk_lines else ""
+    parts = ["I checked this device."]
+    details = [
+        ("OS", _format_sw_vers(os_lines)),
+        ("Chip", cpu),
+        ("Memory", ram),
+        ("Cores", cores),
+        ("Disk", disk),
+    ]
+    for label, value in details:
+        if value:
+            parts.append(f"{label}: {value}")
+    return "\n".join(parts).strip()
+
+
+def _format_shell_result_for_chat(command: str, output_preview: str, summary: str) -> str:
+    normalized_command = _compact_shell_command(command)
+    output = str(output_preview or "").strip()
+    if normalized_command == "pwd":
+        return "\n".join(part for part in ["You're in:", output] if part).strip()
+    if "===OS===" in output and "===CPU===" in output:
+        return _format_local_system_info_output(output)
+    if normalized_command == "whoami" and output:
+        return f"Current user: {output}"
+    if output:
+        return "\n".join(["I checked this device.", output]).strip()
+    return summary or "I checked this device."
+
+
 def format_direct_local_tool_result(result: Dict[str, Any]) -> str:
     if not isinstance(result, dict):
         return str(result or "").strip()
@@ -159,7 +254,7 @@ def format_direct_local_tool_result(result: Dict[str, Any]) -> str:
     if tool_name == "run_command":
         command = str(first_action.get("command") or "").strip()
         output_preview = str(first_action.get("output_preview") or "").strip()
-        return "\n".join(part for part in [summary or (f"Command completed: {command}" if command else ""), output_preview] if part).strip()
+        return _format_shell_result_for_chat(command, output_preview, summary)
 
     if tool_name == "screenshot.capture":
         artifact_path = str(first_artifact.get("path") or "").strip()

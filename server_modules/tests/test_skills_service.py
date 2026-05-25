@@ -1,4 +1,5 @@
 import asyncio
+import os
 import tempfile
 import unittest
 import json
@@ -6,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from server_modules import direct_tool_execution_service
+from server_modules import no_provider_service
 from server_modules import skills_service
 
 
@@ -97,6 +99,12 @@ class SkillsServiceTests(unittest.TestCase):
                 "new_hash": "hash-2",
             },
         )
+
+    def test_safe_direct_shell_allows_known_read_only_system_probe_only(self) -> None:
+        self.assertTrue(
+            skills_service._safe_direct_shell_command(no_provider_service.local_system_info_shell_command())
+        )
+        self.assertFalse(skills_service._safe_direct_shell_command("pwd; echo unsafe"))
 
     def test_capability_descriptor_from_payload_normalizes_fields(self) -> None:
         descriptor = skills_service.capability_descriptor_from_payload(
@@ -714,10 +722,133 @@ class SkillsServiceTests(unittest.TestCase):
                 callbacks=callbacks,
             )
 
-        self.assertIn("Command completed: pwd", raw)
+        self.assertIn("Checked this device.", raw)
+        self.assertIn('"command": "pwd"', raw)
         execute_gateway_mock.assert_called_once()
         call_kwargs = execute_gateway_mock.call_args.kwargs
         self.assertEqual(call_kwargs["request_id"], "chat-request-2")
+
+    def test_execute_single_direct_tool_call_uses_direct_worker_when_gateway_not_live(self) -> None:
+        callbacks = self._execution_callbacks()
+        workflow_result = {
+            "summary": "Executed shell command.",
+            "result_data": {
+                "child_result": {
+                    "outputs": {
+                        "actions": [
+                            {
+                                "tool": "execute_shell_command",
+                                "command": "pwd",
+                                "stdout_preview": "/tmp/project",
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+        with (
+            patch(
+                "server_modules.skills_service._resolve_direct_tool_gateway_id",
+                return_value=None,
+            ),
+            patch(
+                "server_modules.skills_service._execute_direct_tool_via_gateway",
+            ) as execute_gateway_mock,
+            patch(
+                "server_modules.runs_execution._workflow_execute_local_tool",
+                return_value=workflow_result,
+            ) as execute_local_mock,
+        ):
+            raw = skills_service.execute_single_direct_tool_call(
+                tool_call={"name": "shell__exec", "arguments": {"command": "pwd"}},
+                workspace_id="default",
+                thread_id="thread-1",
+                index=1,
+                session_ctx={"request_id": "chat-request-2"},
+                callbacks=callbacks,
+            )
+
+        self.assertIn("/tmp/project", raw)
+        execute_gateway_mock.assert_not_called()
+        execute_local_mock.assert_called_once()
+        config = execute_local_mock.call_args.args[2]
+        self.assertEqual(config["command"], "pwd")
+        self.assertEqual(config["execution_target"], "local_companion")
+
+    def test_execute_single_direct_tool_call_uses_local_dev_shell_fallback_without_database(self) -> None:
+        callbacks = self._execution_callbacks()
+        with (
+            patch(
+                "server_modules.skills_service._resolve_direct_tool_gateway_id",
+                return_value=None,
+            ),
+            patch(
+                "server_modules.skills_service._local_dev_direct_shell_fallback_enabled",
+                return_value=True,
+            ),
+            patch(
+                "server_modules.skills_service._execute_local_dev_direct_shell_command",
+                return_value="Command completed: pwd\n/tmp/project",
+            ) as execute_direct_mock,
+            patch(
+                "server_modules.runs_execution._workflow_execute_local_tool",
+            ) as execute_local_mock,
+        ):
+            raw = skills_service.execute_single_direct_tool_call(
+                tool_call={"name": "shell__exec", "arguments": {"command": "pwd"}},
+                workspace_id="default",
+                thread_id="thread-1",
+                index=1,
+                session_ctx={"request_id": "chat-request-2"},
+                callbacks=callbacks,
+            )
+
+        self.assertIn("/tmp/project", raw)
+        execute_direct_mock.assert_called_once()
+        execute_local_mock.assert_not_called()
+
+    def test_local_dev_direct_shell_fallback_can_use_default_worker_for_local_workspace(self) -> None:
+        worker_payload = {
+            "items": [
+                {
+                    "workspace_id": "default",
+                    "online": True,
+                    "capabilities": ["shell.execute", "local.worker"],
+                }
+            ]
+        }
+        with patch.dict(os.environ, {"ORION_ENV": "local"}, clear=False), patch(
+            "server_modules.local_queue.handle_get_local_workers_status",
+            return_value=worker_payload,
+        ):
+            self.assertTrue(skills_service._local_dev_direct_shell_fallback_enabled("ws-1"))
+
+    def test_resolve_direct_tool_gateway_id_falls_back_to_default_only_in_local_env(self) -> None:
+        def _registrations(workspace_id, include_revoked=False):
+            if workspace_id == "default":
+                return [{"gateway_id": "gw-local", "status": "active"}]
+            return []
+
+        with patch.dict(os.environ, {"ORION_ENV": "local"}, clear=False), patch(
+            "server_modules.gateway_state_repository.list_workspace_gateway_registrations",
+            side_effect=_registrations,
+        ), patch(
+            "server_modules.gateway_protocol_service.gateway_connection_is_live",
+            return_value=True,
+        ):
+            self.assertEqual(
+                skills_service._resolve_direct_tool_gateway_id("ws-1", session_ctx={}),
+                "gw-local",
+            )
+
+        with patch.dict(os.environ, {"ORION_ENV": "production"}, clear=False), patch(
+            "server_modules.gateway_state_repository.list_workspace_gateway_registrations",
+            side_effect=_registrations,
+        ), patch(
+            "server_modules.gateway_protocol_service.gateway_connection_is_live",
+            return_value=True,
+        ):
+            self.assertIsNone(skills_service._resolve_direct_tool_gateway_id("ws-1", session_ctx={}))
 
     def test_execute_single_direct_tool_call_routes_file_read_via_gateway_when_live(self) -> None:
         callbacks = self._execution_callbacks()

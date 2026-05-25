@@ -224,6 +224,28 @@ def extract_web_query(message: str) -> str:
     return ""
 
 
+LOCAL_SYSTEM_INFO_SHELL_COMMAND = (
+    'printf "===OS===\\n"; '
+    '(sw_vers 2>/dev/null || uname -a); '
+    'printf "\\n===CPU===\\n"; '
+    '(sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -m); '
+    'printf "\\n===RAM_BYTES===\\n"; '
+    '(sysctl -n hw.memsize 2>/dev/null || true); '
+    'printf "\\n===CORES===\\n"; '
+    '(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || true); '
+    'printf "\\n===DISK===\\n"; '
+    '(df -h / 2>/dev/null || true)'
+)
+
+
+def local_system_info_shell_command() -> str:
+    return LOCAL_SYSTEM_INFO_SHELL_COMMAND
+
+
+def local_working_directory_shell_command() -> str:
+    return "pwd"
+
+
 def parse_http_tool_output(output: str) -> Any:
     parts = str(output or "").split("\n\n", 1)
     payload = parts[1] if len(parts) > 1 else ""
@@ -399,6 +421,34 @@ def plan_tool_calls(
                 },
             }
         )
+    working_directory_requested = direct_chat_tool_catalog_service.looks_like_local_working_directory_request(compact)
+    if working_directory_requested and not planned and "shell__exec" in tool_names:
+        planned.append({"name": "shell__exec", "arguments": {"command": local_working_directory_shell_command()}})
+    elif working_directory_requested and not planned and "hardware__action" in tool_names:
+        planned.append(
+            {
+                "name": "hardware__action",
+                "arguments": {
+                    "runtime_target": "user_device_gateway",
+                    "action": "shell.execute",
+                    "arguments": {"command": local_working_directory_shell_command()},
+                },
+            }
+        )
+    system_info_requested = direct_chat_tool_catalog_service.looks_like_local_system_info_request(compact)
+    if system_info_requested and not planned and "shell__exec" in tool_names:
+        planned.append({"name": "shell__exec", "arguments": {"command": local_system_info_shell_command()}})
+    elif system_info_requested and not planned and "hardware__action" in tool_names:
+        planned.append(
+            {
+                "name": "hardware__action",
+                "arguments": {
+                    "runtime_target": "user_device_gateway",
+                    "action": "shell.execute",
+                    "arguments": {"command": local_system_info_shell_command()},
+                },
+            }
+        )
     if (
         "hardware__action" in tool_names
         and not planned
@@ -449,6 +499,15 @@ def has_obvious_direct_tool_intent(
         message,
         compact_text=compact_text,
         extract_first_url=extract_first_url,
+    ):
+        return True
+    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    if direct_chat_tool_catalog_service.looks_like_local_system_info_request(compact) and (
+        "shell__exec" in tool_names or "hardware__action" in tool_names
+    ):
+        return True
+    if direct_chat_tool_catalog_service.looks_like_local_working_directory_request(compact) and (
+        "shell__exec" in tool_names or "hardware__action" in tool_names
     ):
         return True
     if parse_memory_write(message) is not None or parse_memory_read(message) is not None:

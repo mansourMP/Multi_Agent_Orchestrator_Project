@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from server_modules import direct_chat_provider_service
 
@@ -393,6 +394,40 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertEqual(payload["connection_mode"], "")
         self.assertFalse(payload["ai_ready"])
         self.assertFalse(payload["local_gateway_online"])
+
+    def test_resolve_direct_chat_availability_uses_default_local_worker_in_local_env(self) -> None:
+        worker_payload = {
+            "items": [
+                {
+                    "workspace_id": "default",
+                    "online": True,
+                    "capabilities": ["shell.execute", "local.worker"],
+                }
+            ]
+        }
+        with patch.dict("os.environ", {"ORION_ENV": "local"}, clear=False), patch(
+            "server_modules.local_queue.handle_get_local_workers_status",
+            return_value=worker_payload,
+        ):
+            payload = direct_chat_provider_service.resolve_direct_chat_availability(
+                "ws-1",
+                "openai",
+                direct_chat_runtime_available_fn=lambda: True,
+                preferred_provider_fn=lambda workspace_id, requested: (requested or "openai", {"api_key": "sk-test"}),
+                supports_direct_message_native_chat_fn=lambda _provider, credentials: bool(credentials),
+                resolve_workspace_tool_capabilities_fn=lambda _workspace_id: [],
+                direct_chat_provider_truth_fn=lambda _workspace_id, _provider: {
+                    "credential_plane": "workspace_connection",
+                    "credential_owner_kind": "workspace_byok",
+                    "workspace_connected": True,
+                    "connection_state": "active",
+                    "runtime_state": "active",
+                },
+                workspace_live_gateway_available_fn=lambda _workspace_id: False,
+            )
+
+        self.assertTrue(payload["local_worker_online"])
+        self.assertTrue(payload["capability_truth"]["my_computer"]["local_tools_available"])
 
     def test_connected_provider_tokens_filters_empty_credentials(self) -> None:
         connected = direct_chat_provider_service.connected_provider_tokens(

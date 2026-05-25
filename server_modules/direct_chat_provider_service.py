@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from typing import Any, Callable, Dict, List, Optional
 
 from server_modules.direct_chat_intervention_service import build_intervention
@@ -97,6 +98,48 @@ def _byok_provider_options() -> List[Dict[str, Any]]:
     return options
 
 
+_LOCAL_WORKER_FALLBACK_ENVS = {"dev", "development", "local", "test", "testing"}
+
+
+def _local_worker_fallback_enabled() -> bool:
+    token = str(os.getenv("ORION_ENV") or os.getenv("APP_ENV") or "").strip().lower()
+    return token in _LOCAL_WORKER_FALLBACK_ENVS
+
+
+def _workspace_local_worker_online_exact(workspace_id: str) -> bool:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    try:
+        from server_modules import local_queue
+
+        payload = local_queue.handle_get_local_workers_status()
+    except Exception:
+        return False
+    items = payload.get("items") if isinstance(payload, dict) else []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or not bool(item.get("online")):
+            continue
+        worker_workspace = str(item.get("workspace_id") or "default").strip() or "default"
+        if worker_workspace != normalized_workspace_id:
+            continue
+        capabilities = {
+            str(capability or "").strip().lower()
+            for capability in (item.get("capabilities") if isinstance(item.get("capabilities"), list) else [])
+            if str(capability or "").strip()
+        }
+        if "shell.execute" in capabilities or "local.worker" in capabilities:
+            return True
+    return False
+
+
+def _workspace_local_worker_online(workspace_id: str) -> bool:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    if _workspace_local_worker_online_exact(normalized_workspace_id):
+        return True
+    if normalized_workspace_id != "default" and _local_worker_fallback_enabled():
+        return _workspace_local_worker_online_exact("default")
+    return False
+
+
 def build_capability_truth(
     *,
     workspace_id: str,
@@ -105,6 +148,7 @@ def build_capability_truth(
     tool_capabilities: Any,
     runtime_ok: bool,
     local_gateway_online: bool,
+    local_worker_online: bool = False,
     ai_ready: bool,
     connection_mode: str,
 ) -> Dict[str, Any]:
@@ -138,7 +182,7 @@ def build_capability_truth(
                 }
             )
 
-    local_tools_online = bool(local_gateway_online and runtime_ok)
+    local_tools_online = bool(runtime_ok and (local_gateway_online or local_worker_online))
     setup_actions: List[Dict[str, str]] = []
     credential_plane = str(provider_truth.get("credential_plane") or "").strip().lower()
     hosted_enabled = bool(provider_truth.get("hosted_ai_enabled"))
@@ -222,8 +266,10 @@ def build_capability_truth(
         },
         "byok_providers": _byok_provider_options(),
         "my_computer": {
-            "online": bool(local_gateway_online),
+            "online": bool(local_gateway_online or local_worker_online),
             "runtime_ok": bool(runtime_ok),
+            "local_worker_online": bool(local_worker_online),
+            "local_gateway_online": bool(local_gateway_online),
             "local_tools_available": local_tools_online,
             "state": (
                 "online"
@@ -707,6 +753,7 @@ def resolve_direct_chat_availability(
     credential_plane = str(provider_truth.get("credential_plane") or "").strip().lower()
     runtime_state = str(provider_truth.get("runtime_state") or "").strip().lower()
     local_gateway_online = workspace_live_gateway_available_fn(normalized_workspace_id)
+    local_worker_online = _workspace_local_worker_online(normalized_workspace_id)
     if credential_plane == "local_runtime" and (runtime_state != "active" or not local_gateway_online):
         ai_ready = False
     connection_mode = ""
@@ -724,6 +771,7 @@ def resolve_direct_chat_availability(
         "ai_ready": ai_ready,
         "runtime_ok": runtime_ok,
         "local_gateway_online": local_gateway_online,
+        "local_worker_online": local_worker_online,
         "connection_mode": connection_mode,
         "provider": provider,
         **provider_truth,
@@ -736,6 +784,7 @@ def resolve_direct_chat_availability(
         tool_capabilities=tool_capabilities,
         runtime_ok=runtime_ok,
         local_gateway_online=local_gateway_online,
+        local_worker_online=local_worker_online,
         ai_ready=ai_ready,
         connection_mode=connection_mode,
     )
@@ -753,6 +802,7 @@ def resolve_direct_chat_availability(
                 tool_capabilities=resolved.get("tool_capabilities"),
                 runtime_ok=bool(resolved.get("runtime_ok")),
                 local_gateway_online=bool(resolved.get("local_gateway_online")),
+                local_worker_online=bool(resolved.get("local_worker_online")),
                 ai_ready=bool(resolved.get("ai_ready")),
                 connection_mode=str(resolved.get("connection_mode") or ""),
             )

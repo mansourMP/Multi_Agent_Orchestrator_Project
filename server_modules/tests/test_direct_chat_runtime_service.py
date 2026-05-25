@@ -751,6 +751,67 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(captured["metadata_tools"], [{"name": "file__read"}, {"name": "memory_search"}])
         self.assertFalse(any(event.get("detail") == "Completed" and event.get("id") == "direct-tools:auto" for event in events))
 
+    def test_build_direct_operator_reply_keeps_local_tools_for_assistant_plan_interception(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="what about now?",
+            normalized_workspace_id="ws-1",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="deepseek",
+            normalized_requested_model="deepseek-chat",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[{"name": "shell__exec"}],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "ws-1"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.supported_providers = ["deepseek"]
+        services.message_has_obvious_direct_tool_intent = lambda message, tools: False
+        services.resolve_provider_for_direct_chat_message = (
+            lambda workspace_id, requested_provider, message, tools_present=False: ("deepseek", {"api_key": "sk-test"})
+        )
+        services.supports_direct_message_native_chat = lambda provider, credentials: provider == "deepseek" and bool(credentials)
+        captured: dict[str, object] = {}
+
+        def _stream_provider_backed_direct_chat(**kwargs):
+            captured["tools"] = kwargs.get("tools")
+            captured["assistant_plan_tools"] = kwargs.get("assistant_plan_tools")
+            return iter(
+                [
+                    {
+                        "type": "final",
+                        "payload": {"reply": "ok", "context_used": {}},
+                    }
+                ]
+            )
+
+        with mock.patch.object(
+            direct_chat_runtime_service.direct_chat_generation_service,
+            "stream_provider_backed_direct_chat",
+            side_effect=_stream_provider_backed_direct_chat,
+        ):
+            list(
+                direct_chat_runtime_service.build_direct_operator_reply(
+                    services=services,
+                    message=prepared.normalized_message,
+                    workspace_id="ws-1",
+                    requested_model="deepseek-chat",
+                    requested_provider="deepseek",
+                )
+            )
+
+        self.assertEqual(captured["tools"], [])
+        self.assertEqual(captured["assistant_plan_tools"], [{"name": "shell__exec"}])
+
     def test_build_direct_operator_reply_forces_explicit_tool_request_even_when_provider_ready(self) -> None:
         prepared = SimpleNamespace(
             normalized_message="Use the local shell tool to run ls ~/Desktop and return the result exactly.",
@@ -811,6 +872,65 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertIn("Desktop file A", events[-1]["payload"]["reply"])
         self.assertEqual(events[-1]["payload"]["provider"], "ollama")
         self.assertEqual(events[-1]["payload"]["context_used"]["effective_provider"], "ollama")
+
+    def test_build_direct_operator_reply_forces_working_directory_request_even_when_provider_ready(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="what folder are you in ?",
+            normalized_workspace_id="ws-1",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="deepseek",
+            normalized_requested_model="deepseek-chat",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[{"name": "shell__exec"}],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "ws-1"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.supported_providers = ["deepseek"]
+        services.message_has_obvious_direct_tool_intent = lambda message, tools: True
+        services.resolve_provider_for_direct_chat_message = (
+            lambda workspace_id, requested_provider, message, tools_present=False: ("deepseek", {"api_key": "sk-test"})
+        )
+        services.supports_direct_message_native_chat = lambda provider, credentials: provider == "deepseek" and bool(credentials)
+        services.no_provider_execution_services.parse_tool_name = lambda name: tuple(str(name).split("__", 1))
+        services.no_provider_execution_services.tool_arguments_payload = (
+            lambda arguments: arguments if isinstance(arguments, dict) else {}
+        )
+        executed: dict[str, object] = {}
+
+        def _execute_single_tool_call(**kwargs):
+            executed.update(kwargs)
+            return "/Users/mansur/Multi_Agent_Orchestrator_Project"
+
+        services.no_provider_execution_services.execute_single_tool_call = _execute_single_tool_call
+        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = (
+            lambda **kwargs: (_ for _ in ()).throw(AssertionError("provider generation should not run"))
+        )
+
+        events = list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=services,
+                message=prepared.normalized_message,
+                workspace_id="ws-1",
+                requested_model="deepseek-chat",
+                requested_provider="deepseek",
+            )
+        )
+
+        self.assertEqual(executed["tool_call"]["name"], "shell__exec")
+        self.assertEqual(executed["tool_call"]["arguments"]["command"], "pwd")
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertIn("/Users/mansur/Multi_Agent_Orchestrator_Project", events[-1]["payload"]["reply"])
 
     def test_build_direct_operator_reply_orders_system_identity_and_workspace_context(self) -> None:
         prepared = SimpleNamespace(

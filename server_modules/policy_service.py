@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from scripts.platform_execution import capability_metadata
 from server_modules.computer_action_safety import evaluate_dangerous_computer_action_policy
+from server_modules.capability_registry import canonical_capability_id
 from server_modules import skills_service
 from server_modules import safe_mode_service
 
@@ -808,9 +809,24 @@ def evaluate_tool_policy_decision(
         None,
     )
 
+    known_read_only_system_probe = (
+        uses_raw_command_path and runtime_policy._metadata_is_known_read_only_system_probe(metadata)
+    )
     safe_raw_shell_command = uses_raw_command_path and runtime_policy._metadata_allows_safe_raw_shell(metadata)
     classification = runtime_policy.classify_runtime_action(clean_tool_id, count=1, target=effective_target)
-    if clean_tool_id == "shell.execute" and safe_raw_shell_command:
+    if clean_tool_id == "shell.execute" and known_read_only_system_probe:
+        classification = {
+            **classification,
+            "action_type": runtime_policy.ACTION_TYPE_READ,
+            "target_system": "local_device",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+            "requires_contract_approval": False,
+            "safe_raw_shell_command": True,
+            "known_read_only_system_probe": True,
+        }
+    elif clean_tool_id == "shell.execute" and safe_raw_shell_command:
         classification = {
             **classification,
             "action_type": runtime_policy.ACTION_TYPE_REVERSIBLE_WRITE,
@@ -939,6 +955,7 @@ def evaluate_tool_policy_decision(
         "uses_capability_path": uses_capability_path,
         "uses_raw_command_path": uses_raw_command_path,
         "safe_raw_shell_command": safe_raw_shell_command,
+        "known_read_only_system_probe": known_read_only_system_probe,
         "unsupported_capability": unsupported_capability.get("id") if isinstance(unsupported_capability, dict) else None,
         "browser_security_profile": browser_profile or None,
         "browser_requires_approval": browser_requires_approval,
@@ -1162,6 +1179,16 @@ def browser_direct_tool_requires_approval(action_id: str) -> bool:
     return normalized_action in {"click", "fill", "execute_js", "download_file"}
 
 
+def _hardware_shell_command_argument(arguments: Dict[str, Any]) -> str:
+    nested = arguments.get("arguments") if isinstance(arguments.get("arguments"), dict) else {}
+    return str(
+        nested.get("command")
+        or arguments.get("command")
+        or arguments.get("script")
+        or ""
+    ).strip()
+
+
 def approval_required_for_direct_tool(
     connector_id: str,
     action_id: str,
@@ -1191,6 +1218,11 @@ def approval_required_for_direct_tool(
             or ""
         ).strip()
         if capability_id:
+            if (
+                canonical_capability_id(capability_id) == "shell.execute"
+                and skills_service._safe_direct_shell_command(_hardware_shell_command_argument(arguments))
+            ):
+                return False
             from server_modules import gateway_approval_service
 
             return gateway_approval_service.capability_requires_owner_approval(capability_id)

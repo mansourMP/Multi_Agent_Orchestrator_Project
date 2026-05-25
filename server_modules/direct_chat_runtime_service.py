@@ -179,9 +179,27 @@ def _explicit_provider_parity_tool_calls(
     tools: List[Dict[str, Any]],
     services: DirectChatRuntimeServices,
 ) -> List[Dict[str, Any]]:
+    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    compact = services.no_provider_execution_services.compact_text(message)
+    if direct_chat_tool_catalog_service.looks_like_local_working_directory_request(
+        compact
+    ) or direct_chat_tool_catalog_service.looks_like_local_system_info_request(compact):
+        execution_services = services.no_provider_execution_services
+        planned = no_provider_service.plan_tool_calls(
+            message,
+            tools,
+            compact_text=execution_services.compact_text,
+            extract_first_path_reference=execution_services.extract_first_path_reference,
+            extract_first_url=execution_services.extract_first_url,
+        )
+        return [
+            call
+            for call in planned
+            if isinstance(call, dict)
+            and str(call.get("name") or "").strip() in tool_names
+        ]
     if not _message_explicitly_names_direct_tool(message, services):
         return []
-    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
     shell_match = re.search(
         r"\b(?:local\s+)?shell\s+tool\s+to\s+run\s+(.+?)(?:\s+and\s+return\b|\s+then\b|$)",
         str(message or ""),
@@ -1207,6 +1225,7 @@ def build_direct_operator_reply(
         trace_context=resolved_trace_context,
         resolved_chat_max_iterations=resolved_chat_max_iterations,
         direct_tool_result_summary_system_message="Use the tool results to answer the user's request.",
+        assistant_plan_tools=tools,
     )
 
 

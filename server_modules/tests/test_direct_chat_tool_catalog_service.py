@@ -94,6 +94,49 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
 
         self.assertTrue(allowed)
 
+    def test_message_can_use_direct_local_tools_detects_local_hardware_info_request(self) -> None:
+        callbacks = _callbacks()
+
+        allowed = service.message_can_use_direct_local_tools(
+            "check what i have in this hardware !",
+            provider="deepseek",
+            tools=[{"name": "shell__exec"}],
+            callbacks=callbacks,
+        )
+
+        self.assertTrue(allowed)
+        self.assertTrue(
+            service.message_can_use_builtin_direct_tools(
+                "What hardware specs does this machine have?",
+                tools=[{"name": "hardware__action"}],
+                callbacks=callbacks,
+            )
+        )
+
+    def test_message_can_use_direct_local_tools_ignores_generic_hardware_question(self) -> None:
+        allowed = service.message_can_use_direct_local_tools(
+            "What is hardware acceleration?",
+            provider="deepseek",
+            tools=[{"name": "shell__exec"}],
+            callbacks=_callbacks(),
+        )
+
+        self.assertFalse(allowed)
+
+    def test_message_can_use_direct_local_tools_detects_working_directory_request(self) -> None:
+        callbacks = _callbacks()
+
+        allowed = service.message_can_use_direct_local_tools(
+            "what folder are you in ?",
+            provider="deepseek",
+            tools=[{"name": "shell__exec"}],
+            callbacks=callbacks,
+        )
+
+        self.assertTrue(allowed)
+        self.assertTrue(service.looks_like_local_working_directory_request("what is your current working directory?"))
+        self.assertFalse(service.looks_like_local_working_directory_request("what folder should I use for invoices?"))
+
     def test_message_can_use_direct_local_tools_ignores_pasted_terminal_context(self) -> None:
         pasted_context = """
         Shift+Tab to accept edits

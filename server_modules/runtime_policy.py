@@ -158,6 +158,23 @@ SAFE_SHELL_RISKY_MARKERS = (
 )
 PYTHON_RAW_EXECUTION_FLAGS = ("-c", "-m")
 PIP_MUTATING_SUBCOMMANDS = ("install", "uninstall", "download", "wheel")
+LOCAL_SYSTEM_INFO_SHELL_COMMAND = (
+    'printf "===OS===\\n"; '
+    '(sw_vers 2>/dev/null || uname -a); '
+    'printf "\\n===CPU===\\n"; '
+    '(sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -m); '
+    'printf "\\n===RAM_BYTES===\\n"; '
+    '(sysctl -n hw.memsize 2>/dev/null || true); '
+    'printf "\\n===CORES===\\n"; '
+    '(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || true); '
+    'printf "\\n===DISK===\\n"; '
+    '(df -h / 2>/dev/null || true)'
+)
+LOCAL_SYSTEM_INFO_SHELL_COMMAND_COMPACT = re.sub(
+    r"\s+",
+    " ",
+    LOCAL_SYSTEM_INFO_SHELL_COMMAND.strip(),
+).lower()
 
 
 def _iter_raw_shell_operations(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -187,11 +204,26 @@ def _raw_shell_command_text(operation: Dict[str, Any]) -> str:
     return " ".join(str(item or "").strip() for item in argv if str(item or "").strip()).strip()
 
 
+def _is_known_read_only_system_probe(operation: Dict[str, Any]) -> bool:
+    command = _raw_shell_command_text(operation)
+    compact = re.sub(r"\s+", " ", command).strip().lower()
+    return bool(compact) and compact == LOCAL_SYSTEM_INFO_SHELL_COMMAND_COMPACT
+
+
+def _metadata_is_known_read_only_system_probe(metadata: Dict[str, Any]) -> bool:
+    operations = _iter_raw_shell_operations(metadata)
+    if not operations:
+        return False
+    return all(_is_known_read_only_system_probe(item) for item in operations)
+
+
 def _is_safe_raw_shell_command(operation: Dict[str, Any]) -> bool:
     command = _raw_shell_command_text(operation)
     compact = re.sub(r"\s+", " ", command).strip().lower()
     if not compact:
         return False
+    if _is_known_read_only_system_probe(operation):
+        return True
     if any(token in command for token in SAFE_SHELL_BLOCKED_TOKENS):
         return False
     if any(marker in compact for marker in SAFE_SHELL_RISKY_MARKERS):
@@ -3634,9 +3666,24 @@ def evaluate_tool_policy_decision(
         None,
     )
 
+    known_read_only_system_probe = (
+        uses_raw_command_path and _metadata_is_known_read_only_system_probe(metadata)
+    )
     safe_raw_shell_command = uses_raw_command_path and _metadata_allows_safe_raw_shell(metadata)
     classification = classify_runtime_action(clean_tool_id, count=1, target=effective_target)
-    if clean_tool_id == "shell.execute" and safe_raw_shell_command:
+    if clean_tool_id == "shell.execute" and known_read_only_system_probe:
+        classification = {
+            **classification,
+            "action_type": ACTION_TYPE_READ,
+            "target_system": "local_device",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+            "requires_contract_approval": False,
+            "safe_raw_shell_command": True,
+            "known_read_only_system_probe": True,
+        }
+    elif clean_tool_id == "shell.execute" and safe_raw_shell_command:
         classification = {
             **classification,
             "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
@@ -3721,6 +3768,7 @@ def evaluate_tool_policy_decision(
         "uses_capability_path": uses_capability_path,
         "uses_raw_command_path": uses_raw_command_path,
         "safe_raw_shell_command": safe_raw_shell_command,
+        "known_read_only_system_probe": known_read_only_system_probe,
         "unsupported_capability": unsupported_capability.get("id") if isinstance(unsupported_capability, dict) else None,
         "browser_security_profile": browser_profile or None,
         "browser_requires_approval": browser_requires_approval,

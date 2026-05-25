@@ -46,6 +46,27 @@ class DirectChatOperatorSupportServiceTests(unittest.TestCase):
         self.assertTrue(service.local_worker_available({}))
         self.assertFalse(service.local_worker_available({"runtime_ok": False}))
 
+    def test_local_worker_available_prefers_live_worker_over_unpaired_gateway(self) -> None:
+        self.assertTrue(
+            service.local_worker_available(
+                {"runtime_ok": True, "local_gateway_online": False, "local_worker_online": True}
+            )
+        )
+
+    def test_local_worker_available_keeps_gateway_false_when_runtime_not_healthy(self) -> None:
+        self.assertFalse(
+            service.local_worker_available(
+                {"runtime_ok": False, "local_gateway_online": False}
+            )
+        )
+
+    def test_local_worker_available_does_not_treat_runtime_health_as_worker_presence(self) -> None:
+        self.assertFalse(
+            service.local_worker_available(
+                {"runtime_ok": True, "local_gateway_online": False}
+            )
+        )
+
     def test_active_run_count_reads_live_runs_from_repository(self) -> None:
         with mock.patch.object(
             service.run_state_repository,

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
 from typing import Any, Dict, List, Optional
 import uuid
 
@@ -1915,6 +1917,39 @@ def _gateway_arguments_for_direct_local_tool(
     return payload
 
 
+_LOCAL_DIRECT_TOOL_GATEWAY_FALLBACK_ENVS = {"dev", "development", "local", "test", "testing"}
+
+
+def _local_direct_tool_gateway_fallback_enabled() -> bool:
+    token = (
+        os.getenv("ORION_ENV")
+        or os.getenv("ENV")
+        or os.getenv("NODE_ENV")
+        or ""
+    ).strip().lower()
+    return token in _LOCAL_DIRECT_TOOL_GATEWAY_FALLBACK_ENVS
+
+
+def _resolve_live_gateway_from_workspace(
+    workspace_id: str,
+    *,
+    gateway_state_repository: Any,
+    gateway_protocol_service: Any,
+) -> str | None:
+    for registration in gateway_state_repository.list_workspace_gateway_registrations(
+        str(workspace_id or "default").strip() or "default",
+        include_revoked=False,
+    ):
+        gateway_id = str(registration.get("gateway_id") or "").strip()
+        if not gateway_id:
+            continue
+        if str(registration.get("status") or "").strip().lower() != "active":
+            continue
+        if gateway_protocol_service.gateway_connection_is_live(gateway_id):
+            return gateway_id
+    return None
+
+
 def _resolve_direct_tool_gateway_id(
     workspace_id: str,
     *,
@@ -1946,17 +1981,20 @@ def _resolve_direct_tool_gateway_id(
             continue
         if gateway_protocol_service.gateway_connection_is_live(gateway_id):
             return gateway_id
-    for registration in gateway_state_repository.list_workspace_gateway_registrations(
-        str(workspace_id or "default").strip() or "default",
-        include_revoked=False,
-    ):
-        gateway_id = str(registration.get("gateway_id") or "").strip()
-        if not gateway_id:
-            continue
-        if str(registration.get("status") or "").strip().lower() != "active":
-            continue
-        if gateway_protocol_service.gateway_connection_is_live(gateway_id):
-            return gateway_id
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    resolved_gateway_id = _resolve_live_gateway_from_workspace(
+        normalized_workspace_id,
+        gateway_state_repository=gateway_state_repository,
+        gateway_protocol_service=gateway_protocol_service,
+    )
+    if resolved_gateway_id:
+        return resolved_gateway_id
+    if normalized_workspace_id != "default" and _local_direct_tool_gateway_fallback_enabled():
+        return _resolve_live_gateway_from_workspace(
+            "default",
+            gateway_state_repository=gateway_state_repository,
+            gateway_protocol_service=gateway_protocol_service,
+        )
     return None
 
 
@@ -1980,14 +2018,30 @@ def _format_gateway_direct_local_tool_result(
         stdout = str(inner_result.get("stdout") or "").strip()
         stderr = str(inner_result.get("stderr") or "").strip()
         exit_code = inner_result.get("exit_code")
-        parts = [f"Command completed: {command}" if command else "Command completed."]
-        if stdout:
-            parts.append(stdout)
-        if stderr:
-            parts.append(f"stderr:\n{stderr}")
-        if not stdout and not stderr and exit_code is not None:
-            parts.append(f"Exit code: {exit_code}")
-        return "\n".join(part for part in parts if part).strip()
+        output_preview = "\n".join(part for part in [stdout, f"stderr:\n{stderr}" if stderr else ""] if part).strip()
+        result = {
+            "summary": "Checked this device.",
+            "result_data": {
+                "tool_variant": "run_command",
+                "child_result": {
+                    "outputs": {
+                        "actions": [
+                            {
+                                "tool": "run_command",
+                                "command": command,
+                                "status": "completed",
+                                "exit_code": exit_code,
+                                "output_preview": output_preview or (f"Exit code: {exit_code}" if exit_code is not None else ""),
+                                "stdout_preview": stdout,
+                                "stderr_preview": stderr,
+                            }
+                        ],
+                        "artifacts": [],
+                    }
+                },
+            },
+        }
+        return callbacks.format_direct_local_tool_result(result)
     if normalized_connector == "file" and isinstance(inner_result, dict):
         path = str(inner_result.get("path") or "").strip()
         mode = str(inner_result.get("mode") or normalized_action or "read").strip().lower()
@@ -2193,6 +2247,15 @@ def _safe_direct_shell_command(command: str) -> bool:
     compact = re.sub(r"\s+", " ", str(command or "").strip()).lower()
     if not compact:
         return False
+    from server_modules import no_provider_service
+
+    known_local_system_probe = re.sub(
+        r"\s+",
+        " ",
+        no_provider_service.LOCAL_SYSTEM_INFO_SHELL_COMMAND.strip(),
+    ).lower()
+    if compact == known_local_system_probe:
+        return True
     if any(token in compact for token in ("&&", "||", ";", "|", ">", "<", "$(", "`")):
         return False
     if any(
@@ -2248,6 +2311,99 @@ def _safe_direct_shell_command(command: str) -> bool:
     return any(re.search(pattern, compact) for pattern in allowed_patterns)
 
 
+def _local_direct_shell_worker_online_exact(workspace_id: str) -> bool:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    try:
+        from server_modules import local_queue
+
+        payload = local_queue.handle_get_local_workers_status()
+    except Exception:
+        return False
+    items = payload.get("items") if isinstance(payload, dict) else []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or not bool(item.get("online")):
+            continue
+        worker_workspace = str(item.get("workspace_id") or "default").strip() or "default"
+        if worker_workspace != normalized_workspace_id:
+            continue
+        capabilities = {
+            str(capability or "").strip().lower()
+            for capability in (item.get("capabilities") if isinstance(item.get("capabilities"), list) else [])
+            if str(capability or "").strip()
+        }
+        if "shell.execute" in capabilities:
+            return True
+    return False
+
+
+def _local_direct_shell_worker_online(workspace_id: str) -> bool:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    if _local_direct_shell_worker_online_exact(normalized_workspace_id):
+        return True
+    if normalized_workspace_id != "default" and _local_direct_tool_gateway_fallback_enabled():
+        return _local_direct_shell_worker_online_exact("default")
+    return False
+
+
+def _local_dev_direct_shell_fallback_enabled(workspace_id: str) -> bool:
+    if str(os.getenv("DATABASE_URL") or "").strip():
+        return False
+    env_name = str(os.getenv("ORION_ENV") or os.getenv("APP_ENV") or "").strip().lower()
+    if env_name not in _LOCAL_DIRECT_TOOL_GATEWAY_FALLBACK_ENVS:
+        return False
+    return _local_direct_shell_worker_online(workspace_id)
+
+
+def _execute_local_dev_direct_shell_command(
+    *,
+    command: str,
+    timeout_seconds: int,
+    workspace_id: str,
+    thread_id: str,
+    index: int,
+    callbacks: Any,
+) -> str:
+    completed = subprocess.run(
+        command,
+        shell=True,
+        executable=os.getenv("SHELL") or "/bin/zsh",
+        cwd=os.getcwd(),
+        capture_output=True,
+        text=True,
+        timeout=max(1, min(int(timeout_seconds or 15), 60)),
+    )
+    stdout = str(completed.stdout or "").strip()
+    stderr = str(completed.stderr or "").strip()
+    if completed.returncode != 0:
+        raise RuntimeError(stderr or f"Command failed with exit code {completed.returncode}: {command}")
+    output_preview = stdout or stderr
+    result = {
+        "summary": f"Command completed: {command}",
+        "result_data": {
+            "local_child_run_id": f"direct-chat-local-dev:{str(thread_id or 'thread').strip() or 'thread'}:{index}",
+            "tool_variant": "shell",
+            "child_result": {
+                "outputs": {
+                    "actions": [
+                        {
+                            "tool": "run_command",
+                            "command": command,
+                            "status": "completed",
+                            "exit_code": int(completed.returncode),
+                            "stdout_preview": stdout,
+                            "stderr_preview": stderr,
+                            "output_preview": output_preview,
+                            "workspace_id": str(workspace_id or "default").strip() or "default",
+                        }
+                    ],
+                    "artifacts": [],
+                }
+            },
+        },
+    }
+    return callbacks.format_direct_local_tool_result(result)
+
+
 def _execute_safe_direct_local_tool_call(
     *,
     connector_id: str,
@@ -2280,7 +2436,7 @@ def _execute_safe_direct_local_tool_call(
         workspace_id,
         session_ctx=session_ctx,
     )
-    if gateway_capability_id:
+    if gateway_capability_id and gateway_id:
         session_payload = session_ctx if isinstance(session_ctx, dict) else {}
         metadata = _direct_tool_session_metadata(session_ctx)
         tenant_id = _tenant_id_from_direct_tool_context(session_ctx)
@@ -2342,6 +2498,25 @@ def _execute_safe_direct_local_tool_call(
         _raise_direct_chat_tool_execution_blocked()
     config = dict(config)
     config.setdefault("execution_target", "local_companion")
+
+    if (
+        normalized_connector == "shell"
+        and normalized_action == "exec"
+        and _safe_direct_shell_command(str(argument_payload.get("command") or ""))
+        and _local_dev_direct_shell_fallback_enabled(workspace_id)
+    ):
+        return _execute_local_dev_direct_shell_command(
+            command=str(argument_payload.get("command") or "").strip(),
+            timeout_seconds=int(
+                argument_payload.get("timeout_seconds")
+                or argument_payload.get("timeout")
+                or 15
+            ),
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            index=index,
+            callbacks=callbacks,
+        )
 
     session_payload = session_ctx if isinstance(session_ctx, dict) else {}
     agent_turn_request = session_payload.get("agent_turn_request") if isinstance(session_payload.get("agent_turn_request"), dict) else {}

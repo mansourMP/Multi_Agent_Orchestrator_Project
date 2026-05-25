@@ -28,8 +28,19 @@ def tool_runtime_usable(availability: Dict[str, Any], tool_id: str) -> Optional[
 def local_worker_available(availability: Dict[str, Any]) -> bool:
     if not isinstance(availability, dict):
         return False
+    local_worker_online = availability.get("local_worker_online")
+    if isinstance(local_worker_online, bool):
+        return local_worker_online
+    capability_truth = availability.get("capability_truth") if isinstance(availability.get("capability_truth"), dict) else {}
+    my_computer = capability_truth.get("my_computer") if isinstance(capability_truth.get("my_computer"), dict) else {}
+    local_tools_available = my_computer.get("local_tools_available")
+    if isinstance(local_tools_available, bool):
+        return local_tools_available
     local_gateway_online = availability.get("local_gateway_online")
     if isinstance(local_gateway_online, bool):
+        runtime_ok = availability.get("runtime_ok")
+        if isinstance(runtime_ok, bool):
+            return local_gateway_online and runtime_ok
         return local_gateway_online
     runtime_ok = availability.get("runtime_ok")
     if isinstance(runtime_ok, bool):

@@ -168,6 +168,41 @@ _LOCAL_FILE_ACTION_TOKENS = (
     "write",
 )
 
+_LOCAL_SYSTEM_INFO_ACTION_TOKENS = (
+    "check",
+    "detect",
+    "get",
+    "inspect",
+    "list",
+    "see",
+    "show",
+    "summarize",
+    "tell me",
+    "what do i have",
+    "what hardware",
+    "what i have",
+    "what is in",
+    "what specs",
+    "what system",
+    "what's in",
+)
+
+_LOCAL_SYSTEM_INFO_TARGET_PATTERNS = (
+    r"\b(?:my|this|local|current)\s+(?:hardware|machine|computer|device|mac|macbook|laptop|system)\b",
+    r"\b(?:device|machine|system)\s+(?:info|information|specs|specifications|details|profile)\b",
+    r"\b(?:hardware|device|machine|system)\s+(?:info|information|specs|specifications|details|profile)\b.*\b(?:my|this|local|current)\s+(?:machine|computer|device|mac|macbook|laptop|system)\b",
+    r"\b(?:cpu|ram|memory|disk|storage|os)\s+(?:info|information|specs|details|usage|size)\b",
+    r"\b(?:specs|specifications)\s+(?:of|for|on)\s+(?:my|this|local|current)\s+(?:machine|computer|device|mac|macbook|laptop)\b",
+)
+
+_LOCAL_WORKING_DIRECTORY_PATTERNS = (
+    r"\b(?:what|which)\s+(?:folder|directory)\s+(?:are\s+you|am\s+i|is\s+(?:sage|the\s+agent|the\s+runtime))\s+(?:in|using|running\s+from)\b",
+    r"\bwhere\s+(?:are\s+you|am\s+i|is\s+(?:sage|the\s+agent|the\s+runtime))\s+(?:running|running\s+from|located)\b",
+    r"\b(?:current\s+working\s+directory|current\s+directory|current\s+folder)\b",
+    r"\b(?:show|check|get|tell\s+me|print)\s+(?:the\s+)?(?:cwd|current\s+working\s+directory|current\s+directory|current\s+folder)\b",
+    r"\b(?:pwd|present\s+working\s+directory)\b",
+)
+
 
 def starts_like_local_tool_request(compact_message: str) -> bool:
     compact = str(compact_message or "").strip().lower()
@@ -213,6 +248,23 @@ def looks_like_pasted_chat_context(message: str) -> bool:
 
 def should_skip_local_tool_prefetch(message: str, compact_message: str) -> bool:
     return looks_like_pasted_chat_context(message) and not starts_like_local_tool_request(compact_message)
+
+
+def looks_like_local_system_info_request(compact_message: str) -> bool:
+    compact = str(compact_message or "").strip().lower()
+    if not compact:
+        return False
+    has_action = starts_like_local_tool_request(compact) or any(token in compact for token in _LOCAL_SYSTEM_INFO_ACTION_TOKENS)
+    if not has_action:
+        return False
+    return any(re.search(pattern, compact, flags=re.IGNORECASE) for pattern in _LOCAL_SYSTEM_INFO_TARGET_PATTERNS)
+
+
+def looks_like_local_working_directory_request(compact_message: str) -> bool:
+    compact = str(compact_message or "").strip().lower()
+    if not compact:
+        return False
+    return any(re.search(pattern, compact, flags=re.IGNORECASE) for pattern in _LOCAL_WORKING_DIRECTORY_PATTERNS)
 
 
 def _mentions_explicit_local_file_keyword(compact_message: str, keywords: Sequence[str]) -> bool:
@@ -282,9 +334,15 @@ def message_requests_local_file_tool(message: str, callbacks: DirectChatToolPoli
 
 def message_requests_local_shell_tool(message: str, callbacks: DirectChatToolPolicyCallbacks) -> bool:
     compact = callbacks.compact_text(message)
-    if not compact or callbacks.question_like(compact):
+    if not compact:
         return False
     if should_skip_local_tool_prefetch(message, compact):
+        return False
+    if looks_like_local_working_directory_request(compact):
+        return True
+    if looks_like_local_system_info_request(compact):
+        return True
+    if callbacks.question_like(compact):
         return False
     if callbacks.mentions_any(compact, callbacks.local_shell_keywords):
         return True

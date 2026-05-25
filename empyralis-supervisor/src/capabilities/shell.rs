@@ -11,6 +11,8 @@ struct ShellArguments {
     command: String,
 }
 
+const LOCAL_SYSTEM_INFO_PROBE_COMPACT: &str = r#"printf "===os===\n"; (sw_vers 2>/dev/null || uname -a); printf "\n===cpu===\n"; (sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -m); printf "\n===ram_bytes===\n"; (sysctl -n hw.memsize 2>/dev/null || true); printf "\n===cores===\n"; (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || true); printf "\n===disk===\n"; (df -h / 2>/dev/null || true)"#;
+
 pub fn execute(
     arguments: &Value,
     context: &ExecutionContext,
@@ -95,6 +97,9 @@ fn safe_shell_command(command: &str) -> bool {
     if compact.is_empty() {
         return false;
     }
+    if compact == LOCAL_SYSTEM_INFO_PROBE_COMPACT {
+        return true;
+    }
     for blocked in ["&&", "||", ";", "|", ">", "<", "$(", "`"] {
         if compact.contains(blocked) {
             return false;
@@ -118,5 +123,21 @@ fn safe_shell_command(command: &str) -> bool {
         | "mdls" | "tree" | "rg" | "grep" | "readlink" | "dirname" | "basename" => true,
         "sed" => tokens.get(1).copied() == Some("-n"),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{safe_shell_command, LOCAL_SYSTEM_INFO_PROBE_COMPACT};
+
+    #[test]
+    fn safe_shell_command_allows_known_read_only_system_probe() {
+        assert!(safe_shell_command(LOCAL_SYSTEM_INFO_PROBE_COMPACT));
+    }
+
+    #[test]
+    fn safe_shell_command_still_blocks_unknown_compound_commands() {
+        assert!(!safe_shell_command("pwd; echo unsafe"));
+        assert!(!safe_shell_command("uname -a && whoami"));
     }
 }

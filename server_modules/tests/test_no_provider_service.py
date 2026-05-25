@@ -228,6 +228,69 @@ class NoProviderServiceTests(unittest.TestCase):
             ],
         )
 
+    def test_plan_tool_calls_builds_read_only_local_system_info_shell_action(self) -> None:
+        tool_calls = no_provider_service.plan_tool_calls(
+            "check what i have in this hardware !",
+            [{"name": "shell__exec"}],
+            compact_text=_compact_text,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+        )
+
+        self.assertEqual(len(tool_calls), 1)
+        self.assertEqual(tool_calls[0]["name"], "shell__exec")
+        command = tool_calls[0]["arguments"]["command"]
+        self.assertIn("sw_vers", command)
+        self.assertIn("hw.memsize", command)
+        self.assertIn("df -h /", command)
+
+    def test_plan_tool_calls_uses_hardware_action_for_local_system_info_fallback(self) -> None:
+        tool_calls = no_provider_service.plan_tool_calls(
+            "What hardware specs does this machine have?",
+            [{"name": "hardware__action"}],
+            compact_text=_compact_text,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+        )
+
+        self.assertEqual(tool_calls[0]["name"], "hardware__action")
+        self.assertEqual(tool_calls[0]["arguments"]["action"], "shell.execute")
+        self.assertIn("sw_vers", tool_calls[0]["arguments"]["arguments"]["command"])
+
+    def test_plan_tool_calls_builds_working_directory_shell_action(self) -> None:
+        tool_calls = no_provider_service.plan_tool_calls(
+            "what folder are you in ?",
+            [{"name": "shell__exec"}],
+            compact_text=_compact_text,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+        )
+
+        self.assertEqual(tool_calls, [{"name": "shell__exec", "arguments": {"command": "pwd"}}])
+
+    def test_plan_tool_calls_uses_hardware_action_for_working_directory_fallback(self) -> None:
+        tool_calls = no_provider_service.plan_tool_calls(
+            "where is the runtime running from?",
+            [{"name": "hardware__action"}],
+            compact_text=_compact_text,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+        )
+
+        self.assertEqual(
+            tool_calls,
+            [
+                {
+                    "name": "hardware__action",
+                    "arguments": {
+                        "runtime_target": "user_device_gateway",
+                        "action": "shell.execute",
+                        "arguments": {"command": "pwd"},
+                    },
+                }
+            ],
+        )
+
     def test_has_obvious_direct_tool_intent_detects_directory_and_memory_requests(self) -> None:
         self.assertTrue(
             no_provider_service.has_obvious_direct_tool_intent(
@@ -253,6 +316,28 @@ class NoProviderServiceTests(unittest.TestCase):
         )
         self.assertTrue(
             no_provider_service.has_obvious_direct_tool_intent(
+                "check what i have in this hardware !",
+                [{"name": "shell__exec"}],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+            )
+        )
+        self.assertTrue(
+            no_provider_service.has_obvious_direct_tool_intent(
+                "what folder are you in ?",
+                [{"name": "shell__exec"}],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+            )
+        )
+        self.assertTrue(
+            no_provider_service.has_obvious_direct_tool_intent(
                 "What is my name",
                 [],
                 compact_text=_compact_text,
@@ -266,6 +351,17 @@ class NoProviderServiceTests(unittest.TestCase):
             no_provider_service.has_obvious_direct_tool_intent(
                 "Explain the tradeoffs between SQLite and Postgres",
                 [],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+            )
+        )
+        self.assertFalse(
+            no_provider_service.has_obvious_direct_tool_intent(
+                "Discuss hardware acceleration.",
+                [{"name": "shell__exec"}],
                 compact_text=_compact_text,
                 extract_first_path_reference=_extract_first_path_reference,
                 extract_first_url=_extract_first_url,

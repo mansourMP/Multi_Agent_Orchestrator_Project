@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from server_modules import no_provider_service
 from server_modules import policy_service
 from server_modules import runtime_policy
 
@@ -48,6 +49,60 @@ class PolicyServiceTests(unittest.TestCase):
         self.assertEqual(evaluation["reason"], "Capability contract requires approval before execution.")
         self.assertTrue(evaluation["safe_raw_shell_command"])
 
+    def test_evaluate_tool_policy_decision_allows_known_read_only_system_probe(self) -> None:
+        evaluation = policy_service.evaluate_tool_policy_decision(
+            tool_id="shell.execute",
+            trust_mode="guarded",
+            target="local_companion",
+            metadata={
+                "pack_inputs": {
+                    "operations": [
+                        {
+                            "tool": "shell.execute",
+                            "command": no_provider_service.local_system_info_shell_command(),
+                        }
+                    ]
+                }
+            },
+            capability_ids=[],
+        )
+
+        self.assertEqual(evaluation["execution_decision"], "allow")
+        self.assertTrue(evaluation["safe_raw_shell_command"])
+        self.assertTrue(evaluation["known_read_only_system_probe"])
+        self.assertEqual(evaluation["classification"]["action_type"], "read")
+
+    def test_compute_tool_policy_precheck_allows_known_read_only_system_probe(self) -> None:
+        precheck = policy_service.compute_tool_policy_precheck(
+            {
+                "metadata": {
+                    "execution_target_selected": "local_companion",
+                    "pack_inputs": {
+                        "operations": [
+                            {
+                                "tool": "shell.execute",
+                                "command": no_provider_service.local_system_info_shell_command(),
+                            }
+                        ]
+                    },
+                }
+            },
+            derive_browser_automation_policy_fn=lambda context: {},
+            predict_tool_ids_for_context_fn=lambda context: ["shell.execute"],
+            build_skill_contract_from_metadata_fn=lambda metadata, tool_ids, policy_mode, target: {
+                "policy_mode": "observe",
+                "undeclared_tools": [],
+                "declared_runtime_tools": ["shell.execute"],
+            },
+            predict_capability_ids_for_context_fn=lambda context: [],
+            apply_agent_machine_bypass_to_tool_policy_evaluation_fn=lambda evaluation: evaluation,
+        )
+
+        self.assertEqual(precheck["blocked_count"], 0)
+        self.assertEqual(precheck["approval_required_count"], 0)
+        self.assertEqual(precheck["allow_count"], 1)
+        self.assertEqual(precheck["allowed"], ["shell.execute"])
+
     def test_compute_tool_policy_precheck_aggregates_items_and_counts(self) -> None:
         precheck = policy_service.compute_tool_policy_precheck(
             {"metadata": {"execution_target_selected": "local_companion"}},
@@ -81,6 +136,38 @@ class PolicyServiceTests(unittest.TestCase):
             "post_message",
             {},
             [{"id": "slack", "approval_required_actions": ["post_message"]}],
+            compact_text=lambda value: str(value or "").strip().lower(),
+            http_request_requires_approval=lambda method, url: False,
+        )
+
+        self.assertTrue(requires_approval)
+
+    def test_hardware_shell_action_skips_approval_for_known_read_only_probe(self) -> None:
+        requires_approval = policy_service.approval_required_for_direct_tool(
+            "hardware",
+            "action",
+            {
+                "runtime_target": "user_device_gateway",
+                "action": "shell.execute",
+                "arguments": {"command": no_provider_service.local_system_info_shell_command()},
+            },
+            [],
+            compact_text=lambda value: str(value or "").strip().lower(),
+            http_request_requires_approval=lambda method, url: False,
+        )
+
+        self.assertFalse(requires_approval)
+
+    def test_hardware_shell_action_still_requires_approval_for_unknown_command(self) -> None:
+        requires_approval = policy_service.approval_required_for_direct_tool(
+            "hardware",
+            "action",
+            {
+                "runtime_target": "user_device_gateway",
+                "action": "shell.execute",
+                "arguments": {"command": "uname -a && whoami"},
+            },
+            [],
             compact_text=lambda value: str(value or "").strip().lower(),
             http_request_requires_approval=lambda method, url: False,
         )

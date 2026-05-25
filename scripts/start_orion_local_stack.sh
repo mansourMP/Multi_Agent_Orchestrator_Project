@@ -129,6 +129,76 @@ runtime_database_url() {
   printf ""
 }
 
+normalize_env_token() {
+  printf "%s" "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
+}
+
+is_local_runtime_env() {
+  local token
+  token="$(normalize_env_token "${1:-}")"
+  [[ "${token}" == "local" || "${token}" == "dev" || "${token}" == "development" || "${token}" == "test" || "${token}" == "testing" ]]
+}
+
+is_cloud_runtime_env() {
+  local token
+  token="$(normalize_env_token "${1:-}")"
+  [[ "${token}" == "prod" || "${token}" == "production" || "${token}" == "staging" ]]
+}
+
+effective_orion_env() {
+  if [[ -n "${ORION_ENV:-}" ]]; then
+    printf "%s" "${ORION_ENV}"
+    return
+  fi
+  if [[ -z "${EMPYRALIS_DEPLOY_ENV:-}" && -z "${ENV:-}" && -z "${NODE_ENV:-}" ]]; then
+    printf "local"
+    return
+  fi
+  printf ""
+}
+
+effective_runtime_env_token() {
+  local orion_env_value="${1:-}"
+  printf "%s" "${EMPYRALIS_DEPLOY_ENV:-${orion_env_value:-${ENV:-${NODE_ENV:-}}}}"
+}
+
+effective_external_agent_local_store() {
+  local env_token="${1:-}"
+  local runtime_dsn="${2:-}"
+  if [[ -n "${EMPYRALIS_EXTERNAL_AGENT_LOCAL_STORE:-}" ]]; then
+    printf "%s" "${EMPYRALIS_EXTERNAL_AGENT_LOCAL_STORE}"
+    return
+  fi
+  if [[ -z "${runtime_dsn}" ]] && is_local_runtime_env "${env_token}"; then
+    printf "1"
+    return
+  fi
+  printf ""
+}
+
+external_agent_local_store_reason() {
+  local env_token="${1:-}"
+  local runtime_dsn="${2:-}"
+  local local_store_value="${3:-}"
+  if [[ -n "${EMPYRALIS_EXTERNAL_AGENT_LOCAL_STORE:-}" ]]; then
+    printf "explicit_env"
+    return
+  fi
+  if [[ -n "${runtime_dsn}" ]]; then
+    printf "runtime_database_configured"
+    return
+  fi
+  if [[ "${local_store_value}" == "1" ]]; then
+    printf "local_runtime_without_database_url"
+    return
+  fi
+  if is_cloud_runtime_env "${env_token}"; then
+    printf "cloud_runtime_requires_control_plane_storage"
+    return
+  fi
+  printf "disabled"
+}
+
 EXISTING_RUNTIME_KEY="$(load_existing_runtime_key)"
 EXISTING_SECRETS_BROKER_SECRET="$(load_existing_secret "${SECRETS_BROKER_SECRET_FILE}")"
 EXISTING_TOOL_BROKER_SECRET="$(load_existing_secret "${TOOL_BROKER_SECRET_FILE}")"
@@ -166,6 +236,17 @@ if [[ "${JWT_SECRET_VALUE}" != "${JWT_SECRET_RAW}" ]]; then
 fi
 ORION_API_URL="http://${ORION_HOST}:${ORION_PORT}"
 ORION_WS_URL="ws://${ORION_HOST}:${ORION_PORT}"
+ORION_ENV_VALUE="$(effective_orion_env)"
+RUNTIME_ENV_TOKEN="$(effective_runtime_env_token "${ORION_ENV_VALUE}")"
+RUNTIME_DATABASE_URL_VALUE="$(runtime_database_url)"
+EXTERNAL_AGENT_LOCAL_STORE_VALUE="$(effective_external_agent_local_store "${RUNTIME_ENV_TOKEN}" "${RUNTIME_DATABASE_URL_VALUE}")"
+EXTERNAL_AGENT_LOCAL_STORE_REASON="$(external_agent_local_store_reason "${RUNTIME_ENV_TOKEN}" "${RUNTIME_DATABASE_URL_VALUE}" "${EXTERNAL_AGENT_LOCAL_STORE_VALUE}")"
+if [[ -n "${ORION_ENV_VALUE}" ]]; then
+  export ORION_ENV="${ORION_ENV_VALUE}"
+fi
+if [[ -n "${EXTERNAL_AGENT_LOCAL_STORE_VALUE}" ]]; then
+  export EMPYRALIS_EXTERNAL_AGENT_LOCAL_STORE="${EXTERNAL_AGENT_LOCAL_STORE_VALUE}"
+fi
 ORION_HEALTH_HOST="${ORION_BIND_HOST}"
 if [[ -z "${ORION_HEALTH_HOST}" || "${ORION_HEALTH_HOST}" == "0.0.0.0" || "${ORION_HEALTH_HOST}" == "::" || "${ORION_HEALTH_HOST}" == "*" ]]; then
   ORION_HEALTH_HOST="127.0.0.1"
@@ -227,8 +308,11 @@ ORION_WHATSAPP_AUTOPILOT_ENGINE=${WHATSAPP_AUTOPILOT_ENGINE}
 ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX=${WHATSAPP_AUTOPILOT_REQUIRE_PREFIX}
 ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET=${WHATSAPP_AUTOPILOT_EXECUTION_TARGET}
 ORION_SCHEDULER_ENABLED=${SCHEDULER_ENABLED}
+ORION_ENV=${ORION_ENV_VALUE}
 ORION_AUTH_MODE=${ORION_AUTH_MODE_VALUE}
 ORION_DISABLE_OPENAI_API_KEY=${ORION_DISABLE_OPENAI_API_KEY_VALUE}
+EMPYRALIS_EXTERNAL_AGENT_LOCAL_STORE=${EXTERNAL_AGENT_LOCAL_STORE_VALUE}
+EMPYRALIS_EXTERNAL_AGENT_LOCAL_STORE_REASON=${EXTERNAL_AGENT_LOCAL_STORE_REASON}
 EMPYRALIS_SECRETS_BROKER_SECRET=${SECRETS_BROKER_SECRET}
 EMPYRALIS_TOOL_BROKER_SECRET=${TOOL_BROKER_SECRET}
 JWT_SECRET=${JWT_SECRET_VALUE}
@@ -252,7 +336,15 @@ release_start_lock() {
 
 write_start_metadata() {
   local runtime_fp
+  local runtime_database_configured="false"
+  local external_agent_local_store_enabled="false"
   runtime_fp="$(printf "%s" "${RUNTIME_KEY}" | shasum -a 256 | awk '{print $1}' | cut -c1-12)"
+  if [[ -n "${RUNTIME_DATABASE_URL_VALUE}" ]]; then
+    runtime_database_configured="true"
+  fi
+  if [[ "${EXTERNAL_AGENT_LOCAL_STORE_VALUE}" == "1" ]]; then
+    external_agent_local_store_enabled="true"
+  fi
   cat > "${START_META_FILE}" <<EOF
 {
   "starter_pid": ${STARTER_PID},
@@ -260,6 +352,11 @@ write_start_metadata() {
   "lock_owner": "${LOCK_OWNER}",
   "runtime_key_fingerprint": "${runtime_fp}",
   "openclaw_policy": "${OPENCLAW_GATEWAY_POLICY}",
+  "orion_env": "${ORION_ENV_VALUE}",
+  "runtime_env_token": "${RUNTIME_ENV_TOKEN}",
+  "runtime_database_configured": ${runtime_database_configured},
+  "external_agent_local_store_enabled": ${external_agent_local_store_enabled},
+  "external_agent_local_store_reason": "${EXTERNAL_AGENT_LOCAL_STORE_REASON}",
   "auth_mode": "${ORION_AUTH_MODE_VALUE}"
 }
 EOF

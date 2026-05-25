@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -11,6 +13,14 @@ def _build_app() -> FastAPI:
     app = FastAPI()
     app.include_router(routes_studio.router, prefix="/api")
     return app
+
+
+def _fake_scoped_connection(connection):
+    @asynccontextmanager
+    async def _scoped_connection(**_kwargs):
+        yield connection
+
+    return _scoped_connection
 
 
 def _owner_user() -> dict[str, object]:
@@ -86,6 +96,51 @@ async def test_agent_surfaces_combines_native_external_and_computers(monkeypatch
     payload = response.json()
     assert payload["connected_external_agents"][0]["id"] == "extagent-1"
     assert payload["agent_computers"][0]["surface_kind"] == "agent_computer"
+
+
+@pytest.mark.anyio
+async def test_agent_surfaces_local_mode_without_database_returns_empty_external_surfaces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _build_app()
+    app.dependency_overrides[routes_studio.get_current_user] = _owner_user
+
+    monkeypatch.setenv("ORION_ENV", "local")
+    monkeypatch.delenv("EMPYRALIS_DEPLOY_ENV", raising=False)
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.delenv("NODE_ENV", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("EMPYRALIS_EXTERNAL_AGENT_LOCAL_STORE", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    monkeypatch.setattr(
+        routes_studio.auth_module,
+        "enforce_workspace_access",
+        lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
+    )
+    monkeypatch.setattr(routes_studio.auth_module, "workspace_tenant_id", lambda current_user, workspace_id: "tenant-1")
+    monkeypatch.setattr(
+        "server_modules.control_plane_repository._scoped_connection",
+        _fake_scoped_connection(None),
+    )
+
+    async def fake_list_deployed_agents(**_kwargs):
+        return {"items": []}
+
+    async def fake_list_runtime_attachments(**_kwargs):
+        return {"items": []}
+
+    monkeypatch.setattr(routes_studio.deployed_agent_service, "list_deployed_agents", fake_list_deployed_agents)
+    monkeypatch.setattr(routes_studio.runtime_attachment_service, "list_workspace_runtime_attachments", fake_list_runtime_attachments)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/studio/agent-surfaces", params={"workspace_id": "ws-1"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["connected_external_agents"] == []
+    assert payload["agent_computers"] == []
+    assert payload["items"] == []
 
 
 @pytest.mark.anyio

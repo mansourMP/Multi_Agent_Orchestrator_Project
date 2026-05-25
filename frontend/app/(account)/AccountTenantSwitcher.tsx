@@ -5,11 +5,11 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   Bot,
+  Compass,
   LayoutGrid,
   Monitor,
   Moon,
   Package,
-  PencilLine,
   Settings2,
   SunMedium,
   type LucideIcon,
@@ -30,8 +30,6 @@ import {
 } from '../../../shared/nav-manifest';
 import { useAppTheme } from '@/lib/ui/app-theme';
 import { APP_THEME_ATTRIBUTE } from '@/lib/ui/tokens';
-import { emitWorkstationChatThreadSelected } from '@/lib/workspace/workstation-chat-thread-events';
-import { persistActiveThread } from '@/lib/workspace/workstation-chat-pane-model';
 
 type RailDestinationId = 'chat' | 'studio' | 'gateway' | 'marketplace' | 'applications' | 'settings';
 
@@ -44,11 +42,10 @@ type RailDestination = {
 };
 
 const PRIMARY_DESTINATIONS: RailDestination[] = [
-  { id: 'chat', label: 'New task', defaultRouteId: 'chat', icon: PencilLine, dataLinkId: 'sage' },
-  { id: 'studio', label: 'Agent', defaultRouteId: 'studio', icon: Bot },
-  { id: 'marketplace', label: 'Plugins', defaultRouteId: 'marketplace', icon: LayoutGrid },
-  { id: 'gateway', label: 'Computer', defaultRouteId: 'gateway', icon: Monitor },
-  { id: 'applications', label: 'Library', defaultRouteId: 'applications', icon: Package },
+  { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot, dataLinkId: 'sage' },
+  { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
+  { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
+  { id: 'applications', label: 'Applications', defaultRouteId: 'applications', icon: Package },
 ];
 
 const SECONDARY_DESTINATIONS: RailDestination[] = [
@@ -204,12 +201,6 @@ export function AccountTenantSwitcher() {
     }
   }, [pathname, prefetchHref]);
 
-  const startNewSageTask = useCallback((workspaceId: string) => {
-    const threadId = `thread-${Date.now()}`;
-    persistActiveThread(workspaceId, threadId);
-    emitWorkstationChatThreadSelected({ workspaceId, threadId });
-  }, []);
-
   useEffect(() => {
     if (!activeWorkspaceId) {
       return;
@@ -252,9 +243,6 @@ export function AccountTenantSwitcher() {
 
   return (
     <div data-workstation-switcher="rail" className="account-switcher">
-      <div className="account-switcher__brand" aria-hidden="true">
-        <Bot />
-      </div>
       <nav aria-label="Primary destinations" className="account-switcher__cluster account-switcher__cluster--upper">
         <div className="account-switcher__nav account-switcher__nav--primary">
           {PRIMARY_DESTINATIONS.map((destination) => {
@@ -277,15 +265,9 @@ export function AccountTenantSwitcher() {
                 title={destination.label}
                 onPointerEnter={() => prefetchHref(href)}
                 onFocus={() => prefetchHref(href)}
-                onClick={() => {
-                  if (destination.id === 'chat' && activeWorkspaceId) {
-                    startNewSageTask(activeWorkspaceId);
-                  }
-                  markNavigationPending(destination.id, href);
-                }}
+                onClick={() => markNavigationPending(destination.id, href)}
               >
                 <destination.icon aria-hidden="true" />
-                <span className="account-switcher__link-label">{destination.label}</span>
               </Link>
             );
           })}
@@ -336,7 +318,6 @@ export function AccountTenantSwitcher() {
                 onClick={() => markNavigationPending(destination.id, href)}
               >
                 <destination.icon aria-hidden="true" />
-                <span className="account-switcher__link-label">{destination.label}</span>
               </Link>
             );
           })}

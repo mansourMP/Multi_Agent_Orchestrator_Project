@@ -4,13 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  BriefcaseBusiness,
-  Code2,
   Coins,
-  Laptop,
-  MoreHorizontal,
-  Paintbrush,
-  type LucideIcon,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -205,44 +199,6 @@ import type {
   ChatRuntimeTrustZone
 } from '@/lib/workspace/workstation-chat-pane-model';
 
-const SAGE_HOME_SUGGESTIONS: readonly {
-  id: string;
-  label: string;
-  draft: string;
-  icon: LucideIcon;
-}[] = [
-  {
-    id: 'slides',
-    label: 'Create slides',
-    draft: 'Create slides for ',
-    icon: BriefcaseBusiness,
-  },
-  {
-    id: 'website',
-    label: 'Build website',
-    draft: 'Build a website for ',
-    icon: Code2,
-  },
-  {
-    id: 'desktop-app',
-    label: 'Develop desktop apps',
-    draft: 'Develop a desktop app for ',
-    icon: Laptop,
-  },
-  {
-    id: 'design',
-    label: 'Design',
-    draft: 'Design ',
-    icon: Paintbrush,
-  },
-  {
-    id: 'more',
-    label: 'More',
-    draft: '',
-    icon: MoreHorizontal,
-  },
-] as const;
-
 function formatTitlebarCreditCount(value: number): string {
   const rounded = Math.max(0, Math.floor(value));
   if (rounded >= 1_000_000) {
@@ -417,6 +373,7 @@ export function WorkstationChatPane() {
     setIsSubmittingBootstrap,
     isRetryingSageSetup,
     setIsRetryingSageSetup,
+    hasEnteredConversationFlow,
     setHasEnteredConversationFlow,
     smallModelWarningVisible,
     setSmallModelWarningVisible,
@@ -1114,16 +1071,11 @@ export function WorkstationChatPane() {
       return;
     }
     setHasEnteredConversationFlow(true);
-    setDraft('');
     setStatusMessage(null);
     setSendFailureNotice(null);
-    updatePendingUserMessage(null);
-    setStreamingAssistantText('');
     setShowProjectedAssistant(false);
     setTimelineSettled(false);
     setLiveTimelineEvents([]);
-    setLiveActivitySteps([]);
-    setLiveTrace(null);
     activeThreadIdRef.current = nextThreadId;
     setActiveThreadId(nextThreadId);
     setIsLoading(true);
@@ -1295,7 +1247,8 @@ export function WorkstationChatPane() {
 
   const hasConversationContent = visibleTranscriptCells.length > 0
     || Boolean(liveTrace);
-  const showFirstImpression = !hasConversationContent;
+  const showConversationContext = hasConversationContent || hasEnteredConversationFlow;
+  const showFirstImpression = !showConversationContext;
   const bootstrapQuestion = profileSnapshot.bootstrap.current_question;
   const bootstrapComplete = profileSnapshot.bootstrap.complete;
   // Keep Sage chat usable even when profile bootstrap is incomplete.
@@ -2859,17 +2812,7 @@ export function WorkstationChatPane() {
               ) : null}
 
               {showBlankTranscript ? (
-                showFirstImpression ? (
-                  <div className="app-chat-empty-state app-chat-empty-state--sage-home" aria-label="Sage start">
-                    <div className="app-chat-home-plan" aria-label="Plan">
-                      <span>Free plan</span>
-                      <span className="app-chat-home-plan__link">Start free trial</span>
-                    </div>
-                    <h1 className="app-chat-home-title">What can I do for you?</h1>
-                  </div>
-                ) : (
-                  <div className="app-chat-empty-state" aria-hidden="true" />
-                )
+                <div className="app-chat-empty-state" aria-hidden="true" />
               ) : null}
 
               {visibleTranscriptCells.map((cell, index) => (
@@ -2997,19 +2940,7 @@ export function WorkstationChatPane() {
         busy={isSending}
         controlsDisabled={isPersistingModelSelection}
         sendDisabled={false}
-        placeholder="Assign a task or ask anything"
-        runtimeTargetSummary={{
-          label: contextDeviceLabel
-            ? contextDeviceLabel.replace(/\s+connected$/i, '')
-            : localToolingOnline
-              ? 'This Device'
-              : 'Cloud worker',
-          statusLabel: localToolingOnline ? 'Online' : 'New',
-          online: localToolingOnline,
-          onClick: () => {
-            router.push(gatewayHref);
-          },
-        }}
+        placeholder="Message Sage..."
         providerGateVisible={!activeProviderSummary.connected}
         providerSummary={{
           label: activeProviderSummary.label,
@@ -3023,28 +2954,6 @@ export function WorkstationChatPane() {
           setSmallModelWarningVisible(false);
         }}
       />
-
-      {showFirstImpression ? (
-        <div className="app-chat-home-suggestions" aria-label="Starter tasks">
-          {SAGE_HOME_SUGGESTIONS.map((suggestion) => (
-            <button
-              key={suggestion.id}
-              type="button"
-              className="app-chat-home-suggestion"
-              onClick={() => {
-                if (suggestion.id === 'more') {
-                  setWorkspaceCommandPaletteOpen(true);
-                  return;
-                }
-                setDraft(suggestion.draft);
-              }}
-            >
-              <suggestion.icon size={18} strokeWidth={1.9} aria-hidden="true" />
-              <span>{suggestion.label}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
 
       <CommandSheet
         open={workspaceCommandPaletteOpen}

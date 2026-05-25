@@ -10,7 +10,6 @@ import {
   ChevronRight,
   Mic,
   MicOff,
-  Monitor,
   Plus,
   Square,
   X,
@@ -155,7 +154,6 @@ export function ChatComposer({
   onSlashCommandSelect,
   actionMenuItems = [],
   onVoiceTranscribe,
-  runtimeTargetSummary = null,
 }: {
   draft: string;
   onDraftChange: (nextDraft: string) => void;
@@ -186,12 +184,6 @@ export function ChatComposer({
   onSlashCommandSelect?: (command: ComposerSlashCommand) => void;
   actionMenuItems?: readonly ComposerActionMenuItem[];
   onVoiceTranscribe?: (audio: Blob) => Promise<string>;
-  runtimeTargetSummary?: {
-    label: string;
-    statusLabel?: string | null;
-    online?: boolean;
-    onClick?: () => void;
-  } | null;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const actionLauncherRef = useRef<HTMLDivElement | null>(null);
@@ -674,24 +666,6 @@ export function ChatComposer({
               ) : null}
             </div>
             <div className="app-chat-composer__model" ref={modelPanelRef}>
-              {runtimeTargetSummary ? (
-                <button
-                  type="button"
-                  className={joinClassNames(
-                    'app-chat-composer__runtime-pill',
-                    runtimeTargetSummary.online && 'app-chat-composer__runtime-pill--online',
-                  )}
-                  onClick={runtimeTargetSummary.onClick}
-                  disabled={!runtimeTargetSummary.onClick || busy}
-                  aria-label={`Runtime target: ${runtimeTargetSummary.label}`}
-                >
-                  <Monitor size={15} strokeWidth={2} aria-hidden="true" />
-                  <span>{runtimeTargetSummary.label}</span>
-                  {runtimeTargetSummary.statusLabel ? (
-                    <em>{runtimeTargetSummary.statusLabel}</em>
-                  ) : null}
-                </button>
-              ) : null}
               <button
                 type="button"
                 className="app-chat-composer__provider-pill"

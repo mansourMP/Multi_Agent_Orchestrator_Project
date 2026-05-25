@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 import uuid
@@ -11,6 +12,7 @@ from server_modules.agent_turn import (
     resolve_agent_turn_request_with_fallback,
 )
 from server_modules import agent_trace_service
+from server_modules import secret_redaction_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_chat_generation_service
 from server_modules import empyralis_model_tier_contract
@@ -257,6 +259,53 @@ def _direct_trace_event(
     return {"type": "trace", "payload": envelope}
 
 
+_SHELL_OUTPUT_MAX_LINES = 30
+_SHELL_OUTPUT_MAX_CHARS = 8192
+
+
+def _shell_output_tail(value: Any) -> str:
+    text = secret_redaction_service.redact_text(str(value or "").replace("\0", "")).strip()
+    if not text:
+        return ""
+    if len(text) > _SHELL_OUTPUT_MAX_CHARS:
+        text = text[-_SHELL_OUTPUT_MAX_CHARS:]
+    lines = text.replace("\r", "").split("\n")
+    if len(lines) > _SHELL_OUTPUT_MAX_LINES:
+        text = "\n".join(lines[-_SHELL_OUTPUT_MAX_LINES:])
+    return text
+
+
+def _shell_trace_payload(
+    *,
+    tool_name: str,
+    argument_payload: Dict[str, Any],
+    tool_result: Any = "",
+    duration_ms: Optional[int] = None,
+    status: str = "ok",
+) -> Dict[str, Any]:
+    command = str(argument_payload.get("command") or argument_payload.get("cmd") or "").strip()
+    payload: Dict[str, Any] = {
+        "tool_name": tool_name,
+        "connector_id": "shell" if "shell" in tool_name else None,
+        "status": status,
+        "runtime_target": str(argument_payload.get("runtime_target") or "user_device_gateway").strip(),
+        "target_kind": "local_device",
+    }
+    if command:
+        payload["command"] = command
+    if duration_ms is not None:
+        payload["duration_ms"] = max(0, int(duration_ms))
+    output_tail = _shell_output_tail(tool_result)
+    if output_tail:
+        payload["stdout_tail"] = output_tail
+        payload["summary"] = output_tail
+        if command == "pwd":
+            payload["cwd"] = output_tail.splitlines()[-1].strip()
+    if status == "ok":
+        payload["exit_code"] = 0
+    return payload
+
+
 def _stream_explicit_provider_parity_tools(
     *,
     services: DirectChatRuntimeServices,
@@ -325,7 +374,11 @@ def _stream_explicit_provider_parity_tools(
         started = _direct_trace_event(
             resolved_trace_context,
             event_type="tool.started",
-            data={
+            data=_shell_trace_payload(
+                tool_name=tool_name,
+                argument_payload=argument_payload,
+                status="running",
+            ) if tool_name == "shell__exec" else {
                 "tool_name": tool_name,
                 "connector_id": connector_id or None,
                 "args_preview": argument_payload,
@@ -341,6 +394,7 @@ def _stream_explicit_provider_parity_tools(
             step_id=f"direct-tools:explicit:{index}",
             status="active",
         )
+        started_at = time.monotonic()
         tool_result = services.no_provider_execution_services.execute_single_tool_call(
             tool_call=tool_call,
             workspace_id=normalized_workspace_id,
@@ -352,12 +406,21 @@ def _stream_explicit_provider_parity_tools(
             reasoning_effort=normalized_reasoning_effort or "",
             session_ctx=session_ctx,
         )
+        duration_ms = int((time.monotonic() - started_at) * 1000)
         result = _direct_trace_event(
             resolved_trace_context,
             event_type="tool.result",
             data={
-                "status": "ok",
-                "summary": str(tool_result or "").strip(),
+                **(_shell_trace_payload(
+                    tool_name=tool_name,
+                    argument_payload=argument_payload,
+                    tool_result=tool_result,
+                    duration_ms=duration_ms,
+                    status="ok",
+                ) if tool_name == "shell__exec" else {
+                    "status": "ok",
+                    "summary": str(tool_result or "").strip(),
+                }),
                 "artifact_ids": [],
             },
             tool_call_id=tool_call_id,

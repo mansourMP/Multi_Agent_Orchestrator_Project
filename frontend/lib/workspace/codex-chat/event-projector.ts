@@ -133,6 +133,24 @@ function toolResultText(data: Record<string, unknown>): string | null {
     || null;
 }
 
+const EXEC_OUTPUT_MAX_LINES = 30;
+const EXEC_OUTPUT_MAX_CHARS = 8192;
+
+function outputTail(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = readString(value);
+    if (!text) {
+      continue;
+    }
+    const charTail = text.length > EXEC_OUTPUT_MAX_CHARS ? text.slice(-EXEC_OUTPUT_MAX_CHARS) : text;
+    const lines = charTail.replace(/\r/g, '').split('\n');
+    return lines.length > EXEC_OUTPUT_MAX_LINES
+      ? lines.slice(-EXEC_OUTPUT_MAX_LINES).join('\n')
+      : charTail;
+  }
+  return null;
+}
+
 function toolDisplayName(rawName: string): string {
   const normalized = rawName
     .replace(/[_:.-]+/g, ' ')
@@ -197,9 +215,45 @@ function shellCommandFromData(data: Record<string, unknown>): string {
   const input = toolInputRecord(data);
   return readString(data.command)
     || readString(data.cmd)
-    || readString(data.summary)
     || readString(input.command)
     || readString(input.cmd);
+}
+
+function execMetaFromData(
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown> = {},
+): Pick<
+  Extract<CodexChatEvent, { type: 'exec_result' }>,
+  'runtimeTarget' | 'machineLabel' | 'targetKind' | 'cwd' | 'durationMs' | 'stdoutTail' | 'stderrTail' | 'approvalStatus'
+> {
+  const input = toolInputRecord(data);
+  return {
+    runtimeTarget: readString(data.runtime_target) || readString(metadata.runtime_target) || null,
+    machineLabel: readString(data.machine_label)
+      || readString(data.target_summary)
+      || readString(metadata.label)
+      || null,
+    targetKind: readString(data.target_kind) || readString(data.runtime_access_mode) || null,
+    cwd: readString(data.cwd)
+      || readString(data.working_directory)
+      || readString(input.cwd)
+      || readString(input.workingDir)
+      || null,
+    durationMs: readNumber(data.duration_ms ?? data.durationMs),
+    stdoutTail: outputTail(
+      data.stdout_tail,
+      data.stdout,
+      data.output_tail,
+      data.output_preview,
+      data.stdout_preview,
+      data.summary,
+    ),
+    stderrTail: outputTail(data.stderr_tail, data.stderr, data.stderr_preview, data.error),
+    approvalStatus: readString(data.approval_status)
+      || readString(data.approvalStatus)
+      || readString(data.decision)
+      || null,
+  };
 }
 
 function filePathFromData(data: Record<string, unknown>): string {
@@ -282,10 +336,30 @@ function projectStepEvent(payload: Record<string, unknown>, fallbackIndex: numbe
   }
 
   if (kind === 'shell' || isShellLabel(combined)) {
+    const metadata = readObject(payload.metadata);
+    const execMeta = execMetaFromData(payload, metadata);
+    const command = readString(payload.command) || detail || label || 'Running command';
     if (status === 'running') {
-      return [{ type: 'exec_started', id, command: detail || label || 'Running command' }];
+      return [{
+        type: 'exec_started',
+        id,
+        command,
+        runtimeTarget: execMeta.runtimeTarget,
+        machineLabel: execMeta.machineLabel,
+        targetKind: execMeta.targetKind,
+        cwd: execMeta.cwd,
+        approvalStatus: execMeta.approvalStatus,
+      }];
     }
-    return [{ type: 'exec_result', id, status, output: detail || null, exitCode: null }];
+    return [{
+      type: 'exec_result',
+      id,
+      command,
+      status,
+      output: detail || execMeta.stdoutTail || null,
+      exitCode: readNumber(payload.exit_code),
+      ...execMeta,
+    }];
   }
 
   if (kind === 'file' || isFileLabel(combined)) {
@@ -348,10 +422,16 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     const id = eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex);
     const combined = `${toolName} ${command} ${query} ${path}`;
     if (isShellToolName(toolName, command)) {
+      const execMeta = execMetaFromData(data, metadata);
       return [{
         type: 'exec_started',
         id,
         command: command || 'Running shell',
+        runtimeTarget: execMeta.runtimeTarget,
+        machineLabel: execMeta.machineLabel,
+        targetKind: execMeta.targetKind,
+        cwd: execMeta.cwd,
+        approvalStatus: execMeta.approvalStatus,
       }];
     }
     if (isFileLabel(combined)) {
@@ -401,11 +481,17 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       }];
     }
     if (isShellToolName(toolName, command)) {
+      const execMeta = execMetaFromData(data, metadata);
       if (status === 'running') {
         return [{
           type: 'exec_started',
           id,
           command: result || command || 'Running shell',
+          runtimeTarget: execMeta.runtimeTarget,
+          machineLabel: execMeta.machineLabel,
+          targetKind: execMeta.targetKind,
+          cwd: execMeta.cwd,
+          approvalStatus: execMeta.approvalStatus,
         }];
       }
       return [{
@@ -413,8 +499,9 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
         id,
         command: command || undefined,
         status,
-        output: result,
+        output: execMeta.stdoutTail ?? result,
         exitCode: readNumber(data.exit_code),
+        ...execMeta,
       }];
     }
     if (isFileLabel(combined)) {
@@ -481,16 +568,27 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     const status = statusFromEventType(eventType, data.status || data.state);
     const id = eventId('shell', payload.tool_call_id || payload.item_id || data.action_id, fallbackIndex);
     const command = shellCommandFromData(data) || readString(data.detail) || 'Running shell';
+    const execMeta = execMetaFromData(data, metadata);
     if (status === 'running') {
-      return [{ type: 'exec_started', id, command }];
+      return [{
+        type: 'exec_started',
+        id,
+        command,
+        runtimeTarget: execMeta.runtimeTarget,
+        machineLabel: execMeta.machineLabel,
+        targetKind: execMeta.targetKind,
+        cwd: execMeta.cwd,
+        approvalStatus: execMeta.approvalStatus,
+      }];
     }
     return [{
       type: 'exec_result',
       id,
       command,
       status: status === 'error' ? 'error' : 'done',
-      output: toolResultText(data),
+      output: execMeta.stdoutTail ?? toolResultText(data),
       exitCode: readNumber(data.exit_code),
+      ...execMeta,
     }];
   }
 

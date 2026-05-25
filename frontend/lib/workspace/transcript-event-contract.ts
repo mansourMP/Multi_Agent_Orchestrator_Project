@@ -127,23 +127,31 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'action_id',
   'actor',
   'approval_id',
+  'approval_status',
+  'approvalStatus',
   'artifact_id',
   'artifact_ids',
   'artifactId',
   'caption',
   'capability_id',
   'code',
+  'command',
+  'cwd',
   'decision',
   'delivery_transport',
   'description',
   'detail',
+  'duration_ms',
+  'durationMs',
   'event',
   'exit_code',
+  'exitCode',
   'filename',
   'height',
   'id',
   'kind',
   'label',
+  'machine_label',
   'message',
   'metadata',
   'mime_type',
@@ -157,17 +165,25 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'runtime_access_mode',
   'runtime_session_id',
   'runtime_target',
+  'stderr',
+  'stderr_preview',
+  'stderr_tail',
   'specialist_name',
   'state',
   'status',
   'summary',
+  'stdout',
+  'stdout_preview',
+  'stdout_tail',
   'target_summary',
+  'target_kind',
   'task_summary',
   'title',
   'tool_call_id',
   'tool_name',
   'url',
   'width',
+  'working_directory',
 ]);
 
 const SAFE_TRACE_METADATA_KEYS = new Set([
@@ -175,12 +191,15 @@ const SAFE_TRACE_METADATA_KEYS = new Set([
   'approval_id',
   'artifact_id',
   'code',
+  'cwd',
   'label',
+  'machine_label',
   'runtime_access_mode',
   'runtime_session_id',
   'runtime_target',
   'status',
   'summary',
+  'target_kind',
   'title',
 ]);
 
@@ -247,6 +266,21 @@ const INTERNAL_TEXT_TOKENS = [
   'trace_id',
 ];
 
+const OUTPUT_TAIL_KEYS = new Set([
+  'stderr',
+  'stderr_preview',
+  'stderr_tail',
+  'stdout',
+  'stdout_preview',
+  'stdout_tail',
+]);
+
+function compactOutputTail(value: string): string {
+  const charTail = value.length > 8192 ? value.slice(-8192) : value;
+  const lines = charTail.replace(/\r/g, '').split('\n');
+  return lines.length > 30 ? lines.slice(-30).join('\n') : charTail;
+}
+
 function looksInternalText(value: string): boolean {
   const normalized = value.trim();
   if (!normalized) {
@@ -265,6 +299,9 @@ function safeScalar(value: unknown, key = ''): string | number | boolean | null 
   }
   if (typeof value === 'string') {
     const cleaned = value.replace(/\0/g, '').trim();
+    if (OUTPUT_TAIL_KEYS.has(key)) {
+      return compactOutputTail(cleaned);
+    }
     if (
       ['caption', 'description', 'detail', 'label', 'message', 'summary', 'title'].includes(key)
       && looksInternalText(cleaned)

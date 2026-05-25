@@ -1,16 +1,18 @@
 'use client';
 
 import Link from 'next/link';
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import {
   Brain,
   Camera,
   Check,
+  ChevronRight,
   CircleAlert,
   FileText,
   Paperclip,
   Search,
   ShieldCheck,
+  Terminal,
   Wrench,
 } from 'lucide-react';
 
@@ -377,6 +379,79 @@ function shellPathCopy(command: string, status: 'running' | 'done' | 'error'): {
   };
 }
 
+function execStatusCopy(status: 'running' | 'done' | 'error'): { label: string; tone: 'running' | 'completed' | 'failed' } {
+  if (status === 'running') {
+    return { label: 'running', tone: 'running' };
+  }
+  if (status === 'error') {
+    return { label: 'failed', tone: 'failed' };
+  }
+  return { label: 'completed', tone: 'completed' };
+}
+
+function executionTargetLabel(cell: Extract<CodexTranscriptCell, { kind: 'exec' }>): string {
+  const explicit = String(cell.machineLabel ?? '').trim();
+  if (explicit) {
+    return explicit;
+  }
+  const targetKind = String(cell.targetKind ?? '').trim().toLowerCase();
+  const runtimeTarget = String(cell.runtimeTarget ?? '').trim().toLowerCase();
+  if (targetKind.includes('vps') || runtimeTarget.includes('vps') || runtimeTarget.includes('self_hosted')) {
+    return 'VPS';
+  }
+  if (runtimeTarget.includes('hosted') || runtimeTarget.includes('cloud')) {
+    return 'Cloud worker';
+  }
+  if (targetKind.includes('mac') || runtimeTarget.includes('local') || runtimeTarget.includes('user_device')) {
+    return 'This Mac';
+  }
+  return 'This Device';
+}
+
+function executionTargetPath(cell: Extract<CodexTranscriptCell, { kind: 'exec' }>): string[] {
+  return ['Sage', executionTargetLabel(cell), 'Terminal'];
+}
+
+function formatDurationMs(value: number | null | undefined): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  if (value < 1000) {
+    return `${Math.round(value)}ms`;
+  }
+  const seconds = value / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(1).replace(/\.0$/, '')}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
+
+function ExecutionMetaRow({ label, value, tone }: { label: string; value: ReactNode; tone?: 'success' | 'danger' }) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  return (
+    <div className="app-chat-execution-card__meta-row">
+      <span>{label}</span>
+      <strong className={tone ? `app-chat-execution-card__meta-value--${tone}` : undefined}>{value}</strong>
+    </div>
+  );
+}
+
+function ExecutionOutputBlock({ label, value }: { label: string; value: string | null | undefined }) {
+  const text = String(value ?? '').trim();
+  if (!text) {
+    return null;
+  }
+  return (
+    <div className="app-chat-execution-card__output-block">
+      <span className="app-chat-execution-card__section-title">{label}</span>
+      <pre className="app-chat-execution-card__output"><code>{text}</code></pre>
+    </div>
+  );
+}
+
 function statusPrimaryLabel(label: string): string {
   const normalized = label.trim().toLowerCase();
   if (!normalized) {
@@ -504,21 +579,85 @@ export function ReasoningSummaryCell({
 }
 
 export function ExecCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'exec' }> }) {
+  const [expanded, setExpanded] = useState(false);
   const pathCopy = shellPathCopy(cell.command, cell.status);
+  const statusCopy = execStatusCopy(cell.status);
+  const command = compactSystemDetail(cell.command, 'Running shell');
+  const targetPath = executionTargetPath(cell);
+  const stdoutTail = cell.stdoutTail ?? cell.output;
+  const stderrTail = cell.stderrTail;
+  const duration = formatDurationMs(cell.durationMs);
+  const hasDetails = Boolean(
+    cell.cwd
+    || cell.exitCode !== null
+    || duration
+    || stdoutTail
+    || stderrTail
+    || cell.approvalStatus
+    || cell.runtimeTarget
+    || cell.targetKind
+  );
+
   return (
-    <SystemInlineRow
-      kind="shell"
-      icon={cell.status === 'done'
-        ? <ShieldCheck size={14} strokeWidth={2} />
-        : cell.status === 'error'
-          ? <CircleAlert size={14} strokeWidth={2} />
-          : <Wrench size={14} strokeWidth={1.9} />}
-      primary={pathCopy.primary}
-      secondary={compactSystemDetail(cell.output, cell.status === 'done' ? 'Verified locally' : cell.status === 'error' ? 'Failed' : 'Checking')}
-      path={pathCopy.path}
-      state={cell.status}
-      dimmed={cell.dimmed === true}
-    />
+    <article
+      data-chat-role="system"
+      data-chat-activity-kind="shell"
+      className={`app-chat-execution-card app-chat-execution-card--${statusCopy.tone}${cell.dimmed ? ' app-chat-execution-card--dimmed' : ''}`}
+    >
+      <button
+        type="button"
+        className="app-chat-execution-card__summary"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="app-chat-execution-card__accent" aria-hidden="true" />
+        <span className="app-chat-execution-card__terminal" aria-hidden="true">
+          <Terminal size={13} strokeWidth={2.1} />
+        </span>
+        <span className="app-chat-execution-card__copy">
+          <span className="app-chat-execution-card__primary">
+            {pathCopy.primary}
+          </span>
+          <span className="app-chat-execution-card__path" aria-label={targetPath.join(' to ')}>
+            {targetPath.map((item, index) => (
+              <Fragment key={`${item}-${index}`}>
+                {index > 0 ? <span className="app-chat-execution-card__path-edge" aria-hidden="true" /> : null}
+                <span className="app-chat-execution-card__path-node">{item}</span>
+              </Fragment>
+            ))}
+          </span>
+          <span className="app-chat-execution-card__command">{command}</span>
+        </span>
+        <span className="app-chat-execution-card__status">{statusCopy.label}</span>
+        <ChevronRight
+          size={13}
+          strokeWidth={2}
+          className={`app-chat-execution-card__chevron${expanded ? ' app-chat-execution-card__chevron--expanded' : ''}`}
+          aria-hidden="true"
+        />
+      </button>
+      {expanded && hasDetails ? (
+        <div className="app-chat-execution-card__details">
+          <div className="app-chat-execution-card__section">
+            <span className="app-chat-execution-card__section-title">Command</span>
+            <pre className="app-chat-execution-card__command-block"><code>{cell.command || 'Command'}</code></pre>
+          </div>
+          <div className="app-chat-execution-card__meta">
+            <ExecutionMetaRow label="Target" value={executionTargetLabel(cell)} />
+            <ExecutionMetaRow label="Directory" value={cell.cwd ?? null} />
+            <ExecutionMetaRow
+              label="Exit code"
+              value={cell.exitCode === null ? null : cell.exitCode}
+              tone={cell.exitCode === null ? undefined : cell.exitCode === 0 ? 'success' : 'danger'}
+            />
+            <ExecutionMetaRow label="Duration" value={duration} />
+            <ExecutionMetaRow label="Approval" value={cell.approvalStatus ?? null} />
+          </div>
+          <ExecutionOutputBlock label="stdout" value={stdoutTail} />
+          <ExecutionOutputBlock label="stderr" value={stderrTail} />
+        </div>
+      ) : null}
+    </article>
   );
 }
 

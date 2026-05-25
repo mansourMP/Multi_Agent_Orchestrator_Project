@@ -197,6 +197,12 @@ export function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+const INTERNAL_TOOL_MARKUP_PATTERN = /<\s*\|\s*\|\s*DSML(?:\s*\|\s*\|\s*tool_calls\s*>?)?[\s\S]*/i;
+
+export function stripInternalToolMarkup(value: unknown): string {
+  return readString(value).replace(INTERNAL_TOOL_MARKUP_PATTERN, '').trim();
+}
+
 export function readModelParameterCountBillions(...values: unknown[]): number | null {
   for (const value of values) {
     const text = readString(value).toLowerCase();
@@ -796,7 +802,7 @@ export function normalizeCanonicalChatThread(
       nextMetadata.effective_model = effectiveModel;
     }
     const rawContent = String(entry.content ?? '');
-    const content = rawContent.trim() ? rawContent : '';
+    const content = stripInternalToolMarkup(rawContent);
     if (!content) {
       return [];
     }
@@ -1933,7 +1939,7 @@ export function createCanonicalAssistantMessage(
   response: WorkstationTurnResponse,
   threadId: string,
 ): WorkstationChatMessageRecord | null {
-  const reply = String(response.reply ?? '').trim();
+  const reply = stripInternalToolMarkup(response.reply);
   const approvals = Array.isArray(response.approvals) ? response.approvals : [];
   const interventions = Array.isArray(response.interventions) ? response.interventions : [];
   const runId = typeof response.run_id === 'string' ? response.run_id : null;
@@ -2029,13 +2035,14 @@ export function createIncompleteAssistantMessage(
   threadId: string,
   metadata: Record<string, unknown> = {},
 ): WorkstationChatMessageRecord | null {
-  if (!text.trim()) {
+  const content = stripInternalToolMarkup(text);
+  if (!content) {
     return null;
   }
   return {
     id: `${threadId}:assistant:partial:${Date.now()}`,
     role: 'assistant',
-    content: text,
+    content,
     status: 'incomplete',
     createdAt: new Date().toISOString(),
     runId: null,

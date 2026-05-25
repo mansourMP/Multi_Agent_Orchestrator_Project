@@ -11,7 +11,6 @@ import {
   Paperclip,
   Search,
   ShieldCheck,
-  SquareTerminal,
   Wrench,
 } from 'lucide-react';
 
@@ -353,6 +352,31 @@ function compactSystemDetail(value: string | null | undefined, fallback: string)
   return trimmed.length > 140 ? `${trimmed.slice(0, 137).trimEnd()}…` : trimmed;
 }
 
+function compactShellCommand(command: string): string {
+  return command.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function shellPathCopy(command: string, status: 'running' | 'done' | 'error'): { primary: string; path: string[] } {
+  const normalized = compactShellCommand(command);
+  const action = status === 'running' ? 'Checking' : status === 'error' ? 'Needs review' : 'Checked';
+  if (normalized === 'pwd') {
+    return {
+      primary: `${action} folder`,
+      path: ['Sage', 'This Device', 'Folder'],
+    };
+  }
+  if (normalized.includes('sw_vers') || normalized.includes('sysctl -n machdep.cpu.brand_string') || normalized.includes('hw.memsize')) {
+    return {
+      primary: `${action} this Mac`,
+      path: ['Sage', 'This Device', 'Hardware'],
+    };
+  }
+  return {
+    primary: status === 'error' ? 'Local check failed' : `${action} this device`,
+    path: ['Sage', 'This Device', 'Result'],
+  };
+}
+
 function statusPrimaryLabel(label: string): string {
   const normalized = label.trim().toLowerCase();
   if (!normalized) {
@@ -372,6 +396,7 @@ function SystemInlineRow({
   kind,
   primary,
   secondary,
+  path,
   state,
   dimmed,
   action,
@@ -380,6 +405,7 @@ function SystemInlineRow({
   kind: string;
   primary: string;
   secondary: string;
+  path?: string[];
   state: 'running' | 'done' | 'error';
   dimmed: boolean;
   action?: ReactNode;
@@ -392,7 +418,18 @@ function SystemInlineRow({
     >
       <span className="app-chat-system-row__icon" aria-hidden="true">{icon}</span>
       <span className="app-chat-system-row__primary">{primary}</span>
-      <span className="app-chat-system-row__secondary">{secondary}</span>
+      {path && path.length > 0 ? (
+        <span className="app-chat-system-row__path" aria-label={path.join(' to ')}>
+          {path.map((item, index) => (
+            <Fragment key={`${item}-${index}`}>
+              {index > 0 ? <span className="app-chat-system-row__path-edge" aria-hidden="true" /> : null}
+              <span className="app-chat-system-row__path-node">{item}</span>
+            </Fragment>
+          ))}
+        </span>
+      ) : (
+        <span className="app-chat-system-row__secondary">{secondary}</span>
+      )}
       {action ? <span className="app-chat-system-row__action">{action}</span> : null}
     </article>
   );
@@ -467,16 +504,18 @@ export function ReasoningSummaryCell({
 }
 
 export function ExecCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'exec' }> }) {
+  const pathCopy = shellPathCopy(cell.command, cell.status);
   return (
     <SystemInlineRow
       kind="shell"
       icon={cell.status === 'done'
-        ? <Check size={14} strokeWidth={2} />
+        ? <ShieldCheck size={14} strokeWidth={2} />
         : cell.status === 'error'
           ? <CircleAlert size={14} strokeWidth={2} />
-          : <SquareTerminal size={14} strokeWidth={1.9} />}
-      primary={cell.status === 'done' ? 'Ran command' : cell.status === 'error' ? 'Command failed' : 'Running shell'}
-      secondary={compactSystemDetail(cell.command, cell.status === 'done' ? 'Done' : cell.status === 'error' ? 'Failed' : 'Running')}
+          : <Wrench size={14} strokeWidth={1.9} />}
+      primary={pathCopy.primary}
+      secondary={compactSystemDetail(cell.output, cell.status === 'done' ? 'Verified locally' : cell.status === 'error' ? 'Failed' : 'Checking')}
+      path={pathCopy.path}
       state={cell.status}
       dimmed={cell.dimmed === true}
     />

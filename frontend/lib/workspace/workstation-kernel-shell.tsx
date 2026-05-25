@@ -5,14 +5,13 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { Bot, Compass, LayoutGrid, Menu, Monitor, Package, Plus } from 'lucide-react';
+import { BookOpen, Bot, Brain, Compass, LayoutGrid, Link2, ListTodo, Menu, MessageSquare, Monitor, Package, Plus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
 import {
-  APPLICATION_SURFACE_TABS,
+  APPLICATION_TITLEBAR_TABS,
   buildApplicationTabHref,
-  normalizeApplicationSurfaceTabId,
 } from '@/lib/workspace/application-surface-tabs';
 import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
 import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
@@ -50,8 +49,19 @@ const SAGE_TITLEBAR_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
   'activity',
 ]);
 
+const SAGE_MOBILE_DRAWER_ROUTE_IDS: readonly {
+  routeId: WorkspaceRouteId;
+  label: string;
+  icon: LucideIcon;
+}[] = [
+  { routeId: 'chat', label: 'Chat', icon: MessageSquare },
+  { routeId: 'integrations', label: 'Connections', icon: Link2 },
+  { routeId: 'memory', label: 'Memory', icon: Brain },
+  { routeId: 'tasks', label: 'Tasks', icon: ListTodo },
+  { routeId: 'artifacts', label: 'Library', icon: BookOpen },
+];
+
 const MARKETPLACE_TITLEBAR_FILTERS = [
-  { id: 'all', label: 'All' },
   { id: 'agent_template', label: 'Agent templates' },
   { id: 'skill', label: 'Tools' },
   { id: 'connector', label: 'MCP' },
@@ -60,52 +70,15 @@ const MARKETPLACE_TITLEBAR_FILTERS = [
 
 type MarketplaceTitlebarFilter = typeof MARKETPLACE_TITLEBAR_FILTERS[number]['id'];
 
-const STUDIO_TITLEBAR_FILTERS = [
-  { id: 'all', label: 'All' },
-  { id: 'live', label: 'Live' },
-  { id: 'draft', label: 'Draft' },
-  { id: 'needs_attention', label: 'Needs attention' },
-  { id: 'paused', label: 'Paused' },
-] as const;
-
-type StudioTitlebarFilter = typeof STUDIO_TITLEBAR_FILTERS[number]['id'];
-
 function normalizeMarketplaceTitlebarFilter(value: string | null): MarketplaceTitlebarFilter {
   return MARKETPLACE_TITLEBAR_FILTERS.some((filter) => filter.id === value)
     ? value as MarketplaceTitlebarFilter
-    : 'all';
-}
-
-function normalizeStudioTitlebarFilter(value: string | null): StudioTitlebarFilter {
-  return STUDIO_TITLEBAR_FILTERS.some((filter) => filter.id === value)
-    ? value as StudioTitlebarFilter
-    : 'all';
+    : 'agent_template';
 }
 
 function buildMarketplaceCategoryHref(workspaceId: string, filter: MarketplaceTitlebarFilter): string {
   const baseHref = buildWorkspaceRouteHref(workspaceId, 'marketplace');
-  if (filter === 'all') {
-    return baseHref;
-  }
   return `${baseHref}?category=${encodeURIComponent(filter)}`;
-}
-
-function buildStudioFilterHref(
-  workspaceId: string,
-  filterId: StudioTitlebarFilter,
-  searchParams: { toString: () => string },
-): string {
-  const params = new URLSearchParams(searchParams.toString());
-  params.delete('tab');
-  params.delete('studioTab');
-  if (filterId === 'all') {
-    params.delete('studioFilter');
-  } else {
-    params.set('studioFilter', filterId);
-  }
-  const query = params.toString();
-  const baseHref = buildWorkspaceRouteHref(workspaceId, 'studio');
-  return query ? `${baseHref}?${query}` : baseHref;
 }
 
 function buildStudioCreateAgentHref(
@@ -170,6 +143,38 @@ function readComputerConnectionStatus(payload: unknown): ComputerConnectionStatu
   return {
     connectedCount: items.length,
     onlineCount,
+  };
+}
+
+function readLocalRuntimeConnectionStatus(payload: unknown): ComputerConnectionStatus {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const items = rawItems.filter((item): item is Record<string, unknown> => {
+    if (!item || typeof item !== 'object') {
+      return false;
+    }
+    const capabilities = Array.isArray(item.capabilities)
+      ? item.capabilities.map((capability: unknown) => readString(capability))
+      : [];
+    return capabilities.includes('local.worker') || capabilities.includes('shell.execute');
+  });
+  const onlineCount = items.filter((item) => {
+    const status = readString(item.status).toLowerCase();
+    return item.online === true || status === 'online' || status === 'connected' || status === 'attached' || status === 'healthy' || status === 'idle';
+  }).length;
+  return {
+    connectedCount: items.length,
+    onlineCount,
+  };
+}
+
+function mergeComputerConnectionStatus(
+  primary: ComputerConnectionStatus,
+  secondary: ComputerConnectionStatus,
+): ComputerConnectionStatus {
+  return {
+    connectedCount: primary.connectedCount + secondary.connectedCount,
+    onlineCount: primary.onlineCount + secondary.onlineCount,
   };
 }
 
@@ -399,6 +404,103 @@ function MainAgentHistoryPopover({
   );
 }
 
+function MainAgentMobileHistoryList({
+  chatHref,
+  client,
+  workspaceId,
+  onNavigate,
+}: {
+  chatHref: string;
+  client: {
+    listThreads: (options?: { includeTurns?: boolean; limit?: number }) => Promise<Record<string, unknown>>;
+  };
+  workspaceId: string;
+  onNavigate: () => void;
+}) {
+  const router = useRouter();
+  const [items, setItems] = useState<ChatHistoryItem[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(() => readActiveThreadId(workspaceId));
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
+    client.listThreads({ includeTurns: true, limit: 80 })
+      .then((payload) => {
+        if (!cancelled) {
+          setItems(toHistoryItems(normalizeThreadItems(payload)));
+          setActiveThreadId(readActiveThreadId(workspaceId));
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workspaceId]);
+
+  const openThread = (threadId: string) => {
+    persistActiveThread(workspaceId, threadId);
+    emitWorkstationChatThreadSelected({ workspaceId, threadId });
+    setActiveThreadId(threadId);
+    onNavigate();
+    router.push(chatHref);
+  };
+
+  const createThread = () => {
+    const threadId = `thread-${Date.now()}`;
+    persistActiveThread(workspaceId, threadId);
+    emitWorkstationChatThreadSelected({ workspaceId, threadId });
+    setActiveThreadId(threadId);
+    onNavigate();
+    router.push(chatHref);
+  };
+
+  return (
+    <section className="workstation-mobile-sidebar__history" aria-label="Chat history">
+      <div className="workstation-mobile-sidebar__history-head">
+        <strong>History</strong>
+        <button type="button" onClick={createThread}>
+          <Plus size={16} aria-hidden="true" />
+          <span>New chat</span>
+        </button>
+      </div>
+      <div className="workstation-mobile-sidebar__history-list">
+        {isLoading ? (
+          <div className="workstation-mobile-sidebar__history-state">Loading chats...</div>
+        ) : error ? (
+          <div className="workstation-mobile-sidebar__history-state">Chat history could not refresh.</div>
+        ) : items.length === 0 ? (
+          <div className="workstation-mobile-sidebar__history-state">No chat history yet.</div>
+        ) : items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={joinClassNames(
+              'workstation-mobile-sidebar__history-row',
+              activeThreadId === item.id && 'workstation-mobile-sidebar__history-row--active',
+            )}
+            onClick={() => openThread(item.id)}
+          >
+            <span>{item.title}</span>
+            <small>{formatHistoryDate(item.occurredAt)}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function WorkstationKernelShell({
   children,
 }: PropsWithChildren) {
@@ -451,6 +553,16 @@ export function WorkstationKernelShell({
       return [route];
     });
   }, [activeDestinationId, activeRouteId, routeManifest.routeIndex]);
+  const sageMobileDrawerRoutes = useMemo(
+    () => SAGE_MOBILE_DRAWER_ROUTE_IDS.flatMap((entry) => {
+      const route = routeManifest.routeIndex[entry.routeId];
+      if (!route) {
+        return [];
+      }
+      return [{ ...entry, href: route.href }];
+    }),
+    [routeManifest.routeIndex],
+  );
 
   useEffect(() => {
     if (!routeManifest.routeIndex.gateway) {
@@ -462,21 +574,32 @@ export function WorkstationKernelShell({
     const timeout = window.setTimeout(() => {
       controller.abort();
     }, 8_000);
-    fetch(`/api/gateway/registrations?workspace_id=${encodeURIComponent(workspaceId)}`, {
-      credentials: 'same-origin',
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Gateway registrations failed with status ${response.status}`);
+    const readJson = async (path: string): Promise<unknown> => {
+      const response = await fetch(path, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`${path} failed with status ${response.status}`);
+      }
+      return response.json() as Promise<unknown>;
+    };
+    Promise.allSettled([
+      readJson(`/api/gateway/registrations?workspace_id=${encodeURIComponent(workspaceId)}`),
+      readJson('/api/runtime/runtimes/status'),
+    ])
+      .then(([gatewayResult, runtimeResult]) => {
+        if (cancelled) {
+          return;
         }
-        return response.json() as Promise<unknown>;
-      })
-      .then((payload) => {
-        if (!cancelled) {
-          setComputerStatus(readComputerConnectionStatus(payload));
-        }
+        const gatewayStatus = gatewayResult.status === 'fulfilled'
+          ? readComputerConnectionStatus(gatewayResult.value)
+          : { connectedCount: 0, onlineCount: 0 };
+        const runtimeStatus = runtimeResult.status === 'fulfilled'
+          ? readLocalRuntimeConnectionStatus(runtimeResult.value)
+          : { connectedCount: 0, onlineCount: 0 };
+        setComputerStatus(mergeComputerConnectionStatus(gatewayStatus, runtimeStatus));
       })
       .catch(() => {
         if (!cancelled) {
@@ -503,9 +626,7 @@ export function WorkstationKernelShell({
     return false;
   };
   const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('category'));
-  const studioFilter = normalizeStudioTitlebarFilter(searchParams.get('studioFilter'));
   const studioAgentDetailActive = activeDestinationId === 'studio' && Boolean(searchParams.get('agent'));
-  const applicationTab = normalizeApplicationSurfaceTabId(searchParams.get('tab') || searchParams.get('applicationTab'));
   const titlebarNavigation = activeDestinationId === 'marketplace'
     ? MARKETPLACE_TITLEBAR_FILTERS.map((filter) => (
       <Link
@@ -523,32 +644,17 @@ export function WorkstationKernelShell({
       </Link>
       ))
     : activeDestinationId === 'studio'
-      ? studioAgentDetailActive
-        ? null
-        : STUDIO_TITLEBAR_FILTERS.map((filter) => (
-        <Link
-          key={filter.id}
-          href={buildStudioFilterHref(workspaceId, filter.id, searchParams)}
-          prefetch
-          aria-current={studioFilter === filter.id ? 'page' : undefined}
-          className={joinClassNames(
-            'workstation-titlebar__link',
-            studioFilter === filter.id && 'workstation-titlebar__link--active',
-          )}
-        >
-          <span>{filter.label}</span>
-        </Link>
-        ))
+      ? null
     : activeDestinationId === 'applications'
-      ? APPLICATION_SURFACE_TABS.map((tab) => (
+      ? APPLICATION_TITLEBAR_TABS.map((tab) => (
         <Link
           key={tab.id}
           href={buildApplicationTabHref(workspaceId, tab.id, searchParams)}
           prefetch
-          aria-current={applicationTab === tab.id ? 'page' : undefined}
+          aria-current="page"
           className={joinClassNames(
             'workstation-titlebar__link',
-            applicationTab === tab.id && 'workstation-titlebar__link--active',
+            'workstation-titlebar__link--active',
           )}
         >
           <span>{tab.label}</span>
@@ -589,6 +695,7 @@ export function WorkstationKernelShell({
       className={joinClassNames(
         'workstation-shell',
         activeDestinationId === 'sage' && 'workstation-shell--sage',
+        isSidebarOpen && 'workstation-shell--mobile-sidebar-open',
         studioAgentDetailActive && 'workstation-shell--studio-agent-detail',
         activeRouteId === 'chat' && 'workstation-shell--chat',
       )}
@@ -596,7 +703,11 @@ export function WorkstationKernelShell({
       <div className="workstation-shell__topbar" data-workstation-main-pane="topbar">
         <WorkstationTitlebar
           surfaceLabel=""
-          surfaceControl={<span className="workstation-titlebar__surface-empty" aria-hidden="true" />}
+          surfaceControl={activeDestinationId === 'sage' ? (
+            <span className="workstation-titlebar__mobile-surface-label">Sage</span>
+          ) : (
+            <span className="workstation-titlebar__surface-empty" aria-hidden="true" />
+          )}
           diagnosticsVisible={false}
           onToggleDiagnostics={() => {}}
           leftAction={(
@@ -619,6 +730,15 @@ export function WorkstationKernelShell({
                 >
                   <Plus size={16} aria-hidden="true" />
                   <span>Add agent</span>
+                </Link>
+              ) : activeDestinationId === 'applications' ? (
+                <Link
+                  href={buildApplicationTabHref(workspaceId, 'my_apps', searchParams)}
+                  className="workstation-titlebar__link workstation-titlebar__link--icon"
+                  title="Create app"
+                  aria-label="Create app"
+                >
+                  <Plus size={16} aria-hidden="true" />
                 </Link>
               ) : routeManifest.routeIndex.gateway ? (
                 <Link
@@ -648,12 +768,45 @@ export function WorkstationKernelShell({
       <AppDrawer
         open={isSidebarOpen}
         onOpenChange={setIsSidebarOpen}
-        title={workspaceLabel}
+        title={activeDestinationId === 'sage' ? 'Sage' : workspaceLabel}
         className="workstation-mobile-sidebar"
       >
         {isSidebarOpen && (
-          <div className="workstation-mobile-sidebar__content">
-            <AccountTenantSwitcher />
+          <div
+            className={joinClassNames(
+              'workstation-mobile-sidebar__content',
+              activeDestinationId === 'sage' && 'workstation-mobile-sidebar__content--sage',
+            )}
+          >
+            {activeDestinationId === 'sage' ? (
+              <>
+                <nav className="workstation-mobile-sidebar__sage-nav" aria-label="Sage navigation">
+                  {sageMobileDrawerRoutes.map((route) => (
+                    <Link
+                      key={route.routeId}
+                      href={route.href}
+                      prefetch
+                      aria-current={isContextRouteActive(route.routeId) ? 'page' : undefined}
+                      className={joinClassNames(
+                        'workstation-mobile-sidebar__sage-link',
+                        isContextRouteActive(route.routeId) && 'workstation-mobile-sidebar__sage-link--active',
+                      )}
+                      onClick={() => setIsSidebarOpen(false)}
+                    >
+                      <route.icon size={20} aria-hidden="true" />
+                      <span>{route.label}</span>
+                    </Link>
+                  ))}
+                </nav>
+                <MainAgentMobileHistoryList
+                  chatHref={routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`}
+                  client={services.client}
+                  workspaceId={workspaceId}
+                  onNavigate={() => setIsSidebarOpen(false)}
+                />
+              </>
+            ) : null}
+            {activeDestinationId === 'sage' ? null : <AccountTenantSwitcher />}
           </div>
         )}
       </AppDrawer>

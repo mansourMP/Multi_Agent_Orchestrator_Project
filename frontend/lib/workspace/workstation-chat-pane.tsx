@@ -163,6 +163,7 @@ import {
   formatContextWindowLabel,
   reasoningLabel,
   findProviderFailureIntervention,
+  stripInternalToolMarkup,
   createCanonicalAssistantMessage,
   createPendingUserMessage,
   createClientTurnRequestId,
@@ -2301,7 +2302,7 @@ export function WorkstationChatPane() {
                 type: 'chunk',
                 payload: { delta },
               }]);
-              setStreamingAssistantText((current) => `${current}${delta}`);
+              setStreamingAssistantText((current) => stripInternalToolMarkup(`${current}${delta}`));
               setLiveActivitySteps((current) => {
                 const thinkingIndex = current.findIndex((item) => item.kind === 'thinking');
                 if (thinkingIndex < 0) {
@@ -2328,9 +2329,10 @@ export function WorkstationChatPane() {
             const finalReply = readString(event.payload.reply)
               || readString(event.payload.content)
               || readString(event.payload.message);
-            if (finalReply && !isProviderRuntimeGateMessage(finalReply)) {
-              observedFinalReply = finalReply;
-              setStreamingAssistantText(finalReply);
+            const visibleFinalReply = stripInternalToolMarkup(finalReply);
+            if (visibleFinalReply && !isProviderRuntimeGateMessage(visibleFinalReply)) {
+              observedFinalReply = visibleFinalReply;
+              setStreamingAssistantText(visibleFinalReply);
               setStatusMessage(null);
               setSendFailureNotice(null);
             }

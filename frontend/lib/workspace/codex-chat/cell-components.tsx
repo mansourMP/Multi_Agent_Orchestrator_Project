@@ -602,7 +602,7 @@ export function ExecCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 
     <article
       data-chat-role="system"
       data-chat-activity-kind="shell"
-      className={`app-chat-execution-card app-chat-execution-card--${statusCopy.tone}${cell.dimmed ? ' app-chat-execution-card--dimmed' : ''}`}
+      className={`app-chat-execution-card app-chat-execution-card--${statusCopy.tone}${expanded ? ' app-chat-execution-card--expanded' : ''}${cell.dimmed ? ' app-chat-execution-card--dimmed' : ''}`}
     >
       <button
         type="button"

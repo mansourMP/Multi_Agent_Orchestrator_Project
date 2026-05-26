@@ -12,7 +12,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Agents',
     iconName: 'boxes',
     defaultRouteId: 'studio',
-    childRouteIds: ['studio', 'inbox', 'deploy', 'studioIntegrations', 'demo'],
+    childRouteIds: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
     direct: false,
   },
   {
@@ -126,7 +126,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
   },
   {
     id: 'notifications',
-    label: 'Inbox',
+    label: 'Activity',
     segment: 'notifications',
     destinationId: 'sage',
     web: {
@@ -136,7 +136,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/inbox/index',
       screenName: 'inbox/index',
       groupId: 'sage',
-      tabLabel: 'Inbox',
+      tabLabel: 'Activity',
       includeInBottomTabs: true,
     },
   },
@@ -153,7 +153,6 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     id: 'tasks',
     label: 'Tasks',
     segment: 'tasks',
-    legacySegments: ['heartbeat'],
     destinationId: 'sage',
     web: {},
   },
@@ -220,25 +219,14 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     id: 'settings',
     label: 'Settings',
     segment: 'settings',
-    legacySegments: ['control', 'admin', 'admin/platform', 'admin/billing', 'admin/routing', 'admin/members', 'admin/policies'],
     destinationId: 'settings',
     web: {},
     mobile: {
-      screen: '/(tabs)/profile/index',
-      screenName: 'profile/index',
+      screen: '/settings',
+      screenName: 'settings',
       groupId: 'settings',
       tabLabel: 'Settings',
-      includeInBottomTabs: true,
-    },
-  },
-  {
-    id: 'demo',
-    label: 'Investor Demo',
-    segment: 'demo',
-    destinationId: 'studio',
-    requiredCapabilities: ['workspace_admin_enabled'],
-    web: {
-      hiddenFromNavigation: true,
+      includeInBottomTabs: false,
     },
   },
   {
@@ -251,7 +239,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(tabs)/apps/index',
       screenName: 'apps/index',
       groupId: 'marketplace',
-      tabLabel: 'Discover',
+      tabLabel: 'Apps',
       includeInBottomTabs: true,
     },
   },
@@ -364,7 +352,7 @@ export function resolveWorkspaceRouteIdFromSegment(segment) {
   return WORKSPACE_ROUTE_SEGMENT_INDEX[normalizedSegment] ?? null;
 }
 
-const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER = ['chat', 'studio', 'marketplace', 'notifications', 'settings'];
+const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER = ['chat', 'studio', 'marketplace', 'notifications'];
 const WORKSPACE_MOBILE_BOTTOM_TAB_ORDER_INDEX = WORKSPACE_MOBILE_BOTTOM_TAB_ORDER.reduce(
   (accumulator, routeId, index) => {
     accumulator[routeId] = index;

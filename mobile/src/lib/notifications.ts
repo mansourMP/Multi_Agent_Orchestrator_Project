@@ -344,7 +344,7 @@ export function getNotificationHref(data: NotificationRouteData | undefined | nu
     if (screen === "spaces" || screen === "inbox" || screen === "notifications") return "/inbox";
     if (screen === "apps") return "/apps";
     if (screen === "chats" || screen === "kin" || screen === "chat") return "/chats";
-    if (screen === "profile" || screen === "settings") return "/profile";
+    if (screen === "profile" || screen === "settings") return "/settings";
   }
   if (typeof data.tab === "string" && data.tab.trim()) {
     const normalized = data.tab.trim().toLowerCase();

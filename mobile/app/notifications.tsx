@@ -47,7 +47,7 @@ export default function NotificationsScreen() {
             borderRadius: 20,
             borderWidth: 1,
             borderColor: theme.colors.border,
-            backgroundColor: "#FFFFFF",
+            backgroundColor: theme.colors.card,
             alignItems: "center",
             justifyContent: "center",
           }}
@@ -66,7 +66,7 @@ export default function NotificationsScreen() {
               borderRadius: 16,
               borderWidth: 1,
               borderColor: theme.colors.border,
-              backgroundColor: "#F6F7F8",
+              backgroundColor: theme.colors.cardHover,
               padding: 14,
               gap: 4,
             }}
@@ -106,7 +106,7 @@ export default function NotificationsScreen() {
               opacity: busy ? 0.72 : 1,
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 14, fontWeight: "700" }}>
+            <Text style={{ color: theme.colors.accentText, fontSize: 14, fontWeight: "700" }}>
               {busy ? "Updating..." : alertsEnabled ? "Refresh notifications" : "Turn on notifications"}
             </Text>
           </TouchableOpacity>

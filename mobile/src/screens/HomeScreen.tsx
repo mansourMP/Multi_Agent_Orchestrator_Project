@@ -114,7 +114,7 @@ export default function HomeScreen() {
         <QuickLink label="Approvals" onPress={() => router.push("/approvals" as never)} />
         <QuickLink label="Artifacts" onPress={() => router.push("/artifacts" as never)} />
         <QuickLink label="Machines" onPress={() => router.push("/machines" as never)} />
-        <QuickLink label="Connectors" onPress={() => router.push("/connectors" as never)} />
+        <QuickLink label="Connectors" onPress={() => router.push("/integrations" as never)} />
       </View>
 
       <View

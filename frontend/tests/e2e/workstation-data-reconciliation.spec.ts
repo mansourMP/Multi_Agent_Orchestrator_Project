@@ -354,9 +354,8 @@ test.describe('workstation data reconciliation', () => {
 
     const routeExpectations: Array<[string, string]> = [
       ['/w/ws-1', '[data-workstation-surface="chat"]'],
-      ['/w/ws-1/runs', '[data-workstation-surface="activity-proof"]'],
-      ['/w/ws-1/approvals', '[data-workstation-surface="sage-tasks"]'],
       ['/w/ws-1/activity', '[data-workstation-surface="activity-proof"]'],
+      ['/w/ws-1/approvals', '[data-workstation-surface="sage-tasks"]'],
     ];
 
     for (const [route, selector] of routeExpectations) {

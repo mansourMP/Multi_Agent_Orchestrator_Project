@@ -2,8 +2,10 @@ import React from "react";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import { ActivityIndicator, Alert, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, Text, TextInput, TouchableOpacity, View } from "react-native";
 
+import { MobileScreen } from "@/src/components/MobileScreen";
+import { SectionCard } from "@/src/components/SectionCard";
 import {
   mobileApi,
   type SageMemoryCategory,
@@ -17,19 +19,19 @@ type MemoryLayerMeta = {
   category: SageMemoryCategory;
   title: string;
   classLabel: "Safe" | "Sensitive" | "Private" | "Critical";
-  classColor: string;
+  classTone: "success" | "warning" | "error";
 };
 
 type MemoryLayerValues = Record<SageMemoryCategory, string>;
 type MemoryLayerEntries = Partial<Record<SageMemoryCategory, SageMemoryItem>>;
 
 const MEMORY_LAYERS: MemoryLayerMeta[] = [
-  { category: "work_context", title: "Work context", classLabel: "Safe", classColor: "#15803D" },
-  { category: "personal_context", title: "Personal context", classLabel: "Private", classColor: "#C2410C" },
-  { category: "top_of_mind", title: "Top of mind", classLabel: "Sensitive", classColor: "#A16207" },
-  { category: "brief_history", title: "Brief history", classLabel: "Safe", classColor: "#15803D" },
-  { category: "earlier_context", title: "Earlier context", classLabel: "Sensitive", classColor: "#A16207" },
-  { category: "long_term_background", title: "Long-term background", classLabel: "Critical", classColor: "#B91C1C" },
+  { category: "work_context", title: "Work context", classLabel: "Safe", classTone: "success" },
+  { category: "personal_context", title: "Personal context", classLabel: "Private", classTone: "warning" },
+  { category: "top_of_mind", title: "Top of mind", classLabel: "Sensitive", classTone: "warning" },
+  { category: "brief_history", title: "Brief history", classLabel: "Safe", classTone: "success" },
+  { category: "earlier_context", title: "Earlier context", classLabel: "Sensitive", classTone: "warning" },
+  { category: "long_term_background", title: "Long-term background", classLabel: "Critical", classTone: "error" },
 ];
 
 const EMPTY_MEMORY: MemoryLayerValues = {
@@ -45,6 +47,16 @@ const EMPTY_STATE_TEXT = "Nothing saved yet.";
 
 function createEmptyEntries(): MemoryLayerEntries {
   return {};
+}
+
+function toneColors(theme: ReturnType<typeof useTheme>, tone: MemoryLayerMeta["classTone"]) {
+  if (tone === "success") {
+    return { background: theme.colors.successMuted, text: theme.colors.success };
+  }
+  if (tone === "error") {
+    return { background: theme.colors.errorMuted, text: theme.colors.error };
+  }
+  return { background: theme.colors.warningMuted, text: theme.colors.warning };
 }
 
 function mapItemsToLayers(items: SageMemoryItem[]): {
@@ -252,11 +264,7 @@ export default function MemoryScreen() {
   };
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: theme.colors.background }}
-      contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}
-      showsVerticalScrollIndicator={false}
-    >
+    <MobileScreen>
       <View style={{ paddingTop: 16, marginBottom: 4 }}>
         <TouchableOpacity
           activeOpacity={0.86}
@@ -281,36 +289,17 @@ export default function MemoryScreen() {
       </View>
 
       {storagePolicy ? (
-        <View
-          style={{
-            marginBottom: 12,
-            borderRadius: 16,
-            borderWidth: 1,
-            borderColor: theme.colors.border,
-            backgroundColor: theme.colors.surface,
-            paddingHorizontal: 14,
-            paddingVertical: 12,
-            gap: 6,
-          }}
-        >
+        <SectionCard title="Storage" subtitle="Cloud-canonical memory with encrypted mobile cache.">
           <Text style={{ fontSize: 13.5, color: theme.colors.textSecondary }}>
             Cloud-canonical · Encrypted cache only
           </Text>
           <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>
             {Number(storagePolicy.used_entries || 0)} / {Number(storagePolicy.max_entries || 50)} entries used
           </Text>
-        </View>
+        </SectionCard>
       ) : null}
 
-      <View
-        style={{
-          borderRadius: 22,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: theme.colors.surface,
-          overflow: "hidden",
-        }}
-      >
+      <SectionCard title="Memory layers">
         {loading ? (
           <View
             style={{
@@ -325,18 +314,19 @@ export default function MemoryScreen() {
             <Text style={{ fontSize: 13.5, color: theme.colors.textSecondary }}>Loading memory…</Text>
           </View>
         ) : (
-          MEMORY_LAYERS.map((layer, index) => (
-            <View
-              key={layer.category}
-              style={{
-                paddingHorizontal: 16,
-                paddingVertical: 16,
-                gap: 8,
-                borderBottomWidth: index < MEMORY_LAYERS.length - 1 ? 1 : 0,
-                borderBottomColor: theme.colors.border,
-              }}
-            >
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          MEMORY_LAYERS.map((layer, index) => {
+            const classTone = toneColors(theme, layer.classTone);
+            return (
+              <View
+                key={layer.category}
+                style={{
+                  paddingVertical: 16,
+                  gap: 8,
+                  borderBottomWidth: index < MEMORY_LAYERS.length - 1 ? 1 : 0,
+                  borderBottomColor: theme.colors.border,
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                 <Text style={{ flex: 1, fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
                   {layer.title}
                 </Text>
@@ -345,10 +335,10 @@ export default function MemoryScreen() {
                     paddingHorizontal: 9,
                     paddingVertical: 5,
                     borderRadius: 999,
-                    backgroundColor: `${layer.classColor}1A`,
+                    backgroundColor: classTone.background,
                   }}
                 >
-                  <Text style={{ fontSize: 11, fontFamily: "DMSans_700Bold", color: layer.classColor }}>
+                  <Text style={{ fontSize: 11, fontFamily: "DMSans_700Bold", color: classTone.text }}>
                     {layer.classLabel}
                   </Text>
                 </View>
@@ -372,7 +362,7 @@ export default function MemoryScreen() {
                     borderRadius: 16,
                     borderWidth: 1,
                     borderColor: theme.colors.border,
-                    backgroundColor: "#F6F7F8",
+                    backgroundColor: theme.colors.cardHover,
                     paddingHorizontal: 14,
                     paddingVertical: 12,
                     color: theme.colors.text,
@@ -385,10 +375,11 @@ export default function MemoryScreen() {
                   {memoryValues[layer.category].trim() || EMPTY_STATE_TEXT}
                 </Text>
               )}
-            </View>
-          ))
+              </View>
+            );
+          })
         )}
-      </View>
+      </SectionCard>
 
       {status ? (
         <Text
@@ -396,7 +387,7 @@ export default function MemoryScreen() {
             marginTop: 12,
             fontSize: 13,
             lineHeight: 19,
-            color: status.kind === "error" ? "#C2413B" : theme.colors.textSecondary,
+            color: status.kind === "error" ? theme.colors.error : theme.colors.textSecondary,
           }}
         >
           {status.message}
@@ -418,7 +409,7 @@ export default function MemoryScreen() {
               opacity: saving ? 0.6 : 1,
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 14, fontWeight: "700" }}>
+            <Text style={{ color: theme.colors.accentText, fontSize: 14, fontWeight: "700" }}>
               {saving ? "Saving…" : "Save memory"}
             </Text>
           </TouchableOpacity>
@@ -455,7 +446,7 @@ export default function MemoryScreen() {
               opacity: loading ? 0.6 : 1,
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 14, fontWeight: "700" }}>Edit memory</Text>
+            <Text style={{ color: theme.colors.accentText, fontSize: 14, fontWeight: "700" }}>Edit memory</Text>
           </TouchableOpacity>
           <View style={{ flexDirection: "row", gap: 10 }}>
             <TouchableOpacity
@@ -494,13 +485,13 @@ export default function MemoryScreen() {
                 opacity: loading || isWiping ? 0.6 : 1,
               }}
             >
-              <Text style={{ color: "#C2413B", fontSize: 13.5, fontWeight: "700" }}>
+              <Text style={{ color: theme.colors.error, fontSize: 13.5, fontWeight: "700" }}>
                 {isWiping ? "Wiping…" : "Wipe"}
               </Text>
             </TouchableOpacity>
           </View>
         </View>
       )}
-    </ScrollView>
+    </MobileScreen>
   );
 }

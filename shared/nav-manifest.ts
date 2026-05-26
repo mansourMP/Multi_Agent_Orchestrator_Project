@@ -30,8 +30,7 @@ export type WorkspaceRouteId =
   | 'gateway'
   | 'gatewayApprovals'
   | 'gatewayActivity'
-  | 'settings'
-  | 'demo';
+  | 'settings';
 
 export type WorkspaceNavIconName =
   | 'message-square'

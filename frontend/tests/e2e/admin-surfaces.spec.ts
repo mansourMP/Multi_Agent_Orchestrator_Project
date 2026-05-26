@@ -42,36 +42,11 @@ async function loginAsWorkspaceMember(page) {
 }
 
 test.describe('admin surfaces', () => {
-  test('legacy admin routes still redirect to settings', async ({ page }) => {
-    await loginAsOwner(page);
-
-    for (const path of ['admin', 'admin/members', 'admin/platform', 'admin/policies', 'admin/routing']) {
-      await page.goto(workspacePath(path));
-      await expect(page).toHaveURL(/\/w\/ws-1\/settings(?:\?.*)?(?:[/?#]|$)/);
-      await expect(page.locator('[data-workstation-surface="settings"]')).toBeVisible();
-    }
-  });
-
-  test('owner can open /demo when workspace_admin_enabled is present', async ({ page }) => {
-    await loginAsOwner(page);
-
-    await page.goto(workspacePath('demo'));
-    await expect(page).toHaveURL(/\/w\/ws-1\/demo(?:[/?#]|$)/);
-    await expect(page.getByRole('heading', { name: /investor demo/i })).toBeVisible();
-  });
-
-  test('non-admin workspace cannot render /demo', async ({ page }) => {
-    await loginAsWorkspaceMember(page);
-
-    await page.goto(workspacePath('demo'));
-    await expect(page).toHaveURL(CHAT_FALLBACK_ROUTES);
-    await expect(page.getByRole('heading', { name: /investor demo/i })).toHaveCount(0);
-  });
-
-  test('applications route redirects to deploy', async ({ page }) => {
+  test('owner can open applications surface directly', async ({ page }) => {
     await loginAsOwner(page);
     await page.goto(workspacePath('applications'));
-    await expect(page).toHaveURL(/\/w\/ws-1\/deploy(?:[/?#]|$)/);
+    await expect(page).toHaveURL(/\/w\/ws-1\/applications(?:[/?#]|$)/);
+    await expect(page.getByText(/apps/i).first()).toBeVisible();
   });
 
   test('non-admin workspace cannot render direct hosted mini-app route', async ({ page }) => {

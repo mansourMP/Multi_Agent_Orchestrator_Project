@@ -115,33 +115,33 @@ function normalizeBrowserSessions(payload: Record<string, unknown> | null | unde
   });
 }
 
-function toneColors(status: unknown) {
+function toneColors(theme: ReturnType<typeof useTheme>, status: unknown) {
   const token = String(status ?? "").trim().toLowerCase();
   if (["healthy", "active", "connected", "attached", "approved", "pass", "executed"].includes(token)) {
     return {
-      background: "#EAFBF1",
-      border: "#B8E7C9",
-      text: "#13653A",
+      background: theme.colors.successMuted,
+      border: theme.colors.successMuted,
+      text: theme.colors.success,
     };
   }
   if (["pending", "requested", "approval_required", "warn", "attach_required", "degraded", "waiting_for_input"].includes(token)) {
     return {
-      background: "#FFF7E8",
-      border: "#F2D7A4",
-      text: "#8A5A00",
+      background: theme.colors.warningMuted,
+      border: theme.colors.warningMuted,
+      text: theme.colors.warning,
     };
   }
   if (["blocked", "rejected", "fail", "attach_failed", "offline", "not_attached", "revoked"].includes(token)) {
     return {
-      background: "#FFF0EF",
-      border: "#F3C7C3",
-      text: "#B23B30",
+      background: theme.colors.errorMuted,
+      border: theme.colors.errorMuted,
+      text: theme.colors.error,
     };
   }
   return {
-    background: "#F4F5F7",
-    border: "#E0E3E8",
-    text: "#586070",
+    background: theme.colors.cardHover,
+    border: theme.colors.border,
+    text: theme.colors.textSecondary,
   };
 }
 
@@ -197,7 +197,8 @@ function DetailCard({
 }
 
 function TonePill({ value }: { value: string }) {
-  const palette = toneColors(value);
+  const theme = useTheme();
+  const palette = toneColors(theme, value);
   return (
     <View
       style={{
@@ -229,14 +230,14 @@ function ActionButton({
   const backgroundColor = tone === "primary"
     ? theme.colors.accent
     : tone === "danger"
-      ? "#FFF4F3"
+      ? theme.colors.errorMuted
       : theme.colors.surface;
   const borderColor = tone === "primary"
     ? theme.colors.accent
     : tone === "danger"
-      ? "rgba(194, 65, 59, 0.2)"
+      ? theme.colors.errorMuted
       : theme.colors.border;
-  const textColor = tone === "primary" ? "#FFFFFF" : tone === "danger" ? "#C2413B" : theme.colors.text;
+  const textColor = tone === "primary" ? theme.colors.accentText : tone === "danger" ? theme.colors.error : theme.colors.text;
 
   return (
     <TouchableOpacity
@@ -476,13 +477,13 @@ export default function GatewayScreen() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 28 }}>
         <View style={{ gap: 12, marginTop: 12 }}>
           {statusMessage ? (
-            <View style={{ borderRadius: 16, padding: 14, backgroundColor: "#EAFBF1", borderWidth: 1, borderColor: "#B8E7C9" }}>
-              <Text style={{ color: "#13653A", fontWeight: "600" }}>{statusMessage}</Text>
+            <View style={{ borderRadius: 16, padding: 14, backgroundColor: theme.colors.successMuted, borderWidth: 1, borderColor: theme.colors.successMuted }}>
+              <Text style={{ color: theme.colors.success, fontWeight: "600" }}>{statusMessage}</Text>
             </View>
           ) : null}
           {derivedErrorMessage ? (
-            <View style={{ borderRadius: 16, padding: 14, backgroundColor: "#FFF0EF", borderWidth: 1, borderColor: "#F3C7C3" }}>
-              <Text style={{ color: "#B23B30", fontWeight: "600" }}>{derivedErrorMessage}</Text>
+            <View style={{ borderRadius: 16, padding: 14, backgroundColor: theme.colors.errorMuted, borderWidth: 1, borderColor: theme.colors.errorMuted }}>
+              <Text style={{ color: theme.colors.error, fontWeight: "600" }}>{derivedErrorMessage}</Text>
             </View>
           ) : null}
 
@@ -557,7 +558,7 @@ export default function GatewayScreen() {
                     borderRadius: 16,
                     borderWidth: 1,
                     borderColor: selected ? theme.colors.accent : theme.colors.border,
-                    backgroundColor: selected ? "#F5F9FF" : theme.colors.background,
+                    backgroundColor: selected ? theme.colors.cardHover : theme.colors.background,
                     padding: 14,
                     gap: 8,
                   }}

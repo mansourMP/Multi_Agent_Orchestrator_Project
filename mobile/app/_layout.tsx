@@ -123,10 +123,6 @@ export default function RootLayout() {
                     options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
                   />
                   <Stack.Screen
-                    name="privacy"
-                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
-                  />
-                  <Stack.Screen
                     name="artifacts"
                     options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
                   />
@@ -136,10 +132,6 @@ export default function RootLayout() {
                   />
                   <Stack.Screen
                     name="gateway"
-                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
-                  />
-                  <Stack.Screen
-                    name="connectors"
                     options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
                   />
                   <Stack.Screen
@@ -153,10 +145,6 @@ export default function RootLayout() {
                   <Stack.Screen
                     name="status"
                     options={MOBILE_STACK_MOTION_PRESETS.backwardCard}
-                  />
-                  <Stack.Screen
-                    name="apps/store"
-                    options={MOBILE_STACK_MOTION_PRESETS.sheet}
                   />
                   <Stack.Screen
                     name="apps/register"

@@ -3,8 +3,10 @@ import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import { ScrollView, Text, View } from "react-native";
+import { Text, View } from "react-native";
 
+import { MobileScreen } from "@/src/components/MobileScreen";
+import { SectionCard } from "@/src/components/SectionCard";
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
 import { ActionButton } from "@/src/components/system/ActionButton";
 import { MotionPressable } from "@/src/components/system/MotionPressable";
@@ -160,15 +162,11 @@ export function ProfileScreen() {
       icon: "shield-checkmark-outline",
       label: "Privacy & Safety",
       subtitle: "Permissions, memory boundaries, and controls",
-      onPress: () => router.push("/privacy"),
+      onPress: () => router.push("/settings"),
     },
   ];
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: theme.colors.background }}
-      contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}
-      showsVerticalScrollIndicator={false}
-    >
+    <MobileScreen>
       <PrimaryScreenHeader
         title="You"
         subtitle="Profile, device connection, and your settings."
@@ -183,41 +181,16 @@ export function ProfileScreen() {
         }}
       />
 
-      <View
-        style={{
-          marginTop: 2,
-          paddingHorizontal: 18,
-          paddingVertical: 18,
-          borderRadius: 24,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: "#F3F4F6",
-          gap: 5,
-        }}
+      <SectionCard
+        title={session?.userDisplayName || "Empyralis User"}
+        subtitle={session?.userEmail || "Signed in on this device"}
       >
-        <Text style={{ fontSize: 18, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-          {session?.userDisplayName || "Empyralis User"}
-        </Text>
-        <Text style={{ fontSize: 13, lineHeight: 19, color: theme.colors.textSecondary }}>
-          {session?.userEmail || "Signed in on this device"}
-        </Text>
         <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
           Workspace {session?.workspaceId || "default"} · Version {appVersion}
         </Text>
-      </View>
+      </SectionCard>
 
-      <View
-        style={{
-          marginTop: 14,
-          paddingHorizontal: 18,
-          paddingVertical: 16,
-          borderRadius: 24,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: "#F3F4F6",
-          gap: 10,
-        }}
-      >
+      <SectionCard title="Runtime fuel">
         <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 14 }}>
           <View style={{ flex: 1 }}>
             <Text style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.textSecondary }}>
@@ -236,7 +209,7 @@ export function ProfileScreen() {
               paddingHorizontal: 10,
               paddingVertical: 6,
               borderRadius: 999,
-              backgroundColor: "#FFFFFF",
+              backgroundColor: theme.colors.card,
               borderWidth: 1,
               borderColor: theme.colors.border,
             }}
@@ -250,7 +223,7 @@ export function ProfileScreen() {
           style={{
             height: 8,
             borderRadius: 999,
-            backgroundColor: "#E5E7EB",
+            backgroundColor: theme.colors.cardHover,
             overflow: "hidden",
           }}
         >
@@ -259,7 +232,7 @@ export function ProfileScreen() {
               width: `${hostedCreditPercent}%`,
               height: "100%",
               borderRadius: 999,
-              backgroundColor: "#111827",
+              backgroundColor: theme.colors.accent,
             }}
           />
         </View>
@@ -270,18 +243,9 @@ export function ProfileScreen() {
               ? "Hosted credits are unavailable for this workspace. You can still use connected providers or your own API key."
               : "Sign in and connect your workspace to see monthly usage."}
         </Text>
-      </View>
+      </SectionCard>
 
-      <View
-        style={{
-          marginTop: 14,
-          borderRadius: 24,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: "#F3F4F6",
-          overflow: "hidden",
-        }}
-      >
+      <SectionCard title="Controls">
         <ProfileMenuButton
           icon="desktop-outline"
           label="Device connection"
@@ -306,21 +270,9 @@ export function ProfileScreen() {
             showDivider={index < profileMenuItems.length - 1}
           />
         ))}
-      </View>
+      </SectionCard>
 
-      <View
-        style={{
-          marginTop: 14,
-          paddingHorizontal: 18,
-          paddingVertical: 14,
-          borderRadius: 20,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: "#F6F7F8",
-          gap: 3,
-        }}
-      >
-        <Text style={{ fontSize: 14, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Empyralis</Text>
+      <SectionCard title="Empyralis">
         <Text style={{ fontSize: 12.5, color: theme.colors.textSecondary }}>
           {connected
             ? "Your phone is linked to your workspace. Open device connection any time to review approvals and runtime health."
@@ -332,7 +284,7 @@ export function ProfileScreen() {
           onPress={() => router.push((connected ? "/gateway" : "/session") as never)}
           style={{ alignSelf: "flex-start", marginTop: 8 }}
         />
-      </View>
+      </SectionCard>
 
       <MotionPressable
         onPress={async () => {
@@ -344,15 +296,15 @@ export function ProfileScreen() {
           height: 48,
           borderRadius: 18,
           borderWidth: 1,
-          borderColor: "rgba(194, 65, 59, 0.16)",
-          backgroundColor: "#FFF4F3",
+          borderColor: theme.colors.errorMuted,
+          backgroundColor: theme.colors.errorMuted,
           alignItems: "center",
           justifyContent: "center",
         }}
       >
-        <Text style={{ color: "#C2413B", fontSize: 14, fontWeight: "700" }}>Sign out</Text>
+        <Text style={{ color: theme.colors.error, fontSize: 14, fontWeight: "700" }}>Sign out</Text>
       </MotionPressable>
-    </ScrollView>
+    </MobileScreen>
   );
 }
 
@@ -398,7 +350,7 @@ function ProfileMenuButton({
           borderRadius: 22,
           borderWidth: 1,
           borderColor: theme.colors.border,
-          backgroundColor: "#FFFFFF",
+          backgroundColor: theme.colors.card,
           alignItems: "center",
           justifyContent: "center",
         }}

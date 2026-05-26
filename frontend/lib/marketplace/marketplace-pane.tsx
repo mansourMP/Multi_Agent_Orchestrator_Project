@@ -19,7 +19,7 @@ import {
 
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { ListDetailPanel } from '@/lib/ui/list-detail';
-import { AppButton, joinClassNames } from '@/lib/ui/primitives';
+import { AppButton, AppModal, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { MarketplacePackageRecord } from '@/lib/workspace/workstation-client';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
@@ -850,6 +850,121 @@ function MarketplaceField({
   );
 }
 
+function MarketplacePackageDetail({
+  card,
+  details,
+  installingPackageId,
+  onInstall,
+  onOpenHref,
+}: {
+  card: MarketplaceCardView;
+  details: MarketplaceSelectedDetails;
+  installingPackageId: string | null;
+  onInstall: (packageId: string) => void;
+  onOpenHref: (href: string) => void;
+}) {
+  const DetailIcon = marketplaceIconForCard(card);
+  const detailSections = marketplaceDetailSections(card, details);
+
+  return (
+    <div className="marketplace-pane__detail-stack">
+      <div className="marketplace-pane__detail-hero">
+        <div className="marketplace-pane__detail-icon" aria-hidden="true">
+          <DetailIcon />
+        </div>
+        <div className="marketplace-pane__detail-hero-copy">
+          <strong className="marketplace-pane__detail-hero-title">{card.name}</strong>
+          <div className="marketplace-pane__detail-kind-row">
+            <span className={joinClassNames('marketplace-pane__kind-pill', `marketplace-pane__kind-pill--${card.kind}`)}>
+              {packageKindLabel(card.kind)}
+            </span>
+            {card.previewOnly ? (
+              <span className="marketplace-pane__status-badge marketplace-pane__status-badge--preview">
+                Preview
+              </span>
+            ) : card.installed ? (
+              <span className="marketplace-pane__status-badge marketplace-pane__status-badge--installed">
+                Installed
+              </span>
+            ) : (
+              <span className="marketplace-pane__status-badge marketplace-pane__status-badge--approved">
+                {marketplaceLifecycleLabel(details.item, details.packagePayload, details.runtimeTruth)}
+              </span>
+            )}
+          </div>
+          <p className="marketplace-pane__detail-description">{card.description}</p>
+        </div>
+      </div>
+
+      <div className="marketplace-pane__detail-section-list">
+        {detailSections.map((section) => {
+          const SectionIcon = section.icon;
+          return (
+            <section key={section.title} className="marketplace-pane__detail-section">
+              <div className="marketplace-pane__detail-section-icon" aria-hidden="true">
+                <SectionIcon />
+              </div>
+              <div className="marketplace-pane__detail-section-copy">
+                <strong className="marketplace-pane__detail-title">{section.title}</strong>
+                {section.body ? (
+                  <p className="marketplace-pane__panel-copy">{section.body}</p>
+                ) : null}
+                {section.items?.length ? (
+                  <div className="marketplace-pane__detail-checklist">
+                    {section.items.map((item) => (
+                      <div key={item} className="marketplace-pane__detail-checklist-item">
+                        <Check aria-hidden="true" />
+                        <span>{item}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+
+      <div className="marketplace-pane__detail-footer">
+        <button
+          type="button"
+          className={joinClassNames(
+            'marketplace-pane__link-button',
+            card.installed && 'marketplace-pane__link-button--installed',
+            card.previewOnly && 'marketplace-pane__link-button--preview',
+          )}
+          disabled={card.previewOnly || (!card.installed && !card.installEligible) || installingPackageId === card.id}
+          onClick={() => {
+            if (card.previewOnly) {
+              return;
+            }
+            if (card.installed && card.openHref) {
+              onOpenHref(card.openHref);
+              return;
+            }
+            onInstall(card.id);
+          }}
+        >
+          {installingPackageId === card.id
+            ? 'Installing...'
+            : marketplacePrimaryActionLabel(card)}
+        </button>
+        {card.docsHref ? (
+          <a
+            href={card.docsHref}
+            target="_blank"
+            rel="noreferrer"
+            className="marketplace-pane__bookmark-link"
+            aria-label="Open publisher docs"
+          >
+            Docs
+          </a>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function MarketplacePane() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -924,22 +1039,26 @@ export function MarketplacePane() {
       }
       return;
     }
+    if (selectedPackageId === null) {
+      return;
+    }
     const visibleItems = items.filter((item) => marketplaceKindMatchesFilter(readString(item.kind), kindFilter));
     const hasSelected = visibleItems.some((item) => readString(item.package_id) === selectedPackageId);
     if (!hasSelected) {
-      setSelectedPackageId(readString(visibleItems[0]?.package_id) || null);
+      setSelectedPackageId(null);
     }
   }, [items, kindFilter, selectedPackageId]);
 
   async function handleInstall(packageId: string) {
     setInstallingPackageId(packageId);
     setError(null);
+    const keepDetailOpen = selectedPackageId === packageId;
     try {
       const payload = await services.client.installMarketplacePackage({ packageId });
       const runtimeTruth = readRecord(payload?.runtime_truth);
       const openHref = readString(runtimeTruth.open_href);
       await loadMarketplacePackages(kindFilter);
-      setSelectedPackageId(packageId);
+      setSelectedPackageId(keepDetailOpen ? packageId : null);
       if (openHref) {
         router.push(openHref);
       }
@@ -1072,7 +1191,7 @@ export function MarketplacePane() {
 
   const selectedPackage = useMemo(() => {
     const selected = renderedCards.find((item) => item.id === selectedPackageId);
-    return selected || renderedCards[0] || null;
+    return selected || null;
   }, [renderedCards, selectedPackageId]);
 
   const selectedDetails = useMemo(() => {
@@ -1204,122 +1323,10 @@ export function MarketplacePane() {
               </div>
             </div>
           </div>
-          <aside className="marketplace-pane__detail-scroll" aria-label="Discover item details">
+          {canPublishPackages && showDeveloperRegistration ? (
+            <aside className="marketplace-pane__detail-scroll marketplace-pane__detail-scroll--developer" aria-label="Operator publishing">
               <div className="marketplace-pane__secondary-stack">
-                <div className="marketplace-pane__detail-panel">
-                  {selectedPackage && selectedDetails ? (
-                    <div className="marketplace-pane__detail-stack">
-                      {(() => {
-                        const DetailIcon = marketplaceIconForCard(selectedPackage);
-                        const detailSections = marketplaceDetailSections(selectedPackage, selectedDetails);
-                        return (
-                          <>
-                      <div className="marketplace-pane__detail-hero">
-                        <div className="marketplace-pane__detail-icon" aria-hidden="true">
-                          <DetailIcon />
-                        </div>
-                        <div className="marketplace-pane__detail-hero-copy">
-                          <strong className="marketplace-pane__detail-hero-title">{selectedPackage.name}</strong>
-                          <div className="marketplace-pane__detail-kind-row">
-                            <span className={joinClassNames('marketplace-pane__kind-pill', `marketplace-pane__kind-pill--${selectedPackage.kind}`)}>
-                              {packageKindLabel(selectedPackage.kind)}
-                            </span>
-                            {selectedPackage.previewOnly ? (
-                              <span className="marketplace-pane__status-badge marketplace-pane__status-badge--preview">
-                                Preview
-                              </span>
-                            ) : selectedPackage.installed ? (
-                              <span className="marketplace-pane__status-badge marketplace-pane__status-badge--installed">
-                                Installed
-                              </span>
-                            ) : (
-                              <span className="marketplace-pane__status-badge marketplace-pane__status-badge--approved">
-                                {marketplaceLifecycleLabel(selectedDetails.item, selectedDetails.packagePayload, selectedDetails.runtimeTruth)}
-                              </span>
-                            )}
-                          </div>
-                          <p className="marketplace-pane__detail-description">{selectedPackage.description}</p>
-                        </div>
-                      </div>
 
-                      <div className="marketplace-pane__detail-section-list">
-                        {detailSections.map((section) => {
-                          const SectionIcon = section.icon;
-                          return (
-                            <section key={section.title} className="marketplace-pane__detail-section">
-                              <div className="marketplace-pane__detail-section-icon" aria-hidden="true">
-                                <SectionIcon />
-                              </div>
-                              <div className="marketplace-pane__detail-section-copy">
-                                <strong className="marketplace-pane__detail-title">{section.title}</strong>
-                                {section.body ? (
-                                  <p className="marketplace-pane__panel-copy">{section.body}</p>
-                                ) : null}
-                                {section.items?.length ? (
-                                  <div className="marketplace-pane__detail-checklist">
-                                    {section.items.map((item) => (
-                                      <div key={item} className="marketplace-pane__detail-checklist-item">
-                                        <Check aria-hidden="true" />
-                                        <span>{item}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : null}
-                              </div>
-                            </section>
-                          );
-                        })}
-                      </div>
-
-                      <div className="marketplace-pane__detail-footer">
-                        <button
-                          type="button"
-                          className={joinClassNames(
-                            'marketplace-pane__link-button',
-                            selectedPackage.installed && 'marketplace-pane__link-button--installed',
-                            selectedPackage.previewOnly && 'marketplace-pane__link-button--preview',
-                          )}
-                          disabled={selectedPackage.previewOnly || (!selectedPackage.installed && !selectedPackage.installEligible) || installingPackageId === selectedPackage.id}
-                          onClick={() => {
-                            if (selectedPackage.previewOnly) {
-                              return;
-                            }
-                            if (selectedPackage.installed && selectedPackage.openHref) {
-                              router.push(selectedPackage.openHref);
-                              return;
-                            }
-                            void handleInstall(selectedPackage.id);
-                          }}
-                        >
-                          {installingPackageId === selectedPackage.id
-                            ? 'Installing...'
-                            : marketplacePrimaryActionLabel(selectedPackage)}
-                        </button>
-                        {selectedPackage.docsHref ? (
-                          <a
-                            href={selectedPackage.docsHref}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="marketplace-pane__bookmark-link"
-                            aria-label="Open publisher docs"
-                          >
-                            Docs
-                          </a>
-                        ) : null}
-                      </div>
-                          </>
-                        );
-                      })()}
-                        </div>
-                ) : (
-                  <EmptyPanel
-                    title="No item selected"
-                    body="Choose an item on the left to see what it does, what gets created, setup needed, access, and cost."
-                  />
-                )}
-              </div>
-
-              {canPublishPackages && showDeveloperRegistration ? (
                 <ListDetailPanel
                   className="marketplace-pane__composer-panel"
                   eyebrow="Operator publishing"
@@ -1768,10 +1775,33 @@ export function MarketplacePane() {
                   </AppButton>
                 </div>
               </ListDetailPanel>
-              ) : null}
-            </div>
-        </aside>
+              </div>
+            </aside>
+          ) : null}
         </div>
+        <AppModal
+          open={Boolean(selectedPackage && selectedDetails)}
+          title={selectedPackage?.name ?? 'Discover item'}
+          description="Review what it does, setup needed, access, and cost."
+          className="marketplace-pane__detail-modal"
+          onOpenChange={(open) => {
+            if (!open) {
+              setSelectedPackageId(null);
+            }
+          }}
+        >
+          {selectedPackage && selectedDetails ? (
+            <div className="marketplace-pane__detail-panel marketplace-pane__detail-panel--modal">
+              <MarketplacePackageDetail
+                card={selectedPackage}
+                details={selectedDetails}
+                installingPackageId={installingPackageId}
+                onInstall={(packageId) => { void handleInstall(packageId); }}
+                onOpenHref={(href) => router.push(href)}
+              />
+            </div>
+          ) : null}
+        </AppModal>
       </section>
     </WorkstationSurfaceRoot>
   );

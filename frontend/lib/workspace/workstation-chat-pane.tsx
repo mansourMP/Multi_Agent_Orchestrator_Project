@@ -2,10 +2,6 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import {
-  Coins,
-} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
@@ -16,7 +12,6 @@ import { PlatformNotification } from '@/lib/ui/platform-notification';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
 import {
   ChatComposer,
-  type ComposerActionMenuItem,
   type ComposerPreRunCostEstimate,
   type ComposerSlashCommand,
 } from '@/lib/workspace/chat-composer';
@@ -64,6 +59,7 @@ import {
   type WorkstationSessionRecord,
   type WorkstationTurnStreamAbortHandle,
   type WorkstationTurnResponse,
+  type WorkspaceAiRoutePayload,
 } from '@/lib/workspace/workstation-client';
 import {
   type CanonicalApprovalSummary,
@@ -199,46 +195,6 @@ import type {
   ChatRuntimeTrustZone
 } from '@/lib/workspace/workstation-chat-pane-model';
 
-function formatTitlebarCreditCount(value: number): string {
-  const rounded = Math.max(0, Math.floor(value));
-  if (rounded >= 1_000_000) {
-    return `${(rounded / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
-  }
-  if (rounded >= 100_000) {
-    return `${Math.round(rounded / 1_000)}K`;
-  }
-  return rounded.toLocaleString();
-}
-
-type ChatCreditUsageHistoryRow = {
-  id: string;
-  label: string;
-  meta: string;
-  credits: number;
-  createdAt: string | null;
-  kind: string;
-};
-
-function formatSignedCredits(value: number): string {
-  const rounded = Math.round(value);
-  const prefix = rounded > 0 ? '+' : rounded < 0 ? '-' : '';
-  return `${prefix}${Math.abs(rounded).toLocaleString()}`;
-}
-
-function formatCreditHistoryTime(value: string | null): string {
-  if (!value) {
-    return 'No time recorded';
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-  });
-}
-
 function legacyTraceIdForReplay(message: WorkstationChatMessageRecord): string | null {
   if (message.role.trim().toLowerCase() !== 'assistant') {
     return null;
@@ -365,8 +321,6 @@ export function WorkstationChatPane() {
     setIsPersistingModelSelection,
   } = useChatProviderModelState(disconnectedModelOption());
   const {
-    titlebarActionsHost,
-    setTitlebarActionsHost,
     isLoading,
     setIsLoading,
     isSubmittingBootstrap,
@@ -393,10 +347,7 @@ export function WorkstationChatPane() {
     setPendingDeleteMemoryId,
   } = useChatMemoryEditorState(defaultSageMemoryDraft());
   const [billingSummary, setBillingSummary] = useState<Record<string, unknown> | null>(null);
-  const [creditUsageHistory, setCreditUsageHistory] = useState<Record<string, unknown> | null>(null);
-  const [isCreditUsageHistoryLoading, setIsCreditUsageHistoryLoading] = useState(false);
-  const [titlebarCreditsOpen, setTitlebarCreditsOpen] = useState(false);
-  const titlebarCreditsRef = useRef<HTMLDivElement | null>(null);
+  const [workspaceAiRoute, setWorkspaceAiRoute] = useState<WorkspaceAiRoutePayload | null>(null);
   const submitInFlightRef = useRef(false);
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
   const streamAbortRequestedRef = useRef(false);
@@ -422,6 +373,7 @@ export function WorkstationChatPane() {
   const refreshProviderCatalog = useCallback(async () => {
     const payload = await services.queryClient.run('chat:provider-catalog', async () => {
       const profileRequest = services.client.listProviderProfiles().catch(() => ({ items: [] }));
+      const aiRouteRequest = services.client.getWorkspaceAiRoute().catch(() => null);
       const catalogRequest = (async () => {
         try {
           return await services.client.listProviderCatalog();
@@ -429,10 +381,11 @@ export function WorkstationChatPane() {
           return await services.client.listProviders();
         }
       })();
-      const [catalogPayload, profilesPayload] = await Promise.all([catalogRequest, profileRequest]);
+      const [catalogPayload, profilesPayload, aiRoutePayload] = await Promise.all([catalogRequest, profileRequest, aiRouteRequest]);
       return {
         catalogPayload,
         profilesPayload,
+        aiRoutePayload,
       };
     }).catch(() => null);
 
@@ -444,6 +397,7 @@ export function WorkstationChatPane() {
           ? current
           : normalizeChatModelOptions({ providers: [hostedCreditsFallbackProvider()] })
       ));
+      setWorkspaceAiRoute(null);
       return;
     }
 
@@ -457,6 +411,11 @@ export function WorkstationChatPane() {
     setProviderCatalog(nextCatalog.providers);
     setProviderProfiles(nextCatalog.profiles);
     setModelOptions(nextCatalog.options);
+    setWorkspaceAiRoute(
+      payload.aiRoutePayload && typeof payload.aiRoutePayload === 'object'
+        ? payload.aiRoutePayload as WorkspaceAiRoutePayload
+        : null,
+    );
   }, [services.client, services.queryClient]);
 
   const refreshToolingState = useCallback(async () => {
@@ -508,18 +467,6 @@ export function WorkstationChatPane() {
       return await services.client.getBillingSummary();
     }).catch(() => null);
     setBillingSummary(payload && typeof payload === 'object' ? payload : null);
-  }, [services.client, services.queryClient]);
-
-  const refreshCreditUsageHistory = useCallback(async () => {
-    setIsCreditUsageHistoryLoading(true);
-    try {
-      const payload = await services.queryClient.run('chat:credit-usage-history', async () => {
-        return await services.client.getCreditUsageHistory({ limit: 40 });
-      }).catch(() => null);
-      setCreditUsageHistory(payload && typeof payload === 'object' ? payload : null);
-    } finally {
-      setIsCreditUsageHistoryLoading(false);
-    }
   }, [services.client, services.queryClient]);
 
   const persistSelectedModelPreference = useCallback(async (nextModelId: string) => {
@@ -1096,13 +1043,6 @@ export function WorkstationChatPane() {
   }, [activeThreadId, bootstrap.workspace.id]);
 
   useEffect(() => {
-    if (typeof document === 'undefined') {
-      return;
-    }
-    setTitlebarActionsHost(document.getElementById('workstation-titlebar-actions-slot'));
-  }, []);
-
-  useEffect(() => {
     if (typeof window === 'undefined') {
       return undefined;
     }
@@ -1436,6 +1376,13 @@ export function WorkstationChatPane() {
     }
     return { label: 'Cloud AI', tone: 'neutral' as const };
   }, [localToolingOnline, selectedModelOption.uiSection, selectedProviderRecord]);
+  const workspaceAiRouteLabel = useMemo(() => {
+    const route = workspaceAiRoute?.workspaceDefault;
+    if (!route || typeof route !== 'object') {
+      return null;
+    }
+    return readString(route.label) || null;
+  }, [workspaceAiRoute]);
   const runtimeTrustZone = useMemo<ChatRuntimeTrustZone>(
     () => resolveRuntimeTrustZone(localRuntimeTarget, machineTrust),
     [localRuntimeTarget, machineTrust],
@@ -1452,14 +1399,6 @@ export function WorkstationChatPane() {
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
   );
-  const studioHref = useMemo(
-    () => routeManifest.routeIndex.studio?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/studio`,
-    [bootstrap.workspace.id, routeManifest.routeIndex.studio],
-  );
-  const studioCreateAgentHref = useMemo(() => {
-    const separator = studioHref.includes('?') ? '&' : '?';
-    return `${studioHref}${separator}createAgent=1`;
-  }, [studioHref]);
   const approvalsHref = useMemo(
     () => routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`,
     [bootstrap.workspace.id, routeManifest.routeIndex.approvals],
@@ -1490,27 +1429,6 @@ export function WorkstationChatPane() {
       }];
     }),
     [routeManifest.routeIndex],
-  );
-  const composerActionMenuItems = useMemo<ComposerActionMenuItem[]>(
-    () => [
-      {
-        id: 'create-business-agent',
-        title: 'Create Business Agent',
-        description: 'Create a worker for a customer, channel, or business workflow.',
-        onSelect: () => {
-          router.push(studioCreateAgentHref);
-        },
-      },
-      {
-        id: 'view-business-agents',
-        title: 'View Business Agents',
-        description: 'Open workers Sage can manage for business workflows.',
-        onSelect: () => {
-          router.push(studioHref);
-        },
-      },
-    ],
-    [router, studioCreateAgentHref, studioHref],
   );
   const gatewayHref = useMemo(
     () => routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/gateway`,
@@ -1583,8 +1501,7 @@ export function WorkstationChatPane() {
     setDraft('');
     switch (command.actionKind) {
       case 'open_usage':
-        setTitlebarCreditsOpen(true);
-        void refreshCreditUsageHistory();
+        setStatusMessage('Credits moved to the account menu.');
         return;
       case 'open_tools':
       case 'open_runtime':
@@ -1598,7 +1515,7 @@ export function WorkstationChatPane() {
       default:
         setStatusMessage(runtimeStatus.label);
     }
-  }, [integrationsHref, refreshBrowserGatewayReadiness, refreshCreditUsageHistory, router, runtimeStatus.label, setDraft, setStatusMessage]);
+  }, [integrationsHref, refreshBrowserGatewayReadiness, router, runtimeStatus.label, setDraft, setStatusMessage]);
   const handleWorkspaceCommandSelect = useCallback((command: SageWorkspaceCommandMetadata) => {
     setWorkspaceCommandPaletteOpen(false);
     if (command.routeId === 'approvals') {
@@ -1697,62 +1614,6 @@ export function WorkstationChatPane() {
     }),
     [draft, hostedCreditState, selectedExecutionPlacement, selectedModelOption],
   );
-  const titlebarCreditLabel = useMemo(() => {
-    if (hostedCreditState.monthlyCreditCap <= 0) {
-      return '0 credits';
-    }
-    return `${formatTitlebarCreditCount(hostedCreditState.monthlyCreditsRemaining)} credits`;
-  }, [hostedCreditState.monthlyCreditCap, hostedCreditState.monthlyCreditsRemaining]);
-  const titlebarCreditDetail = useMemo(() => {
-    if (hostedCreditState.monthlyCreditCap <= 0) {
-      return 'Empyralis credits are not active for this workspace.';
-    }
-    return `${Math.floor(hostedCreditState.monthlyCreditsRemaining).toLocaleString()} credits remaining. ${Math.floor(hostedCreditState.monthlyCreditCap).toLocaleString()} monthly refresh credits; ${Math.floor(hostedCreditState.creditBalanceCredits).toLocaleString()} rollover credits.`;
-  }, [hostedCreditState.creditBalanceCredits, hostedCreditState.monthlyCreditCap, hostedCreditState.monthlyCreditsRemaining]);
-  const recentThreadTitleById = useMemo(() => {
-    const lookup = new Map<string, string>();
-    for (const item of recentThreads) {
-      const threadId = readString(item.threadId);
-      const title = readString(item.title);
-      if (threadId && title) {
-        lookup.set(threadId, title);
-      }
-    }
-    return lookup;
-  }, [recentThreads]);
-  const creditUsageRows = useMemo<ChatCreditUsageHistoryRow[]>(() => {
-    const rawItems = Array.isArray(creditUsageHistory?.items) ? creditUsageHistory.items : [];
-    return rawItems
-      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-      .map((item, index) => {
-        const threadId = readString(item.thread_id);
-        const kind = readString(item.kind) || 'usage';
-        const credits = readNumber(item.credits) ?? 0;
-        const provider = readString(item.provider);
-        const model = readString(item.model);
-        const tokenCount = readNumber(item.total_tokens) ?? 0;
-        const fallbackLabel = kind === 'usage' ? 'Sage chat' : 'Credits';
-        const label = (threadId ? recentThreadTitleById.get(threadId) : null) || readString(item.label) || fallbackLabel;
-        const detailParts = [
-          formatCreditHistoryTime(readString(item.created_at) || null),
-          provider || null,
-          model || null,
-          tokenCount > 0 ? `${Math.round(tokenCount).toLocaleString()} tokens` : null,
-        ].filter(Boolean);
-        return {
-          id: readString(item.id) || `${kind}-${index}`,
-          label,
-          meta: detailParts.join(' · ') || readString(item.source) || 'Credit event',
-          credits,
-          createdAt: readString(item.created_at) || null,
-          kind,
-        };
-      });
-  }, [creditUsageHistory, recentThreadTitleById]);
-  const creditPlanLabel = readString(readObject(creditUsageHistory?.plan).label)
-    || readString(readObject(billingSummary?.subscription).label)
-    || 'Free';
-  const perChatCreditHistoryAvailable = creditUsageHistory ? creditUsageHistory.per_chat_available !== false : true;
   const showContextStrip = false;
   const showHeaderReadinessStrip = false;
 
@@ -1936,30 +1797,6 @@ export function WorkstationChatPane() {
   }, [isSending, stopStreamingResponse]);
 
   useEffect(() => {
-    if (!titlebarCreditsOpen) {
-      return undefined;
-    }
-    void refreshCreditUsageHistory();
-    const onPointerDown = (event: PointerEvent) => {
-      if (titlebarCreditsRef.current?.contains(event.target as Node)) {
-        return;
-      }
-      setTitlebarCreditsOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setTitlebarCreditsOpen(false);
-      }
-    };
-    window.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [refreshCreditUsageHistory, titlebarCreditsOpen]);
-
-  useEffect(() => {
     if (!isSending) {
       return undefined;
     }
@@ -2003,8 +1840,7 @@ export function WorkstationChatPane() {
       setDraft('');
       switch (sessionCommand.actionKind) {
         case 'open_usage':
-          setTitlebarCreditsOpen(true);
-          void refreshCreditUsageHistory();
+          setStatusMessage('Credits moved to the account menu.');
           break;
         case 'open_tools':
         case 'open_runtime':
@@ -2487,10 +2323,7 @@ export function WorkstationChatPane() {
       if (normalizedResponse.status !== 'incomplete') {
         services.queryClient.invalidate('chat:billing-summary');
         services.queryClient.invalidate('chat:credit-usage-history');
-        await Promise.allSettled([
-          refreshBillingSummary(),
-          refreshCreditUsageHistory(),
-        ]);
+        await refreshBillingSummary();
       }
     } catch (error) {
       updatePendingUserMessage(null);
@@ -2595,81 +2428,7 @@ export function WorkstationChatPane() {
   };
 
   return (
-    <>
-      {titlebarActionsHost ? createPortal(
-        <>
-          {titlebarCreditLabel ? (
-            <div className="workstation-titlebar__credits" ref={titlebarCreditsRef}>
-              <button
-                type="button"
-                className="workstation-titlebar__credits-trigger"
-                aria-label={titlebarCreditDetail}
-                aria-expanded={titlebarCreditsOpen}
-                onClick={() => setTitlebarCreditsOpen((value) => !value)}
-              >
-                <Coins size={14} strokeWidth={2.05} aria-hidden="true" />
-                <span>{titlebarCreditLabel}</span>
-              </button>
-              {titlebarCreditsOpen ? (
-                <section className="workstation-titlebar__credits-popover" aria-label="Usage">
-                  <header className="workstation-titlebar__credits-header">
-                    <div>
-                      <p>Usage</p>
-                      <strong>{creditPlanLabel}</strong>
-                    </div>
-                    <button type="button" onClick={refreshCreditUsageHistory}>
-                      Refresh
-                    </button>
-                  </header>
-                  <div className="workstation-titlebar__credits-card">
-                    <div className="workstation-titlebar__credits-balance-row">
-                      <span>Credits</span>
-                      <strong>{formatTitlebarCreditCount(hostedCreditState.monthlyCreditsRemaining)}</strong>
-                    </div>
-                    <div className="workstation-titlebar__credits-balance-row">
-                      <span>Monthly refresh</span>
-                      <strong>{formatTitlebarCreditCount(hostedCreditState.monthlyCreditCap)}</strong>
-                    </div>
-                  </div>
-                  <div className="workstation-titlebar__credits-history">
-                    <div className="workstation-titlebar__credits-history-title">
-                      <strong>Usage history</strong>
-                      <span>UTC</span>
-                    </div>
-                    {isCreditUsageHistoryLoading ? (
-                      <p className="workstation-titlebar__credits-empty">Loading usage...</p>
-                    ) : creditUsageRows.length > 0 ? (
-                      creditUsageRows.slice(0, 8).map((row) => (
-                        <div className="workstation-titlebar__credits-row" key={row.id}>
-                          <div>
-                            <strong>{row.label}</strong>
-                            <span>{row.meta}</span>
-                          </div>
-                          <b className={row.credits >= 0 ? 'is-positive' : 'is-negative'}>
-                            {formatSignedCredits(row.credits)}
-                          </b>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="workstation-titlebar__credits-empty">
-                        No credit usage has been recorded for this workspace yet.
-                      </p>
-                    )}
-                    {!perChatCreditHistoryAvailable ? (
-                      <p className="workstation-titlebar__credits-note">
-                        Per-chat history starts after hosted Sage usage reaches the billing ledger.
-                      </p>
-                    ) : null}
-                  </div>
-                </section>
-              ) : null}
-            </div>
-          ) : null}
-        </>,
-        titlebarActionsHost,
-      ) : null}
-
-      <main
+    <main
         data-workstation-surface="chat"
         data-workstation-chat="pane"
         className={`app-chat-page app-chat-page--surface${showFirstImpression ? ' app-chat-page--first-impression' : ''}`}
@@ -2913,13 +2672,12 @@ export function WorkstationChatPane() {
         onStop={stopStreamingResponse}
         slashCommands={sageSlashCommands}
         onSlashCommandSelect={handleSlashCommandSelect}
-        actionMenuItems={composerActionMenuItems}
         onOpenIntegrations={() => {
-          router.push(integrationsHref);
+          router.push(`${integrationsHref}?section=ai-runtime`);
         }}
         model={effectiveSelectedModel}
         modelOptions={composerModelOptions}
-        modelProviderLabel={runtimeStatus.label}
+        modelProviderLabel={workspaceAiRouteLabel ?? runtimeStatus.label}
         onModelChange={handleModelChange}
         reasoningEffort={reasoningEffort}
         reasoningOptions={reasoningOptions}
@@ -2945,6 +2703,10 @@ export function WorkstationChatPane() {
         providerSummary={{
           label: activeProviderSummary.label,
           actionLabel: 'Set up in Connections',
+        }}
+        computerStatus={{
+          online: gatewayToolingOnline,
+          label: gatewayToolingOnline ? 'Computer online' : 'Computer offline',
         }}
         smallModelWarning={smallModelWarningVisible
           ? "You're using a small model. For best results with tools and complex tasks, we recommend switching to a larger model (7B+)."
@@ -3167,7 +2929,6 @@ export function WorkstationChatPane() {
           setPendingDeleteMemoryId(null);
         }}
       />
-      </main>
-    </>
+    </main>
   );
 }

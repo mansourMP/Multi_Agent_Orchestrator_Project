@@ -5676,6 +5676,37 @@ textarea.app-field.app-chat-composer__textarea:focus-visible {
   align-items: center;
 }
 
+.app-chat-composer__computer-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 4px;
+  color: var(--muted-foreground);
+  font-size: var(--app-font-13);
+  font-weight: var(--app-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.app-chat-composer__computer-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--app-danger);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-danger) 10%, transparent);
+}
+
+.app-chat-composer__computer-status--online .app-chat-composer__computer-status-dot {
+  background: var(--app-success);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-success) 11%, transparent);
+}
+
+.app-chat-composer__computer-status--offline .app-chat-composer__computer-status-dot {
+  background: var(--app-danger);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-danger) 10%, transparent);
+}
+
 .app-chat-composer__model-popover {
   position: absolute;
   right: 0;

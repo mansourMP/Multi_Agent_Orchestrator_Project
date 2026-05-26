@@ -14,6 +14,10 @@ from server_modules.transparency_settings_service import (
     get_transparency_settings,
     put_transparency_settings,
 )
+from server_modules.workspace_ai_route_service import (
+    build_workspace_ai_route_payload,
+    update_workspace_default_ai_route,
+)
 from server_modules.workspace_channel_operations_service import (
     build_workspace_channel_operations,
 )
@@ -178,6 +182,16 @@ class WorkspaceProviderCredentialDeleteRequest(BaseModel):
 
 class WorkspaceRoutingUpdateRequest(BaseModel):
     admin_defaults: Optional[Dict[str, Any]] = None
+
+
+class WorkspaceAiRouteDefaultUpdateRequest(BaseModel):
+    route_id: Optional[str] = None
+    routeId: Optional[str] = None
+    kind: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    model_preset: Optional[str] = None
+    modelPreset: Optional[str] = None
 
 
 class WorkspaceTransparencySettingsUpdateRequest(BaseModel):
@@ -356,6 +370,43 @@ async def workspace_routing(
     return await workspace_admin_service.build_workspace_routing_payload(
         workspace_id=workspace_id,
         current_user=current_user,
+    )
+
+
+@router.get("/workspaces/{workspace_id}/ai-route")
+async def workspace_ai_route(
+    workspace_id: str,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="viewer",
+    )
+    return await build_workspace_ai_route_payload(resolved_workspace_id)
+
+
+@router.patch("/workspaces/{workspace_id}/ai-route/default")
+async def workspace_ai_route_default_update(
+    workspace_id: str,
+    body: WorkspaceAiRouteDefaultUpdateRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
+    return await update_workspace_default_ai_route(
+        workspace_id=resolved_workspace_id,
+        route_id=body.route_id or body.routeId,
+        kind=body.kind,
+        provider=body.provider,
+        model=body.model,
+        model_preset=body.model_preset or body.modelPreset,
     )
 
 

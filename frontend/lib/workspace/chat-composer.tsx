@@ -69,6 +69,11 @@ export type ComposerActionMenuItem = {
   onSelect: () => void;
 };
 
+export type ComposerComputerStatus = {
+  online: boolean;
+  label: string;
+};
+
 function isComposerOptionGroup(option: ComposerModelOption): option is ComposerOptionGroup {
   return 'options' in option;
 }
@@ -154,6 +159,7 @@ export function ChatComposer({
   onSlashCommandSelect,
   actionMenuItems = [],
   onVoiceTranscribe,
+  computerStatus = null,
 }: {
   draft: string;
   onDraftChange: (nextDraft: string) => void;
@@ -184,6 +190,7 @@ export function ChatComposer({
   onSlashCommandSelect?: (command: ComposerSlashCommand) => void;
   actionMenuItems?: readonly ComposerActionMenuItem[];
   onVoiceTranscribe?: (audio: Blob) => Promise<string>;
+  computerStatus?: ComposerComputerStatus | null;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const actionLauncherRef = useRef<HTMLDivElement | null>(null);
@@ -223,6 +230,9 @@ export function ChatComposer({
     : selectedModelIsDefaultRoute && visibleModelOptions.length <= 1
       ? 'Connect AI'
       : rawSelectedModelLabel;
+  const visibleSelectedModelLabel = isHostedCreditsModel
+    ? `${selectedModelLabel} · Workspace AI`
+    : selectedModelLabel;
   const modelMenuOptions = isHostedCreditsModel && hostedCreditOptions.length > 0
     ? hostedCreditOptions
     : visibleModelOptions;
@@ -679,7 +689,7 @@ export function ChatComposer({
                 }}
               >
                 <Brain size={15} strokeWidth={2} aria-hidden="true" />
-                <span>{selectedModelLabel}</span>
+                <span>{visibleSelectedModelLabel}</span>
               </button>
               {modelPanelOpen ? (
                 <div
@@ -748,9 +758,25 @@ export function ChatComposer({
                       })}
                     </div>
                   </div>
-                  {modelMenuProviderLabel ? (
+                  {modelMenuProviderLabel || canOpenProviderPicker ? (
                     <div className="app-chat-composer__model-menu-section">
                       <div className="app-chat-composer__model-menu-separator" aria-hidden="true" />
+                      {modelMenuProviderLabel ? (
+                        <button
+                          type="button"
+                          className="app-chat-composer__model-menu-row app-chat-composer__model-menu-row--provider"
+                          disabled={controlsDisabled || busy || !canOpenProviderPicker}
+                          onClick={() => {
+                            setModelPanelOpen(false);
+                            onOpenIntegrations?.();
+                          }}
+                        >
+                          <span>
+                            <strong>{modelMenuProviderLabel}</strong>
+                          </span>
+                          <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="app-chat-composer__model-menu-row app-chat-composer__model-menu-row--provider"
@@ -761,7 +787,8 @@ export function ChatComposer({
                         }}
                       >
                         <span>
-                          <strong>{modelMenuProviderLabel}</strong>
+                          <strong>Manage AI route</strong>
+                          <small>Provider accounts, local models, budgets, and fallback.</small>
                         </span>
                         <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
                       </button>
@@ -776,6 +803,19 @@ export function ChatComposer({
                 </div>
               ) : null}
             </div>
+            {computerStatus ? (
+              <span
+                className={joinClassNames(
+                  'app-chat-composer__computer-status',
+                  computerStatus.online
+                    ? 'app-chat-composer__computer-status--online'
+                    : 'app-chat-composer__computer-status--offline',
+                )}
+              >
+                <span className="app-chat-composer__computer-status-dot" aria-hidden="true" />
+                <span>{computerStatus.label}</span>
+              </span>
+            ) : null}
           </div>
 
           <button

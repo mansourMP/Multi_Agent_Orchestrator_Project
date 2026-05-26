@@ -58,6 +58,35 @@ export type WorkstationTurnStreamAbortHandle = {
   signal: AbortSignal;
 };
 
+export type WorkspaceAiRouteKind =
+  | 'empyralis_managed'
+  | 'user_api_key'
+  | 'local_model'
+  | 'enterprise_gateway';
+
+export type WorkspaceAiRouteRecord = Record<string, unknown> & {
+  id?: string | null;
+  kind?: WorkspaceAiRouteKind | string | null;
+  label?: string | null;
+  publicLabel?: string | null;
+  description?: string | null;
+  providerId?: string | null;
+  modelId?: string | null;
+  modelPreset?: string | null;
+  billingSource?: string | null;
+  runtimeTarget?: string | null;
+  enabled?: boolean | null;
+  status?: string | null;
+};
+
+export type WorkspaceAiRoutePayload = Record<string, unknown> & {
+  workspaceId?: string | null;
+  workspaceDefault?: WorkspaceAiRouteRecord | null;
+  availableRoutes?: WorkspaceAiRouteRecord[] | null;
+  usedBy?: Record<string, unknown>[] | null;
+  budgets?: Record<string, unknown> | null;
+};
+
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -831,6 +860,8 @@ export type WorkstationClientPaths = {
   mcpToolApprove: (serverId: string) => string;
   providers: string;
   providersCatalog: string;
+  workspaceAiRoute: string;
+  workspaceAiRouteDefault: string;
   providerModels: (providerId: string, profileId?: string | null) => string;
   workspaceProviderModelsRefresh: (providerId: string) => string;
   workspaceTransparencySettings: string;
@@ -1080,6 +1111,14 @@ export type WorkstationClient = {
   deleteMcpServer: (options: { serverId: string }) => Promise<Record<string, unknown> | null>;
   listProviders: () => Promise<Record<string, unknown>>;
   listProviderCatalog: () => Promise<Record<string, unknown>>;
+  getWorkspaceAiRoute: () => Promise<WorkspaceAiRoutePayload>;
+  updateWorkspaceAiRouteDefault: (options: {
+    routeId?: string | null;
+    kind?: WorkspaceAiRouteKind | null;
+    provider?: string | null;
+    model?: string | null;
+    modelPreset?: string | null;
+  }) => Promise<WorkspaceAiRoutePayload>;
   listProviderModels: (options: { providerId: string; profileId?: string | null }) => Promise<Record<string, unknown>>;
   refreshWorkspaceProviderModels: (options: { providerId: string }) => Promise<Record<string, unknown> | null>;
   getWorkspaceTransparencySettings: () => Promise<Record<string, unknown>>;
@@ -1568,6 +1607,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/agent-registry/mcp/servers/${encodeURIComponent(serverId)}/tools/approve`,
     providers: `/api/providers${buildQueryString({ workspace_id: workspaceId })}`,
     providersCatalog: `/api/providers/catalog${buildQueryString({ workspace_id: workspaceId })}`,
+    workspaceAiRoute: `/api/workspaces/${encodeURIComponent(workspaceId)}/ai-route`,
+    workspaceAiRouteDefault: `/api/workspaces/${encodeURIComponent(workspaceId)}/ai-route/default`,
     providerModels: (providerId: string, profileId: string | null = null) =>
       `/api/providers/${encodeURIComponent(providerId)}/models${buildQueryString({ workspace_id: workspaceId, profile_id: profileId })}`,
     workspaceProviderModelsRefresh: (providerId: string) =>
@@ -3020,6 +3061,33 @@ export function createWorkstationClient(
         path: paths.providersCatalog,
         policy: PROVIDER_READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    getWorkspaceAiRoute: () =>
+      requestJson<WorkspaceAiRoutePayload>({
+        path: paths.workspaceAiRoute,
+        policy: PROVIDER_READ_REQUEST_POLICY,
+      }) as Promise<WorkspaceAiRoutePayload>,
+    updateWorkspaceAiRouteDefault: ({
+      routeId = null,
+      kind = null,
+      provider = null,
+      model = null,
+      modelPreset = null,
+    }) =>
+      requestJson<WorkspaceAiRoutePayload>({
+        path: paths.workspaceAiRouteDefault,
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            routeId: routeId ?? undefined,
+            kind: kind ?? undefined,
+            provider: provider ?? undefined,
+            model: model ?? undefined,
+            modelPreset: modelPreset ?? undefined,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }) as Promise<WorkspaceAiRoutePayload>,
     listProviderModels: ({ providerId, profileId = null }: { providerId: string; profileId?: string | null }) =>
       requestJson<Record<string, unknown>>({
         path: paths.providerModels(providerId, profileId),

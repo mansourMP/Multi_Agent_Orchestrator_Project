@@ -48,15 +48,42 @@ import {
 
 export const studioPaneCache = new Map<string, StudioPaneCache>();
 
+type StudioPaneCacheListener = (workspaceId: string, cache: StudioPaneCache) => void;
+
+const studioPaneCacheListeners = new Set<StudioPaneCacheListener>();
+
+export const STUDIO_PANE_REFRESH_EVENT = 'empyralis:studio-pane-refresh';
+
+function notifyStudioPaneCacheListeners(workspaceId: string): void {
+  setTimeout(() => {
+    const cache = studioPaneCache.get(workspaceId);
+    if (!cache) {
+      return;
+    }
+    Array.from(studioPaneCacheListeners).forEach((listener) => listener(workspaceId, cache));
+  }, 0);
+}
+
+export function subscribeStudioPaneCache(listener: StudioPaneCacheListener): () => void {
+  studioPaneCacheListeners.add(listener);
+  return () => {
+    studioPaneCacheListeners.delete(listener);
+  };
+}
+
 export function updateStudioPaneCache(workspaceId: string, partial: Partial<StudioPaneCache>) {
   const current = studioPaneCache.get(workspaceId);
-  studioPaneCache.set(workspaceId, {
+  const nextCache = {
     providerCatalog: current?.providerCatalog ?? [],
     agents: current?.agents ?? [],
+    connectedExternalAgents: current?.connectedExternalAgents ?? [],
+    runtimeAttachments: current?.runtimeAttachments ?? [],
     connectorVaultIds: current?.connectorVaultIds ?? [],
     agentMetricsById: current?.agentMetricsById ?? {},
     agentAnalyticsById: current?.agentAnalyticsById ?? {},
     selectedAgentId: current?.selectedAgentId ?? null,
+    selectedExternalAgentId: current?.selectedExternalAgentId ?? null,
+    selectedAgentComputerId: current?.selectedAgentComputerId ?? null,
     overlayAgentId: null,
     selectedAgentDetail: current?.selectedAgentDetail ?? null,
     selectedAgentAnalytics: current?.selectedAgentAnalytics ?? null,
@@ -64,8 +91,19 @@ export function updateStudioPaneCache(workspaceId: string, partial: Partial<Stud
     conversations: current?.conversations ?? [],
     selectedSessionId: current?.selectedSessionId ?? null,
     selectedTranscript: current?.selectedTranscript ?? null,
+    isAgentListPriming: current?.isAgentListPriming ?? false,
+    isAgentListUnavailable: current?.isAgentListUnavailable ?? false,
     ...partial,
-  });
+  };
+  studioPaneCache.set(workspaceId, nextCache);
+  notifyStudioPaneCacheListeners(workspaceId);
+}
+
+export function requestStudioPaneRefresh(workspaceId: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(STUDIO_PANE_REFRESH_EVENT, { detail: { workspaceId } }));
 }
 
 export function readString(value: unknown, fallback = ''): string {

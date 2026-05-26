@@ -40,8 +40,8 @@ const AI_ROUTE_DETAILS: Record<WizardState['aiSource'], {
 }> = {
   empyralis_credits: {
     audience: 'Recommended',
-    status: 'Managed credits',
-    description: 'Best for normal Studio users. Empyralis handles the provider route and bills against workspace credits.',
+    status: 'Workspace default',
+    description: 'Best for normal Studio users. The agent inherits the workspace AI route managed in Connections.',
   },
   workspace_api_key: {
     audience: 'Bring your own key',
@@ -54,9 +54,9 @@ const AI_ROUTE_DETAILS: Record<WizardState['aiSource'], {
     description: 'Best for technical workspaces that operate a local or self-hosted model runtime.',
   },
   subscription_passthrough: {
-    audience: 'Personal subscription',
-    status: 'Policy-gated route',
-    description: 'Best only when an eligible external subscription route is allowed for this workspace.',
+    audience: 'Enterprise',
+    status: 'Gateway route',
+    description: 'Best only when this workspace has an approved enterprise AI gateway route.',
   },
 };
 
@@ -150,14 +150,14 @@ export function AgentAiSettingsSections({
     ?? STUDIO_AI_SOURCE_OPTIONS[0];
   const selectedRouteDetail = AI_ROUTE_DETAILS[selectedSourceOption.value];
   const providerLabel = usesEmpyralisCredits
-    ? 'Empyralis credits'
+    ? 'Workspace default'
     : usesSubscriptionPassthrough
-      ? selectedProvider?.label ?? 'Eligible subscription'
+      ? selectedProvider?.label ?? 'Enterprise gateway'
       : selectedProvider?.label ?? (usesLocalModel ? 'Connect Agent Computer' : 'Choose provider');
   const providerHint = usesEmpyralisCredits
-    ? 'Empyralis manages the provider behind platform credits.'
+    ? 'Uses the workspace AI route from Connections. Most agents should inherit this.'
     : usesSubscriptionPassthrough
-      ? 'Uses an eligible external subscription when available.'
+      ? 'Uses an approved enterprise AI gateway when available.'
       : usesLocalModel
         ? 'Uses a local or self-hosted model provider from an Agent Computer.'
         : 'Uses a workspace credential shared across this workspace (not an agent-private secret).';
@@ -176,6 +176,11 @@ export function AgentAiSettingsSections({
       aria-busy={isLoadingProviderCatalog}
     >
       <section className="studio-ai-settings__route-overview" aria-label="AI route options">
+        <section className="studio-ai-settings__inheritance">
+          <span>Default behavior</span>
+          <strong>Use workspace default</strong>
+          <p>Provider setup belongs in Connections → AI & Runtime. Studio agents only override the route when there is a specific business reason.</p>
+        </section>
         <section className="studio-ai-settings__selected-card">
           <div className="studio-ai-settings__selected-copy">
             <span>Selected route</span>

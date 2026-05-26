@@ -124,10 +124,14 @@ export type AgentAnalyticsSnapshot = {
 export type StudioPaneCache = {
   providerCatalog: ProviderCatalogSnapshot[];
   agents: DeployedAgentRecord[];
+  connectedExternalAgents: StudioConnectedExternalAgent[];
+  runtimeAttachments: RuntimeAttachmentSnapshot[];
   connectorVaultIds: string[];
   agentMetricsById: Record<string, AgentOperationalMetrics>;
   agentAnalyticsById: Record<string, AgentAnalyticsSnapshot>;
   selectedAgentId: string | null;
+  selectedExternalAgentId: string | null;
+  selectedAgentComputerId: string | null;
   overlayAgentId: string | null;
   selectedAgentDetail: DeployedAgentRecord | null;
   selectedAgentAnalytics: AgentAnalyticsSnapshot | null;
@@ -135,6 +139,8 @@ export type StudioPaneCache = {
   conversations: DeployedAgentConversationRecord[];
   selectedSessionId: string | null;
   selectedTranscript: DeployedAgentConversationDetail | null;
+  isAgentListPriming: boolean;
+  isAgentListUnavailable: boolean;
 };
 
 export type DetailConfigDraft = Pick<

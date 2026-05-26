@@ -1372,9 +1372,10 @@ test.describe('deployed agents surface', () => {
     await expect(surface).toContainText(/OpenClaw answered privately/i);
     expect(externalChatBodies).toHaveLength(1);
     expect(externalChatBodies[0].workspace_id).toBe('ws-1');
-    await page.getByRole('tab', { name: /results/i }).click();
+    await page.getByRole('button', { name: /manage connection/i }).click();
+    await page.getByRole('button', { name: /^results$/i }).click();
     await expect(surface).toContainText(/sub-agents/i);
-    await expect(surface).toContainText(/actions declared, approval support not enabled/i);
+    await expect(surface).toContainText(/actions are declared but not enabled/i);
     await page.getByRole('button', { name: /^load$/i }).first().click();
     await expect(surface).toContainText(/research worker/i);
     await expect(surface).toContainText(/external agent sub agent/i);
@@ -1383,6 +1384,12 @@ test.describe('deployed agents surface', () => {
     await expect(surface).toContainText(/workflow finished/i);
     await expect(surface).toContainText(/external-owned/i);
     await expect(surface).toContainText(/external agent event/i);
+    await expect(surface).not.toContainText(/add source/i);
+    await page.getByRole('button', { name: /^integrations$/i }).click();
+    await page.getByRole('button', { name: /connect capability/i }).click();
+    await expect(surface).toContainText(/add sections through the external manifest/i);
+    await expect(surface).toContainText(/backend proxy, never from the browser/i);
+    await page.getByRole('button', { name: /^close$/i }).click();
     await surface.locator('.studio-agents-nav__agent').filter({ hasText: /laptop local agent/i }).click();
     await expect(surface).toContainText(/agent computer/i);
     await expect(surface).toContainText(/mansur macbook/i);

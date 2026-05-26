@@ -15,7 +15,7 @@ import {
 
 import { ListDetailPanel } from '@/lib/ui/list-detail';
 import { AnimatePresence, MotionTabPanel } from '@/lib/ui/motion';
-import { AppButton, AppSurfaceStat, AppSurfaceStatGrid, AppTextarea, joinClassNames } from '@/lib/ui/primitives';
+import { AppButton, AppModal, AppSurfaceStat, AppSurfaceStatGrid, AppTextarea, joinClassNames } from '@/lib/ui/primitives';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
@@ -95,6 +95,16 @@ const AGENT_SECTION_ICONS: Record<SpecialistOverlayTabId, LucideIcon> = {
   connectors: Cable,
   analytics: BarChart3,
 };
+
+type AgentPrimaryTabId = Extract<SpecialistOverlayTabId, 'overview' | 'chat'>;
+type AgentSetupTabId = Exclude<SpecialistOverlayTabId, AgentPrimaryTabId>;
+
+function isAgentSetupTabId(tabId: SpecialistOverlayTabId): tabId is AgentSetupTabId {
+  return tabId !== 'overview' && tabId !== 'chat';
+}
+
+const AGENT_PRIMARY_TABS = SPECIALIST_OVERLAY_TABS.filter((tab) => !isAgentSetupTabId(tab.id));
+const AGENT_SETUP_TABS = SPECIALIST_OVERLAY_TABS.filter((tab) => isAgentSetupTabId(tab.id));
 
 function isSupportedKnowledgeFile(file: File): boolean {
   const name = file.name.toLowerCase();
@@ -189,6 +199,8 @@ export const AgentDetailView = memo(({
   const [knowledgeSourceInput, setKnowledgeSourceInput] = useState('');
   const [knowledgeFileError, setKnowledgeFileError] = useState<string | null>(null);
   const [isUploadingKnowledgeFile, setIsUploadingKnowledgeFile] = useState(false);
+  const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
+  const [setupModalTab, setSetupModalTab] = useState<AgentSetupTabId>('knowledge');
   const knowledgeFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -196,6 +208,13 @@ export const AgentDetailView = memo(({
     setKnowledgeFileError(null);
     setIsUploadingKnowledgeFile(false);
   }, [workspaceId, selectedAgentId]);
+
+  useEffect(() => {
+    if (currentStudioSubview === 'agents' && isAgentSetupTabId(overlayTab)) {
+      setSetupModalTab(overlayTab);
+      setIsSetupModalOpen(true);
+    }
+  }, [currentStudioSubview, overlayTab]);
 
   const selectedAgentRuntimePlacement = useMemo(() => {
     const config = readRecord(selectedAgent?.config);
@@ -506,6 +525,27 @@ export const AgentDetailView = memo(({
     }
   };
 
+  const openSetupModal = (tabId: AgentSetupTabId = isAgentSetupTabId(overlayTab) ? overlayTab : 'knowledge') => {
+    setSetupModalTab(tabId);
+    setIsSetupModalOpen(true);
+  };
+
+  const closeSetupModal = () => {
+    setIsSetupModalOpen(false);
+    if (isAgentSetupTabId(overlayTab)) {
+      onSelectTab('overview');
+    }
+  };
+
+  const selectAgentSection = (tabId: SpecialistOverlayTabId) => {
+    if (isAgentSetupTabId(tabId)) {
+      openSetupModal(tabId);
+      return;
+    }
+    setIsSetupModalOpen(false);
+    onSelectTab(tabId);
+  };
+
   if (!selectedAgent) {
     return (
       <div className="studio-agent-detail-empty" aria-label="Agent detail">
@@ -517,69 +557,89 @@ export const AgentDetailView = memo(({
     );
   }
 
-  const showSectionRail = currentStudioSubview === 'agents';
+  const showAgentTopbar = currentStudioSubview === 'agents';
+  const activeAgentTopTab: AgentPrimaryTabId = overlayTab === 'chat' ? 'chat' : 'overview';
 
   return (
     <div className="app-stack-4 studio-agent-detail-motion">
       <div className={joinClassNames(
         'studio-agent-detail-layout',
-        showSectionRail && 'studio-agent-detail-layout--with-rail',
+        showAgentTopbar && 'studio-agent-detail-layout--with-topbar',
         currentStudioSubview !== 'agents' && 'studio-agent-detail-layout--single',
       )}>
-        {showSectionRail ? (
-          <nav className="studio-agent-detail-tabs studio-agent-detail-tabs--rail" role="tablist" aria-label="Business Agent sections">
-            {SPECIALIST_OVERLAY_TABS.map((tab) => {
-              const SectionIcon = AGENT_SECTION_ICONS[tab.id];
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  className={joinClassNames(
-                    'studio-agent-detail-tabs__button',
-                    overlayTab === tab.id && 'studio-agent-detail-tabs__button--active',
-                  )}
-                  aria-label={tab.label}
-                  aria-selected={overlayTab === tab.id}
-                  title={tab.label}
-                  onClick={() => onSelectTab(tab.id)}
-                >
-                  <SectionIcon size={15} strokeWidth={2} aria-hidden="true" />
-                  <span>{tab.label}</span>
-                </button>
-              );
-            })}
-          </nav>
+        {showAgentTopbar ? (
+          <div className="studio-agent-detail-topbar">
+            <nav className="studio-agent-detail-tabs studio-agent-detail-tabs--topbar" role="tablist" aria-label="Business Agent sections">
+              {AGENT_PRIMARY_TABS.map((tab) => {
+                const SectionIcon = AGENT_SECTION_ICONS[tab.id];
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    className={joinClassNames(
+                      'studio-agent-detail-tabs__button',
+                      activeAgentTopTab === tab.id && 'studio-agent-detail-tabs__button--active',
+                    )}
+                    aria-label={tab.label}
+                    aria-selected={activeAgentTopTab === tab.id}
+                    title={tab.label}
+                    onClick={() => selectAgentSection(tab.id)}
+                  >
+                    <SectionIcon size={15} strokeWidth={2} aria-hidden="true" />
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+            <AppButton type="button" tone="secondary" onClick={() => openSetupModal()}>
+              Edit setup
+            </AppButton>
+          </div>
         ) : null}
-        <div className="studio-agent-detail-content">
-        <AnimatePresence mode="wait" initial={false}>
-              {currentStudioSubview === 'agents' && overlayTab === 'chat' && (
-        <MotionTabPanel key="chat" className="studio-agent-motion-panel">
-        <ListDetailPanel
-          className="studio-panel studio-panel--detail studio-panel--chat"
-          hideHeaderText
-          eyebrow="Chat"
-          title="Workspace chat"
-          subtitle="Chat privately with this agent. Messages stay in Studio and never send to customer channels."
-        >
-          {selectedAgentId && workspaceId ? (
-            <AgentPlaygroundPanel
-              deployedAgentId={selectedAgentId}
-              workspaceId={workspaceId}
-              client={services.client}
-              runtimeMode={testRuntimeModeForPlacement(selectedAgentRuntimePlacement)}
-              session={testChatSession}
-              onSessionChange={onTestChatSessionChange}
-              onResetSession={onResetTestChatSession}
-            />
-          ) : (
-            <EmptyPanel title="Agent is not ready yet" body="Save the agent first, then chat with it here." />
-          )}
-        </ListDetailPanel>
-        </MotionTabPanel>
-      )}
 
-      {currentStudioSubview === 'agents' && overlayTab === 'knowledge' && (
+        <AppModal
+          open={isSetupModalOpen}
+          title="Edit setup"
+          description="Configure the agent sections that do not need to stay in the main canvas."
+          className="studio-agent-setup-modal"
+          onOpenChange={(open) => {
+            if (!open) {
+              closeSetupModal();
+            } else {
+              setIsSetupModalOpen(true);
+            }
+          }}
+          actions={(
+            <AppButton type="button" tone="ghost" onClick={closeSetupModal}>
+              Close
+            </AppButton>
+          )}
+        >
+          <div className="studio-agent-setup-modal__layout">
+            <nav className="studio-agent-setup-modal__nav" aria-label="Edit setup sections">
+              {AGENT_SETUP_TABS.map((tab) => {
+                const SectionIcon = AGENT_SECTION_ICONS[tab.id];
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={joinClassNames(
+                      'studio-agent-setup-modal__nav-item',
+                      setupModalTab === tab.id && 'studio-agent-setup-modal__nav-item--active',
+                    )}
+                    aria-current={setupModalTab === tab.id ? 'page' : undefined}
+                    onClick={() => setSetupModalTab(tab.id as AgentSetupTabId)}
+                  >
+                    <SectionIcon size={15} strokeWidth={2} aria-hidden="true" />
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+            <div className="studio-agent-setup-modal__content">
+              <AnimatePresence mode="wait" initial={false}>
+      {isSetupModalOpen && setupModalTab === 'knowledge' && (
         <MotionTabPanel key="knowledge" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -747,14 +807,14 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
 
-      {currentStudioSubview === 'agents' && overlayTab === 'ai' && (
+      {isSetupModalOpen && setupModalTab === 'ai' && (
         <MotionTabPanel key="ai" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           hideHeaderText
           eyebrow="Model"
           title="AI route"
-          subtitle="Choose whether this agent uses Empyralis credits or a connected API account."
+          subtitle="Uses the workspace AI route by default. Override only when this agent needs a different provider, local model, or budget."
           actions={detailConfigDraft ? (
             <AppButton type="button" onClick={onSaveDetailConfig} disabled={isSavingDetailConfig}>
               {isSavingDetailConfig ? 'Saving…' : 'Save'}
@@ -789,7 +849,7 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
 
-      {currentStudioSubview === 'agents' && overlayTab === 'tools' && (
+      {isSetupModalOpen && setupModalTab === 'tools' && (
         <MotionTabPanel key="tools" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -807,7 +867,7 @@ export const AgentDetailView = memo(({
             <>
               <AgentActionCapabilitySections
                 selectedToolIds={detailConfigDraft.selectedToolIds}
-                onOpenIntegrations={() => onSelectTab('connectors')}
+                onOpenIntegrations={() => setSetupModalTab('connectors')}
                 onToggleTool={(toolId) => {
                   const nextSelected = detailConfigDraft.selectedToolIds.includes(toolId)
                     ? detailConfigDraft.selectedToolIds.filter((item) => item !== toolId)
@@ -821,7 +881,7 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
 
-      {currentStudioSubview === 'agents' && overlayTab === 'memory' && (
+      {isSetupModalOpen && setupModalTab === 'memory' && (
         <MotionTabPanel key="memory" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -884,7 +944,7 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
 
-      {currentStudioSubview === 'agents' && overlayTab === 'connectors' && (
+      {isSetupModalOpen && setupModalTab === 'connectors' && (
         <MotionTabPanel key="connectors" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -906,7 +966,7 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
 
-      {currentStudioSubview === 'agents' && overlayTab === 'analytics' && (
+      {isSetupModalOpen && setupModalTab === 'analytics' && (
         <MotionTabPanel key="analytics" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -923,7 +983,40 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
 
-      {(currentStudioSubview === 'deploy' || (currentStudioSubview === 'agents' && overlayTab === 'overview')) && (
+              </AnimatePresence>
+            </div>
+          </div>
+        </AppModal>
+
+        <div className="studio-agent-detail-content">
+        <AnimatePresence mode="wait" initial={false}>
+              {currentStudioSubview === 'agents' && activeAgentTopTab === 'chat' && (
+        <MotionTabPanel key="chat" className="studio-agent-motion-panel">
+        <ListDetailPanel
+          className="studio-panel studio-panel--detail studio-panel--chat"
+          hideHeaderText
+          eyebrow="Chat"
+          title="Workspace chat"
+          subtitle="Chat privately with this agent. Messages stay in Studio and never send to customer channels."
+        >
+          {selectedAgentId && workspaceId ? (
+            <AgentPlaygroundPanel
+              deployedAgentId={selectedAgentId}
+              workspaceId={workspaceId}
+              client={services.client}
+              runtimeMode={testRuntimeModeForPlacement(selectedAgentRuntimePlacement)}
+              session={testChatSession}
+              onSessionChange={onTestChatSessionChange}
+              onResetSession={onResetTestChatSession}
+            />
+          ) : (
+            <EmptyPanel title="Agent is not ready yet" body="Save the agent first, then chat with it here." />
+          )}
+        </ListDetailPanel>
+        </MotionTabPanel>
+      )}
+
+      {(currentStudioSubview === 'deploy' || (currentStudioSubview === 'agents' && activeAgentTopTab === 'overview')) && (
         <MotionTabPanel key="overview" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -955,10 +1048,10 @@ export const AgentDetailView = memo(({
                     <span>{selectedAgentModeLabel}</span>
                   </div>
                   <div className="studio-agent-overview__hero-actions">
-                    <AppButton type="button" onClick={() => onSelectTab('chat')}>
+                    <AppButton type="button" onClick={() => selectAgentSection('chat')}>
                       Chat with this agent
                     </AppButton>
-                    <AppButton type="button" tone="secondary" onClick={onOpenEditWizard}>
+                    <AppButton type="button" tone="secondary" onClick={() => openSetupModal()}>
                       Edit setup
                     </AppButton>
                   </div>
@@ -997,7 +1090,7 @@ export const AgentDetailView = memo(({
                       key={item.label}
                       type="button"
                       className={joinClassNames('studio-agent-overview__checklist-card', item.ready && 'studio-agent-overview__checklist-card--ready')}
-                      onClick={() => onSelectTab(item.tab)}
+                      onClick={() => selectAgentSection(item.tab)}
                     >
                       <span className="studio-agent-overview__checklist-dot" />
                       <strong>{item.label}</strong>
@@ -1011,7 +1104,7 @@ export const AgentDetailView = memo(({
                 <section className="studio-agent-overview__group">
                   <div className="studio-agent-overview__group-head">
                     <strong>Identity & Purpose</strong>
-                    <button type="button" onClick={() => onSelectTab('knowledge')}>View instructions</button>
+                    <button type="button" onClick={() => selectAgentSection('knowledge')}>View instructions</button>
                   </div>
                   <div className="studio-agent-overview__card">
                     <span>Public name</span>
@@ -1039,7 +1132,7 @@ export const AgentDetailView = memo(({
                 <section className="studio-agent-overview__group">
                   <div className="studio-agent-overview__group-head">
                     <strong>Knowledge & Retrieval</strong>
-                    <button type="button" onClick={() => onSelectTab('knowledge')}>Test search</button>
+                    <button type="button" onClick={() => selectAgentSection('knowledge')}>Test search</button>
                   </div>
                   <div className="studio-agent-overview__card">
                     <span>Sources</span>
@@ -1060,7 +1153,7 @@ export const AgentDetailView = memo(({
                 <section className="studio-agent-overview__group">
                   <div className="studio-agent-overview__group-head">
                     <strong>Model & Route</strong>
-                    <button type="button" onClick={() => onSelectTab('ai')}>Change route</button>
+                    <button type="button" onClick={() => selectAgentSection('ai')}>Change route</button>
                   </div>
                   <div className="studio-agent-overview__card">
                     <span>Selected route</span>
@@ -1102,7 +1195,7 @@ export const AgentDetailView = memo(({
                     <span>Integrations</span>
                     <strong>Live Channels & Connectors</strong>
                   </div>
-                  <button type="button" className="studio-actions__link-button" onClick={() => onSelectTab('connectors')}>Manage integrations</button>
+                  <button type="button" className="studio-actions__link-button" onClick={() => selectAgentSection('connectors')}>Manage integrations</button>
                 </div>
                 <div className="studio-agent-overview__connector-strip">
                   {overlayConnectorCards.slice(0, 4).map((card) => (
@@ -1128,7 +1221,7 @@ export const AgentDetailView = memo(({
                       <div className="studio-agent-overview__step-copy">
                         <strong>Complete the launch checklist</strong>
                         <p>{launchDetail}</p>
-                        <AppButton type="button" tone="secondary" onClick={() => onSelectTab(readinessItems.find((item) => !item.ready)?.tab ?? 'ai')}>Resolve</AppButton>
+                        <AppButton type="button" tone="secondary" onClick={() => selectAgentSection(readinessItems.find((item) => !item.ready)?.tab ?? 'ai')}>Resolve</AppButton>
                       </div>
                     </div>
                   ) : selectedAgentState !== 'live' ? (
@@ -1137,7 +1230,7 @@ export const AgentDetailView = memo(({
                       <div className="studio-agent-overview__step-copy">
                         <strong>Test before deploying</strong>
                         <p>Open the private chat to verify the agent follows its instructions and cites the correct sources.</p>
-                        <AppButton type="button" tone="secondary" onClick={() => onSelectTab('chat')}>Open chat</AppButton>
+                        <AppButton type="button" tone="secondary" onClick={() => selectAgentSection('chat')}>Open chat</AppButton>
                       </div>
                     </div>
                   ) : (
@@ -1146,7 +1239,7 @@ export const AgentDetailView = memo(({
                       <div className="studio-agent-overview__step-copy">
                         <strong>Agent is live</strong>
                         <p>Monitor customer conversations and outcomes in the Results tab.</p>
-                        <AppButton type="button" tone="secondary" onClick={() => onSelectTab('analytics')}>View results</AppButton>
+                        <AppButton type="button" tone="secondary" onClick={() => selectAgentSection('analytics')}>View results</AppButton>
                       </div>
                     </div>
                   )}

@@ -98,9 +98,9 @@ export const STUDIO_AI_SOURCE_OPTIONS: ReadonlyArray<{
 }> = [
   {
     value: 'empyralis_credits',
-    label: 'Empyralis credits',
-    title: 'Use Empyralis credits',
-    hint: 'Recommended route for most Business Agents. Empyralis manages the provider behind workspace credits.',
+    label: 'Workspace default',
+    title: 'Use workspace default',
+    hint: 'Recommended route for most Business Agents. Inherits the workspace AI route from Connections.',
   },
   {
     value: 'workspace_api_key',
@@ -116,9 +116,9 @@ export const STUDIO_AI_SOURCE_OPTIONS: ReadonlyArray<{
   },
   {
     value: 'subscription_passthrough',
-    label: 'Personal subscription',
-    title: 'Use a personal subscription',
-    hint: 'Reserved for eligible external subscription routes when the workspace policy allows it.',
+    label: 'Enterprise gateway',
+    title: 'Use an enterprise gateway',
+    hint: 'Reserved for workspace-approved gateways such as LiteLLM, Azure OpenAI, Bedrock, or Vertex AI.',
   },
 ];
 
@@ -423,41 +423,41 @@ export const SPECIALIST_CONNECTOR_CARDS: ReadonlyArray<{
   {
     id: 'telegram',
     label: 'Telegram Bot',
-    image: '/integrations/telegram.png',
+    image: '/brand-assets/channels/telegram.svg?v=3',
     capabilityTags: ['Messages', 'Replies'],
   },
   {
     id: 'whatsapp',
     label: 'WhatsApp Business',
-    image: '/integrations/whatsapp.png',
+    image: '/brand-assets/channels/whatsapp.svg?v=3',
     connectorIds: ['whatsapp_twilio'],
     capabilityTags: ['Messages', 'Autopilot'],
   },
   {
     id: 'gmail',
     label: 'Gmail',
-    image: '/integrations/gmail.png',
+    image: '/brand-assets/apps/gmail.svg?v=3',
     connectorIds: ['google_workspace'],
     capabilityTags: ['Send email', 'Read inbox'],
   },
   {
     id: 'calendar',
     label: 'Calendar',
-    image: '/integrations/microsoft365.png',
+    image: '/brand-assets/apps/google-calendar.svg?v=3',
     connectorIds: ['google_workspace', 'microsoft_365'],
     capabilityTags: ['Calendar', 'Events'],
   },
   {
     id: 'custom_api',
     label: 'Custom API',
-    image: '/integrations/webhook.png',
+    image: '/brand-assets/generic/webhook.svg?v=3',
     connectorIds: ['webhook'],
     capabilityTags: ['API', 'Webhook'],
   },
   {
     id: 'tool_server',
     label: 'Tool server',
-    image: '/integrations/github.png',
+    image: '/brand-assets/generic/api.svg?v=3',
     connectorIds: ['mcp_server'],
     capabilityTags: ['MCP', 'Custom tools'],
   },

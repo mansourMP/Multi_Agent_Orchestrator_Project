@@ -385,6 +385,12 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
               </div>
               <div className={styles.factStack}>
                 <div className={styles.factBlock}>
+                  <p className={styles.factLabel}>AI usage</p>
+                  <p className={styles.factValue}>
+                    Uses the workspace AI route by default. Apps request capabilities; they do not own provider keys.
+                  </p>
+                </div>
+                <div className={styles.factBlock}>
                   <p className={styles.factLabel}>Bridge</p>
                   <p className={styles.factValue}>
                     {summarizeBridgeKinds(item.hosted_app?.bridge?.allowed_contracts || item.bridge_contracts)}

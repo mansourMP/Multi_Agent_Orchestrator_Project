@@ -155,7 +155,7 @@ export function createInitialAccountShellState(): AccountShellState {
     workspaceMembershipIndex: {},
     selectedWorkspaceId: null,
     lastVisitedWorkspaceRouteById: {},
-    globalTheme: 'system',
+    globalTheme: 'light',
     globalChromePreferences: DEFAULT_GLOBAL_CHROME_PREFERENCES,
   };
 }
@@ -169,7 +169,7 @@ export function reduceAccountShellState(
       if (!action.payload) {
         return {
           ...createInitialAccountShellState(),
-          globalTheme: action.persistedSnapshot?.globalTheme ?? 'system',
+          globalTheme: action.persistedSnapshot?.globalTheme ?? 'light',
           globalChromePreferences:
             action.persistedSnapshot?.globalChromePreferences ?? DEFAULT_GLOBAL_CHROME_PREFERENCES,
         };
@@ -188,7 +188,7 @@ export function reduceAccountShellState(
           action.persistedSnapshot?.accountId === action.payload.account.id
             ? action.persistedSnapshot.lastVisitedWorkspaceRouteById
             : {},
-        globalTheme: action.persistedSnapshot?.globalTheme ?? 'system',
+        globalTheme: action.persistedSnapshot?.globalTheme ?? 'light',
         globalChromePreferences:
           action.persistedSnapshot?.globalChromePreferences ?? DEFAULT_GLOBAL_CHROME_PREFERENCES,
       };

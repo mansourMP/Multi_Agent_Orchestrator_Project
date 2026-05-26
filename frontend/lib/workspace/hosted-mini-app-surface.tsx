@@ -482,6 +482,20 @@ export function HostedMiniAppSurface({
             </article>
 
             <article className={styles.policyCard}>
+              <p className={styles.policyLabel}>AI usage</p>
+              <h2 className={styles.policyTitle}>Uses workspace default</h2>
+              <p className={styles.policyCopy}>
+                Mini-apps do not own provider keys. They declare needs like text generation, vision, privacy, and budget;
+                the workspace AI route decides where inference runs.
+              </p>
+              <div className={styles.inlineList}>
+                {['text_generation', 'workspace_default_route', 'budget_normal'].map((item) => (
+                  <span key={item} className={styles.chip}>{humanizeToken(item)}</span>
+                ))}
+              </div>
+            </article>
+
+            <article className={styles.policyCard}>
               <p className={styles.policyLabel}>Origins and bridge activity</p>
               <h2 className={styles.policyTitle}>Allowed origins only</h2>
               <p className={styles.policyCopy}>

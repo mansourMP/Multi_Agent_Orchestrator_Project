@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { Moon, SunMedium } from 'lucide-react';
 
 import { logout, me, type AuthProviderOptions, listAuthProviders } from '@/lib/auth/auth-client';
 import {
@@ -14,6 +15,7 @@ import {
   AppSurfaceStatGrid,
   joinClassNames,
 } from '@/lib/ui/primitives';
+import { useAppTheme } from '@/lib/ui/app-theme';
 import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
@@ -384,6 +386,7 @@ export function WorkstationSettingsPane() {
   const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const { state: accountShellState, actions: accountShellActions } = useAccountShell();
+  const { resolvedTheme } = useAppTheme();
   const [selectedSection, setSelectedSection] = useState<SettingsSectionId>(() => {
     const requestedSection = searchParams.get('section');
     return isSettingsSectionId(requestedSection) ? requestedSection : 'account';
@@ -484,6 +487,8 @@ export function WorkstationSettingsPane() {
     : 'Cloud';
   const activeSection = SETTINGS_SECTIONS.find((section) => section.id === selectedSection) ?? SETTINGS_SECTIONS[0];
   const currentThemePreference = accountShellState.globalTheme;
+  const nextAppearanceTheme = resolvedTheme === 'dark' ? 'light' : 'dark';
+  const AppearanceThemeIcon = resolvedTheme === 'dark' ? SunMedium : Moon;
   const accountDisplayName = bootstrap.account.displayName?.trim() || 'Empyralis User';
   const accountEmail = bootstrap.account.email;
   const accountInitial = (accountDisplayName || accountEmail).charAt(0).toUpperCase();
@@ -675,6 +680,17 @@ export function WorkstationSettingsPane() {
                 title="Theme"
                 description="Choose how Empyralis renders on this browser."
               >
+                <div className="settings-theme-toggle-row">
+                  <button
+                    type="button"
+                    className="settings-theme-toggle"
+                    aria-label={`Switch to ${nextAppearanceTheme} mode`}
+                    onClick={() => accountShellActions.setGlobalTheme(nextAppearanceTheme)}
+                  >
+                    <AppearanceThemeIcon size={16} aria-hidden="true" />
+                    <span>Switch to {nextAppearanceTheme}</span>
+                  </button>
+                </div>
                 <div className="settings-choice-grid">
                   {[
                     { id: 'system' as const, label: 'System', detail: 'Follow this device.' },

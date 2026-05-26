@@ -45,9 +45,9 @@ export function readAccountShellSnapshot(): AccountShellSnapshot | null {
       lastVisitedWorkspaceRouteById: readStringMap(parsed.lastVisitedWorkspaceRouteById),
       workspaceRouteStateById: readStringMap(parsed.workspaceRouteStateById),
       globalTheme:
-        parsed.globalTheme === 'light' || parsed.globalTheme === 'dark'
+        parsed.globalTheme === 'light' || parsed.globalTheme === 'dark' || parsed.globalTheme === 'system'
           ? parsed.globalTheme
-          : 'system',
+          : 'light',
       globalChromePreferences: {
         tenantSwitcherCollapsed: Boolean(
           isRecord(parsed.globalChromePreferences)

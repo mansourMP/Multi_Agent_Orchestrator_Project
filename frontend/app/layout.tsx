@@ -57,7 +57,7 @@ function buildThemeBootstrapScript(storageKey: string): string {
     (function () {
       try {
         var raw = window.localStorage.getItem(${JSON.stringify(storageKey)});
-        var preference = 'system';
+        var preference = 'light';
         if (raw) {
           var parsed = JSON.parse(raw);
           var candidate = parsed && typeof parsed === 'object' ? parsed.globalTheme : null;
@@ -94,11 +94,11 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   return (
     <html
       lang="en"
-      data-emp-theme="dark"
+      data-emp-theme="light"
       suppressHydrationWarning
       className={`${dmSans.variable} ${fraunces.variable}`}
     >
-      <body data-emp-theme="dark" suppressHydrationWarning>
+      <body data-emp-theme="light" suppressHydrationWarning>
         <script
           // Keep document theme in sync with persisted preference before hydration.
           dangerouslySetInnerHTML={{ __html: themeBootstrapScript }}

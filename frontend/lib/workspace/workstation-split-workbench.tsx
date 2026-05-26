@@ -23,7 +23,7 @@ export function WorkstationSplitWorkbench({
 }: PropsWithChildren<{
   ariaLabel: string;
   sidebarHeader?: ReactNode;
-  sidebar: ReactNode;
+  sidebar?: ReactNode;
   sidebarFooter?: ReactNode;
   mainHeader?: ReactNode;
   className?: string;
@@ -36,34 +36,36 @@ export function WorkstationSplitWorkbench({
   const rootRef = useRef<HTMLElement | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(sidebarDefaultWidth);
   const [isResizing, setIsResizing] = useState(false);
+  const hasSidebar = sidebar !== null && sidebar !== undefined;
+  const effectiveResizableSidebar = resizableSidebar && hasSidebar;
 
   const clampSidebarWidth = useCallback((value: number) => (
     Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, Math.round(value)))
   ), [sidebarMaxWidth, sidebarMinWidth]);
 
   useEffect(() => {
-    if (!resizableSidebar || !sidebarResizeStorageKey) {
+    if (!effectiveResizableSidebar || !sidebarResizeStorageKey) {
       return;
     }
     const storedValue = Number(window.localStorage.getItem(sidebarResizeStorageKey));
     if (Number.isFinite(storedValue) && storedValue > 0) {
       setSidebarWidth(clampSidebarWidth(storedValue));
     }
-  }, [clampSidebarWidth, resizableSidebar, sidebarResizeStorageKey]);
+  }, [clampSidebarWidth, effectiveResizableSidebar, sidebarResizeStorageKey]);
 
   useEffect(() => {
-    if (!resizableSidebar) {
+    if (!effectiveResizableSidebar) {
       return;
     }
     rootRef.current?.style.setProperty('--workstation-split-sidebar-width', `${sidebarWidth}px`);
-  }, [resizableSidebar, sidebarWidth]);
+  }, [effectiveResizableSidebar, sidebarWidth]);
 
   const persistSidebarWidth = useCallback((nextWidth: number) => {
-    if (!resizableSidebar || !sidebarResizeStorageKey) {
+    if (!effectiveResizableSidebar || !sidebarResizeStorageKey) {
       return;
     }
     window.localStorage.setItem(sidebarResizeStorageKey, String(clampSidebarWidth(nextWidth)));
-  }, [clampSidebarWidth, resizableSidebar, sidebarResizeStorageKey]);
+  }, [clampSidebarWidth, effectiveResizableSidebar, sidebarResizeStorageKey]);
 
   const updateSidebarWidth = useCallback((nextWidth: number, persist = false) => {
     const clampedWidth = clampSidebarWidth(nextWidth);
@@ -74,7 +76,7 @@ export function WorkstationSplitWorkbench({
   }, [clampSidebarWidth, persistSidebarWidth]);
 
   const handleResizePointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (!resizableSidebar || !rootRef.current) {
+    if (!effectiveResizableSidebar || !rootRef.current) {
       return;
     }
 
@@ -105,10 +107,10 @@ export function WorkstationSplitWorkbench({
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
     window.addEventListener('pointercancel', handlePointerUp);
-  }, [clampSidebarWidth, persistSidebarWidth, resizableSidebar, sidebarWidth]);
+  }, [clampSidebarWidth, effectiveResizableSidebar, persistSidebarWidth, sidebarWidth]);
 
   const handleResizeKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
-    if (!resizableSidebar) {
+    if (!effectiveResizableSidebar) {
       return;
     }
 
@@ -125,35 +127,37 @@ export function WorkstationSplitWorkbench({
       event.preventDefault();
       updateSidebarWidth(sidebarDefaultWidth, true);
     }
-  }, [resizableSidebar, sidebarDefaultWidth, sidebarMinWidth, sidebarWidth, updateSidebarWidth]);
+  }, [effectiveResizableSidebar, sidebarDefaultWidth, sidebarMinWidth, sidebarWidth, updateSidebarWidth]);
 
   return (
     <section
       ref={rootRef}
       className={joinClassNames(
         'workstation-split-workbench',
-        resizableSidebar && 'workstation-split-workbench--resizable',
+        effectiveResizableSidebar && 'workstation-split-workbench--resizable',
         isResizing && 'workstation-split-workbench--resizing',
         className,
       )}
       aria-label={ariaLabel}
     >
-      <aside className="workstation-split-workbench__sidebar" aria-label={`${ariaLabel} list`}>
-        {sidebarHeader ? (
-          <div className="workstation-split-workbench__sidebar-header">
-            {sidebarHeader}
+      {hasSidebar ? (
+        <aside className="workstation-split-workbench__sidebar" aria-label={`${ariaLabel} list`}>
+          {sidebarHeader ? (
+            <div className="workstation-split-workbench__sidebar-header">
+              {sidebarHeader}
+            </div>
+          ) : null}
+          <div className="workstation-split-workbench__sidebar-scroll">
+            {sidebar}
           </div>
-        ) : null}
-        <div className="workstation-split-workbench__sidebar-scroll">
-          {sidebar}
-        </div>
-        {sidebarFooter ? (
-          <div className="workstation-split-workbench__sidebar-footer">
-            {sidebarFooter}
-          </div>
-        ) : null}
-      </aside>
-      {resizableSidebar ? (
+          {sidebarFooter ? (
+            <div className="workstation-split-workbench__sidebar-footer">
+              {sidebarFooter}
+            </div>
+          ) : null}
+        </aside>
+      ) : null}
+      {effectiveResizableSidebar ? (
         <div
           className="workstation-split-workbench__sidebar-resizer"
           role="separator"

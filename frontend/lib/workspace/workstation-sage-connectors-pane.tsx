@@ -19,6 +19,7 @@ import type {
   ProviderCatalogRecord,
   ProviderProfileRecord,
   VaultCredentialRecord,
+  WorkspaceAiRoutePayload,
 } from '@/lib/workspace/workstation-client';
 
 type IntegrationStatus = 'connected' | 'not_connected';
@@ -258,7 +259,7 @@ type ExternalIntegrationCardRecord = {
   channel?: PersonalCommunicationChannel | null;
 };
 
-type IntegrationWorkbenchCategoryId = 'ai' | 'apps' | 'channels' | 'computers' | 'knowledge' | 'skills' | 'developer';
+type IntegrationWorkbenchCategoryId = 'ai_runtime' | 'plugins';
 
 type IntegrationWorkbenchGroup = {
   id: IntegrationWorkbenchCategoryId;
@@ -281,6 +282,7 @@ type SageConnectorsPaneCache = {
   telegramPersonal: PersonalChannelViewPayload | null;
   personalChannelSurfaces: PersonalChannelSurfaceRecord[];
   hostedSageAi: HostedSageAiSnapshot;
+  workspaceAiRoute: WorkspaceAiRoutePayload | null;
   mcpServers: McpServerRecord[];
 };
 
@@ -346,29 +348,29 @@ const SAMPLE_PROVIDER_LABELS: Record<string, string> = {
 };
 
 const PROVIDER_IMAGE_BY_ID: Record<string, string> = {
-  openai: '/integrations/openai.png',
-  'openai-codex': '/integrations/openai.png',
-  anthropic: '/integrations/anthropic.png',
-  gemini: '/integrations/gemini.jpg',
-  vertex: '/integrations/gemini.jpg',
-  openrouter: '/integrations/webhook.png',
-  groq: '/integrations/webhook.png',
-  xai: '/integrations/webhook.png',
-  azure_openai: '/integrations/openai.png',
-  bedrock: '/integrations/webhook.png',
-  mistral: '/integrations/mistral.png',
-  deepseek: '/integrations/deepseek.jpg',
-  ollama_cloud: '/integrations/ollama.png',
-  qwen: '/integrations/qwen.png',
-  custom_openai_compatible: '/integrations/webhook.png',
-  ollama: '/integrations/ollama.png',
+  openai: '/brand-assets/providers/openai.svg?v=3',
+  'openai-codex': '/brand-assets/providers/openai.svg?v=3',
+  anthropic: '/brand-assets/providers/anthropic.svg?v=3',
+  gemini: '/brand-assets/providers/gemini.svg?v=3',
+  vertex: '/brand-assets/providers/gemini.svg?v=3',
+  openrouter: '/brand-assets/providers/openrouter.svg?v=3',
+  groq: '/brand-assets/generic/api.svg?v=3',
+  xai: '/brand-assets/providers/xai.svg?v=3',
+  azure_openai: '/brand-assets/providers/openai.svg?v=3',
+  bedrock: '/brand-assets/providers/bedrock.svg?v=3',
+  mistral: '/brand-assets/providers/mistral.svg?v=3',
+  deepseek: '/brand-assets/providers/deepseek.svg?v=3',
+  ollama_cloud: '/brand-assets/providers/ollama.svg?v=3',
+  qwen: '/brand-assets/providers/qwen.svg?v=3',
+  custom_openai_compatible: '/brand-assets/generic/api.svg?v=3',
+  ollama: '/brand-assets/providers/ollama.svg?v=3',
 };
 
 const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'gmail',
     label: 'Gmail',
-    image: '/integrations/gmail.png',
+    image: '/brand-assets/apps/gmail.svg?v=3',
     connectorIds: ['google_workspace'],
     capabilityTags: ['Send email', 'Read inbox'],
     summary: 'Use one Google sign-in when Sage should work with Gmail and Google Calendar.',
@@ -378,7 +380,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'google_calendar',
     label: 'Google Calendar',
-    image: '/integrations/microsoft365.png',
+    image: '/brand-assets/apps/google-calendar.svg?v=3',
     connectorIds: ['google_workspace'],
     capabilityTags: ['Calendar', 'Events'],
     summary: 'Use Google Calendar when Sage should schedule, review, or update events for you.',
@@ -388,7 +390,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'email',
     label: 'Email',
-    image: '',
+    image: '/brand-assets/generic/api.svg?v=3',
     connectorIds: ['google_workspace', 'microsoft_365', 'smtp'],
     capabilityTags: ['Inbox', 'Send email'],
     summary: 'Email is where Sage can reach people across Gmail, Outlook, or a custom mailbox.',
@@ -398,7 +400,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'telegram_bot',
     label: 'Telegram Bot',
-    image: '/integrations/telegram.png',
+    image: '/brand-assets/channels/telegram.svg?v=3',
     connectorIds: ['telegram_bot'],
     capabilityTags: ['Customer chat', 'Bot replies'],
     summary: 'Telegram bot deployments live in the Studio/business lane. They are separate from your personal Telegram on Connected Computer.',
@@ -408,7 +410,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'whatsapp_twilio',
     label: 'WhatsApp Business',
-    image: '/integrations/whatsapp.png',
+    image: '/brand-assets/channels/whatsapp.svg?v=3',
     connectorIds: ['whatsapp_twilio'],
     capabilityTags: ['Customer inbox', 'Business sends'],
     summary: 'Business WhatsApp stays in the Studio connector lane with provider-managed credentials and customer-facing delivery.',
@@ -418,7 +420,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'slack',
     label: 'Slack',
-    image: '/integrations/slack.png',
+    image: '/brand-assets/channels/slack.svg?v=3',
     connectorIds: ['slack'],
     capabilityTags: ['Channels', 'DMs'],
     summary: 'Use Slack when Sage should work in team channels and direct messages.',
@@ -428,7 +430,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'discord_bot',
     label: 'Discord',
-    image: '',
+    image: '/brand-assets/channels/discord.svg?v=3',
     connectorIds: ['discord_bot'],
     capabilityTags: ['Servers', 'DMs'],
     summary: 'Discord is a future communication integration. Keep it planned until the personal-agent core and channel safety are hardened.',
@@ -438,7 +440,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'github',
     label: 'GitHub',
-    image: '/integrations/github.png',
+    image: '/brand-assets/apps/github.svg?v=3',
     connectorIds: ['github'],
     capabilityTags: ['Issues', 'Pull requests'],
     summary: 'GitHub gives Sage repo, issue, and pull-request context.',
@@ -448,7 +450,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'notion',
     label: 'Notion',
-    image: '/integrations/notion.png',
+    image: '/brand-assets/apps/notion.svg?v=3',
     connectorIds: ['notion'],
     capabilityTags: ['Pages', 'Search'],
     summary: 'Use Notion when Sage should search notes, docs, and workspace pages.',
@@ -458,7 +460,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'linear',
     label: 'Linear',
-    image: '',
+    image: '/brand-assets/apps/linear.svg?v=3',
     connectorIds: ['linear'],
     capabilityTags: ['Issues', 'Projects'],
     summary: 'Linear lets Sage read, create, and update issue work when connected.',
@@ -468,27 +470,27 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'drive',
     label: 'Drive',
-    image: '/integrations/gmail.png',
+    image: '/brand-assets/apps/google-drive.svg?v=3',
     connectorIds: ['google_workspace'],
     capabilityTags: ['Files', 'Search'],
     summary: 'Google Drive gives Sage permissioned workspace files and documents when connected through Google Workspace.',
-    setupHint: 'Connect Google Workspace first, then expose Drive files through the knowledge lane.',
+    setupHint: 'Connect Google Workspace first, then Sage can use Drive files from Plugins.',
     surfaceScope: 'all',
   },
   {
     id: 'uploads',
     label: 'Uploads',
-    image: '',
+    image: '/brand-assets/generic/uploads.svg?v=3',
     connectorIds: ['uploads'],
-    capabilityTags: ['Files', 'Knowledge'],
-    summary: 'Uploads are local workspace knowledge files Sage can use without a third-party account.',
-    setupHint: 'Upload files from chat or the knowledge surface when this lane is enabled.',
+    capabilityTags: ['Files', 'Context'],
+    summary: 'Uploads are local workspace files Sage can use without a third-party account.',
+    setupHint: 'Upload files from chat or Plugins when this lane is enabled.',
     surfaceScope: 'all',
   },
   {
     id: 'websites',
     label: 'Websites',
-    image: '',
+    image: '/brand-assets/generic/websites.svg?v=3',
     connectorIds: ['websites'],
     capabilityTags: ['Web', 'Retrieval'],
     summary: 'Websites let Sage use approved public pages or domains as knowledge sources.',
@@ -498,7 +500,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'microsoft_365',
     label: 'Microsoft 365',
-    image: '/integrations/microsoft365.png',
+    image: '/brand-assets/apps/microsoft365.svg?v=3',
     connectorIds: ['microsoft_365'],
     capabilityTags: ['Mail', 'Calendar'],
     summary: 'Microsoft 365 lets Sage work with Outlook mail and calendar in one connection.',
@@ -508,7 +510,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'webhook',
     label: 'Webhook',
-    image: '/integrations/webhook.png',
+    image: '/brand-assets/generic/webhook.svg?v=3',
     connectorIds: ['webhook'],
     capabilityTags: ['App action', 'Automation'],
     summary: 'App actions let Sage notify or start work in another system without a full app connection.',
@@ -519,6 +521,35 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function normalizeIntegrationCategoryId(value: unknown): IntegrationWorkbenchCategoryId | null {
+  const token = readString(value).toLowerCase().replace(/-/g, '_');
+  switch (token) {
+    case 'ai':
+    case 'ai_accounts':
+    case 'ai_runtime':
+    case 'computers':
+    case 'computer':
+    case 'agent_computer':
+      return 'ai_runtime';
+    case 'apps':
+    case 'app_connections':
+    case 'connected_apps':
+    case 'channels':
+    case 'personal_messaging':
+    case 'apps_messaging':
+    case 'plugins':
+      return 'plugins';
+    case 'knowledge':
+    case 'sources':
+    case 'skills':
+    case 'extensions':
+    case 'developer':
+      return 'plugins';
+    default:
+      return null;
+  }
 }
 
 function readNumber(value: unknown, fallback = 0): number {
@@ -1658,12 +1689,14 @@ export function WorkstationSageConnectorsPane({
   const [telegramPersonal, setTelegramPersonal] = useState<PersonalChannelViewPayload | null>(() => cachedState?.telegramPersonal ?? null);
   const [personalChannelSurfaces, setPersonalChannelSurfaces] = useState<PersonalChannelSurfaceRecord[]>(() => cachedState?.personalChannelSurfaces ?? []);
   const [hostedSageAi, setHostedSageAi] = useState<HostedSageAiSnapshot>(() => cachedState?.hostedSageAi ?? DEFAULT_HOSTED_SAGE_AI);
+  const [workspaceAiRoute, setWorkspaceAiRoute] = useState<WorkspaceAiRoutePayload | null>(() => cachedState?.workspaceAiRoute ?? null);
   const [mcpServers, setMcpServers] = useState<McpServerRecord[]>(() => cachedState?.mcpServers ?? []);
   const [isLoading, setIsLoading] = useState(() => cachedState === null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
-  const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => showProviders ? 'ai' : 'channels');
+  const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => showProviders ? 'ai_runtime' : 'plugins');
+  const [pluginsTab, setPluginsTab] = useState<'plugins' | 'skills'>('plugins');
   const [providerDraftKeys, setProviderDraftKeys] = useState<Record<string, string>>({});
   const [providerDraftBaseUrls, setProviderDraftBaseUrls] = useState<Record<string, string>>({});
   const [providerPickerOpen, setProviderPickerOpen] = useState(false);
@@ -1681,8 +1714,9 @@ export function WorkstationSageConnectorsPane({
   });
 
   const loadState = useCallback(async () => {
-    const [catalogResult, profileResult, credentialResult, connectorResult, mcpResult, gatewayResult] = await Promise.allSettled([
+    const [catalogResult, routeResult, profileResult, credentialResult, connectorResult, mcpResult, gatewayResult] = await Promise.allSettled([
       services.client.listProviderCatalog(),
+      services.client.getWorkspaceAiRoute(),
       services.client.listProviderProfiles(),
       services.client.listVaultCredentials(),
       services.client.listConnectorsVault(),
@@ -1762,6 +1796,7 @@ export function WorkstationSageConnectorsPane({
       telegramPersonal: gatewayPayload.telegramPersonal,
       personalChannelSurfaces: gatewayPayload.personalChannelSurfaces,
       hostedSageAi: normalizeHostedSageAi(catalogPayload),
+      workspaceAiRoute: routeResult.status === 'fulfilled' ? routeResult.value : null,
       mcpServers: mcpResult.status === 'fulfilled' ? normalizeMcpServers(mcpResult.value) : [],
     };
     sageConnectorsPaneCache.set(cacheKey, nextState);
@@ -1776,6 +1811,7 @@ export function WorkstationSageConnectorsPane({
     setTelegramPersonal(nextState.telegramPersonal);
     setPersonalChannelSurfaces(nextState.personalChannelSurfaces);
     setHostedSageAi(nextState.hostedSageAi);
+    setWorkspaceAiRoute(nextState.workspaceAiRoute);
     setMcpServers(nextState.mcpServers);
 
     if (catalogResult.status === 'rejected') {
@@ -2004,13 +2040,13 @@ export function WorkstationSageConnectorsPane({
     const imessage = summarizePlannedIMessagePersonalState(personalChannelSurfaceByKey.get('imessage_personal'));
     const wechat = summarizeWeChatPersonalState(personalChannelSurfaceByKey.get('wechat_personal'));
     return [
-      { id: 'device', label: 'Connected Computer', image: '', ...device },
-      { id: 'browser', label: 'Use my browser', image: '', ...browser },
-      { id: 'telegram_personal', label: 'Your Telegram', image: '/integrations/telegram.png', ...telegram },
-      { id: 'whatsapp_personal', label: 'Your WhatsApp', image: '/integrations/whatsapp.png', ...whatsapp },
-      { id: 'signal_personal', label: 'Signal', image: '', ...signal },
-      { id: 'imessage_personal', label: 'iMessage', image: '', ...imessage },
-      { id: 'wechat_personal', label: 'WeChat', image: '', ...wechat },
+      { id: 'device', label: 'Connected Computer', image: '/brand-assets/generic/computer.svg?v=3', ...device },
+      { id: 'browser', label: 'Use my browser', image: '/brand-assets/generic/browser.svg?v=3', ...browser },
+      { id: 'telegram_personal', label: 'Your Telegram', image: '/brand-assets/channels/telegram.svg?v=3', ...telegram },
+      { id: 'whatsapp_personal', label: 'Your WhatsApp', image: '/brand-assets/channels/whatsapp.svg?v=3', ...whatsapp },
+      { id: 'signal_personal', label: 'Signal', image: '/brand-assets/channels/signal.svg?v=3', ...signal },
+      { id: 'imessage_personal', label: 'iMessage', image: '/brand-assets/channels/imessage.svg?v=3', ...imessage },
+      { id: 'wechat_personal', label: 'WeChat', image: '/brand-assets/channels/wechat.svg?v=3', ...wechat },
     ];
   }, [doctor, personalChannelSurfaceByKey, selectedGateway, telegramPersonal, whatsappPersonal]);
 
@@ -2172,93 +2208,40 @@ export function WorkstationSageConnectorsPane({
     [communicationPersonalCards, connectorCards],
   );
 
+  const pluginCards = useMemo<ExternalIntegrationCardRecord[]>(
+    () => [
+      ...communicationPersonalCards.map(personalAsExternalCard),
+      ...connectorCards.map(connectorAsExternalCard),
+    ],
+    [communicationPersonalCards, connectorCards],
+  );
+
   const integrationGroups = useMemo<IntegrationWorkbenchGroup[]>(() => {
     const groups: IntegrationWorkbenchGroup[] = [];
-    if (showProviders) {
-      groups.push({
-        id: 'ai',
-        label: 'AI Accounts',
-        description: 'Empyralis credits and user-owned AI accounts.',
-        detail: aiProviderSummary.activeLabel,
-        countLabel: activeProviderCard ? 'Active' : 'Setup',
-        statusTone: activeProviderCard ? 'connected' : 'warning',
-      });
-    }
-
-    if (appCards.length > 0) {
-      groups.push({
-        id: 'apps',
-        label: 'Connected Apps',
-        description: 'Work systems Sage can read or act inside.',
-        detail: 'Gmail, calendar, workspace apps, GitHub, Notion, and webhooks.',
-        countLabel: `${appCards.length}`,
-        statusTone: appCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
-      });
-    }
-    if (channelCards.length > 0) {
-      groups.push({
-        id: 'channels',
-        label: showPersonalSurface ? 'Personal Messaging' : 'Business Channels',
-        description: showPersonalSurface ? 'Places you can talk to Sage.' : 'Places customers can talk to an agent.',
-        detail: surface === 'sage'
-          ? 'Telegram, WhatsApp, Signal, iMessage, and WeChat through Agent Computer.'
-          : 'Customer-facing message channels.',
-        countLabel: `${channelCards.length}`,
-        statusTone: channelCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
-      });
-    }
-    if (showPersonalSurface && thisComputerCards.length > 0) {
-      groups.push({
-        id: 'computers',
-        label: 'Agent Computer',
-        description: 'Optional computer power.',
-        detail: 'Computer control, phone app, and remote setup.',
-        countLabel: thisComputerCards.some((card) => card.statusTone === 'connected') ? 'Online' : 'Setup',
-        statusTone: thisComputerCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'warning',
-      });
-    }
-    if (knowledgeCards.length > 0) {
-      groups.push({
-        id: 'knowledge',
-        label: 'Knowledge',
-        description: 'Approved sources Sage can read.',
-        detail: 'Drive, Notion, uploads, websites, and repos.',
-        countLabel: `${knowledgeCards.length}`,
-        statusTone: knowledgeCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
-      });
-    }
-    if (showTools) {
-      groups.push({
-        id: 'skills',
-        label: 'Skills',
-        description: 'Installable Skill.md packages.',
-        detail: 'Built-in, local, open-source, and marketplace packages.',
-        countLabel: 'Governed',
-        statusTone: 'neutral',
-      });
-    }
     groups.push({
-      id: 'developer',
-      label: 'Extensions',
-      description: 'Plugin-style adapters and custom tools.',
-      detail: 'MCP servers, custom APIs, and future adapter packs.',
-      countLabel: mcpServers.length > 0 ? `${mcpServers.length}` : 'Custom',
-      statusTone: mcpServers.some((server) => server.enabled !== false) ? 'connected' : 'neutral',
+      id: 'ai_runtime',
+      label: 'AI & Runtime',
+      description: 'Default AI route, provider accounts, local models, and Agent Computer.',
+      detail: aiProviderSummary.activeLabel,
+      countLabel: activeProviderCard || thisComputerCards.some((card) => card.statusTone === 'connected') ? 'Active' : 'Setup',
+      statusTone: activeProviderCard || thisComputerCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'warning',
+    });
+
+    groups.push({
+      id: 'plugins',
+      label: 'Plugins',
+      description: 'Apps, files, channels, skills, MCP servers, custom APIs, and webhooks Sage can use.',
+      detail: 'Gmail, Calendar, GitHub, Notion, Drive, Slack, skills, MCP, and custom tools.',
+      countLabel: `${pluginCards.length + mcpServers.length}`,
+      statusTone: pluginCards.some((card) => card.statusTone === 'connected') || mcpServers.some((server) => server.enabled !== false) ? 'connected' : 'neutral',
     });
     return groups;
   }, [
     activeProviderCard,
     aiProviderSummary.activeLabel,
-    appCards,
-    channelCards,
-    knowledgeCards,
-    localCompanionOnline,
     mcpServers,
-    providerCards,
-    showPersonalSurface,
-    showProviders,
+    pluginCards,
     showTools,
-    surface,
     thisComputerCards,
   ]);
 
@@ -2268,16 +2251,7 @@ export function WorkstationSageConnectorsPane({
   );
 
   const requestedIntegrationId = useMemo<IntegrationWorkbenchCategoryId | null>(() => {
-    const token = readString(searchParams.get('section') ?? searchParams.get('connection')).toLowerCase();
-    return token === 'ai'
-      || token === 'apps'
-      || token === 'channels'
-      || token === 'computers'
-      || token === 'knowledge'
-      || token === 'skills'
-      || token === 'developer'
-      ? token
-      : null;
+    return normalizeIntegrationCategoryId(searchParams.get('section') ?? searchParams.get('connection'));
   }, [searchParams]);
 
   useEffect(() => {
@@ -2440,31 +2414,35 @@ export function WorkstationSageConnectorsPane({
     });
     const targetProviderId = record.provider.id;
     const targetProfile = nextProfiles.find((profile) => readString(profile.provider).toLowerCase() === targetProviderId) ?? null;
-    const profilesToWrite = new Map<string, ProviderProfileRecord | null>();
-    nextProfiles.forEach((profile) => {
-      profilesToWrite.set(readString(profile.provider).toLowerCase(), profile);
-    });
-    profilesToWrite.set(targetProviderId, targetProfile);
-
-    await Promise.all([...profilesToWrite.entries()].map(([providerId, profile]) => {
-      const metadata = {
-        ...profileMetadataRecord(profile),
-        chat_model_selection: providerId === targetProviderId ? 'explicit' : 'default',
-      };
-      return services.client.upsertProviderProfile({
-        id: readString(profile?.id) || null,
-        provider: providerId,
-        label: readString(profile?.label) || `Sage ${record.provider.label}`,
-        credentialId: readString(profile?.credential_id) || readString(record.credential?.id) || null,
-        authMode: readString(profile?.auth_mode) || readString(record.provider.defaultAuthMode) || null,
-        priority: Number(profile?.priority ?? (providerId === targetProviderId ? 10 : 100)),
-        enabled: profile?.enabled !== false,
-        model: providerId === targetProviderId
-          ? (activeModel || null)
-          : readString(profile?.model) || null,
-        metadata,
+    if (!targetProfile) {
+      await services.client.upsertProviderProfile({
+        id: null,
+        provider: targetProviderId,
+        label: `Sage ${record.provider.label}`,
+        credentialId: readString(record.credential?.id) || null,
+        authMode: readString(record.provider.defaultAuthMode) || null,
+        priority: 10,
+        enabled: true,
+        model: activeModel || null,
+        metadata: {
+          chat_model_selection: 'default',
+        },
       });
-    }));
+    }
+
+    const hostedPreset = hosted && ['light', 'pro', 'max'].includes(activeModel.toLowerCase())
+      ? activeModel.toLowerCase()
+      : null;
+    await services.client.updateWorkspaceAiRouteDefault({
+      kind: hosted
+        ? 'empyralis_managed'
+        : providerIsLocalOnly(record)
+          ? 'local_model'
+          : 'user_api_key',
+      provider: targetProviderId,
+      model: activeModel || null,
+      modelPreset: hostedPreset,
+    });
 
     emitWorkstationProviderChanged({
       workspaceId: services.scope.workspaceId,
@@ -3785,6 +3763,90 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function renderAiRouteSummary() {
+    const currentRoute = workspaceAiRoute?.workspaceDefault && typeof workspaceAiRoute.workspaceDefault === 'object'
+      ? workspaceAiRoute.workspaceDefault
+      : null;
+    const routeBudgets = workspaceAiRoute?.budgets && typeof workspaceAiRoute.budgets === 'object'
+      ? workspaceAiRoute.budgets
+      : null;
+    const usedByRows = Array.isArray(workspaceAiRoute?.usedBy)
+      ? workspaceAiRoute.usedBy.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+      : [];
+    const availableRoutes = Array.isArray(workspaceAiRoute?.availableRoutes)
+      ? workspaceAiRoute.availableRoutes
+          .filter((route): route is Record<string, unknown> => Boolean(route) && typeof route === 'object')
+          .map((route) => readString(route.label) || readString(route.publicLabel))
+          .filter(Boolean)
+      : [];
+    const monthlyCapUsd = readNumber(routeBudgets?.workspaceMonthlyCapUsd, Number.NaN);
+    const remainingCredits = readInteger(routeBudgets?.remainingCredits, Number.NaN);
+    const fallbackAllowed = routeBudgets
+      ? routeBudgets.fallbackAllowed === true
+      : true;
+    const budgetDetail = Number.isFinite(remainingCredits)
+      ? `${formatCredits(remainingCredits)} credits remaining`
+      : Number.isFinite(monthlyCapUsd)
+        ? `$${monthlyCapUsd.toFixed(2)} monthly cap`
+        : aiProviderSummary.creditsDetail;
+    const routeLabels = availableRoutes.length > 0
+      ? availableRoutes
+      : [
+          'Empyralis managed AI',
+          'OpenAI API key',
+          'Anthropic API key',
+          'Google Gemini API key',
+          'Local model on This Mac',
+          'Local model on VPS',
+        ];
+    return (
+      <section className="sage-unified-section sage-ai-route-summary" aria-label="Workspace AI route">
+        <p className="sage-unified-section__label">AI & Runtime</p>
+        <p className="sage-unified-section__description">
+          One workspace AI route is shared by Sage, Studio agents, and mini-apps. Provider setup lives here, not inside each surface.
+        </p>
+        <div className="sage-ai-route-summary__grid">
+          <article className="sage-ai-route-summary__card sage-ai-route-summary__card--primary">
+            <span>Current route</span>
+            <strong>Workspace default: {readString(currentRoute?.label) || aiProviderSummary.activeLabel}</strong>
+            <p>{readString(currentRoute?.description) || aiProviderSummary.activeDetail}</p>
+          </article>
+          <article className="sage-ai-route-summary__card">
+            <span>Used by</span>
+            <ul className="sage-ai-route-summary__list">
+              {(usedByRows.length > 0 ? usedByRows : [
+                { label: 'Sage', detail: 'Workspace default' },
+                { label: 'Studio agents', detail: 'Workspace default' },
+                { label: 'Mini-apps', detail: 'Workspace default' },
+              ]).map((row) => (
+                <li key={readString(row.label)}>
+                  <strong>{readString(row.label)}</strong>
+                  <em>{readString(row.detail) || 'Workspace default'}</em>
+                </li>
+              ))}
+            </ul>
+          </article>
+          <article className="sage-ai-route-summary__card">
+            <span>Budgets</span>
+            <ul className="sage-ai-route-summary__list">
+              <li><strong>Workspace monthly cap</strong><em>{budgetDetail}</em></li>
+              <li><strong>Per-agent cap</strong><em>Inherits workspace route</em></li>
+              <li><strong>Fallback</strong><em>{fallbackAllowed ? 'Allowed when configured' : 'Disabled'}</em></li>
+            </ul>
+          </article>
+        </div>
+        <div className="sage-ai-route-summary__routes" aria-label="Available AI routes">
+          <span>Available routes</span>
+          <div>
+            {routeLabels.map((route) => (
+              <span key={route}>{route}</span>
+            ))}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   function renderExternalCollection(
     label: string,
     description: string,
@@ -3863,7 +3925,8 @@ export function WorkstationSageConnectorsPane({
               type="button"
               tone="secondary"
               onClick={() => {
-                setSelectedIntegrationId('channels');
+                setSelectedIntegrationId('plugins');
+                setPluginsTab('plugins');
                 setExpandedCardId(null);
               }}
             >
@@ -3889,6 +3952,245 @@ export function WorkstationSageConnectorsPane({
           </details>
         </div>
       </section>
+    );
+  }
+
+  function renderAiRuntimeOverview() {
+    return (
+      <>
+        {renderAiRouteSummary()}
+        {showProviders ? renderAiOverview() : null}
+        {showPersonalSurface && thisComputerCards.length > 0 ? renderAgentComputerConnections() : null}
+      </>
+    );
+  }
+
+  function renderAppsMessagingOverview() {
+    return (
+      <>
+        {renderExternalCollection(
+          'App Connections',
+          'Connect work apps here. These are external services Sage can read or act inside.',
+          appCards,
+          'No app connectors are available for this surface yet.',
+        )}
+        {renderExternalCollection(
+          showPersonalSurface ? 'Personal Messaging' : 'Business Channels',
+          showPersonalSurface
+            ? 'Personal channels stay on Connected Computer. Business/customer channels stay separate.'
+            : 'Studio channels are customer-facing and separate from Sage personal channels.',
+          channelCards,
+          'No messaging connectors are available for this surface yet.',
+        )}
+      </>
+    );
+  }
+
+  function renderPluginsOverview() {
+    return (
+      <div className="sage-plugins-surface">
+        <div className="sage-plugins-tabs" role="tablist" aria-label="Plugin setup">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={pluginsTab === 'plugins'}
+            className={joinClassNames('sage-plugins-tab', pluginsTab === 'plugins' && 'sage-plugins-tab--active')}
+            onClick={() => {
+              setPluginsTab('plugins');
+              setExpandedCardId(null);
+            }}
+          >
+            Plugins
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={pluginsTab === 'skills'}
+            className={joinClassNames('sage-plugins-tab', pluginsTab === 'skills' && 'sage-plugins-tab--active')}
+            onClick={() => {
+              setPluginsTab('skills');
+              setExpandedCardId(null);
+            }}
+          >
+            Skills
+          </button>
+        </div>
+        {pluginsTab === 'plugins'
+          ? renderExternalCollection(
+            'Plugins',
+            'Connect apps, files, websites, channels, and automations Sage can use.',
+            pluginCards,
+            'No plugins are available yet.',
+          )
+          : renderDeveloperOverview()}
+      </div>
+    );
+  }
+
+  function renderDeveloperOverview() {
+    return (
+      <>
+        {showTools ? (
+          <section className="sage-unified-section">
+            <p className="sage-unified-section__label">Skills</p>
+            <p className="sage-unified-section__description">
+              Installable Skill.md packages for reusable Sage procedures. Each package carries its own setup and safety
+              requirements.
+            </p>
+            <WorkstationSageToolsPane />
+          </section>
+        ) : null}
+        <section className="sage-unified-section">
+          <p className="sage-unified-section__label">Extensions</p>
+          <p className="sage-unified-section__description">Custom APIs, tool servers, and webhooks stay collapsed until a technical user needs them.</p>
+          <div className="sage-integrations-detail-card">
+            <strong>MCP servers, custom APIs, and webhooks</strong>
+            <span>Use this lane for custom tools that should not be mixed with everyday app plugins. MCP tools stay unavailable until reviewed here.</span>
+          </div>
+          <div className="sage-unified-expand">
+            <div className="sage-unified-expand__header">
+              <strong className="sage-unified-expand__title">Add MCP server</strong>
+            </div>
+            <FormField label="Server ID">
+              <FormInput
+                value={mcpServerDraft.serverId}
+                placeholder="inventory-feed"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                onChange={(event) => {
+                  const serverId = event.currentTarget.value;
+                  setMcpServerDraft((current) => ({ ...current, serverId }));
+                }}
+              />
+            </FormField>
+            <FormField label="Label">
+              <FormInput
+                value={mcpServerDraft.label}
+                placeholder="Inventory Feed"
+                onChange={(event) => {
+                  const label = event.currentTarget.value;
+                  setMcpServerDraft((current) => ({ ...current, label }));
+                }}
+              />
+            </FormField>
+            <FormField label="Endpoint">
+              <FormInput
+                type="url"
+                value={mcpServerDraft.endpoint}
+                placeholder="https://example.com/mcp"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                onChange={(event) => {
+                  const endpoint = event.currentTarget.value;
+                  setMcpServerDraft((current) => ({ ...current, endpoint }));
+                }}
+              />
+            </FormField>
+            <div className="sage-unified-expand__actions">
+              <AppButton
+                type="button"
+                disabled={busyCardId === 'mcp:save'}
+                onClick={() => {
+                  void handleMcpServerSave();
+                }}
+              >
+                {busyCardId === 'mcp:save' ? 'Saving...' : 'Save and discover tools'}
+              </AppButton>
+            </div>
+          </div>
+          {mcpServers.length > 0 ? (
+            <div className="sage-ai-provider-sections">
+              {mcpServers.map((server) => {
+                const serverId = readString(server.id);
+                const serverTools = Array.isArray(server.tools) ? server.tools : [];
+                return (
+                  <section key={serverId || readString(server.endpoint)} className="sage-ai-provider-section">
+                    <div className="sage-ai-provider-section__header">
+                      <strong>{readString(server.label, serverId || 'MCP server')}</strong>
+                      <span>{server.enabled === false ? 'Disabled' : `${serverTools.length} tool${serverTools.length === 1 ? '' : 's'}`}</span>
+                    </div>
+                    <div className="sage-integrations-detail-card">
+                      <strong>{readString(server.endpoint, 'No endpoint recorded')}</strong>
+                      <span>
+                        {server.last_synced_at ? `Last synced ${readString(server.last_synced_at)}` : 'Refresh to discover current tools.'}
+                      </span>
+                      <div className="sage-unified-expand__actions">
+                        <AppButton
+                          type="button"
+                          tone="secondary"
+                          disabled={busyCardId === `mcp:${serverId}:refresh`}
+                          onClick={() => {
+                            void handleMcpServerRefresh(server);
+                          }}
+                        >
+                          {busyCardId === `mcp:${serverId}:refresh` ? 'Refreshing...' : 'Refresh tools'}
+                        </AppButton>
+                        <AppButton
+                          type="button"
+                          tone="ghost"
+                          disabled={busyCardId === `mcp:${serverId}:delete`}
+                          onClick={() => {
+                            void handleMcpServerDelete(server);
+                          }}
+                        >
+                          {busyCardId === `mcp:${serverId}:delete` ? 'Removing...' : 'Remove'}
+                        </AppButton>
+                      </div>
+                    </div>
+                    {serverTools.length > 0 ? (
+                      <div className="sage-unified-grid sage-unified-grid--4">
+                        {serverTools.map((tool) => {
+                          const toolName = readString(tool.name);
+                          const approved = tool.approved !== false;
+                          const approveKey = `mcp:${serverId}:${toolName}:approve`;
+                          return (
+                            <article key={toolName || readString(tool.label)} className="sage-unified-card">
+                              <span className="sage-unified-card__label">{readString(tool.label, toolName || 'MCP tool')}</span>
+                              <span className="sage-unified-card__detail">
+                                {readString(tool.description, 'No description provided.')}
+                              </span>
+                              <span className={joinClassNames('sage-unified-card__status', approved && 'sage-unified-card__status--connected')}>
+                                {approved ? 'Approved' : 'Needs review'}
+                              </span>
+                              <span className="sage-unified-card__detail">
+                                {[readString(tool.action_class, 'read'), readString(tool.risk_level, 'low'), tool.requires_approval ? 'needs approval' : 'policy bound'].join(' · ')}
+                              </span>
+                              {!approved ? (
+                                <AppButton
+                                  type="button"
+                                  tone="secondary"
+                                  disabled={busyCardId === approveKey}
+                                  onClick={() => {
+                                    void handleMcpToolApprove(server, tool);
+                                  }}
+                                >
+                                  {busyCardId === approveKey ? 'Approving...' : 'Approve tool'}
+                                </AppButton>
+                              ) : null}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="sage-integrations-detail-card">
+                        <strong>No tools discovered yet</strong>
+                        <span>Refresh the server or check its MCP endpoint.</span>
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="sage-integrations-detail-card">
+              <strong>No MCP servers connected</strong>
+              <span>Add a server to make custom tools visible for approval.</span>
+            </div>
+          )}
+        </section>
+      </>
     );
   }
 
@@ -3937,223 +4239,32 @@ export function WorkstationSageConnectorsPane({
 
   function renderSelectedIntegrationDetail() {
     if (error) {
-      return <AppNotice tone="warning">Connections could not refresh. Try again when ready.</AppNotice>;
+      return <AppNotice tone="warning">Setup could not refresh. Try again when ready.</AppNotice>;
     }
     if (!selectedIntegrationGroup) {
       return (
         <div className="sage-settings-empty">
-          No connections available.
+          No setup options available.
         </div>
       );
     }
     switch (selectedIntegrationGroup.id) {
-      case 'ai':
-        return renderAiOverview();
-      case 'apps':
-        return renderExternalCollection(
-          'Apps',
-          'Connect work apps here. Individual apps stay in the main pane, not in the sidebar.',
-          appCards,
-          'No app connectors are available for this surface yet.',
-        );
-      case 'channels':
-        return renderExternalCollection(
-          'Channels',
-          surface === 'sage'
-            ? 'Personal channels stay on Connected Computer. Business/customer channels stay separate.'
-            : 'Studio channels are customer-facing and separate from Sage personal channels.',
-          channelCards,
-          'No channel connectors are available for this surface yet.',
-        );
-      case 'computers':
-        return renderAgentComputerConnections();
-      case 'knowledge':
-        return renderExternalCollection(
-          'Knowledge',
-          'Approved sources Sage can read when you ask.',
-          knowledgeCards,
-          'No knowledge sources are available yet.',
-        );
-      case 'skills':
-        return (
-          <section className="sage-unified-section">
-            <p className="sage-unified-section__label">Skills</p>
-            <p className="sage-unified-section__description">
-              Installable Skill.md packages for reusable Sage procedures. Each package carries its own setup and safety
-              requirements.
-            </p>
-            <WorkstationSageToolsPane />
-          </section>
-        );
-      case 'developer':
+      case 'ai_runtime':
+        return renderAiRuntimeOverview();
+      case 'plugins':
       default:
-        return (
-          <section className="sage-unified-section">
-            <p className="sage-unified-section__label">Developer tools</p>
-            <p className="sage-unified-section__description">Custom APIs, tool servers, and webhooks stay collapsed until a technical user needs them.</p>
-            <div className="sage-integrations-detail-card">
-              <strong>MCP servers, custom APIs, and webhooks</strong>
-              <span>Use this lane for developer-owned connections that should not be mixed with everyday apps and channels. MCP tools stay unavailable until reviewed here.</span>
-            </div>
-            <div className="sage-unified-expand">
-              <div className="sage-unified-expand__header">
-                <strong className="sage-unified-expand__title">Add MCP server</strong>
-              </div>
-              <FormField label="Server ID">
-                <FormInput
-                  value={mcpServerDraft.serverId}
-                  placeholder="inventory-feed"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  onChange={(event) => {
-                    const serverId = event.currentTarget.value;
-                    setMcpServerDraft((current) => ({ ...current, serverId }));
-                  }}
-                />
-              </FormField>
-              <FormField label="Label">
-                <FormInput
-                  value={mcpServerDraft.label}
-                  placeholder="Inventory Feed"
-                  onChange={(event) => {
-                    const label = event.currentTarget.value;
-                    setMcpServerDraft((current) => ({ ...current, label }));
-                  }}
-                />
-              </FormField>
-              <FormField label="Endpoint">
-                <FormInput
-                  type="url"
-                  value={mcpServerDraft.endpoint}
-                  placeholder="https://example.com/mcp"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  onChange={(event) => {
-                    const endpoint = event.currentTarget.value;
-                    setMcpServerDraft((current) => ({ ...current, endpoint }));
-                  }}
-                />
-              </FormField>
-              <div className="sage-unified-expand__actions">
-                <AppButton
-                  type="button"
-                  disabled={busyCardId === 'mcp:save'}
-                  onClick={() => {
-                    void handleMcpServerSave();
-                  }}
-                >
-                  {busyCardId === 'mcp:save' ? 'Saving...' : 'Save and discover tools'}
-                </AppButton>
-              </div>
-            </div>
-            {mcpServers.length > 0 ? (
-              <div className="sage-ai-provider-sections">
-                {mcpServers.map((server) => {
-                  const serverId = readString(server.id);
-                  const serverTools = Array.isArray(server.tools) ? server.tools : [];
-                  return (
-                    <section key={serverId || readString(server.endpoint)} className="sage-ai-provider-section">
-                      <div className="sage-ai-provider-section__header">
-                        <strong>{readString(server.label, serverId || 'MCP server')}</strong>
-                        <span>{server.enabled === false ? 'Disabled' : `${serverTools.length} tool${serverTools.length === 1 ? '' : 's'}`}</span>
-                      </div>
-                      <div className="sage-integrations-detail-card">
-                        <strong>{readString(server.endpoint, 'No endpoint recorded')}</strong>
-                        <span>
-                          {server.last_synced_at ? `Last synced ${readString(server.last_synced_at)}` : 'Refresh to discover current tools.'}
-                        </span>
-                        <div className="sage-unified-expand__actions">
-                          <AppButton
-                            type="button"
-                            tone="secondary"
-                            disabled={busyCardId === `mcp:${serverId}:refresh`}
-                            onClick={() => {
-                              void handleMcpServerRefresh(server);
-                            }}
-                          >
-                            {busyCardId === `mcp:${serverId}:refresh` ? 'Refreshing...' : 'Refresh tools'}
-                          </AppButton>
-                          <AppButton
-                            type="button"
-                            tone="ghost"
-                            disabled={busyCardId === `mcp:${serverId}:delete`}
-                            onClick={() => {
-                              void handleMcpServerDelete(server);
-                            }}
-                          >
-                            {busyCardId === `mcp:${serverId}:delete` ? 'Removing...' : 'Remove'}
-                          </AppButton>
-                        </div>
-                      </div>
-                      {serverTools.length > 0 ? (
-                        <div className="sage-unified-grid sage-unified-grid--4">
-                          {serverTools.map((tool) => {
-                            const toolName = readString(tool.name);
-                            const approved = tool.approved !== false;
-                            const approveKey = `mcp:${serverId}:${toolName}:approve`;
-                            return (
-                              <article key={toolName || readString(tool.label)} className="sage-unified-card">
-                                <span className="sage-unified-card__label">{readString(tool.label, toolName || 'MCP tool')}</span>
-                                <span className="sage-unified-card__detail">
-                                  {readString(tool.description, 'No description provided.')}
-                                </span>
-                                <span className={joinClassNames('sage-unified-card__status', approved && 'sage-unified-card__status--connected')}>
-                                  {approved ? 'Approved' : 'Needs review'}
-                                </span>
-                                <span className="sage-unified-card__detail">
-                                  {[readString(tool.action_class, 'read'), readString(tool.risk_level, 'low'), tool.requires_approval ? 'needs approval' : 'policy bound'].join(' · ')}
-                                </span>
-                                {!approved ? (
-                                  <AppButton
-                                    type="button"
-                                    tone="secondary"
-                                    disabled={busyCardId === approveKey}
-                                    onClick={() => {
-                                      void handleMcpToolApprove(server, tool);
-                                    }}
-                                  >
-                                    {busyCardId === approveKey ? 'Approving...' : 'Approve tool'}
-                                  </AppButton>
-                                ) : null}
-                              </article>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="sage-integrations-detail-card">
-                          <strong>No tools discovered yet</strong>
-                          <span>Refresh the server or check its MCP endpoint.</span>
-                        </div>
-                      )}
-                    </section>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="sage-integrations-detail-card">
-                <strong>No MCP servers connected</strong>
-                <span>Add a server to make custom tools visible for approval.</span>
-              </div>
-            )}
-          </section>
-        );
+        return renderPluginsOverview();
     }
   }
+
 
   return (
     <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)} data-workstation-surface="integrations">
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
       <WorkstationSplitWorkbench
-        ariaLabel="Connections"
-        className="sage-integrations-workbench"
-        resizableSidebar
-        sidebarResizeStorageKey={`empyralis:connections-sidebar-width:${workspaceId}`}
-        sidebarDefaultWidth={330}
-        sidebarMinWidth={96}
-        sidebarMaxWidth={420}
-        sidebar={renderIntegrationSidebar()}
+        ariaLabel="Setup"
+        className="sage-integrations-workbench sage-integrations-workbench--single"
+        sidebar={null}
       >
         {renderSelectedIntegrationDetail()}
       </WorkstationSplitWorkbench>
@@ -4162,8 +4273,8 @@ export function WorkstationSageConnectorsPane({
 
       <CommandSheet
         open={providerPickerOpen}
-        title="Choose AI model"
-        description="Use Empyralis credits by default, or connect your own AI account."
+        title="Choose workspace AI route"
+        description="Use the workspace default route, provider API keys, or local models from AI & Runtime."
         onClose={() => {
           setProviderPickerOpen(false);
           setProviderPickerDraftId(null);

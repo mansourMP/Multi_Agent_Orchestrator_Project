@@ -25,13 +25,13 @@ type AppThemeContextValue = {
 };
 
 const AppThemeContext = createContext<AppThemeContextValue>({
-  preference: 'system',
+  preference: 'light',
   resolvedTheme: APP_DEFAULT_THEME,
 });
 
 function readSystemDarkPreference(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-    return true;
+    return false;
   }
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
 }

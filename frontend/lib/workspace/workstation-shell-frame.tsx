@@ -18,20 +18,14 @@ export function WorkstationShellFrame({
   switcherPane: ReactNode;
   kernelPane: ReactNode;
 }) {
+  void switcherPane;
+
   return (
     <div
       data-workstation-shell="frame"
-      data-workstation-shell-zones="2"
+      data-workstation-shell-zones="1"
       className="app-shell-frame"
     >
-      <aside
-        data-workstation-pane="rail"
-        data-workstation-shell-zone="rail"
-        className="app-shell-frame__sidebar"
-      >
-        {switcherPane}
-      </aside>
-
       <div
         data-workstation-shell="kernel-host"
         data-workstation-shell-zone="content"

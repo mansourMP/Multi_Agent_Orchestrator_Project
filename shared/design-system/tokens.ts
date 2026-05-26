@@ -10,7 +10,7 @@ const px = (value: number): string => `${value}px`;
 const ms = (value: number): string => `${value}ms`;
 
 export const DESIGN_SYSTEM_THEME_ATTRIBUTE = 'data-emp-theme';
-export const DESIGN_SYSTEM_DEFAULT_THEME = 'dark' as const;
+export const DESIGN_SYSTEM_DEFAULT_THEME = 'light' as const;
 
 export const DESIGN_SYSTEM_FONTS = {
   sans: 'var(--font-dm-sans), "DM Sans", "Inter", "Geist", "SF Pro Text", "SF Pro Display", "Segoe UI", sans-serif',

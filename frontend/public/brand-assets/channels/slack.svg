@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img">
+  <title>Slack</title>
+  <path fill="#36C5F0" d="M8.2 2a2.2 2.2 0 0 0 0 4.4h2.2V4.2A2.2 2.2 0 0 0 8.2 2Z"/>
+  <path fill="#36C5F0" d="M10.4 8.2H4.2a2.2 2.2 0 0 0 0 4.4h6.2V8.2Z"/>
+  <path fill="#2EB67D" d="M22 8.2a2.2 2.2 0 0 0-4.4 0v2.2h2.2A2.2 2.2 0 0 0 22 8.2Z"/>
+  <path fill="#2EB67D" d="M15.8 10.4V4.2a2.2 2.2 0 0 0-4.4 0v6.2h4.4Z"/>
+  <path fill="#ECB22E" d="M15.8 22a2.2 2.2 0 0 0 0-4.4h-2.2v2.2A2.2 2.2 0 0 0 15.8 22Z"/>
+  <path fill="#ECB22E" d="M13.6 15.8h6.2a2.2 2.2 0 0 0 0-4.4h-6.2v4.4Z"/>
+  <path fill="#E01E5A" d="M2 15.8a2.2 2.2 0 0 0 4.4 0v-2.2H4.2A2.2 2.2 0 0 0 2 15.8Z"/>
+  <path fill="#E01E5A" d="M8.2 13.6v6.2a2.2 2.2 0 0 0 4.4 0v-6.2H8.2Z"/>
+</svg>

@@ -11,6 +11,7 @@ from server_modules import deployed_agent_config_schema
 from server_modules import failure_policy_service
 from server_modules import memory_summary_service
 from server_modules import provider_profiles
+from server_modules import workspace_context_memory_adapter
 from server_modules.conversation_memory_policy import (
     EXTERNAL_CHANNEL_CUSTOMER_PROFILE,
     MemoryPolicyProfile,
@@ -44,6 +45,13 @@ def _compact_text(value: Any, *, limit: int = 320) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 1].rstrip() + "…"
+
+
+def _external_safe_memory_text(value: Any, *, limit: int = 320) -> str:
+    sanitized = workspace_context_memory_adapter.strip_red_facts_from_external_context(str(value or ""))
+    if not sanitized:
+        return ""
+    return _compact_text(sanitized, limit=limit)
 
 
 async def _append_memory_audit_event(
@@ -197,7 +205,7 @@ def _normalize_history_messages(
         if resolved_exclude_event_id and str(event.get("id") or "").strip() == resolved_exclude_event_id:
             continue
         role = _event_role(event)
-        content = _compact_text(event.get("text"), limit=900)
+        content = _external_safe_memory_text(event.get("text"), limit=900)
         if role not in {"user", "assistant"} or not content:
             continue
         normalized.append({"role": role, "content": content})
@@ -216,7 +224,7 @@ def _render_memory_business_plan(
     ]
     for item in prior_messages:
         role = str(item.get("role") or "").strip().lower()
-        content = _compact_text(item.get("content"), limit=900)
+        content = _external_safe_memory_text(item.get("content"), limit=900)
         if not content:
             continue
         if role == "assistant" and content.lower().startswith("persistent customer memory:"):
@@ -293,7 +301,10 @@ async def load_deployed_agent_memory_context(
     backing_install_id = str((deployed_agent or {}).get("backing_install_id") or "").strip() or None
     memory_row = await control_plane_repository.get_deployed_agent_conversation_memory(**key)
     existing_summary = (
-        str((memory_row or {}).get("summary_text") or "").strip()
+        _external_safe_memory_text(
+            (memory_row or {}).get("summary_text"),
+            limit=DEFAULT_MEMORY_BUSINESS_PLAN_MAX_CHARS,
+        )
         if _within_retention_window(
             (memory_row or {}).get("updated_at") or (memory_row or {}).get("created_at"),
             retention_days=policy.retention.summary_days,

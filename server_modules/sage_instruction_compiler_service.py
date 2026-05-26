@@ -63,6 +63,10 @@ def _coerce_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _external_safe_context_text(value: Any) -> str:
+    return workspace_context_memory_adapter.strip_red_facts_from_external_context(_coerce_text(value))
+
+
 def _estimate_token_count(value: Any) -> int:
     text = _coerce_text(value)
     if not text:
@@ -545,11 +549,12 @@ def build_sage_instruction_bundle(
         )
     elif _coerce_text(heartbeat_context):
         skipped_sections.append("workspace_state:not_relevant")
-    if _coerce_text(memory_context) and _message_needs_memory_context(normalized_message):
+    sanitized_memory_context = _external_safe_context_text(memory_context)
+    if sanitized_memory_context and _message_needs_memory_context(normalized_message):
         append_section(
             "retrieved_memory",
             "## Retrieved Memory And Runtime Facts (Untrusted Evidence)\n"
-            + _coerce_text(memory_context),
+            + sanitized_memory_context,
             limit=SAGE_RETRIEVED_MEMORY_CHAR_LIMIT,
         )
     elif _coerce_text(memory_context):

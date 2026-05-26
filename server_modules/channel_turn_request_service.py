@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from server_modules.agent_turn import build_inbound_agent_turn_request
 from server_modules import deployed_agent_config_schema
+from server_modules import external_content_guard
 from server_modules.channel_identity_service import (
     build_inbound_identity,
     normalize_channel_key,
@@ -138,6 +139,44 @@ def _specialist_tool_descriptors(selected_tool_ids: list[str]) -> list[dict[str,
     return descriptors
 
 
+def _guard_external_channel_message(
+    *,
+    message: str,
+    channel_key: str,
+    actor_id: str,
+    actor_display_name: str,
+    request_id: Optional[str],
+    metadata: Dict[str, Any],
+) -> tuple[str, Dict[str, Any]]:
+    guarded = external_content_guard.wrap_external_content(
+        message,
+        source="external_channel_ingress",
+        sender=actor_display_name or actor_id or None,
+        channel=channel_key,
+        source_event_id=request_id,
+        metadata={
+            "actor_id": actor_id,
+            **{
+                key: value
+                for key, value in dict(metadata or {}).items()
+                if key in {"endpoint_key", "message_id", "connector_id", "source_connector_id"}
+            },
+        },
+    )
+    return guarded.text, {
+        "external_content_guard": {
+            "wrapped": True,
+            "wrapper_id": guarded.wrapper_id,
+            "source": guarded.metadata.source,
+            "channel": guarded.metadata.channel,
+            "source_event_id": guarded.metadata.source_event_id,
+            "injection_score": guarded.injection_score,
+            "injection_severity": guarded.injection_severity,
+            "suspicious_patterns": list(guarded.suspicious_patterns),
+        }
+    }
+
+
 def build_channel_turn_request(
     *,
     tenant_id: str,
@@ -205,6 +244,15 @@ def build_channel_turn_request(
         "selected_tool_ids": selected_tool_ids or None,
         "tools": requested_tools or None,
     }
+    guarded_message, guard_metadata = _guard_external_channel_message(
+        message=message,
+        channel_key=channel_key,
+        actor_id=actor_id,
+        actor_display_name=actor_display_name,
+        request_id=request_id,
+        metadata=metadata,
+    )
+    metadata.update(guard_metadata)
     return build_inbound_agent_turn_request(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -214,7 +262,7 @@ def build_channel_turn_request(
         actor_type="user",
         actor_id=actor_id,
         actor_display_name=actor_display_name,
-        message=message,
+        message=guarded_message,
         prior_messages=prior_messages,
         context_hints={
             "source": "external_channel_ingress",

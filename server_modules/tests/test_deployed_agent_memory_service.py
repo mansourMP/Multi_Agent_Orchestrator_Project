@@ -126,6 +126,54 @@ class DeployedAgentMemoryServiceTests(unittest.IsolatedAsyncioTestCase):
             result["prior_messages"],
         )
 
+    async def test_load_memory_context_strips_red_facts_before_prompt_context(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_memory_service.control_plane_repository.get_deployed_agent_conversation_memory",
+                new=AsyncMock(
+                    return_value={
+                        "summary_text": (
+                            "Persistent customer memory:\n"
+                            "Customer prefers OEM parts.\n"
+                            "RED: customer token abcdefghijklmnopqrstuvwxyz123456"
+                        ),
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.deployed_agent_memory_service.control_plane_repository.list_deployed_agent_conversation_events",
+                new=AsyncMock(
+                    return_value=[
+                        _event(
+                            event_id="evt-1",
+                            direction="inbound",
+                            text="Safe note.\n- [RED] Production API key: sk-agent-secret-123456789",
+                            created_at="2026-04-13T12:00:00Z",
+                        ),
+                    ]
+                ),
+            ),
+        ):
+            result = await deployed_agent_memory_service.load_deployed_agent_memory_context(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                deployed_agent=_deployed_agent(),
+                channel_key="telegram",
+                external_user_id="telegram-user-1",
+                session_key="telegram:partspro-bot:telegram-user-1",
+                responder_install_id="ainstall_1",
+            )
+
+        rendered = "\n".join(
+            [item["content"] for item in result["prior_messages"]]
+            + [str(result.get("business_plan") or "")]
+        )
+        self.assertIn("Customer prefers OEM parts.", rendered)
+        self.assertIn("Safe note.", rendered)
+        self.assertIn("RED memory fact(s) stripped", rendered)
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz123456", rendered)
+        self.assertNotIn("sk-agent-secret-123456789", rendered)
+
     async def test_load_memory_context_is_isolated_by_user_and_deployment(self) -> None:
         async def fake_get_memory(**kwargs):
             if (

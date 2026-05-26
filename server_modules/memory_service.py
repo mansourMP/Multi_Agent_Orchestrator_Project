@@ -1713,9 +1713,24 @@ def persist_direct_chat_memory_best_effort(
         )
     except Exception:
         pass
-    extraction_prior_messages: List[Dict[str, str]] = list(prior_messages or [])
-    extraction_prior_messages.append({"role": "user", "content": normalized_user_message})
-    extraction_prior_messages.append({"role": "assistant", "content": normalized_assistant_reply})
+    extraction_prior_messages: List[Dict[str, str]] = []
+    for item in list(prior_messages or []):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = workspace_context_memory_adapter.strip_red_facts_from_external_context(item.get("content") or "")
+        if content:
+            extraction_prior_messages.append({"role": role, "content": content})
+    safe_user_message = workspace_context_memory_adapter.strip_red_facts_from_external_context(normalized_user_message)
+    safe_assistant_reply = workspace_context_memory_adapter.strip_red_facts_from_external_context(normalized_assistant_reply)
+    if safe_user_message:
+        extraction_prior_messages.append({"role": "user", "content": safe_user_message})
+    if safe_assistant_reply:
+        extraction_prior_messages.append({"role": "assistant", "content": safe_assistant_reply})
+    if not extraction_prior_messages:
+        return
     extraction_context = {
         "workspace_id": workspace_id,
         "provider": provider,

@@ -761,6 +761,39 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["content"], "Timezone is Asia/Shanghai.")
 
+    def test_persist_direct_chat_memory_best_effort_strips_red_facts_before_extraction_prompt(self) -> None:
+        captured_messages = []
+
+        def fake_generate_reply(**kwargs):
+            captured_messages.extend(kwargs["prior_messages"])
+            return ('["Safe preference retained."]', {}, "openai", "")
+
+        memory_service.persist_direct_chat_memory_best_effort(
+            workspace_id="default",
+            provider="openai",
+            model="gpt-test",
+            credentials={"api_key": "sk-test"},
+            reasoning_effort="medium",
+            prior_messages=[
+                {
+                    "role": "user",
+                    "content": "Safe prior note.\nRED: customer token abcdefghijklmnopqrstuvwxyz123456",
+                }
+            ],
+            user_message="Remember safe preference.\n- [RED] API key: sk-agent-secret-123456789",
+            assistant_reply="Saved the safe preference.",
+            generate_reply=fake_generate_reply,
+            extraction_prompt="Extract durable facts.",
+            extraction_system_prompt="Return a JSON array.",
+        )
+
+        rendered = "\n".join(item["content"] for item in captured_messages)
+        self.assertIn("Safe prior note.", rendered)
+        self.assertIn("Remember safe preference.", rendered)
+        self.assertIn("RED memory fact(s) stripped", rendered)
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz123456", rendered)
+        self.assertNotIn("sk-agent-secret-123456789", rendered)
+
     def test_find_workspace_memory_entry_matches_key_or_content(self) -> None:
         memory_service.save_memory("default", "favorite_editor", "Neovim")
         memory_service.save_memory("default", "timezone", "Asia/Shanghai")

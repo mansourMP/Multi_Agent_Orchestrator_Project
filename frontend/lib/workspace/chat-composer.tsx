@@ -1,17 +1,38 @@
 'use client';
 
-import type { FormEvent, KeyboardEvent } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
+  BadgePlus,
+  Blocks,
+  BookOpen,
   Brain,
-  Briefcase,
-  Check,
+  CalendarDays,
   ChevronRight,
+  Command as CommandIcon,
+  Cpu,
+  FileSearch,
+  Globe2,
+  Image as ImageIcon,
+  Laptop,
+  ListTodo,
+  Mail,
   Mic,
   MicOff,
+  Paperclip,
+  Plug,
+  PlugZap,
   Plus,
+  Search,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
   Square,
+  SquareStack,
+  SquareTerminal,
+  Table,
+  WandSparkles,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -24,13 +45,6 @@ type ComposerOption = {
   detail?: string;
   disabled?: boolean;
 };
-
-type ComposerOptionGroup = {
-  label: string;
-  options: ComposerOption[];
-};
-
-type ComposerModelOption = ComposerOption | ComposerOptionGroup;
 
 export type ComposerToolItem = {
   id: string;
@@ -69,24 +83,45 @@ export type ComposerActionMenuItem = {
   onSelect: () => void;
 };
 
+export type ComposerCapabilityStatusTone = 'ready' | 'setup' | 'warning' | 'neutral';
+
+export type ComposerCapabilitySubItem = {
+  id: string;
+  title: string;
+  detail?: string;
+  status?: string;
+  statusTone?: ComposerCapabilityStatusTone;
+  icon?: LucideIcon;
+  iconSrc?: string;
+  enabled?: boolean;
+  itemType?: 'action' | 'toggle';
+  dividerBefore?: boolean;
+  onSelect?: () => void;
+};
+
+export type ComposerCapabilityItem = {
+  id: string;
+  title: string;
+  status?: string;
+  statusTone?: ComposerCapabilityStatusTone;
+  icon?: LucideIcon;
+  iconSrc?: string;
+  submenuTitle?: string;
+  submenuItems?: readonly ComposerCapabilitySubItem[];
+  onSelect: () => void;
+};
+
 export type ComposerComputerStatus = {
   online: boolean;
   label: string;
+  selectedValue?: string;
+  options?: ComposerOption[];
+  onChange?: (nextValue: string) => void;
+  onOpenSettings?: () => void;
 };
 
-function isComposerOptionGroup(option: ComposerModelOption): option is ComposerOptionGroup {
-  return 'options' in option;
-}
-
-function composerOptionLabel(options: ComposerModelOption[], value: string): string {
+function composerOptionLabel(options: ComposerOption[], value: string): string {
   for (const option of options) {
-    if (isComposerOptionGroup(option)) {
-      const nested = option.options.find((item) => item.value === value);
-      if (nested) {
-        return nested.label;
-      }
-      continue;
-    }
     if (option.value === value) {
       return option.label;
     }
@@ -94,44 +129,92 @@ function composerOptionLabel(options: ComposerModelOption[], value: string): str
   return '';
 }
 
-function flattenComposerOptions(options: ComposerModelOption[]): Array<ComposerOption & { groupLabel?: string }> {
-  return options.flatMap((option) => {
-    if (isComposerOptionGroup(option)) {
-      return option.options.map((nested) => ({
-        ...nested,
-        groupLabel: option.label,
-      }));
+function capabilityOptionIcon(id: string): LucideIcon {
+  const normalizedId = id.toLowerCase();
+  if (normalizedId.startsWith('connector:')) {
+    return Plug;
+  }
+  if (normalizedId.startsWith('skill:')) {
+    if (normalizedId.includes('calendar')) {
+      return CalendarDays;
     }
-    return [option];
-  });
+    if (normalizedId.includes('code') || normalizedId.includes('shell') || normalizedId.includes('terminal')) {
+      return SquareTerminal;
+    }
+    if (normalizedId.includes('file')) {
+      return FileSearch;
+    }
+    if (normalizedId.includes('gmail') || normalizedId.includes('mail')) {
+      return Mail;
+    }
+    if (normalizedId.includes('http') || normalizedId.includes('web') || normalizedId.includes('search')) {
+      return Globe2;
+    }
+    return SquareStack;
+  }
+  switch (id) {
+    case 'files':
+      return Paperclip;
+    case 'browser':
+      return Globe2;
+    case 'computer':
+      return Laptop;
+    case 'connectors':
+      return Blocks;
+    case 'skills':
+      return WandSparkles;
+    case 'manage_skills':
+    case 'manage_connectors':
+      return SlidersHorizontal;
+    case 'add_skills':
+      return BadgePlus;
+    case 'add_connector':
+      return PlugZap;
+    case 'tasks':
+      return ListTodo;
+    case 'memory':
+      return Brain;
+    case 'research':
+      return Search;
+    case 'image_create':
+      return ImageIcon;
+    case 'image_edit':
+      return Sparkles;
+    case 'slides':
+      return BookOpen;
+    case 'website':
+      return Globe2;
+    case 'spreadsheet':
+      return Table;
+    case 'approvals':
+      return ShieldCheck;
+    case 'model':
+      return Cpu;
+    case 'commands':
+      return CommandIcon;
+    default:
+      return Sparkles;
+  }
 }
 
-function compactModelLabel(label: string, fallback: string): string {
-  const normalized = label.trim() || fallback;
-  const parts = normalized
-    .split('·')
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const routeSuffixes = new Set(['hosted', 'local', 'workspace key', 'empyralis credits']);
-  const visibleParts = parts.filter((part) => !routeSuffixes.has(part.toLowerCase()));
-  if (visibleParts.length > 0 && visibleParts.length < parts.length) {
-    return visibleParts.join(' · ');
+function CapabilityIconMark({
+  icon: Icon,
+  iconSrc,
+}: {
+  icon: LucideIcon;
+  iconSrc?: string;
+}) {
+  if (iconSrc) {
+    return (
+      <img
+        src={iconSrc}
+        alt=""
+        aria-hidden="true"
+        className="app-chat-composer__capability-logo"
+      />
+    );
   }
-  if (parts.length >= 2 && parts[0].toLowerCase() === parts[1].toLowerCase()) {
-    return parts[0];
-  }
-  return normalized;
-}
-
-function productProviderLabel(label: string | null | undefined, hostedCredits: boolean): string | null {
-  const normalized = (label ?? '').trim();
-  if (hostedCredits) {
-    if (!normalized || normalized.toLowerCase() === 'empyralis credits') {
-      return 'Empyralis AI';
-    }
-    return normalized.replace(/\s*credits$/i, ' AI');
-  }
-  return normalized || null;
+  return <Icon size={16} strokeWidth={1.9} aria-hidden="true" />;
 }
 
 export function ChatComposer({
@@ -139,37 +222,33 @@ export function ChatComposer({
   onDraftChange,
   onSubmit,
   onStop,
-  onOpenIntegrations,
-  model,
-  modelOptions,
-  modelProviderLabel = null,
-  onModelChange,
+  capabilityItems = [],
+  onFilesSelected,
+  modelControl,
+  modelControlOpen = false,
+  onComposerMenuOpen,
   reasoningEffort,
   reasoningOptions,
   onReasoningEffortChange,
   controlsDisabled = false,
   sendDisabled = false,
   placeholder = '',
-  providerGateVisible = false,
-  providerSummary = null,
   busy = false,
   smallModelWarning = null,
   onDismissSmallModelWarning,
   slashCommands = [],
   onSlashCommandSelect,
-  actionMenuItems = [],
   onVoiceTranscribe,
-  computerStatus = null,
 }: {
   draft: string;
   onDraftChange: (nextDraft: string) => void;
   onSubmit: () => void;
   onStop?: () => void;
-  onOpenIntegrations?: () => void;
-  model: string;
-  modelOptions: ComposerModelOption[];
-  modelProviderLabel?: string | null;
-  onModelChange: (nextValue: string) => void;
+  capabilityItems?: readonly ComposerCapabilityItem[];
+  onFilesSelected?: (files: File[]) => void | Promise<void>;
+  modelControl?: ReactNode;
+  modelControlOpen?: boolean;
+  onComposerMenuOpen?: () => void;
   reasoningEffort: string;
   reasoningOptions: ComposerOption[];
   onReasoningEffortChange: (nextValue: string) => void;
@@ -190,17 +269,15 @@ export function ChatComposer({
   onSlashCommandSelect?: (command: ComposerSlashCommand) => void;
   actionMenuItems?: readonly ComposerActionMenuItem[];
   onVoiceTranscribe?: (audio: Blob) => Promise<string>;
-  computerStatus?: ComposerComputerStatus | null;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const actionLauncherRef = useRef<HTMLDivElement | null>(null);
   const commandPaletteRef = useRef<HTMLDivElement | null>(null);
-  const modelPanelRef = useRef<HTMLDivElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const draftRef = useRef(draft);
   const [actionPaletteOpen, setActionPaletteOpen] = useState(false);
-  const [modelPanelOpen, setModelPanelOpen] = useState(false);
   const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const [commandPaletteDismissed, setCommandPaletteDismissed] = useState(false);
@@ -209,36 +286,12 @@ export function ChatComposer({
   const canSend = !busy && !sendDisabled && hasDraft;
   const canStop = busy && typeof onStop === 'function';
   const showSendButton = busy || hasDraft;
-  const rawSelectedModelLabel = compactModelLabel(composerOptionLabel(modelOptions, model), model || 'Model');
-  const visibleModelOptions = useMemo(() => flattenComposerOptions(modelOptions), [modelOptions]);
-  const selectedModelOption = visibleModelOptions.find((option) => option.value === model) ?? null;
-  const hostedCreditOptions = useMemo(
-    () => visibleModelOptions.filter((option) => {
-      const groupLabel = (option.groupLabel ?? '').toLowerCase();
-      const label = compactModelLabel(option.label, option.value).toLowerCase();
-      return groupLabel === 'empyralis credits' || label === 'light' || label === 'pro' || label === 'max';
-    }),
-    [visibleModelOptions],
-  );
-  const selectedModelIsDefaultRoute = !selectedModelOption || selectedModelOption.value === 'default';
-  const isHostedCreditsModel = (selectedModelOption?.groupLabel ?? '').toLowerCase() === 'empyralis credits'
-    || (modelProviderLabel ?? '').toLowerCase() === 'empyralis credits'
-    || ['light', 'pro', 'max'].includes(rawSelectedModelLabel.toLowerCase())
-    || (selectedModelIsDefaultRoute && hostedCreditOptions.length > 0);
-  const selectedModelLabel = selectedModelIsDefaultRoute && hostedCreditOptions.length > 0
-    ? compactModelLabel(hostedCreditOptions[0]?.label ?? 'Light', 'Light')
-    : selectedModelIsDefaultRoute && visibleModelOptions.length <= 1
-      ? 'Connect AI'
-      : rawSelectedModelLabel;
-  const visibleSelectedModelLabel = isHostedCreditsModel
-    ? `${selectedModelLabel} · Workspace AI`
-    : selectedModelLabel;
-  const modelMenuOptions = isHostedCreditsModel && hostedCreditOptions.length > 0
-    ? hostedCreditOptions
-    : visibleModelOptions;
-  const modelMenuProviderLabel = productProviderLabel(modelProviderLabel, isHostedCreditsModel);
-  const canOpenProviderPicker = typeof onOpenIntegrations === 'function';
   const selectedReasoningLabel = composerOptionLabel(reasoningOptions, reasoningEffort) || reasoningEffort || 'Auto';
+  const availableReasoningOptions = useMemo(
+    () => reasoningOptions.filter((option) => !option.disabled),
+    [reasoningOptions],
+  );
+  const showInlineReasoningToggle = false;
   const voiceSupported = typeof onVoiceTranscribe === 'function'
     && typeof window !== 'undefined'
     && typeof navigator !== 'undefined'
@@ -279,7 +332,13 @@ export function ChatComposer({
     && commandQuery !== null
     && filteredSlashCommands.length > 0
     && typeof onSlashCommandSelect === 'function';
-  const actionMenuVisible = actionPaletteOpen && typeof onOpenIntegrations === 'function';
+  const actionMenuVisible = actionPaletteOpen
+    && capabilityItems.length > 0;
+  const [activeCapabilitySubmenuId, setActiveCapabilitySubmenuId] = useState<string | null>(null);
+  const activeCapabilitySubmenu = useMemo(
+    () => capabilityItems.find((item) => item.id === activeCapabilitySubmenuId && item.submenuItems && item.submenuItems.length > 0) ?? null,
+    [activeCapabilitySubmenuId, capabilityItems],
+  );
 
   const submitDraft = () => {
     if (!canSend) {
@@ -316,6 +375,19 @@ export function ChatComposer({
   }, [actionPaletteOpen, commandQuery]);
 
   useEffect(() => {
+    if (!actionMenuVisible) {
+      setActiveCapabilitySubmenuId(null);
+      return;
+    }
+    setActiveCapabilitySubmenuId((current) => {
+      if (current && capabilityItems.some((item) => item.id === current && item.submenuItems && item.submenuItems.length > 0)) {
+        return current;
+      }
+      return null;
+    });
+  }, [actionMenuVisible, capabilityItems]);
+
+  useEffect(() => {
     if (selectedCommandIndex < filteredSlashCommands.length) {
       return;
     }
@@ -323,7 +395,7 @@ export function ChatComposer({
   }, [filteredSlashCommands.length, selectedCommandIndex]);
 
   useEffect(() => {
-    if (!actionPaletteOpen && !commandPaletteVisible && !modelPanelOpen) {
+    if (!actionPaletteOpen && !commandPaletteVisible) {
       return undefined;
     }
     const handlePointerDown = (event: PointerEvent) => {
@@ -334,19 +406,17 @@ export function ChatComposer({
       if (
         actionLauncherRef.current?.contains(target)
         || commandPaletteRef.current?.contains(target)
-        || modelPanelRef.current?.contains(target)
       ) {
         return;
       }
       setActionPaletteOpen(false);
-      setModelPanelOpen(false);
       setCommandPaletteDismissed(true);
     };
     window.addEventListener('pointerdown', handlePointerDown);
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
     };
-  }, [actionPaletteOpen, commandPaletteVisible, modelPanelOpen]);
+  }, [actionPaletteOpen, commandPaletteVisible]);
 
   const selectSlashCommand = (command: ComposerSlashCommand) => {
     setCommandPaletteDismissed(true);
@@ -433,10 +503,23 @@ export function ChatComposer({
       setActionPaletteOpen(false);
     } else {
       setActionPaletteOpen(false);
-      setModelPanelOpen(false);
       setCommandPaletteDismissed(false);
     }
     onDraftChange(nextDraft);
+  };
+
+  const cycleReasoningEffort = () => {
+    if (availableReasoningOptions.length <= 1) {
+      return;
+    }
+    const currentIndex = availableReasoningOptions.findIndex((option) => option.value === reasoningEffort);
+    const nextIndex = currentIndex >= 0
+      ? (currentIndex + 1) % availableReasoningOptions.length
+      : 0;
+    const nextOption = availableReasoningOptions[nextIndex];
+    if (nextOption) {
+      onReasoningEffortChange(nextOption.value);
+    }
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -481,10 +564,25 @@ export function ChatComposer({
     event.preventDefault();
     submitDraft();
   };
-
+  const openFilePicker = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+  const handleFilesSelected = (files: FileList | null) => {
+    const selectedFiles = Array.from(files ?? []);
+    if (selectedFiles.length === 0) {
+      return;
+    }
+    void onFilesSelected?.(selectedFiles);
+  };
   return (
     <section data-workstation-chat-composer="root" className="app-chat-composer">
-      <form className="app-chat-composer__surface" onSubmit={handleSubmit}>
+      <form
+        className={joinClassNames(
+          'app-chat-composer__surface',
+          showInlineReasoningToggle && 'app-chat-composer__surface--reasoning-visible',
+        )}
+        onSubmit={handleSubmit}
+      >
         <textarea
           ref={textareaRef}
           value={draft}
@@ -494,6 +592,18 @@ export function ChatComposer({
           placeholder={placeholder}
           className="app-textarea app-chat-composer__textarea"
           disabled={sendDisabled && !busy}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="app-chat-composer__file-input"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            handleFilesSelected(event.currentTarget.files);
+            event.currentTarget.value = '';
+          }}
         />
 
         {smallModelWarning ? (
@@ -524,11 +634,24 @@ export function ChatComposer({
           </div>
         ) : null}
 
+        {showInlineReasoningToggle ? (
+          <button
+            type="button"
+            className="app-chat-composer__inline-reasoning"
+            disabled={controlsDisabled || busy}
+            aria-label={`Reasoning mode: ${selectedReasoningLabel}. Click to change.`}
+            onClick={cycleReasoningEffort}
+          >
+            <Brain size={13} strokeWidth={2} aria-hidden="true" />
+            <span>{selectedReasoningLabel}</span>
+          </button>
+        ) : null}
+
         <div className="app-chat-composer__toolbar">
           <div
             className={joinClassNames(
-              'app-chat-composer__toolbar-left',
-              (actionMenuVisible || commandPaletteVisible || modelPanelOpen)
+                  'app-chat-composer__toolbar-left',
+              (actionMenuVisible || commandPaletteVisible || modelControlOpen)
                 && 'app-chat-composer__toolbar-left--menu-open',
             )}
           >
@@ -538,104 +661,151 @@ export function ChatComposer({
                 className={joinClassNames(
                   'app-chat-composer__action-trigger',
                   'app-chat-composer__icon-trigger',
-                  providerGateVisible && 'app-chat-composer__provider-pill--warning',
                 )}
-                  onClick={() => {
-                    setCommandPaletteDismissed(true);
-                    setModelPanelOpen(false);
-                    setActionPaletteOpen((current) => !current);
-                  }}
+                onClick={() => {
+                  onComposerMenuOpen?.();
+                  setCommandPaletteDismissed(true);
+                  setActionPaletteOpen((current) => !current);
+                }}
                 aria-expanded={actionMenuVisible}
-                aria-label={providerGateVisible ? (providerSummary?.actionLabel ?? 'Set up Sage') : 'Add or connect'}
+                aria-label="Add actions"
               >
                 <Plus size={18} strokeWidth={2.1} aria-hidden="true" />
               </button>
 
               {actionMenuVisible ? (
                 <div
-                  className="app-chat-composer__action-menu"
+                  className="app-chat-composer__action-menu app-chat-composer__action-menu--capabilities"
                   role="dialog"
-                  aria-label="Add context"
+                  aria-label="Add actions"
                 >
-                  {providerGateVisible && providerSummary && typeof onOpenIntegrations === 'function' ? (
-                    <button
-                      type="button"
-                      className="app-chat-composer__command-setup"
-                      onClick={() => {
-                        setActionPaletteOpen(false);
-                        onOpenIntegrations();
-                      }}
-                    >
-                      <Plus size={16} strokeWidth={2.1} aria-hidden="true" />
-                      <span className="app-chat-composer__command-copy">
-                        <span className="app-chat-composer__command-title-row">
-                          <strong>{providerSummary.actionLabel ?? 'Set up Sage'}</strong>
-                          <span>{providerSummary.label}</span>
-                        </span>
-                      </span>
-                      <ChevronRight
-                        className="app-chat-composer__command-chevron"
-                        size={16}
-                        strokeWidth={1.9}
-                        aria-hidden="true"
-                      />
-                    </button>
-                  ) : null}
-                  {actionMenuItems.map((item) => {
-                    const Icon = item.icon ?? Briefcase;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className="app-chat-composer__command-item"
-                        onClick={() => {
-                          setActionPaletteOpen(false);
-                          item.onSelect();
-                        }}
-                      >
-                        <Icon size={16} strokeWidth={1.9} aria-hidden="true" />
-                        <span className="app-chat-composer__command-copy">
-                          <span className="app-chat-composer__command-title-row">
-                            <strong>{item.title}</strong>
-                            <span className="app-chat-composer__command-description">
-                              {item.description}
+                  <div className="app-chat-composer__capability-list" role="list">
+                    {capabilityItems.map((item) => {
+                      const CapabilityIcon = item.icon ?? capabilityOptionIcon(item.id);
+                      const hasSubmenu = Boolean(item.submenuItems && item.submenuItems.length > 0);
+                      const isSubmenuActive = activeCapabilitySubmenuId === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={joinClassNames(
+                            'app-chat-composer__capability-row',
+                            hasSubmenu && 'app-chat-composer__capability-row--has-submenu',
+                            isSubmenuActive && 'app-chat-composer__capability-row--active',
+                          )}
+                          onPointerEnter={() => {
+                            if (hasSubmenu) {
+                              setActiveCapabilitySubmenuId(item.id);
+                            }
+                          }}
+                          onPointerMove={() => {
+                            if (hasSubmenu) {
+                              setActiveCapabilitySubmenuId(item.id);
+                            }
+                          }}
+                          onMouseEnter={() => {
+                            if (hasSubmenu) {
+                              setActiveCapabilitySubmenuId(item.id);
+                            }
+                          }}
+                          onFocus={() => {
+                            if (hasSubmenu) {
+                              setActiveCapabilitySubmenuId(item.id);
+                            }
+                          }}
+                          onClick={() => {
+                            if (hasSubmenu) {
+                              setActiveCapabilitySubmenuId(item.id);
+                              return;
+                            }
+                            setActionPaletteOpen(false);
+                            if (item.id === 'files') {
+                              openFilePicker();
+                              return;
+                            }
+                            item.onSelect();
+                          }}
+                        >
+                          <span className="app-chat-composer__capability-icon" aria-hidden="true">
+                            <CapabilityIconMark icon={CapabilityIcon} iconSrc={item.iconSrc} />
+                          </span>
+                          <strong>{item.title}</strong>
+                          {hasSubmenu ? (
+                            <ChevronRight className="app-chat-composer__capability-chevron" size={16} strokeWidth={1.9} aria-hidden="true" />
+                          ) : item.status ? (
+                            <span
+                              className={joinClassNames(
+                                'app-chat-composer__capability-status',
+                                item.statusTone && `app-chat-composer__capability-status--${item.statusTone}`,
+                              )}
+                            >
+                              {item.status}
                             </span>
-                          </span>
-                        </span>
-                        <ChevronRight
-                          className="app-chat-composer__command-chevron"
-                          size={16}
-                          strokeWidth={1.9}
-                          aria-hidden="true"
-                        />
-                      </button>
-                    );
-                  })}
-                  {typeof onOpenIntegrations === 'function' ? (
-                    <button
-                      type="button"
-                      className="app-chat-composer__command-item"
-                      onClick={() => {
-                        setActionPaletteOpen(false);
-                        onOpenIntegrations();
-                      }}
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {activeCapabilitySubmenu ? (
+                    <div
+                      className="app-chat-composer__capability-subpanel"
+                      role="menu"
+                      aria-label={activeCapabilitySubmenu.submenuTitle ?? activeCapabilitySubmenu.title}
                     >
-                      <Plus size={16} strokeWidth={1.9} aria-hidden="true" />
-                      <span className="app-chat-composer__command-copy">
-                        <span className="app-chat-composer__command-title-row">
-                          <strong>Add files, apps, or tools</strong>
-                          <span className="app-chat-composer__command-description">
-                            Connect sources and capabilities.
-                          </span>
-                        </span>
-                      </span>
-                      <ChevronRight
-                        className="app-chat-composer__command-chevron"
-                        size={16}
-                        strokeWidth={1.9}
-                        aria-hidden="true"
-                      />
-                    </button>
+                      <div className="app-chat-composer__capability-subpanel-title">
+                        {activeCapabilitySubmenu.submenuTitle ?? activeCapabilitySubmenu.title}
+                      </div>
+                      <div className="app-chat-composer__capability-subpanel-list" role="list">
+                        {(activeCapabilitySubmenu.submenuItems ?? []).map((subItem) => {
+                          const SubItemIcon = subItem.icon ?? capabilityOptionIcon(subItem.id);
+                          const isToggle = subItem.itemType === 'toggle';
+                          return (
+                            <button
+                              key={subItem.id}
+                              type="button"
+                              className={joinClassNames(
+                                'app-chat-composer__capability-subrow',
+                                subItem.dividerBefore && 'app-chat-composer__capability-subrow--divider-before',
+                              )}
+                              onClick={() => {
+                                setActionPaletteOpen(false);
+                                subItem.onSelect?.();
+                              }}
+                            >
+                              <span className="app-chat-composer__capability-icon" aria-hidden="true">
+                                <CapabilityIconMark icon={SubItemIcon} iconSrc={subItem.iconSrc} />
+                              </span>
+                              <span className="app-chat-composer__capability-subrow-copy">
+                                <strong>{subItem.title}</strong>
+                                {subItem.detail ? <small>{subItem.detail}</small> : null}
+                              </span>
+                              {isToggle ? (
+                                <span
+                                  className={joinClassNames(
+                                    'app-chat-composer__capability-switch',
+                                    subItem.enabled && 'app-chat-composer__capability-switch--on',
+                                  )}
+                                  role="switch"
+                                  aria-checked={subItem.enabled === true}
+                                  aria-label={`${subItem.title} connector`}
+                                >
+                                  <span />
+                                </span>
+                              ) : subItem.status ? (
+                                <span
+                                  className={joinClassNames(
+                                    'app-chat-composer__capability-status',
+                                    subItem.statusTone && `app-chat-composer__capability-status--${subItem.statusTone}`,
+                                  )}
+                                >
+                                  {subItem.status}
+                                </span>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   ) : null}
                 </div>
               ) : null}
@@ -675,147 +845,7 @@ export function ChatComposer({
                 </div>
               ) : null}
             </div>
-            <div className="app-chat-composer__model" ref={modelPanelRef}>
-              <button
-                type="button"
-                className="app-chat-composer__provider-pill"
-                disabled={controlsDisabled || busy}
-                aria-expanded={modelPanelOpen}
-                aria-label="Choose AI model"
-                onClick={() => {
-                  setActionPaletteOpen(false);
-                  setCommandPaletteDismissed(true);
-                  setModelPanelOpen((current) => !current);
-                }}
-              >
-                <Brain size={15} strokeWidth={2} aria-hidden="true" />
-                <span>{visibleSelectedModelLabel}</span>
-              </button>
-              {modelPanelOpen ? (
-                <div
-                  className={joinClassNames(
-                    'app-chat-composer__model-popover',
-                    isHostedCreditsModel && 'app-chat-composer__model-popover--hosted',
-                  )}
-                  role="dialog"
-                  aria-label="Model settings"
-                >
-                  {!isHostedCreditsModel && reasoningOptions.length > 0 ? (
-                    <div className="app-chat-composer__model-menu-section">
-                      <span className="app-chat-composer__model-menu-title">Reasoning</span>
-                      <div className="app-chat-composer__model-menu-list" role="listbox" aria-label="Reasoning">
-                        {reasoningOptions.map((option) => (
-                          <button
-                            key={option.value}
-                            type="button"
-                            className={joinClassNames(
-                              'app-chat-composer__model-menu-row',
-                              option.value === reasoningEffort && 'app-chat-composer__model-menu-row--selected',
-                            )}
-                            disabled={controlsDisabled || busy || option.disabled}
-                            onClick={() => {
-                              onReasoningEffortChange(option.value);
-                              setModelPanelOpen(false);
-                            }}
-                            role="option"
-                            aria-selected={option.value === reasoningEffort}
-                          >
-                            <span>{option.label}</span>
-                            {option.value === reasoningEffort ? <Check size={16} strokeWidth={2} aria-hidden="true" /> : null}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="app-chat-composer__model-menu-section">
-                    {!isHostedCreditsModel ? <span className="app-chat-composer__model-menu-title">Model</span> : null}
-                    <div className="app-chat-composer__model-menu-list" role="listbox" aria-label="Model">
-                      {modelMenuOptions.map((option) => {
-                        const compactLabel = compactModelLabel(option.label, option.value);
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            className={joinClassNames(
-                              'app-chat-composer__model-menu-row',
-                              option.value === model && 'app-chat-composer__model-menu-row--selected',
-                            )}
-                            disabled={controlsDisabled || busy || option.disabled}
-                            onClick={() => {
-                              onModelChange(option.value);
-                              setModelPanelOpen(false);
-                            }}
-                            role="option"
-                            aria-selected={option.value === model}
-                          >
-                            <span>
-                              <strong>{compactLabel}</strong>
-                              {option.detail ? <small>{option.detail}</small> : null}
-                            </span>
-                            {option.value === model ? <Check size={16} strokeWidth={2} aria-hidden="true" /> : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  {modelMenuProviderLabel || canOpenProviderPicker ? (
-                    <div className="app-chat-composer__model-menu-section">
-                      <div className="app-chat-composer__model-menu-separator" aria-hidden="true" />
-                      {modelMenuProviderLabel ? (
-                        <button
-                          type="button"
-                          className="app-chat-composer__model-menu-row app-chat-composer__model-menu-row--provider"
-                          disabled={controlsDisabled || busy || !canOpenProviderPicker}
-                          onClick={() => {
-                            setModelPanelOpen(false);
-                            onOpenIntegrations?.();
-                          }}
-                        >
-                          <span>
-                            <strong>{modelMenuProviderLabel}</strong>
-                          </span>
-                          <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="app-chat-composer__model-menu-row app-chat-composer__model-menu-row--provider"
-                        disabled={controlsDisabled || busy || !canOpenProviderPicker}
-                        onClick={() => {
-                          setModelPanelOpen(false);
-                          onOpenIntegrations?.();
-                        }}
-                      >
-                        <span>
-                          <strong>Manage AI route</strong>
-                          <small>Provider accounts, local models, budgets, and fallback.</small>
-                        </span>
-                        <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
-                      </button>
-                    </div>
-                  ) : null}
-                  {!isHostedCreditsModel && reasoningOptions.length <= 0 ? (
-                    <div className="app-chat-composer__model-readout">
-                      <span>Reasoning</span>
-                      <strong>{selectedReasoningLabel}</strong>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-            {computerStatus ? (
-              <span
-                className={joinClassNames(
-                  'app-chat-composer__computer-status',
-                  computerStatus.online
-                    ? 'app-chat-composer__computer-status--online'
-                    : 'app-chat-composer__computer-status--offline',
-                )}
-              >
-                <span className="app-chat-composer__computer-status-dot" aria-hidden="true" />
-                <span>{computerStatus.label}</span>
-              </span>
-            ) : null}
+            {modelControl}
           </div>
 
           <button

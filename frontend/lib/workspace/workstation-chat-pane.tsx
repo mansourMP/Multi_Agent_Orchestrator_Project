@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { createPortal } from 'react-dom';
+import { Check, ChevronDown, ChevronRight, Cloud, Monitor, Settings, SlidersHorizontal } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
@@ -12,6 +14,9 @@ import { PlatformNotification } from '@/lib/ui/platform-notification';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
 import {
   ChatComposer,
+  type ComposerCapabilityItem,
+  type ComposerCapabilitySubItem,
+  type ComposerComputerStatus,
   type ComposerPreRunCostEstimate,
   type ComposerSlashCommand,
 } from '@/lib/workspace/chat-composer';
@@ -78,7 +83,6 @@ import {
   type SageMemorySnapshot,
   type SageProfileSnapshot,
   type SageSetupSurfaceState,
-  type SageToolPolicyRecord,
   type SendFailureNotice,
   refreshProviderModelCatalog,
   useChatComposerState,
@@ -195,6 +199,394 @@ import type {
   ChatRuntimeTrustZone
 } from '@/lib/workspace/workstation-chat-pane-model';
 
+type SageComposerSkillRecord = {
+  id: string;
+  name: string;
+  status: string;
+  statusLabel: string;
+  source: string;
+  activeNow: boolean;
+};
+
+type SageConnectorMenuShortcut = {
+  id: string;
+  title: string;
+  connectorIds: readonly string[];
+  iconSrc: string;
+};
+
+const SAGE_MENU_VISIBLE_LIMIT = 5;
+
+const SAGE_CONNECTOR_MENU_SHORTCUTS: readonly SageConnectorMenuShortcut[] = [
+  {
+    id: 'gmail',
+    title: 'Gmail',
+    connectorIds: ['gmail', 'google_workspace'],
+    iconSrc: '/brand-assets/apps/gmail.svg?v=3',
+  },
+  {
+    id: 'google_calendar',
+    title: 'Google Calendar',
+    connectorIds: ['google_calendar', 'google_workspace'],
+    iconSrc: '/brand-assets/apps/google-calendar.svg?v=3',
+  },
+  {
+    id: 'google_drive',
+    title: 'Google Drive',
+    connectorIds: ['google_drive', 'google_workspace'],
+    iconSrc: '/brand-assets/apps/google-drive.svg?v=3',
+  },
+  {
+    id: 'telegram_bot',
+    title: 'Telegram',
+    connectorIds: ['telegram_bot', 'telegram'],
+    iconSrc: '/brand-assets/channels/telegram.svg?v=3',
+  },
+  {
+    id: 'github',
+    title: 'GitHub',
+    connectorIds: ['github'],
+    iconSrc: '/brand-assets/apps/github.svg?v=3',
+  },
+  {
+    id: 'slack',
+    title: 'Slack',
+    connectorIds: ['slack'],
+    iconSrc: '/brand-assets/channels/slack.svg?v=3',
+  },
+];
+
+const SAGE_EMPTY_STATE_PROMPTS = [
+  'What can you do?',
+  'Show my running tasks',
+  'Check my system status',
+  'What tools do you have access to?',
+] as const;
+
+const SAGE_MODEL_PICKER_PROVIDERS = [
+  { id: 'empyralis', label: 'Empyralis', aliases: [] },
+  { id: 'anthropic', label: 'Anthropic', aliases: ['anthropic'] },
+  { id: 'openai', label: 'OpenAI', aliases: ['openai'] },
+  { id: 'codex', label: 'Codex CLI', aliases: ['openai_codex', 'codex_cli'] },
+  { id: 'google', label: 'Google', aliases: ['google', 'gemini', 'google_gemini'] },
+  { id: 'deepseek', label: 'DeepSeek', aliases: ['deepseek'] },
+  { id: 'ollama', label: 'Ollama', aliases: ['ollama', 'ollama_cloud'] },
+] as const;
+
+type SageModelPickerProviderId = (typeof SAGE_MODEL_PICKER_PROVIDERS)[number]['id'];
+
+const SAGE_MODEL_PICKER_PROVIDER_IMAGES: Record<SageModelPickerProviderId, string | null> = {
+  empyralis: null,
+  anthropic: '/brand-assets/providers/anthropic.svg?v=3',
+  openai: '/brand-assets/providers/openai.svg?v=3',
+  codex: '/brand-assets/providers/openai.svg?v=3',
+  google: '/brand-assets/providers/gemini.svg?v=3',
+  deepseek: '/brand-assets/providers/deepseek.svg?v=3',
+  ollama: '/brand-assets/providers/ollama.svg?v=3',
+};
+
+const SAGE_MODEL_PICKER_OFFICIAL_MODEL_IDS: Record<SageModelPickerProviderId, readonly string[]> = {
+  empyralis: [
+    'light',
+    'pro',
+    'max',
+  ],
+  anthropic: [
+    'claude-opus-4-7',
+    'claude-sonnet-4-6',
+    'claude-haiku-4-5',
+  ],
+  openai: [
+    'gpt-5-5-pro',
+    'gpt-5-5',
+    'gpt-5-4',
+    'gpt-5-4-mini',
+  ],
+  codex: [
+    'gpt-5-4',
+    'gpt-5-3-codex',
+    'gpt-5-2',
+  ],
+  google: [
+    'gemini-3-pro-preview',
+    'gemini-3-flash-preview',
+    'gemini-2-5-pro',
+    'gemini-2-5-flash',
+  ],
+  deepseek: [
+    'deepseek-v4-pro',
+    'deepseek-v4-flash',
+    'deepseek-chat',
+    'deepseek-reasoner',
+  ],
+  ollama: [
+    'gpt-oss-120b',
+    'gpt-oss-20b',
+    'llama3-2',
+    'llama3',
+  ],
+};
+
+type SageCompanyModelOption = {
+  id: 'light' | 'pro' | 'max';
+  label: string;
+  optionId: string;
+  selected: boolean;
+  disabled: boolean;
+};
+
+type SageModelPickerModel = {
+  id: string;
+  modelId: string;
+  label: string;
+  description: string;
+  optionId: string;
+  selected: boolean;
+};
+
+type SageModelPickerProviderPanel = {
+  id: SageModelPickerProviderId;
+  label: string;
+  image: string | null;
+  models: SageModelPickerModel[];
+};
+
+function readableMenuLabel(value: unknown): string {
+  const rawValue = readString(value);
+  if (!rawValue) {
+    return 'Untitled';
+  }
+  return rawValue
+    .replace(/[_:.-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function normalizeSageComposerSkills(payload: unknown): SageComposerSkillRecord[] {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const items = Array.isArray(record.items) ? record.items : [];
+  return items.flatMap((item) => {
+    const candidate = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const id = readString(candidate.id);
+    const name = readString(candidate.name) || id || 'Skill';
+    if (!id && !name) {
+      return [];
+    }
+    const status = readString(candidate.status) || 'needs_setup';
+    const source = readString(candidate.source);
+    const activeNow = candidate.active_now === true || status === 'ready';
+    const curatedPlaceholder = candidate.curated === true && source === 'curated_pack' && !activeNow;
+    const bundledPlatformSkill = source === 'bundled';
+    if (curatedPlaceholder || bundledPlatformSkill) {
+      return [];
+    }
+    return [{
+      id: id || normalizedModelPickerToken(name),
+      name,
+      status,
+      statusLabel: readString(candidate.status_label) || (activeNow ? 'On' : 'Needs setup'),
+      source,
+      activeNow,
+    }];
+  });
+}
+
+function connectorShortcutMatchesToken(shortcut: SageConnectorMenuShortcut, token: string): boolean {
+  return shortcut.connectorIds.some((connectorId) => connectorId === token);
+}
+
+function connectorTokenFromCredential(credential: VaultCredentialRecord): string {
+  return normalizedProviderToken(credential.connector || credential.provider);
+}
+
+function buildSageConnectorMenuItems(
+  connectorCredentials: VaultCredentialRecord[],
+  onOpenConnectors: () => void,
+): ComposerCapabilitySubItem[] {
+  const connectedShortcutIds = new Set<string>();
+  const connectedItems: ComposerCapabilitySubItem[] = [];
+  const unknownConnectorItems: ComposerCapabilitySubItem[] = [];
+
+  for (const credential of connectorCredentials) {
+    const connectorToken = connectorTokenFromCredential(credential);
+    if (!connectorToken) {
+      continue;
+    }
+    const credentialId = readString(credential.id) || connectorToken;
+    const matchingShortcuts = SAGE_CONNECTOR_MENU_SHORTCUTS.filter((shortcut) =>
+      connectorShortcutMatchesToken(shortcut, connectorToken),
+    );
+    if (matchingShortcuts.length > 0) {
+      for (const shortcut of matchingShortcuts) {
+        if (connectedShortcutIds.has(shortcut.id)) {
+          continue;
+        }
+        connectedShortcutIds.add(shortcut.id);
+        connectedItems.push({
+          id: `connector:${credentialId}:${shortcut.id}`,
+          title: shortcut.title,
+          iconSrc: shortcut.iconSrc,
+          itemType: 'toggle',
+          enabled: true,
+          onSelect: onOpenConnectors,
+        });
+      }
+      continue;
+    }
+    unknownConnectorItems.push({
+      id: `connector:${credentialId}`,
+      title: readString(credential.label) || readableMenuLabel(connectorToken),
+      detail: readableMenuLabel(connectorToken),
+      itemType: 'toggle',
+      enabled: true,
+      onSelect: onOpenConnectors,
+    });
+  }
+
+  const suggestedItems = SAGE_CONNECTOR_MENU_SHORTCUTS
+    .filter((shortcut) => !connectedShortcutIds.has(shortcut.id))
+    .map((shortcut) => ({
+      id: `connector_suggestion:${shortcut.id}`,
+      title: shortcut.title,
+      status: 'Connect',
+      statusTone: 'setup' as const,
+      iconSrc: shortcut.iconSrc,
+      onSelect: onOpenConnectors,
+    }));
+  const appItems = [...connectedItems, ...unknownConnectorItems, ...suggestedItems];
+  const visibleItems = appItems.slice(0, SAGE_MENU_VISIBLE_LIMIT);
+  if (appItems.length > SAGE_MENU_VISIBLE_LIMIT) {
+    visibleItems.push({
+      id: 'see_more_connectors',
+      title: 'More apps',
+      onSelect: onOpenConnectors,
+    });
+  }
+  return visibleItems;
+}
+
+function normalizedProviderToken(value: unknown): string {
+  return readString(value).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function normalizedModelPickerToken(value: unknown): string {
+  return readString(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function SageModelPickerProviderMark({
+  provider,
+}: {
+  provider: Pick<SageModelPickerProviderPanel, 'image' | 'label'>;
+}) {
+  if (provider.image) {
+    return (
+      <span className="sage-canvas-model__provider-mark" aria-hidden="true">
+        <img src={provider.image} alt="" />
+      </span>
+    );
+  }
+  return (
+    <span className="sage-canvas-model__provider-mark sage-canvas-model__provider-mark--fallback" aria-hidden="true">
+      {provider.label.charAt(0).toUpperCase()}
+    </span>
+  );
+}
+
+function officialModelRank(
+  providerId: SageModelPickerProviderId,
+  model: Pick<SageModelPickerModel, 'label'>,
+): number {
+  const officialModels = SAGE_MODEL_PICKER_OFFICIAL_MODEL_IDS[providerId];
+  const label = normalizedModelPickerToken(model.label);
+  return officialModels.findIndex((officialModel) => {
+    const officialId = normalizedModelPickerToken(officialModel);
+    return label === officialId;
+  });
+}
+
+function providerMatchesPickerProvider(
+  provider: ProviderCatalogRecord,
+  pickerProvider: (typeof SAGE_MODEL_PICKER_PROVIDERS)[number],
+): boolean {
+  const credentialPlane = readString(provider.credential_plane).toLowerCase();
+  if (pickerProvider.id === 'empyralis') {
+    return credentialPlane === 'platform_runtime';
+  }
+  if (credentialPlane === 'platform_runtime') {
+    return false;
+  }
+  const providerId = normalizedProviderToken(provider.id);
+  const providerLabel = normalizedProviderToken(provider.label);
+  return pickerProvider.aliases.some((alias) =>
+    providerId === alias
+    || providerId.startsWith(`${alias}_`)
+    || providerId.endsWith(`_${alias}`)
+    || providerLabel === alias
+    || providerLabel.includes(alias));
+}
+
+function catalogModelDescription(
+  model: ProviderCatalogModelRecord,
+  _providerLabel: string,
+): string {
+  return readString(model.description)
+    || readString(model.summary)
+    || readString(model.family);
+}
+
+interface SageChatEmptyStateProps {
+  modelLabel: string;
+  providerGateVisible: boolean;
+  integrationsHref: string;
+  onSelectPrompt: (prompt: string) => void;
+}
+
+function SageChatEmptyState({
+  modelLabel,
+  providerGateVisible,
+  integrationsHref,
+  onSelectPrompt,
+}: SageChatEmptyStateProps) {
+  return (
+    <div className="app-chat-empty-state app-chat-empty-state--sage">
+      <div className="app-chat-empty-state__content">
+        <div className="app-chat-empty-state__identity">
+          <h1 className="app-chat-empty-state__title">Sage</h1>
+          <p className="app-chat-empty-state__model">{modelLabel}</p>
+        </div>
+
+        {providerGateVisible ? (
+          <p className="app-chat-empty-state__provider-notice">
+            No tier available —{' '}
+            <Link className="app-chat-empty-state__provider-link" href={`${integrationsHref}?section=ai-runtime`}>
+              add one in Settings
+            </Link>
+          </p>
+        ) : (
+          <div
+            className="app-chat-empty-state__suggestions app-chat-empty-state__suggestions--composer-clearance"
+            aria-label="Suggested prompts"
+          >
+            {SAGE_EMPTY_STATE_PROMPTS.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                className="app-chat-empty-state__prompt"
+                onClick={() => {
+                  onSelectPrompt(prompt);
+                }}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function legacyTraceIdForReplay(message: WorkstationChatMessageRecord): string | null {
   if (message.role.trim().toLowerCase() !== 'assistant') {
     return null;
@@ -206,6 +598,15 @@ function legacyTraceIdForReplay(message: WorkstationChatMessageRecord): string |
   }
   const contextUsed = readObject(metadata.context_used);
   return readString(metadata.trace_id) || readString(contextUsed.trace_id) || null;
+}
+
+function HardwareOptionIcon({ value }: { value: string }) {
+  const Icon = value === 'auto'
+    ? SlidersHorizontal
+    : value === 'local'
+      ? Monitor
+      : Cloud;
+  return <Icon className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />;
 }
 
 export function WorkstationChatPane() {
@@ -309,7 +710,6 @@ export function WorkstationChatPane() {
     setProviderCatalog,
     providerProfiles,
     setProviderProfiles,
-    toolPolicy,
     setToolPolicy,
     connectorCredentials,
     setConnectorCredentials,
@@ -321,6 +721,8 @@ export function WorkstationChatPane() {
     setIsPersistingModelSelection,
   } = useChatProviderModelState(disconnectedModelOption());
   const {
+    titlebarActionsHost,
+    setTitlebarActionsHost,
     isLoading,
     setIsLoading,
     isSubmittingBootstrap,
@@ -348,11 +750,19 @@ export function WorkstationChatPane() {
   } = useChatMemoryEditorState(defaultSageMemoryDraft());
   const [billingSummary, setBillingSummary] = useState<Record<string, unknown> | null>(null);
   const [workspaceAiRoute, setWorkspaceAiRoute] = useState<WorkspaceAiRoutePayload | null>(null);
+  const [sageComposerSkills, setSageComposerSkills] = useState<SageComposerSkillRecord[]>([]);
   const submitInFlightRef = useRef(false);
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
   const streamAbortRequestedRef = useRef(false);
   const streamInFlightRef = useRef(false);
   const activeTurnRequestIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setTitlebarActionsHost(document.getElementById('workstation-titlebar-brand-actions-slot'));
+    return () => {
+      setTitlebarActionsHost(null);
+    };
+  }, [setTitlebarActionsHost]);
 
   const updatePendingUserMessage = useCallback((message: WorkstationChatMessageRecord | null) => {
     pendingUserMessageRef.current = message;
@@ -420,13 +830,15 @@ export function WorkstationChatPane() {
 
   const refreshToolingState = useCallback(async () => {
     const payload = await services.queryClient.run('chat:tooling-state', async () => {
-      const [toolPolicyPayload, connectorsPayload] = await Promise.all([
+      const [toolPolicyPayload, connectorsPayload, skillsPayload] = await Promise.all([
         services.client.getSageToolPolicy().catch(() => ({ tools: [] })),
         services.client.listConnectorsVault().catch(() => ({ items: [] })),
+        services.client.listSageSkills().catch(() => ({ items: [] })),
       ]);
       return {
         toolPolicyPayload,
         connectorsPayload,
+        skillsPayload,
       };
     }).catch(() => null);
 
@@ -436,6 +848,7 @@ export function WorkstationChatPane() {
 
     setToolPolicy(normalizeSageToolPolicy((payload as { toolPolicyPayload?: unknown }).toolPolicyPayload));
     setConnectorCredentials(normalizeConnectorVaultRecords((payload as { connectorsPayload?: unknown }).connectorsPayload));
+    setSageComposerSkills(normalizeSageComposerSkills((payload as { skillsPayload?: unknown }).skillsPayload));
   }, [services.client, services.queryClient]);
 
   const refreshBrowserGatewayReadiness = useCallback(async () => {
@@ -1322,7 +1735,7 @@ export function WorkstationChatPane() {
       };
     }
     return {
-      label: 'No AI model — Set up in Connections',
+      label: 'No AI model - Set up in AI & Runtime',
       connected: false,
     };
   }, [
@@ -1534,11 +1947,341 @@ export function WorkstationChatPane() {
   const pendingDeleteMemory = pendingDeleteMemoryId
     ? memoryItems.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null
     : null;
+  const [selectedHardwareTarget, setSelectedHardwareTarget] = useState<'auto' | 'cloud' | 'local'>('auto');
+  const [modelCanvasPickerOpen, setModelCanvasPickerOpen] = useState(false);
+  const [modelPickerSubpanel, setModelPickerSubpanel] = useState<'model' | 'provider' | null>(null);
+  const [hardwareCanvasPickerOpen, setHardwareCanvasPickerOpen] = useState(false);
+  const [activeModelPickerProviderId, setActiveModelPickerProviderId] = useState<SageModelPickerProviderId>('empyralis');
+  const [expandedModelPickerProviderIds, setExpandedModelPickerProviderIds] = useState<readonly SageModelPickerProviderId[]>([]);
+  const modelCanvasPickerRef = useRef<HTMLDivElement | null>(null);
+  const hardwareCanvasPickerRef = useRef<HTMLDivElement | null>(null);
   const statusNotice = useMemo(
     () => (statusMessage ? classifyStatusNotice(statusMessage) : null),
     [statusMessage],
   );
   const localRuntimeTargetId = localCompanionOnline ? readString(localRuntimeTarget?.id) : null;
+  const hardwareOptions = useMemo<NonNullable<ComposerComputerStatus['options']>>(
+    () => {
+      const options: NonNullable<ComposerComputerStatus['options']> = [
+        {
+          value: 'auto',
+          label: 'Auto',
+          detail: localCompanionConnected
+            ? 'Use this computer only when the turn needs it.'
+            : 'Use hosted chat unless a computer comes online.',
+        },
+        {
+          value: 'cloud',
+          label: 'Cloud',
+          detail: 'Use the selected tier without local computer tools.',
+        },
+      ];
+
+      options.push({
+        value: 'local',
+        label: 'This computer',
+        detail: localCompanionConnected
+          ? readString(localRuntimeTarget?.sampleAttachmentLabel || localRuntimeTarget?.label) || 'Ready'
+          : readString(localRuntimeTarget?.statusLabel) || 'Offline',
+        disabled: !localCompanionConnected,
+      });
+
+      return options;
+    },
+    [localCompanionConnected, localRuntimeTarget],
+  );
+  useEffect(() => {
+    const selectedOption = hardwareOptions.find((option) => option.value === selectedHardwareTarget);
+    if (!selectedOption || selectedOption.disabled) {
+      setSelectedHardwareTarget('auto');
+    }
+  }, [hardwareOptions, selectedHardwareTarget]);
+  const selectedHardwareRuntimeTarget = useMemo(() => {
+    if (selectedHardwareTarget === 'cloud') {
+      return 'cloud';
+    }
+    if (selectedHardwareTarget === 'local') {
+      return localCompanionConnected && localRuntimeTargetId ? localRuntimeTargetId : 'cloud';
+    }
+    return localCompanionConnected && localRuntimeTargetId ? localRuntimeTargetId : 'cloud';
+  }, [localCompanionConnected, localRuntimeTargetId, selectedHardwareTarget]);
+  const selectedHardwareLabel = useMemo(() => {
+    if (selectedHardwareTarget === 'local') {
+      return 'This computer';
+    }
+    if (selectedHardwareTarget === 'cloud') {
+      return 'Cloud';
+    }
+    return 'Auto';
+  }, [selectedHardwareTarget]);
+  const canvasModelOptions = useMemo<SageCompanyModelOption[]>(
+    () => ([
+      { id: 'light', label: 'Light' },
+      { id: 'pro', label: 'Pro' },
+      { id: 'max', label: 'Max' },
+    ] as const).map((tier) => {
+      const catalogOption = modelOptions.find((option) => option.id === tier.id && option.uiSection === 'empyralis') ?? null;
+      return {
+        id: tier.id,
+        label: catalogOption?.label ?? tier.label,
+        optionId: catalogOption?.id ?? '',
+        selected: catalogOption?.id === effectiveSelectedModel,
+        disabled: !catalogOption,
+      };
+    }),
+    [effectiveSelectedModel, modelOptions],
+  );
+  const selectedCanvasModelLabel = useMemo(
+    () => canvasModelOptions.find((option) => option.id === effectiveSelectedModel)?.label
+      ?? (selectedModelOption.uiSection === 'empyralis' ? selectedModelOption.label : 'Light'),
+    [canvasModelOptions, effectiveSelectedModel, selectedModelOption.label, selectedModelOption.uiSection],
+  );
+  const modelPickerProviderPanels = useMemo<SageModelPickerProviderPanel[]>(
+    () => SAGE_MODEL_PICKER_PROVIDERS.flatMap((pickerProvider): SageModelPickerProviderPanel[] => {
+      if (pickerProvider.id === 'empyralis') {
+        return [{
+          id: pickerProvider.id,
+          label: pickerProvider.label,
+          image: SAGE_MODEL_PICKER_PROVIDER_IMAGES[pickerProvider.id],
+          models: canvasModelOptions.map((model) => ({
+            id: `empyralis:${model.id}`,
+            modelId: model.id,
+            label: model.label,
+            description: '',
+            optionId: model.optionId,
+            selected: model.selected,
+          })),
+        }];
+      }
+      const matchingProviders = providerCatalog.filter((provider) =>
+        providerMatchesPickerProvider(provider, pickerProvider));
+      const models = matchingProviders.flatMap((provider) => {
+        const providerId = readString(provider.id);
+        const providerLabel = readString(provider.label) || pickerProvider.label;
+        const providerModels = Array.isArray(provider.models)
+          ? provider.models.filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
+          : [];
+
+        return providerModels.flatMap((model) => {
+          const modelId = readString(model.id);
+          if (!providerId || !modelId) {
+            return [];
+          }
+          const matchingOption = modelOptions.find((option) =>
+            readString(option.routeProviderId || option.providerId) === providerId
+            && readString(option.routeModelId || option.id) === modelId) ?? null;
+          if (!matchingOption) {
+            return [];
+          }
+          const selectedRouteProviderId = readString(selectedModelOption.routeProviderId || selectedModelOption.providerId);
+          const selectedRouteModelId = readString(selectedModelOption.routeModelId || selectedModelOption.id);
+          const selected = matchingOption.id === effectiveSelectedModel
+            || (selectedRouteProviderId === providerId && selectedRouteModelId === modelId);
+          return [{
+            id: `${providerId}:${modelId}`,
+            modelId,
+            label: readString(model.label) || modelId,
+            description: catalogModelDescription(model, providerLabel),
+            optionId: matchingOption.id,
+            selected,
+          }];
+        });
+      });
+      if (models.length === 0) {
+        return [];
+      }
+      return [{
+        id: pickerProvider.id,
+        label: pickerProvider.label,
+        image: SAGE_MODEL_PICKER_PROVIDER_IMAGES[pickerProvider.id],
+        models,
+      }];
+    }),
+    [canvasModelOptions, effectiveSelectedModel, modelOptions, providerCatalog, selectedModelOption.id, selectedModelOption.providerId, selectedModelOption.routeModelId, selectedModelOption.routeProviderId],
+  );
+  const selectedModelPickerProviderId = useMemo<SageModelPickerProviderId>(() => {
+    if (selectedModelOption.uiSection === 'empyralis') {
+      return 'empyralis';
+    }
+    const routeProviderId = readString(selectedModelOption.routeProviderId || selectedModelOption.providerId);
+    const selectedProvider = routeProviderId
+      ? providerCatalog.find((provider) => readString(provider.id) === routeProviderId) ?? null
+      : null;
+    const matchingDefinition = selectedProvider
+      ? SAGE_MODEL_PICKER_PROVIDERS.find((pickerProvider) =>
+        providerMatchesPickerProvider(selectedProvider, pickerProvider))
+      : null;
+    return matchingDefinition?.id ?? 'empyralis';
+  }, [providerCatalog, selectedModelOption.providerId, selectedModelOption.routeProviderId, selectedModelOption.uiSection]);
+  useEffect(() => {
+    if (!modelCanvasPickerOpen) {
+      setModelPickerSubpanel(null);
+      setExpandedModelPickerProviderIds([]);
+      return;
+    }
+    setModelPickerSubpanel(null);
+    setExpandedModelPickerProviderIds([]);
+    setActiveModelPickerProviderId(selectedModelPickerProviderId);
+  }, [modelCanvasPickerOpen, selectedModelPickerProviderId]);
+  const activeModelPickerProvider = modelPickerProviderPanels.find((provider) =>
+    provider.id === activeModelPickerProviderId) ?? modelPickerProviderPanels[0] ?? null;
+  const activeModelPickerModelView = useMemo(() => {
+    if (!activeModelPickerProvider) {
+      return {
+        expanded: false,
+        hiddenCount: 0,
+        visibleModels: [] as SageModelPickerModel[],
+      };
+    }
+    const selectableModels = activeModelPickerProvider.models.filter((model) => Boolean(model.optionId));
+    const rankedModels = selectableModels
+      .map((model, index) => ({
+        index,
+        model,
+        rank: officialModelRank(activeModelPickerProvider.id, model),
+      }))
+      .filter((item) => item.rank >= 0)
+      .sort((left, right) => left.rank - right.rank || left.index - right.index)
+      .map((item) => item.model);
+    const initialModels = rankedModels.length > 0
+      ? rankedModels
+      : selectableModels.slice(0, 4);
+    const initialModelIds = new Set(initialModels.map((model) => model.id));
+    const overflowModels = selectableModels.filter((model) => !initialModelIds.has(model.id));
+    const expanded = expandedModelPickerProviderIds.includes(activeModelPickerProvider.id);
+    return {
+      expanded,
+      hiddenCount: overflowModels.length,
+      visibleModels: expanded ? [...initialModels, ...overflowModels] : initialModels,
+    };
+  }, [activeModelPickerProvider, expandedModelPickerProviderIds]);
+  const handleHardwareTargetChange = useCallback((nextValue: string) => {
+    if (
+      nextValue !== 'auto'
+      && nextValue !== 'cloud'
+      && nextValue !== 'local'
+    ) {
+      return;
+    }
+    setSelectedHardwareTarget(nextValue);
+    setHardwareCanvasPickerOpen(false);
+  }, []);
+  useEffect(() => {
+    if (!hardwareCanvasPickerOpen && !modelCanvasPickerOpen) {
+      return undefined;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (
+        hardwareCanvasPickerRef.current?.contains(target)
+        || modelCanvasPickerRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setModelCanvasPickerOpen(false);
+      setModelPickerSubpanel(null);
+      setHardwareCanvasPickerOpen(false);
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [hardwareCanvasPickerOpen, modelCanvasPickerOpen]);
+  const handleReasoningEffortChange = useCallback((nextValue: string) => {
+    if (selectedModelOption.reasoningLevels.includes(nextValue as ChatReasoningEffort)) {
+      setReasoningEffort(nextValue as ChatReasoningEffort);
+    }
+  }, [selectedModelOption.reasoningLevels, setReasoningEffort]);
+  const seedDraftIfEmpty = useCallback((nextDraft: string) => {
+    setDraft((current) => (current.trim() ? current : nextDraft));
+  }, [setDraft]);
+  const handleComposerFilesSelected = useCallback((selectedFiles: File[]) => {
+    if (selectedFiles.length === 0) {
+      return;
+    }
+    const fileNames = selectedFiles.map((file) => file.name.trim()).filter(Boolean);
+    const visibleNames = fileNames.slice(0, 3).join(', ');
+    const extraCount = Math.max(0, fileNames.length - 3);
+    const fileLabel = extraCount > 0 ? `${visibleNames}, +${extraCount} more` : visibleNames || `${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'}`;
+    seedDraftIfEmpty(`Use ${fileLabel} as context: `);
+    setStatusMessage(`${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'} selected. Tell Sage what to do with them.`);
+  }, [seedDraftIfEmpty, setStatusMessage]);
+  const sageCapabilityItems = useMemo<ComposerCapabilityItem[]>(() => {
+    const openPlugins = () => {
+      router.push(`${integrationsHref}?section=plugins`);
+    };
+    const openConnectors = () => {
+      router.push(`${integrationsHref}?section=plugins`);
+    };
+    const allSkillItems: ComposerCapabilitySubItem[] = [...sageComposerSkills]
+      .sort((first, second) => first.name.localeCompare(second.name))
+      .map((skill) => ({
+        id: `skill:${skill.id}`,
+        title: skill.name,
+        status: skill.activeNow ? 'On' : skill.statusLabel,
+        statusTone: skill.activeNow ? 'ready' as const : 'setup' as const,
+        onSelect: openPlugins,
+      }));
+    const skillItems = allSkillItems.slice(0, SAGE_MENU_VISIBLE_LIMIT);
+    if (allSkillItems.length > SAGE_MENU_VISIBLE_LIMIT) {
+      skillItems.push({
+        id: 'see_more_skills',
+        title: 'See more skills',
+        onSelect: openPlugins,
+      });
+    }
+    const connectorMenuItems = buildSageConnectorMenuItems(connectorCredentials, openConnectors);
+    return [
+      {
+        id: 'files',
+        title: 'Add files',
+        onSelect: () => undefined,
+      },
+      {
+        id: 'connectors',
+        title: 'Connectors',
+        submenuTitle: 'Connectors',
+        submenuItems: [
+          ...connectorMenuItems,
+          {
+            id: 'manage_connectors',
+            title: 'Manage connectors',
+            dividerBefore: true,
+            onSelect: openConnectors,
+          },
+          {
+            id: 'add_connector',
+            title: 'Add connector',
+            onSelect: openConnectors,
+          },
+        ],
+        onSelect: () => undefined,
+      },
+      {
+        id: 'skills',
+        title: 'Skills',
+        submenuTitle: 'Skills',
+        submenuItems: [
+          ...skillItems,
+          {
+            id: 'manage_skills',
+            title: 'Manage skills',
+            dividerBefore: skillItems.length > 0,
+            onSelect: openPlugins,
+          },
+          {
+            id: 'add_skills',
+            title: 'Add skill',
+            onSelect: openPlugins,
+          },
+        ],
+        onSelect: () => undefined,
+      },
+    ];
+  }, [connectorCredentials, integrationsHref, router, sageComposerSkills]);
   const defaultReasoningEffort = useMemo<ChatReasoningEffort>(
     () => (selectedModelOption.defaultReasoningEffort
       && selectedModelOption.reasoningLevels.includes(selectedModelOption.defaultReasoningEffort)
@@ -2098,7 +2841,7 @@ export function WorkstationChatPane() {
         message: displayMessage,
         channel: 'web',
         source: 'workstation_chat_pane',
-        runtimeTarget: localRuntimeTargetId || 'cloud',
+        runtimeTarget: selectedHardwareRuntimeTarget,
         provider: resolvedProviderId,
         model: resolvedModelId,
         reasoningEffort,
@@ -2427,8 +3170,288 @@ export function WorkstationChatPane() {
     }
   };
 
+  const sageModelControl = (
+    <div className="sage-canvas-model sage-canvas-model--composer" ref={modelCanvasPickerRef}>
+      <button
+        type="button"
+        className="sage-canvas-model__trigger sage-canvas-model__trigger--composer"
+        aria-label={`Choose model and reasoning. Current model: ${selectedCanvasModelLabel}`}
+        aria-expanded={modelCanvasPickerOpen}
+        disabled={isSending || isPersistingModelSelection}
+        onClick={() => {
+          setHardwareCanvasPickerOpen(false);
+          setModelPickerSubpanel(null);
+          setModelCanvasPickerOpen((current) => !current);
+        }}
+      >
+        <span>{selectedCanvasModelLabel}</span>
+        <ChevronDown size={14} strokeWidth={1.9} aria-hidden="true" />
+      </button>
+      {modelCanvasPickerOpen ? (
+        <div className="sage-canvas-model__menu sage-canvas-model__menu--composer" role="dialog" aria-label="Model and reasoning">
+          <div className="sage-canvas-model__section-title">Reasoning</div>
+          <div className="sage-canvas-model__options" role="listbox" aria-label="Reasoning">
+            {reasoningOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`sage-canvas-model__option${option.value === reasoningEffort ? ' sage-canvas-model__option--selected' : ''}`}
+                disabled={isSending || isPersistingModelSelection}
+                onClick={() => {
+                  handleReasoningEffortChange(option.value);
+                }}
+                role="option"
+                aria-selected={option.value === reasoningEffort}
+              >
+                <span>{option.label}</span>
+                {option.value === reasoningEffort ? (
+                  <Check size={16} strokeWidth={2} aria-hidden="true" />
+                ) : null}
+              </button>
+            ))}
+          </div>
+
+          <div className="sage-canvas-model__divider" aria-hidden="true" />
+
+          <button
+            type="button"
+            className={`sage-canvas-model__nav-row${modelPickerSubpanel === 'model' ? ' sage-canvas-model__nav-row--active' : ''}`}
+            disabled={isSending || isPersistingModelSelection}
+            onPointerEnter={() => {
+              if (!isSending && !isPersistingModelSelection) {
+                setModelPickerSubpanel('model');
+              }
+            }}
+            onPointerMove={() => {
+              if (!isSending && !isPersistingModelSelection) {
+                setModelPickerSubpanel('model');
+              }
+            }}
+            onMouseEnter={() => {
+              if (!isSending && !isPersistingModelSelection) {
+                setModelPickerSubpanel('model');
+              }
+            }}
+            onFocus={() => {
+              if (!isSending && !isPersistingModelSelection) {
+                setModelPickerSubpanel('model');
+              }
+            }}
+            onClick={() => {
+              setModelPickerSubpanel('model');
+            }}
+          >
+            <span>{selectedCanvasModelLabel}</span>
+            <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
+          </button>
+
+          {activeModelPickerProvider ? (
+            <button
+              type="button"
+              className={`sage-canvas-model__nav-row${modelPickerSubpanel === 'provider' ? ' sage-canvas-model__nav-row--active' : ''}`}
+              disabled={isSending || isPersistingModelSelection}
+              onPointerEnter={() => {
+                if (!isSending && !isPersistingModelSelection) {
+                  setModelPickerSubpanel('provider');
+                }
+              }}
+              onPointerMove={() => {
+                if (!isSending && !isPersistingModelSelection) {
+                  setModelPickerSubpanel('provider');
+                }
+              }}
+              onMouseEnter={() => {
+                if (!isSending && !isPersistingModelSelection) {
+                  setModelPickerSubpanel('provider');
+                }
+              }}
+              onFocus={() => {
+                if (!isSending && !isPersistingModelSelection) {
+                  setModelPickerSubpanel('provider');
+                }
+              }}
+              onClick={() => {
+                setModelPickerSubpanel('provider');
+              }}
+            >
+              <span className="sage-canvas-model__provider-copy">
+                <SageModelPickerProviderMark provider={activeModelPickerProvider} />
+                <span>{activeModelPickerProvider.label}</span>
+              </span>
+              <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          ) : null}
+
+          {modelPickerSubpanel === 'model' && activeModelPickerProvider ? (
+            <div className="sage-canvas-model__subpanel" role="dialog" aria-label={`${activeModelPickerProvider.label} models`}>
+              <div className="sage-canvas-model__section-title">Model</div>
+              <div className="sage-canvas-model__model-list" role="listbox" aria-label={`${activeModelPickerProvider.label} models`}>
+                {activeModelPickerModelView.visibleModels.length > 0 ? activeModelPickerModelView.visibleModels.map((model) => {
+                  const canSelectModel = Boolean(model.optionId);
+                  return (
+                    <button
+                      key={model.id}
+                      className={`sage-canvas-model__model-row${model.selected ? ' sage-canvas-model__model-row--selected' : ''}`}
+                      type="button"
+                      disabled={!canSelectModel || isSending || isPersistingModelSelection}
+                      onClick={() => {
+                        if (!model.optionId) {
+                          return;
+                        }
+                        setModelCanvasPickerOpen(false);
+                        setModelPickerSubpanel(null);
+                        handleModelChange(model.optionId);
+                      }}
+                      role="option"
+                      aria-selected={model.selected}
+                    >
+                      <span className="sage-canvas-model__model-copy">
+                        <strong>{model.label}</strong>
+                        {model.description ? <small>{model.description}</small> : null}
+                      </span>
+                      {model.selected ? (
+                        <Check size={16} strokeWidth={2} aria-hidden="true" />
+                      ) : null}
+                    </button>
+                  );
+                }) : (
+                  <div className="sage-canvas-model__model-empty">
+                    No models available for this provider.
+                  </div>
+                )}
+              </div>
+              {!activeModelPickerModelView.expanded && activeModelPickerModelView.hiddenCount > 0 ? (
+                <button
+                  type="button"
+                  className="sage-canvas-model__see-more"
+                  disabled={isSending || isPersistingModelSelection}
+                  onClick={() => {
+                    setExpandedModelPickerProviderIds((current) =>
+                      current.includes(activeModelPickerProvider.id)
+                        ? current
+                        : [...current, activeModelPickerProvider.id]);
+                  }}
+                >
+                  See more
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {modelPickerSubpanel === 'provider' ? (
+            <div className="sage-canvas-model__subpanel" role="dialog" aria-label="Model providers">
+              <div className="sage-canvas-model__section-title">Provider</div>
+              <div className="sage-canvas-model__provider-list" role="listbox" aria-label="Providers">
+                {modelPickerProviderPanels.map((provider) => (
+                  <button
+                    key={provider.id}
+                    type="button"
+                    className={`sage-canvas-model__provider-option${provider.id === activeModelPickerProviderId ? ' sage-canvas-model__provider-option--active' : ''}`}
+                    disabled={isSending || isPersistingModelSelection}
+                    onClick={() => {
+                      setActiveModelPickerProviderId(provider.id);
+                    }}
+                    role="option"
+                    aria-selected={provider.id === activeModelPickerProviderId}
+                  >
+                    <span className="sage-canvas-model__provider-copy">
+                      <SageModelPickerProviderMark provider={provider} />
+                      <span>{provider.label}</span>
+                    </span>
+                    {provider.id === activeModelPickerProviderId ? (
+                      <Check size={16} strokeWidth={2} aria-hidden="true" />
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+              <div className="sage-canvas-model__divider" aria-hidden="true" />
+              <button
+                type="button"
+                className="sage-canvas-model__provider-option sage-canvas-model__provider-option--settings"
+                disabled={isSending || isPersistingModelSelection}
+                onClick={() => {
+                  setModelCanvasPickerOpen(false);
+                  setModelPickerSubpanel(null);
+                  router.push(`${integrationsHref}?section=ai-runtime`);
+                }}
+              >
+                <span>AI settings</span>
+                <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const sageCanvasControls = (
+    <div className="sage-canvas-controls" aria-label="Sage chat controls">
+      <div className="sage-canvas-hardware" ref={hardwareCanvasPickerRef}>
+        <button
+          type="button"
+          className="sage-canvas-hardware__trigger"
+          aria-label={`Choose computer. Current: ${selectedHardwareLabel}`}
+          aria-expanded={hardwareCanvasPickerOpen}
+          disabled={isSending || isPersistingModelSelection}
+          onClick={() => {
+            setModelCanvasPickerOpen(false);
+            setModelPickerSubpanel(null);
+            setHardwareCanvasPickerOpen((current) => !current);
+          }}
+        >
+          {selectedHardwareTarget === 'local' ? selectedHardwareLabel : `Computer ${selectedHardwareLabel}`}
+        </button>
+        {hardwareCanvasPickerOpen ? (
+          <div className="sage-canvas-hardware__menu" role="dialog" aria-label="Computer">
+            <div className="sage-canvas-hardware__options" role="listbox" aria-label="Computer">
+              {hardwareOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`sage-canvas-hardware__option${option.value === selectedHardwareTarget ? ' sage-canvas-hardware__option--selected' : ''}`}
+                  disabled={isSending || isPersistingModelSelection || option.disabled}
+                  onClick={() => {
+                    handleHardwareTargetChange(option.value);
+                  }}
+                  role="option"
+                  aria-selected={option.value === selectedHardwareTarget}
+                >
+                  <span className="sage-canvas-hardware__option-copy">
+                    <HardwareOptionIcon value={option.value} />
+                    <span>{option.label}</span>
+                  </span>
+                  {option.value === selectedHardwareTarget ? (
+                    <Check size={16} strokeWidth={2} aria-hidden="true" />
+                  ) : null}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="sage-canvas-hardware__option sage-canvas-hardware__option--manage"
+              disabled={isSending || isPersistingModelSelection}
+              onClick={() => {
+                setHardwareCanvasPickerOpen(false);
+                router.push(`${integrationsHref}?section=connections`);
+              }}
+            >
+              <span className="sage-canvas-hardware__option-copy">
+                <Settings className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
+                <span>Computer settings</span>
+              </span>
+              <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+
   return (
-    <main
+    <>
+      {titlebarActionsHost ? createPortal(sageCanvasControls, titlebarActionsHost) : null}
+      <main
         data-workstation-surface="chat"
         data-workstation-chat="pane"
         className={`app-chat-page app-chat-page--surface${showFirstImpression ? ' app-chat-page--first-impression' : ''}`}
@@ -2571,7 +3594,12 @@ export function WorkstationChatPane() {
               ) : null}
 
               {showBlankTranscript ? (
-                <div className="app-chat-empty-state" aria-hidden="true" />
+                <SageChatEmptyState
+                  modelLabel={selectedModelOption.label}
+                  providerGateVisible={!activeProviderSummary.connected}
+                  integrationsHref={integrationsHref}
+                  onSelectPrompt={setDraft}
+                />
               ) : null}
 
               {visibleTranscriptCells.map((cell, index) => (
@@ -2672,20 +3700,18 @@ export function WorkstationChatPane() {
         onStop={stopStreamingResponse}
         slashCommands={sageSlashCommands}
         onSlashCommandSelect={handleSlashCommandSelect}
-        onOpenIntegrations={() => {
-          router.push(`${integrationsHref}?section=ai-runtime`);
+        capabilityItems={sageCapabilityItems}
+        onFilesSelected={handleComposerFilesSelected}
+        modelControl={sageModelControl}
+        modelControlOpen={modelCanvasPickerOpen}
+        onComposerMenuOpen={() => {
+          setModelCanvasPickerOpen(false);
+          setModelPickerSubpanel(null);
+          setHardwareCanvasPickerOpen(false);
         }}
-        model={effectiveSelectedModel}
-        modelOptions={composerModelOptions}
-        modelProviderLabel={workspaceAiRouteLabel ?? runtimeStatus.label}
-        onModelChange={handleModelChange}
         reasoningEffort={reasoningEffort}
         reasoningOptions={reasoningOptions}
-        onReasoningEffortChange={(nextValue) => {
-          if (selectedModelOption.reasoningLevels.includes(nextValue as ChatReasoningEffort)) {
-            setReasoningEffort(nextValue as ChatReasoningEffort);
-          }
-        }}
+        onReasoningEffortChange={handleReasoningEffortChange}
         onVoiceTranscribe={async (audio) => {
           const payload = await services.client.transcribeSpeech(audio);
           const transcript = typeof payload.transcript === 'string' ? payload.transcript.trim() : '';
@@ -2702,11 +3728,7 @@ export function WorkstationChatPane() {
         providerGateVisible={!activeProviderSummary.connected}
         providerSummary={{
           label: activeProviderSummary.label,
-          actionLabel: 'Set up in Connections',
-        }}
-        computerStatus={{
-          online: gatewayToolingOnline,
-          label: gatewayToolingOnline ? 'Computer online' : 'Computer offline',
+          actionLabel: 'Set up in AI & Runtime',
         }}
         smallModelWarning={smallModelWarningVisible
           ? "You're using a small model. For best results with tools and complex tasks, we recommend switching to a larger model (7B+)."
@@ -2929,6 +3951,7 @@ export function WorkstationChatPane() {
           setPendingDeleteMemoryId(null);
         }}
       />
-    </main>
+      </main>
+    </>
   );
 }

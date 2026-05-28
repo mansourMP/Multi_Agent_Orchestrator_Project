@@ -9,9 +9,9 @@ import type {
 } from '@/lib/workspace/workstation-client';
 
 import type {
+  AgentAnalyticsSeriesPoint,
   AgentAnalyticsSnapshot,
   AgentOperationalMetrics,
-  AgentRosterFilterId,
   ConversationFilters,
   DetailConfigDraft,
   ProviderCatalogModelSnapshot,
@@ -971,24 +971,6 @@ export function agentRuntimePlacement(agent: DeployedAgentRecord | null | undefi
   );
 }
 
-export function agentModeBucket(agent: DeployedAgentRecord | null | undefined): 'text' | 'computer' {
-  return agentRuntimePlacement(agent) === 'managed_cloud' ? 'text' : 'computer';
-}
-
-export function agentMatchesRosterFilter(agent: DeployedAgentRecord, filterId: AgentRosterFilterId): boolean {
-  if (filterId === 'all') {
-    return true;
-  }
-  if (filterId === 'text' || filterId === 'computer') {
-    return agentModeBucket(agent) === filterId;
-  }
-  if (filterId === 'connected') {
-    return listEnabledChannels(agent.channels).length > 0;
-  }
-  const state = readString(agent.deployment_state).toLowerCase();
-  return state !== 'live';
-}
-
 export function normalizeApprovalModeFromPolicies(escalationPreset: unknown, handoffMode: unknown): WizardState['approvalMode'] {
   const escalation = readString(escalationPreset).toLowerCase();
   const handoff = readString(handoffMode).toLowerCase();
@@ -1557,6 +1539,32 @@ export function buildMetricsPlaceholder(): AgentOperationalMetrics {
   };
 }
 
+function readAnalyticsSeriesItems(payload: DeployedAgentAnalyticsRecord): Record<string, unknown>[] {
+  const candidateKeys = ['daily_series', 'time_series', 'timeseries', 'series', 'activity_series'];
+  for (const key of candidateKeys) {
+    const value = payload[key];
+    if (Array.isArray(value)) {
+      return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+    }
+  }
+  return [];
+}
+
+function normalizeAnalyticsSeries(payload: DeployedAgentAnalyticsRecord): AgentAnalyticsSeriesPoint[] {
+  return readAnalyticsSeriesItems(payload)
+    .map((item) => {
+      const date = readOptionalString(item.date ?? item.day ?? item.bucket ?? item.timestamp);
+      const label = readString(item.label, date ?? '');
+      return {
+        date,
+        label,
+        conversations: readNumber(item.conversations ?? item.conversation_count ?? item.sessions ?? item.session_count) ?? 0,
+        messages: readNumber(item.messages ?? item.message_count ?? item.message_volume) ?? 0,
+      };
+    })
+    .filter((item) => item.label || item.date);
+}
+
 export function normalizeAgentAnalytics(payload: DeployedAgentAnalyticsRecord | null | undefined): AgentAnalyticsSnapshot | null {
   if (!payload || typeof payload !== 'object') {
     return null;
@@ -1590,6 +1598,7 @@ export function normalizeAgentAnalytics(payload: DeployedAgentAnalyticsRecord | 
     costCapUsd: readNumber(costBurn.cap_usd),
     percentUsed: readNumber(costBurn.percent_used),
     usageMonth: readOptionalString(costBurn.usage_month),
+    activitySeries: normalizeAnalyticsSeries(payload),
   };
 }
 

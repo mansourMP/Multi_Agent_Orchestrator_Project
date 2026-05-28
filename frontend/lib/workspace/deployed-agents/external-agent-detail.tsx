@@ -57,10 +57,12 @@ export function createEmptyExternalAgentChatSession(): ExternalAgentChatSessionS
 const EXTERNAL_AGENT_SECTION_ICONS: Record<SpecialistOverlayTabId, LucideIcon> = {
   overview: LayoutDashboard,
   chat: MessageSquareText,
+  channels: Cable,
   knowledge: BookOpen,
   ai: Route,
   tools: Zap,
   memory: Brain,
+  artifacts: FileText,
   connectors: Cable,
   analytics: BarChart3,
 };
@@ -220,6 +222,7 @@ function sectionBelongsToTab(section: ExternalSurfaceSection, tabId: ExternalAge
   const capability = readString(section.capabilityRequired).toLowerCase();
   const id = readString(section.id).toLowerCase();
   const icon = readString(section.icon).toLowerCase();
+  const displayKind = readString(section.displayKind).toLowerCase();
   if (tabId === 'knowledge') {
     return category === 'knowledge' || capability.startsWith('knowledge') || id.includes('knowledge') || id.includes('source');
   }
@@ -229,11 +232,27 @@ function sectionBelongsToTab(section: ExternalSurfaceSection, tabId: ExternalAge
   if (tabId === 'tools') {
     return ['actions', 'tools'].includes(category) || ['actions', 'tools'].includes(icon) || capability === 'actions' || capability === 'tools' || id.includes('tool') || id.includes('action');
   }
+  if (tabId === 'channels') {
+    return category.includes('channel') || id.includes('channel');
+  }
+  if (tabId === 'artifacts') {
+    return ['artifact', 'output', 'resource'].some((token) => (
+      category.includes(token)
+      || capability.includes(token)
+      || id.includes(token)
+      || icon.includes(token)
+      || displayKind.includes(token)
+    ));
+  }
   if (tabId === 'connectors') {
-    return ['configuration', 'security'].includes(category);
+    return false;
   }
   if (tabId === 'analytics') {
-    return ['activity', 'outputs', 'resources'].includes(category) && !sectionBelongsToTab(section, 'knowledge') && !sectionBelongsToTab(section, 'memory') && !sectionBelongsToTab(section, 'tools');
+    return ['activity', 'logs', 'events', 'runs', 'usage', 'health', 'configuration', 'security'].includes(category)
+      && !sectionBelongsToTab(section, 'knowledge')
+      && !sectionBelongsToTab(section, 'memory')
+      && !sectionBelongsToTab(section, 'tools')
+      && !sectionBelongsToTab(section, 'artifacts');
   }
   return false;
 }
@@ -300,7 +319,6 @@ export const ConnectedExternalAgentDetailView = memo(({
   const [sectionErrors, setSectionErrors] = useState<Record<string, string>>({});
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [detailModalTab, setDetailModalTab] = useState<ExternalAgentSetupTabId>('knowledge');
-  const [showConnectCapabilityGuide, setShowConnectCapabilityGuide] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const externalAgentId = readString(externalAgent?.id);
@@ -314,6 +332,9 @@ export const ConnectedExternalAgentDetailView = memo(({
   const externalSections = normalizeSurfaceSections(externalAgent?.surface_sections);
   const objectTypes = Array.isArray(externalAgent?.object_types)
     ? externalAgent.object_types.map((item) => humanizeToken(item, '')).filter(Boolean)
+    : [];
+  const rawObjectTypes = Array.isArray(externalAgent?.object_types)
+    ? externalAgent.object_types.map((item) => readString(item).toLowerCase()).filter(Boolean)
     : [];
   const protocols = Array.isArray(externalAgent?.protocols)
     ? externalAgent.protocols.map((item) => humanizeToken(readRecord(item).kind, '')).filter(Boolean)
@@ -331,8 +352,19 @@ export const ConnectedExternalAgentDetailView = memo(({
   );
   const isVerified = connectionState === 'verified';
   const isRevoked = connectionState === 'revoked' || externalAgent?.enabled === false;
+  const hasArtifactSurface = useMemo(() => (
+    capabilityEnabled(capabilityManifest, 'artifacts')
+    || capabilityEnabled(capabilityManifest, 'artifact')
+    || capabilityEnabled(capabilityManifest, 'outputs')
+    || capabilityEnabled(capabilityManifest, 'resources')
+    || rawObjectTypes.some((item) => ['external_agent_artifact', 'artifact', 'output', 'resource'].some((token) => item.includes(token)))
+    || externalSections.some((section) => sectionBelongsToTab(section, 'artifacts'))
+  ), [capabilityManifest, externalSections, rawObjectTypes]);
 
   const visibleTabs = useMemo(() => SPECIALIST_OVERLAY_TABS.filter((tab) => {
+    if (tab.id === 'overview' || tab.id === 'chat' || tab.id === 'analytics') {
+      return true;
+    }
     if (tab.id === 'knowledge') {
       return canReadKnowledge;
     }
@@ -342,11 +374,14 @@ export const ConnectedExternalAgentDetailView = memo(({
     if (tab.id === 'tools') {
       return capabilityEnabled(capabilityManifest, 'actions') || capabilityEnabled(capabilityManifest, 'tools');
     }
-    if (tab.id === 'analytics') {
-      return true;
+    if (tab.id === 'artifacts') {
+      return hasArtifactSurface;
     }
-    return true;
-  }), [canReadKnowledge, canReadMemory, capabilityManifest]);
+    if (tab.id === 'channels' || tab.id === 'ai' || tab.id === 'connectors') {
+      return false;
+    }
+    return false;
+  }), [canReadKnowledge, canReadMemory, capabilityManifest, hasArtifactSurface]);
 
   const activeTab = visibleTabs.some((tab) => tab.id === overlayTab) ? overlayTab : 'overview';
   const primaryTabs = visibleTabs.filter((tab) => !isExternalAgentSetupTabId(tab.id));
@@ -359,16 +394,9 @@ export const ConnectedExternalAgentDetailView = memo(({
     knowledge: externalSections.filter((section) => sectionBelongsToTab(section, 'knowledge')),
     tools: externalSections.filter((section) => sectionBelongsToTab(section, 'tools')),
     memory: externalSections.filter((section) => sectionBelongsToTab(section, 'memory')),
-    connectors: externalSections.filter((section) => sectionBelongsToTab(section, 'connectors')),
+    artifacts: externalSections.filter((section) => sectionBelongsToTab(section, 'artifacts')),
     analytics: externalSections.filter((section) => sectionBelongsToTab(section, 'analytics')),
   }), [externalSections]);
-
-  useEffect(() => {
-    if (isExternalAgentSetupTabId(activeTab)) {
-      setDetailModalTab(activeTab);
-      setIsDetailModalOpen(true);
-    }
-  }, [activeTab]);
 
   const defaultDetailModalTab: ExternalAgentSetupTabId =
     setupTabs.length > 0 && isExternalAgentSetupTabId(setupTabs[0].id)
@@ -381,14 +409,13 @@ export const ConnectedExternalAgentDetailView = memo(({
 
   const closeDetailModal = () => {
     setIsDetailModalOpen(false);
-    if (isExternalAgentSetupTabId(overlayTab)) {
-      onSelectTab('overview');
-    }
   };
 
   const selectExternalAgentSection = (tabId: SpecialistOverlayTabId) => {
     if (isExternalAgentSetupTabId(tabId)) {
-      openDetailModal(tabId);
+      setDetailModalTab(tabId);
+      setIsDetailModalOpen(false);
+      onSelectTab(tabId);
       return;
     }
     setIsDetailModalOpen(false);
@@ -774,6 +801,136 @@ export const ConnectedExternalAgentDetailView = memo(({
     );
   }
 
+  function renderSetupTabContent(tabId: ExternalAgentSetupTabId, keyPrefix: string) {
+    if (tabId === 'knowledge') {
+      return (
+        <MotionTabPanel key={`${keyPrefix}-external-knowledge`} className="studio-agent-motion-panel">
+          <ListDetailPanel
+            className="studio-panel studio-panel--detail"
+            eyebrow="Knowledge"
+            title="External knowledge"
+            subtitle="Knowledge is owned by the external runtime. Native Studio uploads stay unavailable."
+          >
+            <div className="app-stack-3">
+              {renderKnowledgeSection()}
+              {tabSections.knowledge.filter((section) => section.id !== knowledgeSection?.id).map(renderExternalSectionPanel)}
+            </div>
+          </ListDetailPanel>
+        </MotionTabPanel>
+      );
+    }
+
+    if (tabId === 'ai') {
+      return (
+        <MotionTabPanel key={`${keyPrefix}-external-model`} className="studio-agent-motion-panel">
+          <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Model" title="External runtime owns the model" subtitle="Provider switching is disabled because this agent runs outside the native Studio runtime.">
+            <AppSurfaceStatGrid>
+              <AppSurfaceStat label="Provider" value={providerLabel} hint="Declared by manifest" />
+              <AppSurfaceStat label="Route" value="External endpoint" hint="Model route is outside native Studio" />
+              <AppSurfaceStat label="Platform control" value="Read-only" hint="No native provider switching" />
+            </AppSurfaceStatGrid>
+          </ListDetailPanel>
+        </MotionTabPanel>
+      );
+    }
+
+    if (tabId === 'tools') {
+      return (
+        <MotionTabPanel key={`${keyPrefix}-external-actions`} className="studio-agent-motion-panel">
+          <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Actions" title="External tools and actions" subtitle="Declared actions are external-owned and read-only until a dedicated approval/audit action route exists.">
+            <div className="app-stack-3">
+              <div className="studio-inline-wrap">
+                <DataBadge tone="warning">Read-only v1</DataBadge>
+                <DataBadge>Revocable</DataBadge>
+                <DataBadge>No native tool install</DataBadge>
+              </div>
+              {renderExternalSectionGroup(
+                tabSections.tools,
+                'No external tools declared',
+                'Tools and actions appear here when the manifest exposes safe provider-owned sections.',
+              )}
+            </div>
+          </ListDetailPanel>
+        </MotionTabPanel>
+      );
+    }
+
+    if (tabId === 'memory') {
+      return (
+        <MotionTabPanel key={`${keyPrefix}-external-memory`} className="studio-agent-motion-panel">
+          <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Memory" title="External memory" subtitle="Memory is owned by the external runtime and rendered read-only in Studio v1.">
+            <div className="app-stack-3">
+              {renderMemorySection()}
+              {tabSections.memory.filter((section) => section.id !== memorySection?.id).map(renderExternalSectionPanel)}
+            </div>
+          </ListDetailPanel>
+        </MotionTabPanel>
+      );
+    }
+
+    if (tabId === 'artifacts') {
+      return (
+        <MotionTabPanel key={`${keyPrefix}-external-artifacts`} className="studio-agent-motion-panel">
+          <ListDetailPanel
+            className="studio-panel studio-panel--detail"
+            eyebrow="Artifacts"
+            title="External artifacts"
+            subtitle="Artifacts are generated or owned by the external runtime and shown read-only in Studio."
+          >
+            <div className="app-stack-3">
+              {renderExternalSectionGroup(
+                tabSections.artifacts,
+                'No artifacts exposed',
+                'Artifacts appear here when the external manifest exposes artifact, resource, or output sections.',
+              )}
+            </div>
+          </ListDetailPanel>
+        </MotionTabPanel>
+      );
+    }
+
+    return (
+      <MotionTabPanel key={`${keyPrefix}-external-results`} className="studio-agent-motion-panel">
+        <ListDetailPanel
+          className="studio-panel studio-panel--detail"
+          eyebrow="Results"
+          title="Connected-agent activity"
+          subtitle="Runs, health, usage, logs, and manifest refresh state."
+          actions={(
+            <div className="app-inline-actions app-inline-actions--tight">
+              <AppButton type="button" tone="secondary" onClick={refreshManifest} disabled={isRefreshingManifest || isRevoked}>
+                {isRefreshingManifest ? 'Refreshing...' : 'Refresh manifest'}
+              </AppButton>
+              <AppButton type="button" tone="danger" onClick={disconnectAgent} disabled={isDisconnecting || isRevoked}>
+                {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
+              </AppButton>
+            </div>
+          )}
+        >
+          <AppSurfaceStatGrid>
+            <AppSurfaceStat label="Last manifest refresh" value={formatOptionalTimestamp(externalAgent?.last_manifest_refresh_at, 'Not refreshed')} hint="Latest backend handshake" />
+            <AppSurfaceStat label="Status" value={humanizeToken(connectionState, 'Unverified')} hint="Current connection state" />
+            <AppSurfaceStat label="Public send" value="Disabled" hint="Customer channels come later" />
+            <AppSurfaceStat label="External objects" value={objectTypes.length > 0 ? String(objectTypes.length) : 'None'} hint={objectTypes.length > 0 ? objectTypes.join(', ') : 'No object types declared'} />
+          </AppSurfaceStatGrid>
+          <div className="app-stack-3">
+            {tabSections.analytics.length > 0 ? tabSections.analytics.map(renderExternalSectionPanel) : (
+              <EmptyPanel
+                title="No results sections"
+                body="Logs, tasks, events, runs, usage, and health sections appear here when the manifest exposes them."
+                actions={(
+                  <AppButton type="button" tone="secondary" onClick={refreshManifest} disabled={isRefreshingManifest || isRevoked}>
+                    {isRefreshingManifest ? 'Refreshing...' : 'Refresh manifest'}
+                  </AppButton>
+                )}
+              />
+            )}
+          </div>
+        </ListDetailPanel>
+      </MotionTabPanel>
+    );
+  }
+
   if (!externalAgent) {
     return (
       <div className="studio-agent-detail-empty" aria-label="Connected agent detail">
@@ -914,18 +1071,34 @@ export const ConnectedExternalAgentDetailView = memo(({
               </MotionTabPanel>
             )}
 
-            {isDetailModalOpen && detailModalTab === 'connectors' && (
-              <MotionTabPanel key="external-integrations" className="studio-agent-motion-panel">
+            {isDetailModalOpen && detailModalTab === 'artifacts' && (
+              <MotionTabPanel key="external-artifacts" className="studio-agent-motion-panel">
                 <ListDetailPanel
                   className="studio-panel studio-panel--detail"
-                  eyebrow="Integrations"
-                  title="Manifest and connection"
-                  subtitle="Secrets stay in workspace credential storage. Studio metadata only keeps endpoint refs and secret refs."
+                  eyebrow="Artifacts"
+                  title="External artifacts"
+                  subtitle="Artifacts are generated or owned by the external runtime and shown read-only in Studio."
+                >
+                  <div className="app-stack-3">
+                    {renderExternalSectionGroup(
+                      tabSections.artifacts,
+                      'No artifacts exposed',
+                      'Artifacts appear here when the external manifest exposes artifact, resource, or output sections.',
+                    )}
+                  </div>
+                </ListDetailPanel>
+              </MotionTabPanel>
+            )}
+
+            {isDetailModalOpen && detailModalTab === 'analytics' && (
+              <MotionTabPanel key="external-results" className="studio-agent-motion-panel">
+                <ListDetailPanel
+                  className="studio-panel studio-panel--detail"
+                  eyebrow="Results"
+                  title="Connected-agent activity"
+                  subtitle="Runs, health, usage, logs, and manifest refresh state."
                   actions={(
                     <div className="app-inline-actions app-inline-actions--tight">
-                      <AppButton type="button" tone="secondary" onClick={() => setShowConnectCapabilityGuide((value) => !value)}>
-                        Connect capability
-                      </AppButton>
                       <AppButton type="button" tone="secondary" onClick={refreshManifest} disabled={isRefreshingManifest || isRevoked}>
                         {isRefreshingManifest ? 'Refreshing...' : 'Refresh manifest'}
                       </AppButton>
@@ -935,65 +1108,6 @@ export const ConnectedExternalAgentDetailView = memo(({
                     </div>
                   )}
                 >
-                  <div className="app-stack-3">
-                    {showConnectCapabilityGuide ? (
-                      <ListDetailPanel
-                        className="studio-panel studio-panel--detail"
-                        eyebrow="Connect Capability"
-                        title="Add sections through the external manifest"
-                        subtitle="For v1, add read-only schema sections to the external manifest, then refresh. Studio will route them into Knowledge, Actions, Memory, Integrations, or Results."
-                      >
-                        <div className="studio-agent-overview__grid">
-                          <div className="studio-agent-overview__card">
-                            <div className="studio-agent-overview__card-icon"><ShieldCheck size={15} aria-hidden="true" /></div>
-                            <div>
-                              <strong>HTTPS manifest URL</strong>
-                              <span>Expose surface_sections and endpoint refs from the external runtime.</span>
-                            </div>
-                          </div>
-                          <div className="studio-agent-overview__card">
-                            <div className="studio-agent-overview__card-icon"><Cable size={15} aria-hidden="true" /></div>
-                            <div>
-                              <strong>Existing endpoint refs</strong>
-                              <span>Sections load through the backend proxy, never from the browser.</span>
-                            </div>
-                          </div>
-                          <div className="studio-agent-overview__card">
-                            <div className="studio-agent-overview__card-icon"><FileText size={15} aria-hidden="true" /></div>
-                            <div>
-                              <strong>Agent Computer connector</strong>
-                              <span>Private/local endpoints require a verified Agent Computer route.</span>
-                            </div>
-                          </div>
-                        </div>
-                      </ListDetailPanel>
-                    ) : null}
-                    <div className="studio-agent-overview__grid">
-                      {Object.entries(endpointRefs).length > 0 ? Object.entries(endpointRefs).map(([key, value]) => (
-                        <div key={key} className="studio-agent-overview__card">
-                          <div className="studio-agent-overview__card-icon"><ShieldCheck size={15} aria-hidden="true" /></div>
-                          <div>
-                            <strong>{humanizeToken(key, key)}</strong>
-                            <span>{readString(value, 'Not set')}</span>
-                          </div>
-                        </div>
-                      )) : (
-                        <EmptyPanel title="No endpoints" body="Connect a manifest URL or endpoint reference first." />
-                      )}
-                    </div>
-                    {renderExternalSectionGroup(
-                      tabSections.connectors,
-                      'No configuration sections',
-                      'Security and configuration sections appear here when the manifest exposes them.',
-                    )}
-                  </div>
-                </ListDetailPanel>
-              </MotionTabPanel>
-            )}
-
-            {isDetailModalOpen && detailModalTab === 'analytics' && (
-              <MotionTabPanel key="external-results" className="studio-agent-motion-panel">
-                <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Results" title="Connected-agent activity" subtitle="Platform activity and endpoint logs appear here when exposed by the manifest.">
                   <AppSurfaceStatGrid>
                     <AppSurfaceStat label="Last manifest refresh" value={formatOptionalTimestamp(externalAgent.last_manifest_refresh_at, 'Not refreshed')} hint="Latest backend handshake" />
                     <AppSurfaceStat label="Status" value={humanizeToken(connectionState, 'Unverified')} hint="Current connection state" />
@@ -1004,13 +1118,10 @@ export const ConnectedExternalAgentDetailView = memo(({
                     {tabSections.analytics.length > 0 ? tabSections.analytics.map(renderExternalSectionPanel) : (
                       <EmptyPanel
                         title="No results sections"
-                        body="Logs, tasks, events, runs, usage, artifacts, and generated outputs appear here when the manifest exposes them."
+                        body="Logs, tasks, events, runs, usage, and health sections appear here when the manifest exposes them."
                         actions={(
-                          <AppButton type="button" tone="secondary" onClick={() => {
-                            setDetailModalTab('connectors');
-                            setShowConnectCapabilityGuide(true);
-                          }}>
-                            Connect capability
+                          <AppButton type="button" tone="secondary" onClick={refreshManifest} disabled={isRefreshingManifest || isRevoked}>
+                            {isRefreshingManifest ? 'Refreshing...' : 'Refresh manifest'}
                           </AppButton>
                         )}
                       />
@@ -1029,7 +1140,8 @@ export const ConnectedExternalAgentDetailView = memo(({
             <div className="studio-agent-inline-error" role="alert">{localError}</div>
           ) : null}
           <AnimatePresence mode="wait" initial={false}>
-            {activeTopTab === 'overview' && (
+            {isExternalAgentSetupTabId(activeTab) ? renderSetupTabContent(activeTab, 'inline') : null}
+            {activeTab === 'overview' && (
               <MotionTabPanel key="external-overview" className="studio-agent-motion-panel">
                 <ListDetailPanel
                   className="studio-panel studio-panel--detail"
@@ -1147,7 +1259,7 @@ export const ConnectedExternalAgentDetailView = memo(({
               </MotionTabPanel>
             )}
 
-            {activeTopTab === 'chat' && (
+            {activeTab === 'chat' && (
               <MotionTabPanel key="external-chat" className="studio-agent-motion-panel">
                 <ListDetailPanel
                   className="studio-panel studio-panel--detail studio-panel--chat"

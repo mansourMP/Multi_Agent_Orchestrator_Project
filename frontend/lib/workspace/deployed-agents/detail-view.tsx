@@ -1,21 +1,10 @@
 'use client';
 
 import { memo, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import {
-  BarChart3,
-  BookOpen,
-  Brain,
-  Cable,
-  LayoutDashboard,
-  MessageSquareText,
-  Route,
-  Zap,
-  type LucideIcon,
-} from 'lucide-react';
 
 import { ListDetailPanel } from '@/lib/ui/list-detail';
 import { AnimatePresence, MotionTabPanel } from '@/lib/ui/motion';
-import { AppButton, AppModal, AppSurfaceStat, AppSurfaceStatGrid, AppTextarea, joinClassNames } from '@/lib/ui/primitives';
+import { AppButton, AppTextarea, joinClassNames } from '@/lib/ui/primitives';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
@@ -35,14 +24,9 @@ import type {
   TelegramReadinessSnapshot,
 } from './types';
 import {
-  CONTEXT_PRESET_OPTIONS,
   DEFAULT_SAFE_AGENT_PERSONA_VALUES,
   DEFAULT_SAFE_AGENT_SYSTEM_PROMPT_VALUES,
-  AGENT_STUDIO_OBJECT_LABELS,
-  AGENT_VISIBILITY_LABELS,
   SPECIALIST_CONNECTOR_CARDS,
-  SPECIALIST_OVERLAY_TABS,
-  normalizeContextPresetId,
 } from './constants';
 import {
   ContextPresetControl,
@@ -67,7 +51,6 @@ import {
   rosterStatusTone,
   testRuntimeModeForPlacement,
   formatDeploymentModelLabel,
-  formatDeploymentModelSummary,
   selfHostedNodeHealthLabel,
   truncateExternalUserId,
   formatTimestamp,
@@ -75,7 +58,6 @@ import {
   selectedProviderId,
   listEnabledChannels,
   readBudgetCycle,
-  runtimePlacementLabel,
   inferAiTierFromProviderModel,
   connectorConnected,
   providerCatalogById,
@@ -84,27 +66,8 @@ import {
 const SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS = ['.md', '.markdown', '.txt', '.csv', '.json'];
 const KNOWLEDGE_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
 const KNOWLEDGE_UPLOAD_MAX_MB = '2 MB';
-
-const AGENT_SECTION_ICONS: Record<SpecialistOverlayTabId, LucideIcon> = {
-  overview: LayoutDashboard,
-  chat: MessageSquareText,
-  knowledge: BookOpen,
-  ai: Route,
-  tools: Zap,
-  memory: Brain,
-  connectors: Cable,
-  analytics: BarChart3,
-};
-
-type AgentPrimaryTabId = Extract<SpecialistOverlayTabId, 'overview' | 'chat'>;
-type AgentSetupTabId = Exclude<SpecialistOverlayTabId, AgentPrimaryTabId>;
-
-function isAgentSetupTabId(tabId: SpecialistOverlayTabId): tabId is AgentSetupTabId {
-  return tabId !== 'overview' && tabId !== 'chat';
-}
-
-const AGENT_PRIMARY_TABS = SPECIALIST_OVERLAY_TABS.filter((tab) => !isAgentSetupTabId(tab.id));
-const AGENT_SETUP_TABS = SPECIALIST_OVERLAY_TABS.filter((tab) => isAgentSetupTabId(tab.id));
+const OVERVIEW_RANGE_OPTIONS = ['7d', '30d', '90d'] as const;
+type OverviewRange = typeof OVERVIEW_RANGE_OPTIONS[number];
 
 function isSupportedKnowledgeFile(file: File): boolean {
   const name = file.name.toLowerCase();
@@ -199,8 +162,7 @@ export const AgentDetailView = memo(({
   const [knowledgeSourceInput, setKnowledgeSourceInput] = useState('');
   const [knowledgeFileError, setKnowledgeFileError] = useState<string | null>(null);
   const [isUploadingKnowledgeFile, setIsUploadingKnowledgeFile] = useState(false);
-  const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
-  const [setupModalTab, setSetupModalTab] = useState<AgentSetupTabId>('knowledge');
+  const [overviewRange, setOverviewRange] = useState<OverviewRange>('30d');
   const knowledgeFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -208,13 +170,6 @@ export const AgentDetailView = memo(({
     setKnowledgeFileError(null);
     setIsUploadingKnowledgeFile(false);
   }, [workspaceId, selectedAgentId]);
-
-  useEffect(() => {
-    if (currentStudioSubview === 'agents' && isAgentSetupTabId(overlayTab)) {
-      setSetupModalTab(overlayTab);
-      setIsSetupModalOpen(true);
-    }
-  }, [currentStudioSubview, overlayTab]);
 
   const selectedAgentRuntimePlacement = useMemo(() => {
     const config = readRecord(selectedAgent?.config);
@@ -237,10 +192,6 @@ export const AgentDetailView = memo(({
     ? draftKnowledgeSourceLines.map((uri, index) => ({ id: `draft-source-${index + 1}`, uri, label: uri, kind: uri.startsWith('knowledge://') ? 'file' : 'source' }))
     : selectedKnowledgeSources;
   const visibleKnowledgeSourceCount = visibleKnowledgeSources.length;
-
-  const selectedContextPresetLabel = detailConfigDraft
-    ? CONTEXT_PRESET_OPTIONS.find((option) => option.id === normalizeContextPresetId(detailConfigDraft.contextBudgetPreset))?.label ?? 'Standard'
-    : 'Standard';
 
   const selectedAgentMemoryEnabled =
     readRecord(readRecord(selectedAgent?.config).memory_policy).memory_enabled === true ||
@@ -274,28 +225,6 @@ export const AgentDetailView = memo(({
 
   const selectedBudgetCycle = readBudgetCycle(selectedAgent);
   const selectedBudgetBurn = selectedAgentAnalytics?.currentBurnUsd ?? readNumber(selectedBudgetCycle.current_burn_usd);
-
-  const selectedAgentModeLabel = selectedAgent
-    ? runtimePlacementLabel(selectedAgentRuntimePlacement)
-    : 'Cloud worker';
-
-  const overviewTrendValues = selectedAgentAnalytics
-    ? [
-        0,
-        selectedAgentAnalytics.messageVolumeDay,
-        Math.max(selectedAgentAnalytics.messageVolumeWeek - selectedAgentAnalytics.messageVolumeDay, 0),
-        Math.max(selectedAgentAnalytics.messageVolumeMonth - selectedAgentAnalytics.messageVolumeWeek, 0),
-        selectedAgentAnalytics.messageVolumeMonth,
-      ]
-    : [0, 0, 0, 0, 0];
-  const overviewTrendMax = Math.max(...overviewTrendValues, 1);
-  const overviewTrendPoints = overviewTrendValues
-    .map((value, index) => {
-      const x = (index / Math.max(overviewTrendValues.length - 1, 1)) * 100;
-      const y = 76 - (Math.max(value, 0) / overviewTrendMax) * 56;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(' ');
 
   const overlayConnectorCards = useMemo(() => {
     if (!selectedAgent) return [];
@@ -334,12 +263,7 @@ export const AgentDetailView = memo(({
   );
   const selectedAgentState = readString(selectedAgent?.deployment_state).toLowerCase();
   const selectedAgentStateLabel = humanizeToken(selectedAgent?.deployment_state, 'Draft');
-  const selectedAgentProviderIdValue = selectedProviderId(selectedAgent);
   const selectedAgentModelLabel = formatDeploymentModelLabel(selectedAgent, providerCatalogIndex);
-  const selectedAgentModelSummary = formatDeploymentModelSummary(selectedAgent, providerCatalogIndex);
-  const selectedAgentRouteLabel = selectedAgentProviderIdValue
-    ? providerCatalogIndex[selectedAgentProviderIdValue]?.label ?? humanizeToken(selectedAgentProviderIdValue, 'Custom API')
-    : 'Empyralis Credits';
   const selectedAgentToolCount = normalizeToolIds(
     readRecord(readRecord(selectedAgent?.config).tool_policy).enabled_tools ??
     readRecord(selectedAgent?.metadata).selected_tool_ids,
@@ -352,9 +276,6 @@ export const AgentDetailView = memo(({
     readString(readRecord(selectedAgent?.metadata).system_prompt).trim(),
   );
   const channelReady = listEnabledChannels(selectedAgent?.channels).length > 0;
-  const selectedAgentVisibilityLabel = selectedAgentState === 'live' && channelReady
-    ? AGENT_VISIBILITY_LABELS.public_channel
-    : AGENT_VISIBILITY_LABELS.private_workspace;
   const runtimeReady = !selectedAgentSelfHostedDeployBlocker;
   const telegramReady = !selectedAgentNeedsTelegramReadiness || selectedTelegramReadiness?.readyForLive === true;
   const deployBlockers = [
@@ -389,7 +310,7 @@ export const AgentDetailView = memo(({
       label: 'Channel',
       detail: channelReady ? selectedAgentChannelLabel : 'No customer channel connected.',
       ready: channelReady && telegramReady,
-      tab: 'connectors' as SpecialistOverlayTabId,
+      tab: 'channels' as SpecialistOverlayTabId,
     },
     {
       label: 'Actions',
@@ -422,53 +343,102 @@ export const AgentDetailView = memo(({
       tab: 'analytics' as SpecialistOverlayTabId,
     },
   ];
-  const readyCount = readinessItems.filter((item) => item.ready).length;
-  const launchTitle = selectedAgentState === 'live'
-    ? 'Live and serving customers'
-    : launchReady
-      ? 'Ready to deploy'
-      : 'Launch needs attention';
   const launchDetail = selectedAgentState === 'live'
     ? 'This agent can receive customer traffic.'
     : launchReady
       ? 'Production-safe defaults are set. Chat with it privately, then deploy when ready.'
       : deployBlockers[0] || 'Finish the required setup before customer traffic.';
-  const setupCards = [
+  const overviewConversationCount = selectedAgentMetrics?.conversationCount ?? 0;
+  const overviewMessagesMonth = selectedAgentAnalytics?.messageVolumeMonth ?? 0;
+  const overviewActiveUsers = selectedAgentAnalytics?.activeUsersLast30d ?? 0;
+  const overviewHandoffCount = selectedAgentAnalytics?.escalationSessionCount ?? 0;
+  const overviewHandoffRate = selectedAgentAnalytics
+    ? `${Math.round(selectedAgentAnalytics.escalationRatePercent)}%`
+    : '0%';
+  const hasLoggedOutcomes = Boolean(selectedAgentAnalytics?.outcomes.length);
+  const overviewTopOutcome = hasLoggedOutcomes && selectedAgentAnalytics?.topOutcome
+    ? humanizeToken(selectedAgentAnalytics.topOutcome, 'Outcome')
+    : 'No outcomes yet';
+  const overviewLatestActivity =
+    selectedAgentMetrics?.latestActivityLabel ??
+    (selectedAgentAnalytics?.latestMessageAt ? `Latest ${formatTimestamp(selectedAgentAnalytics.latestMessageAt)}` : 'No activity yet');
+  const overviewLatestChannel = selectedAgentMetrics?.latestChannel
+    ? humanizeToken(selectedAgentMetrics.latestChannel, selectedAgentMetrics.latestChannel)
+    : (channelReady ? selectedAgentChannelLabel : 'No channel yet');
+  const overviewUsageMonthDate = selectedAgentAnalytics?.usageMonth
+    ? Date.parse(`${selectedAgentAnalytics.usageMonth}T00:00:00Z`)
+    : Number.NaN;
+  const overviewUsageWindow = Number.isFinite(overviewUsageMonthDate)
+    ? new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(overviewUsageMonthDate))
+    : 'This month';
+  const overviewStatusDetail = selectedAgentState === 'live'
+    ? 'Live traffic is enabled. Track work handled, handoffs, and spend.'
+    : launchReady
+      ? 'Ready for customer traffic. Deployment stays owner controlled.'
+      : launchDetail;
+  const overviewMetrics = [
+    { label: 'People 30d', value: formatCompactCount(overviewActiveUsers) },
+    { label: 'Conversations', value: formatCompactCount(overviewConversationCount) },
+    { label: 'Messages 30d', value: formatCompactCount(overviewMessagesMonth) },
+    { label: 'Cost', value: formatUsd(selectedBudgetBurn ?? 0) },
+  ];
+  const overviewSetupChecklist = readinessItems.filter((item) => (
+    item.label === 'Instructions' ||
+    item.label === 'Knowledge' ||
+    item.label === 'Channel' ||
+    item.label === 'Actions'
+  ));
+  const overviewRangeDays = overviewRange === '7d' ? 7 : overviewRange === '90d' ? 90 : 30;
+  const overviewAllSeries = selectedAgentAnalytics?.activitySeries ?? [];
+  const overviewDatedSeries = overviewAllSeries.filter((item) => (
+    item.date && Number.isFinite(Date.parse(item.date))
+  ));
+  const overviewRangeCutoff = Date.now() - ((overviewRangeDays - 1) * 24 * 60 * 60 * 1000);
+  const overviewChartSeries = overviewDatedSeries.length > 0
+    ? overviewAllSeries.filter((item) => {
+        if (!item.date) return false;
+        const timestamp = Date.parse(item.date);
+        return Number.isFinite(timestamp) && timestamp >= overviewRangeCutoff;
+      })
+    : overviewAllSeries.slice(-overviewRangeDays);
+  const overviewChartMax = Math.max(
+    1,
+    ...overviewChartSeries.flatMap((item) => [item.conversations, item.messages]),
+  );
+  const buildOverviewPolyline = (metric: 'conversations' | 'messages') => {
+    if (overviewChartSeries.length === 0) {
+      return '';
+    }
+    const lastIndex = overviewChartSeries.length - 1;
+    return overviewChartSeries
+      .map((item, index) => {
+        const x = lastIndex === 0 ? 50 : 4 + ((index / lastIndex) * 92);
+        const amount = Math.max(0, item[metric]);
+        const y = 78 - ((amount / overviewChartMax) * 58);
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(' ');
+  };
+  const overviewConversationPolyline = buildOverviewPolyline('conversations');
+  const overviewMessagePolyline = buildOverviewPolyline('messages');
+  const overviewChartStartLabel = overviewChartSeries[0]?.label || `Last ${overviewRange}`;
+  const overviewChartEndLabel = overviewChartSeries[overviewChartSeries.length - 1]?.label || 'Today';
+  const overviewWorkSignals = [
     {
-      label: 'Knowledge',
-      value: `${knowledgeSourceCount} source${knowledgeSourceCount === 1 ? '' : 's'}`,
-      detail: instructionsReady ? 'Instructions ready' : 'Instructions missing',
-      tab: 'knowledge' as SpecialistOverlayTabId,
+      label: 'Last activity',
+      value: overviewLatestActivity,
     },
     {
-      label: 'Model',
-      value: selectedAgentModelLabel,
-      detail: modelReady ? selectedAgentModeLabel : 'Provider setup required',
-      tab: 'ai' as SpecialistOverlayTabId,
+      label: 'Outcome',
+      value: overviewTopOutcome,
+    },
+    {
+      label: 'Handoffs',
+      value: `${formatCompactCount(overviewHandoffCount)} / ${overviewHandoffRate}`,
     },
     {
       label: 'Channel',
-      value: selectedAgentChannelLabel,
-      detail: channelReady ? 'Customer entrypoint selected' : 'Connect before launch',
-      tab: 'connectors' as SpecialistOverlayTabId,
-    },
-    {
-      label: 'Actions',
-      value: `${selectedAgentToolCount} enabled`,
-      detail: selectedAgentToolCount > 0 ? 'Permissions reviewed' : 'No actions allowed',
-      tab: 'tools' as SpecialistOverlayTabId,
-    },
-    {
-      label: 'Memory',
-      value: selectedAgentMemoryEnabled ? 'On' : 'Off',
-      detail: selectedAgentMemoryEnabled ? selectedContextPresetLabel : 'No customer facts stored',
-      tab: 'memory' as SpecialistOverlayTabId,
-    },
-    {
-      label: 'Results',
-      value: selectedAgentMetrics?.conversationCountLabel ?? '0 conversations',
-      detail: selectedAgentMetrics?.latestActivityLabel ?? 'No recent activity',
-      tab: 'analytics' as SpecialistOverlayTabId,
+      value: overviewLatestChannel,
     },
   ];
   const addKnowledgeReferenceToDraft = (reference: string) => {
@@ -525,24 +495,7 @@ export const AgentDetailView = memo(({
     }
   };
 
-  const openSetupModal = (tabId: AgentSetupTabId = isAgentSetupTabId(overlayTab) ? overlayTab : 'knowledge') => {
-    setSetupModalTab(tabId);
-    setIsSetupModalOpen(true);
-  };
-
-  const closeSetupModal = () => {
-    setIsSetupModalOpen(false);
-    if (isAgentSetupTabId(overlayTab)) {
-      onSelectTab('overview');
-    }
-  };
-
   const selectAgentSection = (tabId: SpecialistOverlayTabId) => {
-    if (isAgentSetupTabId(tabId)) {
-      openSetupModal(tabId);
-      return;
-    }
-    setIsSetupModalOpen(false);
     onSelectTab(tabId);
   };
 
@@ -557,89 +510,15 @@ export const AgentDetailView = memo(({
     );
   }
 
-  const showAgentTopbar = currentStudioSubview === 'agents';
-  const activeAgentTopTab: AgentPrimaryTabId = overlayTab === 'chat' ? 'chat' : 'overview';
-
   return (
     <div className="app-stack-4 studio-agent-detail-motion">
       <div className={joinClassNames(
         'studio-agent-detail-layout',
-        showAgentTopbar && 'studio-agent-detail-layout--with-topbar',
         currentStudioSubview !== 'agents' && 'studio-agent-detail-layout--single',
       )}>
-        {showAgentTopbar ? (
-          <div className="studio-agent-detail-topbar">
-            <nav className="studio-agent-detail-tabs studio-agent-detail-tabs--topbar" role="tablist" aria-label="Business Agent sections">
-              {AGENT_PRIMARY_TABS.map((tab) => {
-                const SectionIcon = AGENT_SECTION_ICONS[tab.id];
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    role="tab"
-                    className={joinClassNames(
-                      'studio-agent-detail-tabs__button',
-                      activeAgentTopTab === tab.id && 'studio-agent-detail-tabs__button--active',
-                    )}
-                    aria-label={tab.label}
-                    aria-selected={activeAgentTopTab === tab.id}
-                    title={tab.label}
-                    onClick={() => selectAgentSection(tab.id)}
-                  >
-                    <SectionIcon size={15} strokeWidth={2} aria-hidden="true" />
-                    <span>{tab.label}</span>
-                  </button>
-                );
-              })}
-            </nav>
-            <AppButton type="button" tone="secondary" onClick={() => openSetupModal()}>
-              Edit setup
-            </AppButton>
-          </div>
-        ) : null}
-
-        <AppModal
-          open={isSetupModalOpen}
-          title="Edit setup"
-          description="Configure the agent sections that do not need to stay in the main canvas."
-          className="studio-agent-setup-modal"
-          onOpenChange={(open) => {
-            if (!open) {
-              closeSetupModal();
-            } else {
-              setIsSetupModalOpen(true);
-            }
-          }}
-          actions={(
-            <AppButton type="button" tone="ghost" onClick={closeSetupModal}>
-              Close
-            </AppButton>
-          )}
-        >
-          <div className="studio-agent-setup-modal__layout">
-            <nav className="studio-agent-setup-modal__nav" aria-label="Edit setup sections">
-              {AGENT_SETUP_TABS.map((tab) => {
-                const SectionIcon = AGENT_SECTION_ICONS[tab.id];
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    className={joinClassNames(
-                      'studio-agent-setup-modal__nav-item',
-                      setupModalTab === tab.id && 'studio-agent-setup-modal__nav-item--active',
-                    )}
-                    aria-current={setupModalTab === tab.id ? 'page' : undefined}
-                    onClick={() => setSetupModalTab(tab.id as AgentSetupTabId)}
-                  >
-                    <SectionIcon size={15} strokeWidth={2} aria-hidden="true" />
-                    <span>{tab.label}</span>
-                  </button>
-                );
-              })}
-            </nav>
-            <div className="studio-agent-setup-modal__content">
-              <AnimatePresence mode="wait" initial={false}>
-      {isSetupModalOpen && setupModalTab === 'knowledge' && (
+        <div className="studio-agent-detail-content">
+        <AnimatePresence mode="wait" initial={false}>
+      {currentStudioSubview === 'agents' && overlayTab === 'knowledge' && (
         <MotionTabPanel key="knowledge" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -807,7 +686,7 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
 
-      {isSetupModalOpen && setupModalTab === 'ai' && (
+      {currentStudioSubview === 'agents' && overlayTab === 'ai' && (
         <MotionTabPanel key="ai" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -849,7 +728,26 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
 
-      {isSetupModalOpen && setupModalTab === 'tools' && (
+      {currentStudioSubview === 'agents' && overlayTab === 'channels' && (
+        <MotionTabPanel key="channels" className="studio-agent-motion-panel">
+        <ListDetailPanel
+          className="studio-panel studio-panel--detail"
+          hideHeaderText
+          eyebrow="Channels"
+          title="Agent channels"
+          subtitle="Connect where customers talk to this agent."
+        >
+          <AgentIntegrationsSections
+            connectorCards={overlayConnectorCards}
+            workspaceId={workspaceId}
+            selectedAgentId={selectedAgentId}
+            view="channels"
+          />
+        </ListDetailPanel>
+        </MotionTabPanel>
+      )}
+
+      {currentStudioSubview === 'agents' && overlayTab === 'tools' && (
         <MotionTabPanel key="tools" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -867,7 +765,6 @@ export const AgentDetailView = memo(({
             <>
               <AgentActionCapabilitySections
                 selectedToolIds={detailConfigDraft.selectedToolIds}
-                onOpenIntegrations={() => setSetupModalTab('connectors')}
                 onToggleTool={(toolId) => {
                   const nextSelected = detailConfigDraft.selectedToolIds.includes(toolId)
                     ? detailConfigDraft.selectedToolIds.filter((item) => item !== toolId)
@@ -875,13 +772,19 @@ export const AgentDetailView = memo(({
                   onUpdateDetailConfig({ selectedToolIds: nextSelected });
                 }}
               />
+              <AgentIntegrationsSections
+                connectorCards={overlayConnectorCards}
+                workspaceId={workspaceId}
+                selectedAgentId={selectedAgentId}
+                view="integrations"
+              />
             </>
           ) : null}
         </ListDetailPanel>
         </MotionTabPanel>
       )}
 
-      {isSetupModalOpen && setupModalTab === 'memory' && (
+      {currentStudioSubview === 'agents' && overlayTab === 'memory' && (
         <MotionTabPanel key="memory" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -944,29 +847,7 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
 
-      {isSetupModalOpen && setupModalTab === 'connectors' && (
-        <MotionTabPanel key="connectors" className="studio-agent-motion-panel">
-        <ListDetailPanel
-          className="studio-panel studio-panel--detail"
-          hideHeaderText
-          eyebrow="Integrations"
-          title="Agent integrations"
-          subtitle="Connect customer channels and trusted systems after the agent exists."
-        >
-          <AgentIntegrationsSections
-            providerCatalog={providerCatalog}
-            connectorCards={overlayConnectorCards}
-            runtimeAttachments={runtimeAttachments}
-            hasGatewayOnlineTarget={hasGatewayOnlineTarget}
-            hasCloudComputerAvailableTarget={hasCloudComputerAvailableTarget}
-            workspaceId={workspaceId}
-            selectedAgentId={selectedAgentId}
-          />
-        </ListDetailPanel>
-        </MotionTabPanel>
-      )}
-
-      {isSetupModalOpen && setupModalTab === 'analytics' && (
+      {currentStudioSubview === 'agents' && overlayTab === 'analytics' && (
         <MotionTabPanel key="analytics" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
@@ -982,15 +863,7 @@ export const AgentDetailView = memo(({
         </ListDetailPanel>
         </MotionTabPanel>
       )}
-
-              </AnimatePresence>
-            </div>
-          </div>
-        </AppModal>
-
-        <div className="studio-agent-detail-content">
-        <AnimatePresence mode="wait" initial={false}>
-              {currentStudioSubview === 'agents' && activeAgentTopTab === 'chat' && (
+              {currentStudioSubview === 'agents' && overlayTab === 'chat' && (
         <MotionTabPanel key="chat" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail studio-panel--chat"
@@ -1016,14 +889,14 @@ export const AgentDetailView = memo(({
         </MotionTabPanel>
       )}
 
-      {(currentStudioSubview === 'deploy' || (currentStudioSubview === 'agents' && activeAgentTopTab === 'overview')) && (
+      {(currentStudioSubview === 'deploy' || (currentStudioSubview === 'agents' && overlayTab === 'overview')) && (
         <MotionTabPanel key="overview" className="studio-agent-motion-panel">
         <ListDetailPanel
           className="studio-panel studio-panel--detail"
           hideHeaderText
           eyebrow="Command Center"
           title={readString(selectedAgent.name, 'Assistant overview')}
-          subtitle="Identity, launch readiness, and live performance signals."
+          subtitle="Work handled, customer activity, and operating cost."
         >
           {isLoadingDetail ? (
             <div className="app-stack-3">
@@ -1040,211 +913,128 @@ export const AgentDetailView = memo(({
                       {selectedAgentStateLabel}
                     </DataBadge>
                   </div>
-                  <strong>{launchTitle}</strong>
-                  <p>{launchDetail}</p>
-                  <div className="studio-agent-overview__identity-chips" aria-label="Agent scope">
-                    <span>{AGENT_STUDIO_OBJECT_LABELS.studio_agent}</span>
-                    <span>{selectedAgentVisibilityLabel}</span>
-                    <span>{selectedAgentModeLabel}</span>
+                  <strong>{readString(selectedAgent.name, 'Business Agent')}</strong>
+                  <p>{!modelReady ? 'Choose platform credits, your API key, or a local model before launch.' : overviewStatusDetail}</p>
+                </div>
+              </section>
+
+              <section className="studio-agent-overview__metrics-panel" aria-label="Agent metrics">
+                <div className="studio-agent-overview__section-head">
+                  <div>
+                    <span>Metrics</span>
+                    <strong>Traffic and cost</strong>
                   </div>
-                  <div className="studio-agent-overview__hero-actions">
-                    <AppButton type="button" onClick={() => selectAgentSection('chat')}>
-                      Chat with this agent
-                    </AppButton>
-                    <AppButton type="button" tone="secondary" onClick={() => openSetupModal()}>
-                      Edit setup
-                    </AppButton>
+                  <div className="studio-agent-overview__range-toggle" aria-label="Metrics time range">
+                    {OVERVIEW_RANGE_OPTIONS.map((range) => (
+                      <button
+                        key={range}
+                        type="button"
+                        className={joinClassNames(
+                          'studio-agent-overview__range-button',
+                          overviewRange === range && 'studio-agent-overview__range-button--active',
+                        )}
+                        onClick={() => setOverviewRange(range)}
+                      >
+                        {range}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                <div className="studio-agent-overview__hero-metrics">
-                  <div className="studio-agent-overview__hero-metric">
-                    <span>Checklist</span>
-                    <strong>{readyCount}/{readinessItems.length}</strong>
+
+                <div className="studio-agent-overview__metric-grid">
+                  {overviewMetrics.map((item) => (
+                    <div key={item.label} className="studio-agent-overview__metric-tile">
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="studio-agent-overview__chart" aria-label="Conversations and messages over time">
+                  <div className="studio-agent-overview__chart-head">
+                    <div>
+                      <span>Conversations vs messages</span>
+                      <strong>{overviewUsageWindow}</strong>
+                    </div>
+                    <div className="studio-agent-overview__chart-legend" aria-label="Chart legend">
+                      <span><i className="studio-agent-overview__legend-dot studio-agent-overview__legend-dot--conversations" />Conversations</span>
+                      <span><i className="studio-agent-overview__legend-dot studio-agent-overview__legend-dot--messages" />Messages</span>
+                    </div>
                   </div>
-                  <div className="studio-agent-overview__hero-metric">
-                    <span>Conversations</span>
-                    <strong>{selectedAgentMetrics?.conversationCountLabel ?? '0'}</strong>
+                  <div className="studio-agent-overview__chart-frame">
+                    <svg className="studio-agent-overview__chart-svg" viewBox="0 0 100 90" role="img" aria-label={`${overviewRange} conversations and messages chart`}>
+                      <line className="studio-agent-overview__chart-grid" x1="4" y1="20" x2="96" y2="20" />
+                      <line className="studio-agent-overview__chart-grid" x1="4" y1="49" x2="96" y2="49" />
+                      <line className="studio-agent-overview__chart-axis" x1="4" y1="78" x2="96" y2="78" />
+                      <line className="studio-agent-overview__chart-axis" x1="4" y1="20" x2="4" y2="78" />
+                      {overviewConversationPolyline ? (
+                        <polyline className="studio-agent-overview__chart-line studio-agent-overview__chart-line--conversations" points={overviewConversationPolyline} />
+                      ) : null}
+                      {overviewMessagePolyline ? (
+                        <polyline className="studio-agent-overview__chart-line studio-agent-overview__chart-line--messages" points={overviewMessagePolyline} />
+                      ) : null}
+                    </svg>
+                    {overviewChartSeries.length === 0 ? (
+                      <div className="studio-agent-overview__chart-empty">
+                        <strong>No time-series data yet</strong>
+                        <span>Totals are available, but the analytics endpoint is not returning daily points.</span>
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="studio-agent-overview__hero-metric">
-                    <span>Messages</span>
-                    <strong>{selectedAgentAnalytics ? formatCompactCount(selectedAgentAnalytics.messageVolumeMonth) : '0'}</strong>
-                  </div>
-                  <div className="studio-agent-overview__hero-metric">
-                    <span>Monthly cost</span>
-                    <strong>{formatUsd(selectedBudgetBurn)}</strong>
+                  <div className="studio-agent-overview__chart-labels">
+                    <span>{overviewChartStartLabel}</span>
+                    <span>Max {formatCompactCount(overviewChartMax)}</span>
+                    <span>{overviewChartEndLabel}</span>
                   </div>
                 </div>
               </section>
 
-              <section className="studio-agent-overview__launch-checklist" aria-label="Launch checklist">
+              <section className="studio-agent-overview__activity-panel" aria-label="Agent activity">
                 <div className="studio-agent-overview__section-head">
                   <div>
-                    <span>Launch readiness</span>
-                    <strong>What must be true before customers see it</strong>
+                    <span>Activity</span>
+                    <strong>Latest operating signals</strong>
                   </div>
-                  <small>{readyCount} of {readinessItems.length} ready</small>
                 </div>
-                <div className="studio-agent-overview__checklist-grid">
-                  {readinessItems.map((item) => (
+                <div className="studio-agent-overview__activity-row">
+                  {overviewWorkSignals.map((item) => (
+                    <div key={item.label} className="studio-agent-overview__activity-item">
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="studio-agent-overview__setup-alert" aria-label="Setup blockers">
+                <div className="studio-agent-overview__section-head">
+                  <div>
+                    <span>Before launch</span>
+                    <strong>Setup checklist</strong>
+                  </div>
+                  <small>{launchDetail}</small>
+                </div>
+                <div className="studio-agent-overview__blocker-list">
+                  {overviewSetupChecklist.map((item) => (
                     <button
                       key={item.label}
                       type="button"
-                      className={joinClassNames('studio-agent-overview__checklist-card', item.ready && 'studio-agent-overview__checklist-card--ready')}
+                      className={joinClassNames(
+                        'studio-agent-overview__blocker-row',
+                        item.ready && 'studio-agent-overview__blocker-row--ready',
+                      )}
                       onClick={() => selectAgentSection(item.tab)}
                     >
-                      <span className="studio-agent-overview__checklist-dot" />
-                      <strong>{item.label}</strong>
-                      <p>{item.detail}</p>
+                      <span className="studio-agent-overview__blocker-dot" />
+                      <span className="studio-agent-overview__blocker-copy">
+                        <strong>{item.label}</strong>
+                        <small>{item.detail}</small>
+                      </span>
                     </button>
                   ))}
                 </div>
               </section>
 
-              <div className="studio-agent-overview__grid">
-                <section className="studio-agent-overview__group">
-                  <div className="studio-agent-overview__group-head">
-                    <strong>Identity & Purpose</strong>
-                    <button type="button" onClick={() => selectAgentSection('knowledge')}>View instructions</button>
-                  </div>
-                  <div className="studio-agent-overview__card">
-                    <span>Public name</span>
-                    <strong>{readString(selectedAgent.name, 'Unnamed agent')}</strong>
-                  </div>
-                  <div className="studio-agent-overview__card">
-                    <span>Avatar</span>
-                    <div className="studio-agent-overview__avatar-preview">
-                      {readString(selectedAgent.avatar) ? (
-                        <img src={selectedAgent.avatar!} alt="Avatar" />
-                      ) : (
-                        <div className="studio-agent-overview__avatar-placeholder">
-                          {readString(selectedAgent.name, 'A').charAt(0).toUpperCase()}
-                        </div>
-                      )}
-                      <span>{readString(selectedAgent.avatar) ? 'Custom' : 'Default'}</span>
-                    </div>
-                  </div>
-                  <div className="studio-agent-overview__card studio-agent-overview__card--wide">
-                    <span>Job description</span>
-                    <p>{readString(selectedAgent.persona, 'No job description set.')}</p>
-                  </div>
-                </section>
-
-                <section className="studio-agent-overview__group">
-                  <div className="studio-agent-overview__group-head">
-                    <strong>Knowledge & Retrieval</strong>
-                    <button type="button" onClick={() => selectAgentSection('knowledge')}>Test search</button>
-                  </div>
-                  <div className="studio-agent-overview__card">
-                    <span>Sources</span>
-                    <strong>{knowledgeSourceCount} connected</strong>
-                  </div>
-                  <div className="studio-agent-overview__card">
-                    <span>Retrieval health</span>
-                    <strong>
-                      {knowledgeSourceCount > 0 ? 'Reference check ready' : 'Needs data'}
-                    </strong>
-                  </div>
-                  <div className="studio-agent-overview__card studio-agent-overview__card--wide">
-                    <span>Status</span>
-                    <p>{knowledgeSourceCount > 0 ? 'Saved source references can be verified by name, kind, URI, or path. Content citation indexing is still reported separately.' : 'Agent will answer based on general instructions only.'}</p>
-                  </div>
-                </section>
-
-                <section className="studio-agent-overview__group">
-                  <div className="studio-agent-overview__group-head">
-                    <strong>Model & Route</strong>
-                    <button type="button" onClick={() => selectAgentSection('ai')}>Change route</button>
-                  </div>
-                  <div className="studio-agent-overview__card">
-                    <span>Selected route</span>
-                    <strong>{selectedAgentRouteLabel}</strong>
-                  </div>
-                  <div className="studio-agent-overview__card">
-                    <span>Default model</span>
-                    <strong>{selectedAgentModelLabel}</strong>
-                  </div>
-                  <div className="studio-agent-overview__card studio-agent-overview__card--wide">
-                    <span>Runtime</span>
-                    <p>{selectedAgentModelSummary} · {modelReady ? 'Ready for production traffic.' : 'Connect a provider in Integrations.'}</p>
-                  </div>
-                </section>
-
-                <section className="studio-agent-overview__group">
-                  <div className="studio-agent-overview__group-head">
-                    <strong>Safety & Compliance</strong>
-                    <button type="button" onClick={onOpenEditWizard}>Adjust limits</button>
-                  </div>
-                  <div className="studio-agent-overview__card">
-                    <span>Human handoff</span>
-                    <strong>{humanizeToken(readRecord(readRecord(selectedAgent.config).escalation_policy).preset, 'Standard')}</strong>
-                  </div>
-                  <div className="studio-agent-overview__card">
-                    <span>Monthly cap</span>
-                    <strong>{formatUsd(readRecord(readRecord(selectedAgent.config).commerce_policy).monthly_cost_cap_usd)}</strong>
-                  </div>
-                  <div className="studio-agent-overview__card studio-agent-overview__card--wide">
-                    <span>Safety engine</span>
-                    <p>Guarded by Empyralis Safety. {readRecord(readRecord(selectedAgent.config).safety_policy).health_safety_enabled === true ? 'Sensitive topic filter active.' : 'Standard safety active.'}</p>
-                  </div>
-                </section>
-              </div>
-
-              <section className="studio-agent-overview__integrations">
-                <div className="studio-agent-overview__section-head">
-                  <div>
-                    <span>Integrations</span>
-                    <strong>Live Channels & Connectors</strong>
-                  </div>
-                  <button type="button" className="studio-actions__link-button" onClick={() => selectAgentSection('connectors')}>Manage integrations</button>
-                </div>
-                <div className="studio-agent-overview__connector-strip">
-                  {overlayConnectorCards.slice(0, 4).map((card) => (
-                    <div key={card.id} className={joinClassNames('studio-agent-overview__connector-pill', card.connected && 'studio-agent-overview__connector-pill--connected')}>
-                      <span>{card.label}</span>
-                      <strong>{card.statusLabel}</strong>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section className="studio-agent-overview__next-steps">
-                <div className="studio-agent-overview__section-head">
-                  <div>
-                    <span>Next steps</span>
-                    <strong>Path to production</strong>
-                  </div>
-                </div>
-                <div className="studio-agent-overview__step-list">
-                  {!launchReady ? (
-                    <div className="studio-agent-overview__step studio-agent-overview__step--todo">
-                      <div className="studio-agent-overview__step-mark">!</div>
-                      <div className="studio-agent-overview__step-copy">
-                        <strong>Complete the launch checklist</strong>
-                        <p>{launchDetail}</p>
-                        <AppButton type="button" tone="secondary" onClick={() => selectAgentSection(readinessItems.find((item) => !item.ready)?.tab ?? 'ai')}>Resolve</AppButton>
-                      </div>
-                    </div>
-                  ) : selectedAgentState !== 'live' ? (
-                    <div className="studio-agent-overview__step studio-agent-overview__step--todo">
-                      <div className="studio-agent-overview__step-mark">?</div>
-                      <div className="studio-agent-overview__step-copy">
-                        <strong>Test before deploying</strong>
-                        <p>Open the private chat to verify the agent follows its instructions and cites the correct sources.</p>
-                        <AppButton type="button" tone="secondary" onClick={() => selectAgentSection('chat')}>Open chat</AppButton>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="studio-agent-overview__step studio-agent-overview__step--done">
-                      <div className="studio-agent-overview__step-mark">✓</div>
-                      <div className="studio-agent-overview__step-copy">
-                        <strong>Agent is live</strong>
-                        <p>Monitor customer conversations and outcomes in the Results tab.</p>
-                        <AppButton type="button" tone="secondary" onClick={() => selectAgentSection('analytics')}>View results</AppButton>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </section>
             </div>
           )}
         </ListDetailPanel>

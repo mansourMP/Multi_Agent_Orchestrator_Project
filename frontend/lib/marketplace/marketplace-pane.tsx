@@ -1214,6 +1214,17 @@ export function MarketplacePane() {
                     Browse governed agent templates, skills, tools, MCP connectors, and bundles for this workspace.
                   </p>
                 </div>
+                {canPublishPackages ? (
+                  <div className="marketplace-pane__catalog-actions">
+                    <AppButton
+                      type="button"
+                      tone="secondary"
+                      onClick={() => setShowDeveloperRegistration(true)}
+                    >
+                      Publish
+                    </AppButton>
+                  </div>
+                ) : null}
               </div>
               <div className="marketplace-pane__browse-panel">
                 {error && !loading ? (

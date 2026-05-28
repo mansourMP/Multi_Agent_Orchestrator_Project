@@ -17,6 +17,7 @@ import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
 import type {
+  ConnectedExternalAgentRecord,
   DeployedAgentRecord,
 } from '@/lib/workspace/workstation-client';
 import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
@@ -85,6 +86,81 @@ import {
   summarizeStudioErrorMessage,
 } from './utils';
 
+type CreateAgentKind = 'native' | 'external';
+
+type ExternalProviderKind =
+  | 'openclaw'
+  | 'custom_http'
+  | 'hermes'
+  | 'mcp'
+  | 'a2a'
+  | 'custom';
+
+type ExternalAgentFormState = {
+  name: string;
+  providerKind: ExternalProviderKind;
+  baseUrl: string;
+  manifestUrl: string;
+  chatUrl: string;
+  eventsUrl: string;
+  artifactsUrl: string;
+  secretRef: string;
+  manifestJson: string;
+};
+
+const EXTERNAL_PROVIDER_OPTIONS: Array<{ value: ExternalProviderKind; label: string; hint: string }> = [
+  { value: 'openclaw', label: 'OpenClaw', hint: 'Use this for OpenClaw-style local or remote agent runtimes.' },
+  { value: 'custom_http', label: 'Custom HTTPS agent', hint: 'Use this for a provider-neutral external agent manifest.' },
+  { value: 'mcp', label: 'MCP server', hint: 'Use this for a governed remote MCP capability surface.' },
+  { value: 'a2a', label: 'A2A agent', hint: 'Use this for Agent-to-Agent compatible runtimes.' },
+  { value: 'hermes', label: 'Hermes', hint: 'Use this for Hermes-compatible agent runtimes.' },
+  { value: 'custom', label: 'Other', hint: 'Use this when the provider is not listed yet.' },
+];
+
+const EMPTY_EXTERNAL_AGENT_FORM: ExternalAgentFormState = {
+  name: '',
+  providerKind: 'openclaw',
+  baseUrl: '',
+  manifestUrl: '',
+  chatUrl: '',
+  eventsUrl: '',
+  artifactsUrl: '',
+  secretRef: '',
+  manifestJson: '',
+};
+
+function buildExternalAgentEndpoints(form: ExternalAgentFormState): Record<string, string> {
+  const endpoints: Record<string, string> = {};
+  const fields: Array<[keyof ExternalAgentFormState, string]> = [
+    ['baseUrl', 'base_url'],
+    ['manifestUrl', 'manifest_url'],
+    ['chatUrl', 'chat_url'],
+    ['eventsUrl', 'events_url'],
+    ['artifactsUrl', 'artifacts_url'],
+  ];
+
+  for (const [field, endpointKey] of fields) {
+    const value = readString(form[field]).trim();
+    if (value) {
+      endpoints[endpointKey] = value;
+    }
+  }
+
+  return endpoints;
+}
+
+function parseExternalAgentManifestJson(value: string): Record<string, unknown> {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const parsed = JSON.parse(trimmed);
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    throw new Error('Manifest JSON must be a JSON object.');
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export interface AgentWizardProps {
   open: boolean;
   mode: WizardMode;
@@ -92,6 +168,7 @@ export interface AgentWizardProps {
   initialState?: WizardState;
   templateId?: string;
   onSuccess: (record: DeployedAgentRecord) => void;
+  onExternalSuccess?: (record: ConnectedExternalAgentRecord) => void;
   workspaceId: string;
   bootstrap: any;
   services: any;
@@ -109,6 +186,7 @@ export function AgentWizard({
   initialState,
   templateId,
   onSuccess,
+  onExternalSuccess,
   workspaceId,
   bootstrap,
   services,
@@ -122,12 +200,15 @@ export function AgentWizard({
   const [wizardState, setWizardState] = useState<WizardState>(() => initialState ?? buildWizardState(null));
   const [wizardErrorMessage, setWizardErrorMessage] = useState<string | null>(null);
   const [isSubmittingWizard, setIsSubmittingWizard] = useState(false);
+  const [createAgentKind, setCreateAgentKind] = useState<CreateAgentKind>('native');
+  const [externalAgentForm, setExternalAgentForm] = useState<ExternalAgentFormState>(EMPTY_EXTERNAL_AGENT_FORM);
   const [isTelegramSetupOpen, setIsTelegramSetupOpen] = useState(false);
   const [selectedTelegramReadiness, setSelectedTelegramReadiness] = useState<TelegramReadinessSnapshot | null>(null);
   const [isLoadingTelegramReadiness, setIsLoadingTelegramReadiness] = useState(false);
 
   const activeWizardSteps = mode === 'create' ? CREATE_AGENT_WIZARD_STEPS : DEPLOYED_AGENT_WIZARD_STEPS;
   const wizardStep = activeWizardSteps[Math.min(wizardStepIndex, activeWizardSteps.length - 1)] ?? activeWizardSteps[0];
+  const isExternalCreate = mode === 'create' && createAgentKind === 'external';
 
   const providerCatalogIndex = useMemo(
     () => providerCatalogById(providerCatalog),
@@ -227,6 +308,8 @@ export function AgentWizard({
           computerAutomationEnabled: false,
         }, providerCatalog));
       }
+      setCreateAgentKind('native');
+      setExternalAgentForm(EMPTY_EXTERNAL_AGENT_FORM);
       setWizardStepIndex(0);
       setWizardErrorMessage(null);
       setIsTelegramSetupOpen(false);
@@ -273,12 +356,58 @@ export function AgentWizard({
     }));
   }
 
+  function setExternalAgentField<K extends keyof ExternalAgentFormState>(field: K, value: ExternalAgentFormState[K]) {
+    setWizardErrorMessage(null);
+    setExternalAgentForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
   async function persistWizard() {
+    if (isExternalCreate) {
+      const name = externalAgentForm.name.trim();
+      if (!name) {
+        setWizardErrorMessage('Name the external agent before connecting it.');
+        return;
+      }
+
+      let manifest: Record<string, unknown>;
+      try {
+        manifest = parseExternalAgentManifestJson(externalAgentForm.manifestJson);
+      } catch (error) {
+        setWizardErrorMessage(error instanceof Error ? error.message : 'Manifest JSON is invalid.');
+        return;
+      }
+
+      setIsSubmittingWizard(true);
+      setWizardErrorMessage(null);
+      try {
+        const created = await services.client.createConnectedExternalAgent({
+          name,
+          providerKind: externalAgentForm.providerKind,
+          endpoints: buildExternalAgentEndpoints(externalAgentForm),
+          manifest,
+          secretRef: externalAgentForm.secretRef.trim() || null,
+        });
+        const createdRecord = readRecord(created) as ConnectedExternalAgentRecord;
+        if (!readString(createdRecord.id)) {
+          throw new Error('External agent was connected, but Studio did not receive an agent id.');
+        }
+        onExternalSuccess?.(createdRecord);
+      } catch (error) {
+        setWizardErrorMessage(error instanceof Error ? error.message : 'The external agent could not be connected.');
+      } finally {
+        setIsSubmittingWizard(false);
+      }
+      return;
+    }
+
     const stateForSave = mode === 'create' ? buildCreateDraftWizardState(wizardState) : wizardState;
     if (mode === 'create') {
       const name = stateForSave.name.trim();
       if (!name) {
-        setWizardErrorMessage('Name the Business Agent before creating it.');
+        setWizardErrorMessage('Name the agent before creating it.');
         return;
       }
       setIsSubmittingWizard(true);
@@ -335,7 +464,7 @@ export function AgentWizard({
         });
         onSuccess(created as DeployedAgentRecord);
       } catch (error) {
-        setWizardErrorMessage(error instanceof Error ? error.message : 'The Business Agent could not be created.');
+        setWizardErrorMessage(error instanceof Error ? error.message : 'The agent could not be created.');
       } finally {
         setIsSubmittingWizard(false);
       }
@@ -480,16 +609,16 @@ export function AgentWizard({
   return (
     <CommandSheet
       open={open}
-      title={mode === 'create' ? 'Create Business Agent' : 'Edit Business Agent'}
+      title={mode === 'create' ? 'Create your agent' : 'Edit Business Agent'}
       description={
         mode === 'create'
-          ? 'Start with a worker profile. You can add knowledge, connections, and channels after it exists.'
+          ? 'Name it, describe the job, then connect knowledge, apps, and channels later.'
           : 'Adjust the worker profile, knowledge, customer channel, and safety behavior.'
       }
       onClose={onClose}
       actions={(
         <div className="app-inline-actions">
-          {wizardStepIndex > 0 ? (
+          {!isExternalCreate && wizardStepIndex > 0 ? (
             <AppButton
               type="button"
               tone="secondary"
@@ -499,7 +628,7 @@ export function AgentWizard({
               Back
             </AppButton>
           ) : null}
-          {wizardStepIndex < activeWizardSteps.length - 1 ? (
+          {!isExternalCreate && wizardStepIndex < activeWizardSteps.length - 1 ? (
             <AppButton
               type="button"
               onClick={() => setWizardStepIndex((current) => Math.min(activeWizardSteps.length - 1, current + 1))}
@@ -515,14 +644,14 @@ export function AgentWizard({
               }}
               disabled={isSubmittingWizard}
             >
-              {mode === 'create' ? 'Create Business Agent' : 'Save changes'}
+              {isExternalCreate ? 'Connect external agent' : mode === 'create' ? 'Create agent' : 'Save changes'}
             </AppButton>
           )}
         </div>
       )}
     >
       <div data-deployed-agent-wizard="root" className="deployed-agents-wizard">
-        {activeWizardSteps.length > 1 ? (
+        {!isExternalCreate && activeWizardSteps.length > 1 ? (
           <div className="deployed-agents-wizard__steps">
             {activeWizardSteps.map((step, index) => (
               <button
@@ -546,54 +675,145 @@ export function AgentWizard({
           </StateBanner>
         ) : null}
 
-        <ModalSection title={wizardStep.label} description={wizardStep.description}>
-          {wizardStep.id === 'overview' ? (
-            mode === 'create' ? (
-              <div className="deployed-agents-wizard__create-draft">
-                <div className="deployed-agents-wizard__quickstart">
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormReadout label="Template" value={selectedStudioTemplate.title} />
-                    <FormReadout label="Use case" value={selectedStudioTemplate.outcome} />
-                  </FormGrid>
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Business Agent name" hint="The name your team sees in the worker list.">
+        {mode === 'create' ? (
+          <div className="deployed-agents-wizard__create-draft">
+            <div className="deployed-agents-wizard__kind-switch" role="group" aria-label="Agent type">
+              <button
+                type="button"
+                className={joinClassNames(
+                  'deployed-agents-wizard__kind-option',
+                  createAgentKind === 'native' && 'deployed-agents-wizard__kind-option--selected',
+                )}
+                aria-pressed={createAgentKind === 'native'}
+                disabled={isSubmittingWizard}
+                onClick={() => setCreateAgentKind('native')}
+              >
+                <strong>Native</strong>
+                <span>Managed in Studio</span>
+              </button>
+              <button
+                type="button"
+                className={joinClassNames(
+                  'deployed-agents-wizard__kind-option',
+                  createAgentKind === 'external' && 'deployed-agents-wizard__kind-option--selected',
+                )}
+                aria-pressed={createAgentKind === 'external'}
+                disabled={isSubmittingWizard}
+                onClick={() => setCreateAgentKind('external')}
+              >
+                <strong>External</strong>
+                <span>OpenClaw, MCP, A2A</span>
+              </button>
+            </div>
+            {isExternalCreate ? (
+              <div className="deployed-agents-wizard__quickstart">
+                <p className="deployed-agents-wizard__connection-note">
+                  Public HTTPS endpoints work now. Local/private agents use Agent Computer.
+                </p>
+                <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                  <FormField label="Agent name">
+                    <FormInput
+                      value={externalAgentForm.name}
+                      onChange={(event) => setExternalAgentField('name', event.currentTarget.value)}
+                      placeholder="OpenClaw assistant"
+                    />
+                  </FormField>
+                  <FormField label="Provider">
+                    <FormSelect
+                      value={externalAgentForm.providerKind}
+                      onChange={(event) => setExternalAgentField('providerKind', event.currentTarget.value as ExternalProviderKind)}
+                    >
+                      {EXTERNAL_PROVIDER_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </FormSelect>
+                  </FormField>
+                </FormGrid>
+                <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                  <FormField label="Base URL">
+                    <FormInput
+                      value={externalAgentForm.baseUrl}
+                      onChange={(event) => setExternalAgentField('baseUrl', event.currentTarget.value)}
+                      placeholder="https://agent.example.com"
+                    />
+                  </FormField>
+                  <FormField label="Manifest URL">
+                    <FormInput
+                      value={externalAgentForm.manifestUrl}
+                      onChange={(event) => setExternalAgentField('manifestUrl', event.currentTarget.value)}
+                      placeholder="https://agent.example.com/.well-known/agent-manifest.json"
+                    />
+                  </FormField>
+                </FormGrid>
+                <details className="deployed-agents-wizard__advanced">
+                  <summary>More settings</summary>
+                  <div className="deployed-agents-wizard__advanced-body">
+                    <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                      <FormField label="Chat endpoint" hint="Optional public HTTPS chat endpoint.">
+                        <FormInput
+                          value={externalAgentForm.chatUrl}
+                          onChange={(event) => setExternalAgentField('chatUrl', event.currentTarget.value)}
+                          placeholder="https://agent.example.com/chat"
+                        />
+                      </FormField>
+                      <FormField label="Events endpoint" hint="Optional events or run history endpoint.">
+                        <FormInput
+                          value={externalAgentForm.eventsUrl}
+                          onChange={(event) => setExternalAgentField('eventsUrl', event.currentTarget.value)}
+                          placeholder="https://agent.example.com/events"
+                        />
+                      </FormField>
+                      <FormField label="Artifacts endpoint" hint="Optional artifacts/resources endpoint.">
+                        <FormInput
+                          value={externalAgentForm.artifactsUrl}
+                          onChange={(event) => setExternalAgentField('artifactsUrl', event.currentTarget.value)}
+                          placeholder="https://agent.example.com/artifacts"
+                        />
+                      </FormField>
+                    </FormGrid>
+                    <FormField label="Secret reference" hint="Stored secret reference only. Do not paste raw keys.">
                       <FormInput
-                        value={wizardState.name}
-                        onChange={(event) => setWizardField('name', event.currentTarget.value)}
-                        placeholder="New Business Agent"
+                        value={externalAgentForm.secretRef}
+                        onChange={(event) => setExternalAgentField('secretRef', event.currentTarget.value)}
+                        placeholder="vault://external-agents/openclaw-prod"
                       />
                     </FormField>
-                    <FormField label="Primary channel" hint="This is a setup preference. Live channel binding happens after creation.">
-                      <FormSelect
-                        value={wizardState.customerChannel}
-                        onChange={(event) => setWizardField('customerChannel', event.currentTarget.value as WizardState['customerChannel'])}
-                      >
-                        <option value="draft">Decide later</option>
-                        <option value="telegram">Telegram</option>
-                        <option value="whatsapp">WhatsApp</option>
-                        <option value="web_widget">Web widget</option>
-                      </FormSelect>
+                    <FormField label="Manifest JSON" hint="Optional manifest object for immediate Studio sections.">
+                      <FormTextarea
+                        rows={5}
+                        value={externalAgentForm.manifestJson}
+                        onChange={(event) => setExternalAgentField('manifestJson', event.currentTarget.value)}
+                        placeholder={'{\n  "capabilities": ["chat", "artifacts"],\n  "surface_sections": []\n}'}
+                      />
                     </FormField>
-                  </FormGrid>
-                  <FormField label="Initial instructions" hint="What should this Business Agent do, and when should it hand off to a human?">
-                    <FormTextarea
-                      rows={5}
-                      value={wizardState.systemPrompt}
-                      onChange={(event) => setWizardField('systemPrompt', event.currentTarget.value)}
-                      placeholder={selectedStudioTemplate.systemPrompt}
-                    />
-                  </FormField>
-                  <FormField label="Optional trusted source" hint="Paste a file URI, URL, sheet reference, or leave empty and add files later.">
-                    <FormTextarea
-                      rows={3}
-                      value={wizardState.knowledgeSourceText}
-                      onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
-                      placeholder={selectedStudioTemplate.knowledgePlaceholder}
-                    />
-                  </FormField>
-                </div>
+                  </div>
+                </details>
               </div>
             ) : (
+            <div className="deployed-agents-wizard__quickstart">
+              <FormField label="Agent name">
+                <FormInput
+                  value={wizardState.name}
+                  onChange={(event) => setWizardField('name', event.currentTarget.value)}
+                  placeholder="New agent"
+                />
+              </FormField>
+              <FormField label="What should it do?">
+                <FormTextarea
+                  rows={8}
+                  value={wizardState.systemPrompt}
+                  onChange={(event) => setWizardField('systemPrompt', event.currentTarget.value)}
+                  placeholder={selectedStudioTemplate.systemPrompt}
+                />
+              </FormField>
+            </div>
+            )}
+          </div>
+        ) : (
+          <ModalSection title={wizardStep.label} description={wizardStep.description}>
+            {wizardStep.id === 'overview' ? (
               <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                 <FormField label="Business Agent name" hint="The public name customers will see.">
                   <FormInput
@@ -651,10 +871,9 @@ export function AgentWizard({
                     value={wizardState.contextBudgetPreset}
                     onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
                   />
-                </FormField>
-              </FormGrid>
-            )
-          ) : null}
+                  </FormField>
+                </FormGrid>
+            ) : null}
 
           {wizardStep.id === 'knowledge' ? (
             <div className="app-stack-3">
@@ -1294,7 +1513,8 @@ export function AgentWizard({
               </FormGrid>
             </div>
           ) : null}
-        </ModalSection>
+          </ModalSection>
+        )}
       </div>
     </CommandSheet>
   );

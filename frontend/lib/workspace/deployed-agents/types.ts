@@ -14,8 +14,7 @@ import type {
 export type WizardMode = 'create' | 'edit';
 export type WizardStepId = 'overview' | 'knowledge' | 'tools' | 'channels' | 'memory' | 'safety' | 'test' | 'deploy';
 export type StudioSubview = 'agents' | 'inbox' | 'deploy';
-export type AgentRosterFilterId = 'all' | 'text' | 'computer' | 'connected' | 'draft';
-export type SpecialistOverlayTabId = 'overview' | 'chat' | 'knowledge' | 'ai' | 'tools' | 'memory' | 'connectors' | 'analytics';
+export type SpecialistOverlayTabId = 'overview' | 'chat' | 'channels' | 'knowledge' | 'ai' | 'tools' | 'memory' | 'artifacts' | 'connectors' | 'analytics';
 export type StudioSurfaceKind = 'native_studio_agent' | 'connected_external_agent' | 'agent_computer' | 'agent_group_reserved';
 export type AgentStudioObjectType = 'studio_agent' | 'connected_external_agent' | 'agent_computer' | 'external_agent_reserved' | 'group_reserved';
 export type AgentVisibilityKind = 'private_workspace' | 'public_channel' | 'reserved';
@@ -104,6 +103,13 @@ export type AgentOperationalMetrics = {
   latestChannel: string | null;
 };
 
+export type AgentAnalyticsSeriesPoint = {
+  date: string | null;
+  label: string;
+  conversations: number;
+  messages: number;
+};
+
 export type AgentAnalyticsSnapshot = {
   activeUsersLast30d: number;
   messageVolumeDay: number;
@@ -119,6 +125,7 @@ export type AgentAnalyticsSnapshot = {
   costCapUsd: number | null;
   percentUsed: number | null;
   usageMonth: string | null;
+  activitySeries: AgentAnalyticsSeriesPoint[];
 };
 
 export type StudioPaneCache = {

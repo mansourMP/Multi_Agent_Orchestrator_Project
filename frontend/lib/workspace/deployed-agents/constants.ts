@@ -1,5 +1,4 @@
 import type {
-  AgentRosterFilterId,
   SpecialistOverlayTabId,
   StudioTemplate,
   WizardState,
@@ -67,17 +66,9 @@ export const CREATE_AGENT_WIZARD_STEPS: Array<{
 }> = [
   {
     id: 'overview',
-    label: 'Create Business Agent',
-    description: 'Name the worker. Memory, connections, channels, and actions come after creation.',
+    label: 'Create your agent',
+    description: 'Start with a name and instructions. Knowledge, apps, channels, and actions come after creation.',
   },
-];
-
-export const AGENT_ROSTER_FILTERS: ReadonlyArray<{ id: AgentRosterFilterId; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'text', label: 'Text' },
-  { id: 'computer', label: 'Computer' },
-  { id: 'connected', label: 'Connected' },
-  { id: 'draft', label: 'Draft' },
 ];
 
 export const STUDIO_AI_TIER_OPTIONS: ReadonlyArray<{
@@ -384,13 +375,16 @@ export const SPECIALIST_OVERLAY_TABS: Array<{
 }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'chat', label: 'Chat' },
+  { id: 'channels', label: 'Channels' },
   { id: 'knowledge', label: 'Knowledge' },
   { id: 'ai', label: 'Model' },
   { id: 'tools', label: 'Actions' },
   { id: 'memory', label: 'Memory' },
-  { id: 'connectors', label: 'Integrations' },
+  { id: 'artifacts', label: 'Artifacts' },
   { id: 'analytics', label: 'Results' },
 ];
+
+export const NATIVE_SPECIALIST_OVERLAY_TABS = SPECIALIST_OVERLAY_TABS.filter((tab) => tab.id !== 'artifacts');
 
 export const AGENT_STUDIO_OBJECT_LABELS = {
   studio_agent: 'Studio Agent',
@@ -408,6 +402,9 @@ export const AGENT_VISIBILITY_LABELS = {
 
 export function normalizeSpecialistOverlayTabId(value: string | null | undefined): SpecialistOverlayTabId {
   const normalized = String(value || '').trim();
+  if (normalized === 'connectors') {
+    return 'tools';
+  }
   return SPECIALIST_OVERLAY_TABS.some((tab) => tab.id === normalized)
     ? normalized as SpecialistOverlayTabId
     : 'overview';

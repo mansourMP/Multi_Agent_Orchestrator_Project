@@ -127,6 +127,43 @@ function useStableEvent<TArgs extends unknown[], TResult>(
   return useCallback((...args: TArgs) => handlerRef.current(...args), []);
 }
 
+function connectedAgentHasArtifactSurface(agent: ConnectedExternalAgentRecord | null): boolean {
+  const capabilityManifest = readRecord(agent?.capability_manifest);
+  const capabilities = Array.isArray(capabilityManifest.capabilities)
+    ? capabilityManifest.capabilities.map((item) => readString(item).toLowerCase()).filter(Boolean)
+    : [];
+  const capabilityKeys = ['artifacts', 'artifact', 'outputs', 'resources'];
+  if (capabilityKeys.some((key) => capabilityManifest[key] === true || capabilities.includes(key))) {
+    return true;
+  }
+  const objectTypes = Array.isArray(agent?.object_types)
+    ? agent.object_types.map((item) => readString(item).toLowerCase()).filter(Boolean)
+    : [];
+  if (objectTypes.some((item) => ['external_agent_artifact', 'artifact', 'output', 'resource'].some((token) => item.includes(token)))) {
+    return true;
+  }
+  const sections = Array.isArray(agent?.surface_sections)
+    ? agent.surface_sections.map((item) => readRecord(item))
+    : [];
+  return sections.some((section) => ['artifact', 'output', 'resource'].some((token) => [
+    section.id,
+    section.category,
+    section.capability_required,
+    section.display_kind,
+    section.title,
+  ].some((value) => readString(value).toLowerCase().includes(token))));
+}
+
+function isConnectedExternalAgentActive(agent: ConnectedExternalAgentRecord): boolean {
+  const lifecycle = [
+    agent.connection_state,
+    agent.trust_state,
+    agent.status,
+    agent.lifecycle_status,
+  ].map((value) => readString(value).toLowerCase());
+  return agent.enabled !== false && !lifecycle.some((value) => value === 'revoked' || value === 'disconnected');
+}
+
 function StudioAgentStartPanel({
   studioTemplates,
   onOpenCreateWizard,
@@ -259,10 +296,15 @@ export function WorkstationDeployedAgentsPane({
     outcome: 'all',
   });
 
-  const selectedAgent = useMemo(
-    () => selectedAgentDetail ?? agents.find((item) => readString(item.id) === selectedAgentId) ?? null,
-    [agents, selectedAgentDetail, selectedAgentId],
-  );
+  const selectedAgent = useMemo(() => {
+    if (!selectedAgentId) {
+      return null;
+    }
+    if (selectedAgentDetail && readString(selectedAgentDetail.id) === selectedAgentId) {
+      return selectedAgentDetail;
+    }
+    return agents.find((item) => readString(item.id) === selectedAgentId) ?? null;
+  }, [agents, selectedAgentDetail, selectedAgentId]);
   const selectedExternalAgent = useMemo(
     () => connectedExternalAgents.find((item) => readString(item.id) === selectedExternalAgentId) ?? null,
     [connectedExternalAgents, selectedExternalAgentId],
@@ -415,8 +457,14 @@ export function WorkstationDeployedAgentsPane({
   );
   const requestedCreateAgent = searchParams.get('createAgent') === '1';
   const requestedOverlayTab = useMemo(
-    () => normalizeSpecialistOverlayTabId(searchParams.get('tab') || searchParams.get('studioTab')),
-    [searchParams],
+    () => {
+      const requestedTab = searchParams.get('tab') || searchParams.get('studioTab');
+      if (requestedTab === 'connectors' && requestedExternalAgentId) {
+        return connectedAgentHasArtifactSurface(selectedExternalAgent) ? 'artifacts' : 'analytics';
+      }
+      return normalizeSpecialistOverlayTabId(requestedTab);
+    },
+    [requestedExternalAgentId, searchParams, selectedExternalAgent],
   );
   const replaceStudioQuery = useCallback((mutate: (params: URLSearchParams) => void) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -433,6 +481,24 @@ export function WorkstationDeployedAgentsPane({
       params.delete('studioFilter');
     });
   }, [replaceStudioQuery, searchParams]);
+
+  useEffect(() => {
+    const requestedTab = searchParams.get('tab') || searchParams.get('studioTab');
+    if (requestedTab !== 'connectors') {
+      return;
+    }
+    if (requestedExternalAgentId && !selectedExternalAgent) {
+      return;
+    }
+    const nextTab = requestedExternalAgentId
+      ? connectedAgentHasArtifactSurface(selectedExternalAgent) ? 'artifacts' : 'analytics'
+      : 'tools';
+
+    replaceStudioQuery((params) => {
+      params.set('tab', nextTab);
+      params.delete('studioTab');
+    });
+  }, [replaceStudioQuery, requestedExternalAgentId, searchParams, selectedExternalAgent]);
 
   const selectOverlayTab = useCallback((nextTab: SpecialistOverlayTabId) => {
     setOverlayTab(nextTab);
@@ -572,6 +638,7 @@ export function WorkstationDeployedAgentsPane({
       setExternalAgentSurfaceError(null);
       const nextExternalAgents = Array.isArray(payload?.connected_external_agents)
         ? payload.connected_external_agents.filter((item): item is ConnectedExternalAgentRecord => Boolean(item) && typeof item === 'object')
+          .filter(isConnectedExternalAgentActive)
         : [];
       setConnectedExternalAgents(nextExternalAgents);
       updateStudioPaneCache(workspaceId, { connectedExternalAgents: nextExternalAgents });
@@ -585,7 +652,7 @@ export function WorkstationDeployedAgentsPane({
       setExternalAgentSurfaceError(error instanceof Error ? error.message : 'Studio agent surface contract did not load.');
       try {
         const payload = await services.client.listConnectedExternalAgents();
-        const fallbackAgents = readItems<ConnectedExternalAgentRecord>(payload);
+        const fallbackAgents = readItems<ConnectedExternalAgentRecord>(payload).filter(isConnectedExternalAgentActive);
         setConnectedExternalAgents(fallbackAgents);
         updateStudioPaneCache(workspaceId, { connectedExternalAgents: fallbackAgents });
       } catch (fallbackError) {
@@ -637,13 +704,9 @@ export function WorkstationDeployedAgentsPane({
       if (explicitSelection) {
         setSelectedAgentId(explicitSelection);
       } else if (!options.preserveSelection) {
-        const cachedSelection = readString(cachedStudioPane?.selectedAgentId);
-        const nextSelection = cachedSelection && items.some((item) => readString(item.id) === cachedSelection)
-          ? cachedSelection
-          : readString(items[0]?.id) || null;
-        setSelectedAgentId(nextSelection);
+        setSelectedAgentId(null);
       } else if (selectedAgentId && !items.some((item) => readString(item.id) === selectedAgentId)) {
-        setSelectedAgentId(readString(items[0]?.id) || null);
+        setSelectedAgentId(null);
       }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Deployed agents could not be loaded.');
@@ -862,7 +925,23 @@ export function WorkstationDeployedAgentsPane({
       return;
     }
     setMobileAgentDetailOpen(false);
-  }, [requestedAgentComputerId, requestedAgentId, requestedExternalAgentId]);
+    setSelectedAgentId(null);
+    setSelectedExternalAgentId(null);
+    setSelectedAgentComputerId(null);
+    setSelectedAgentDetail(null);
+    setSelectedAgentAnalytics(null);
+    setSelectedTranscript(null);
+    setOverlayAgentId(null);
+    setOverlayTab('overview');
+    updateStudioPaneCache(workspaceId, {
+      selectedAgentId: null,
+      selectedExternalAgentId: null,
+      selectedAgentComputerId: null,
+      selectedAgentDetail: null,
+      selectedAgentAnalytics: null,
+      selectedTranscript: null,
+    });
+  }, [requestedAgentComputerId, requestedAgentId, requestedExternalAgentId, workspaceId]);
 
   useEffect(() => {
     const normalizedRequestedTemplateId = normalizeTemplateToken(requestedProofAgentTemplateId);
@@ -1110,6 +1189,42 @@ export function WorkstationDeployedAgentsPane({
     }
   }
 
+  function handleWizardExternalSuccess(record: ConnectedExternalAgentRecord) {
+    const recordId = readString(record.id);
+    if (!recordId) {
+      setStatusMessage('Connected external agent was added, but Studio did not receive an agent id.');
+      return;
+    }
+
+    setConnectedExternalAgents((current) => {
+      const exists = current.some((item) => readString(item.id) === recordId);
+      return exists
+        ? current.map((item) => readString(item.id) === recordId ? record : item)
+        : [record, ...current];
+    });
+    setSelectedAgentId(null);
+    setSelectedAgentDetail(null);
+    setSelectedAgentAnalytics(null);
+    setSelectedAgentComputerId(null);
+    setSelectedExternalAgentId(recordId);
+    setOverlayAgentId(null);
+    setOverlayTab('overview');
+    setMobileAgentDetailOpen(true);
+    setIsWizardOpen(false);
+    setCurrentStudioSubview('agents');
+    setStatusMessage(`Connected external agent ${readString(record.name || record.label, 'external agent')}.`);
+    replaceStudioQuery((params) => {
+      params.set('externalAgent', recordId);
+      params.delete('agent');
+      params.delete('agentComputer');
+      params.delete('studioFilter');
+      params.delete('tab');
+      params.delete('studioTab');
+      params.delete('createAgent');
+    });
+    void refreshConnectedExternalAgents();
+  }
+
   async function handleDeploymentAction(action: 'deploy' | 'pause') {
     const agentId = readString(selectedAgent?.id);
     if (!agentId) {
@@ -1131,8 +1246,8 @@ export function WorkstationDeployedAgentsPane({
       return;
     }
     if (action === 'deploy' && selectedAgentModelDeployBlocker) {
-      selectOverlayTab('connectors');
-      setErrorMessage(`${selectedAgentModelDeployBlocker} Open Integrations and connect OpenRouter, OpenAI, Anthropic, Google Gemini, or another API provider.`);
+      selectOverlayTab('ai');
+      setErrorMessage(`${selectedAgentModelDeployBlocker} Open Model and choose the workspace default, an API key, a local model, or an enterprise gateway.`);
       return;
     }
     if (
@@ -1475,6 +1590,17 @@ export function WorkstationDeployedAgentsPane({
     if (!recordId) {
       return;
     }
+    if (!isConnectedExternalAgentActive(record)) {
+      setConnectedExternalAgents((current) => current.filter((item) => readString(item.id) !== recordId));
+      setSelectedExternalAgentId((current) => current === recordId ? null : current);
+      replaceStudioQuery((params) => {
+        if (params.get('externalAgent') === recordId) {
+          params.delete('externalAgent');
+          params.delete('tab');
+        }
+      });
+      return;
+    }
     setConnectedExternalAgents((current) => {
       const exists = current.some((item) => readString(item.id) === recordId);
       return exists
@@ -1691,7 +1817,7 @@ export function WorkstationDeployedAgentsPane({
                     <AppButton type="button" tone="secondary" onClick={() => selectOverlayTab('ai')}>
                       Check model route
                     </AppButton>
-                    <AppButton type="button" tone="secondary" onClick={() => selectOverlayTab('connectors')}>
+                    <AppButton type="button" tone="secondary" onClick={() => selectOverlayTab('channels')}>
                       Connect channel
                     </AppButton>
                   </div>
@@ -1820,6 +1946,7 @@ export function WorkstationDeployedAgentsPane({
           onClose={closeWizard}
           templateId={selectedTemplateId}
           onSuccess={(record) => { void handleWizardSuccess(record); }}
+          onExternalSuccess={handleWizardExternalSuccess}
           workspaceId={workspaceId}
           bootstrap={bootstrap}
           services={services}

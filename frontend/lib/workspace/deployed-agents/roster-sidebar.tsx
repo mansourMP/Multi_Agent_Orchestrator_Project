@@ -22,14 +22,35 @@ import {
   rosterStatusTone,
 } from './utils';
 
-type StudioRosterTypeFilterId = 'all' | 'native' | 'connected' | 'computers';
+type ProviderBadgeDescriptor = {
+  label: string;
+  initials: string;
+  imageSrc?: string;
+};
 
-const STUDIO_ROSTER_TYPE_FILTERS: ReadonlyArray<{ id: StudioRosterTypeFilterId; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'native', label: 'Native' },
-  { id: 'connected', label: 'Connected' },
-  { id: 'computers', label: 'Computers' },
-];
+const EXTERNAL_PROVIDER_BADGES: Record<string, ProviderBadgeDescriptor> = {
+  openclaw: {
+    label: 'OpenClaw',
+    initials: 'OC',
+    imageSrc: '/brand-assets/providers/openclaw.svg',
+  },
+  custom: {
+    label: 'Custom',
+    initials: 'C',
+  },
+  custom_http: {
+    label: 'Custom HTTP',
+    initials: 'C',
+  },
+};
+
+function resolveExternalProviderBadge(providerKind: unknown): ProviderBadgeDescriptor {
+  const normalized = readString(providerKind, 'custom').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  return EXTERNAL_PROVIDER_BADGES[normalized] ?? {
+    label: humanizeToken(providerKind, 'Custom endpoint'),
+    initials: readString(providerKind, 'C').slice(0, 2).toUpperCase(),
+  };
+}
 
 const AgentRosterItem = memo(({
   agent,
@@ -53,6 +74,7 @@ const AgentRosterItem = memo(({
       type="button"
       className={joinClassNames(
         'studio-agents-nav__agent',
+        'studio-agents-nav__agent--external',
         selected && 'studio-agents-nav__agent--active',
       )}
       aria-label={`${displayName}, ${stateLabel}${latestActivityLabel ? `, ${latestActivityLabel}` : ''}`}
@@ -84,7 +106,8 @@ const ConnectedExternalAgentRosterItem = memo(({
   const agentId = readString(agent.id);
   const displayName = readString(agent.name ?? agent.label, agentId || 'Connected Agent');
   const connectionState = readString(agent.connection_state, 'unverified');
-  const providerLabel = humanizeToken(agent.provider_kind, 'Custom endpoint');
+  const providerBadge = resolveExternalProviderBadge(agent.provider_kind);
+  const connectionLabel = humanizeToken(connectionState, 'Unverified');
 
   return (
     <button
@@ -93,15 +116,22 @@ const ConnectedExternalAgentRosterItem = memo(({
         'studio-agents-nav__agent',
         selected && 'studio-agents-nav__agent--active',
       )}
-      aria-label={`${displayName}, connected agent, ${providerLabel}, ${humanizeToken(connectionState, 'Unverified')}`}
+      aria-label={`${displayName}, connected agent, ${providerBadge.label}, ${connectionLabel}`}
       aria-selected={selected}
       onClick={() => onSelectAgent(agentId)}
     >
+      <span className="studio-agents-nav__provider-badge" title={`${providerBadge.label} connected agent`}>
+        {providerBadge.imageSrc ? (
+          <img src={providerBadge.imageSrc} alt="" aria-hidden="true" />
+        ) : (
+          <span>{providerBadge.initials}</span>
+        )}
+      </span>
       <span className="studio-agents-nav__copy">
         <span className="studio-agents-nav__label">{displayName}</span>
       </span>
       <span className={joinClassNames('studio-agents-nav__status', connectionState === 'verified' ? 'studio-agents-nav__status--live' : connectionState === 'revoked' ? 'studio-agents-nav__status--danger' : 'studio-agents-nav__status--warning')}>
-        {humanizeToken(connectionState, 'Unverified')}
+        {connectionLabel}
       </span>
     </button>
   );
@@ -203,49 +233,16 @@ export const AgentRosterSidebar = memo(({
   totalStudioObjectCount,
   visibleStudioObjectCount,
 }: AgentRosterSidebarProps) => {
-  const [typeFilter, setTypeFilter] = useState<StudioRosterTypeFilterId>('all');
   const [searchExpanded, setSearchExpanded] = useState(false);
-  const typeFilterCounts: Record<StudioRosterTypeFilterId, number> = {
-    all: visibleStudioObjectCount,
-    native: agents.length,
-    connected: connectedExternalAgents.length,
-    computers: agentComputers.length,
-  };
-  const showNativeAgents = typeFilter === 'all' || typeFilter === 'native';
-  const showConnectedAgents = typeFilter === 'all' || typeFilter === 'connected';
-  const showAgentComputers = typeFilter === 'all' || typeFilter === 'computers';
   const searchVisible = searchExpanded || rosterSearchQuery.trim().length > 0;
-  const visibleItemCount = typeFilterCounts[typeFilter] ?? 0;
+  const visibleItemCount = visibleStudioObjectCount;
   const hasSearchQuery = rosterSearchQuery.trim().length > 0;
-  const emptyTitle = (() => {
-    if (hasSearchQuery) {
-      return 'No matching Studio objects';
-    }
-    if (typeFilter === 'native') {
-      return 'No native agents yet';
-    }
-    if (typeFilter === 'connected') {
-      return 'No connected agents yet';
-    }
-    if (typeFilter === 'computers') {
-      return 'No Agent Computers yet';
-    }
-    return 'No Studio objects yet';
-  })();
-  const emptyDetail = (() => {
-    if (hasSearchQuery) {
-      return 'Try another search or switch object type.';
-    }
-    if (typeFilter === 'native' || typeFilter === 'all') {
-      return 'Create a native agent or connect another runtime when ready.';
-    }
-    if (typeFilter === 'connected') {
-      return 'External runtimes can be connected when that path is ready.';
-    }
-    return 'Runtime resources can be added when local or dedicated work is needed.';
-  })();
+  const emptyTitle = hasSearchQuery ? 'No matching Studio objects' : 'No Studio objects yet';
+  const emptyDetail = hasSearchQuery
+    ? 'Try another search.'
+    : 'Create a native agent or connect another runtime when ready.';
 
-  const connectedAgentItems = !collapsed && showConnectedAgents ? connectedExternalAgents.map((agent, index) => {
+  const connectedAgentItems = !collapsed ? connectedExternalAgents.map((agent, index) => {
         const agentId = readString(agent.id, `connected-agent-${index}`);
         return (
           <ConnectedExternalAgentRosterItem
@@ -257,7 +254,7 @@ export const AgentRosterSidebar = memo(({
         );
       }) : null;
 
-  const agentComputerItems = !collapsed && showAgentComputers ? agentComputers.map((computer, index) => {
+  const agentComputerItems = !collapsed ? agentComputers.map((computer, index) => {
         const computerId = readString(
           readComputerValue(computer, 'id')
           ?? readComputerValue(computer, 'attachmentId')
@@ -317,23 +314,6 @@ export const AgentRosterSidebar = memo(({
                   />
                 </label>
               ) : null}
-              <div className="studio-agents-nav__filters" aria-label="Studio object type filters">
-                {STUDIO_ROSTER_TYPE_FILTERS.map((filter) => (
-                  <button
-                    key={filter.id}
-                    type="button"
-                    className={joinClassNames(
-                      'studio-agents-nav__filter',
-                      typeFilter === filter.id && 'studio-agents-nav__filter--active',
-                    )}
-                    aria-pressed={typeFilter === filter.id}
-                    onClick={() => setTypeFilter(filter.id)}
-                  >
-                    <span>{filter.label}</span>
-                    <strong>{typeFilterCounts[filter.id] ?? 0}</strong>
-                  </button>
-                ))}
-              </div>
             </div>
           ) : null}
 
@@ -373,7 +353,7 @@ export const AgentRosterSidebar = memo(({
                     <strong>{emptyTitle}</strong>
                     <span>{emptyDetail}</span>
                   </div>
-                  {totalStudioObjectCount > 0 && (typeFilter !== 'native' || hasSearchQuery) ? null : (
+                  {totalStudioObjectCount > 0 && hasSearchQuery ? null : (
                     <AppButton type="button" tone="primary" onClick={() => onOpenCreateWizard(CUSTOM_STUDIO_TEMPLATE.id)}>
                       Add agent
                     </AppButton>
@@ -382,7 +362,7 @@ export const AgentRosterSidebar = memo(({
               </div>
             ) : (
               <div className="studio-agents-nav__items">
-                {showNativeAgents ? agents.map((agent, index) => {
+                {agents.map((agent, index) => {
                   const agentId = readString(agent.id, `deployed-agent-${index}`);
                   return (
                     <AgentRosterItem
@@ -393,7 +373,7 @@ export const AgentRosterSidebar = memo(({
                       onSelectAgent={onSelectAgent}
                     />
                   );
-                }) : null}
+                })}
                 {connectedAgentItems}
                 {agentComputerItems}
               </div>

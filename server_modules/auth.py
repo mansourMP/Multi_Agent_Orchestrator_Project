@@ -589,6 +589,23 @@ def _resolve_auth_session_ttl_seconds(channel: Any, ttl_seconds: Optional[int] =
     return max(int(JWT_EXP_SECONDS), 60)
 
 
+def _resolve_auth_refresh_ttl_seconds(channel: Any) -> int:
+    normalized_channel = _normalize_auth_session_channel(channel, default="web")
+    if normalized_channel == "mobile":
+        return max(int(MOBILE_REFRESH_EXP_SECONDS), 60)
+    if browser_auth_session_channel(normalized_channel):
+        return max(int(AUTH_REFRESH_COOKIE_MAX_AGE_SECONDS), 60)
+    return max(int(JWT_EXP_SECONDS), 60)
+
+
+def _resolve_auth_session_record_ttl_seconds(channel: Any, access_ttl_seconds: int) -> int:
+    resolved_access_ttl = max(int(access_ttl_seconds or JWT_EXP_SECONDS), 60)
+    normalized_channel = _normalize_auth_session_channel(channel, default="web")
+    if normalized_channel == "mobile" or browser_auth_session_channel(normalized_channel):
+        return max(resolved_access_ttl, _resolve_auth_refresh_ttl_seconds(normalized_channel))
+    return resolved_access_ttl
+
+
 def _resolve_authenticated_workspace_id(
     requested_workspace_id: Optional[str],
     workspace_access: dict[str, dict[str, Any]],
@@ -774,6 +791,7 @@ def _issue_authenticated_user_payload(
         )
 
     resolved_ttl_seconds = _resolve_auth_session_ttl_seconds(normalized_channel, session_ttl_seconds)
+    session_record_ttl_seconds = _resolve_auth_session_record_ttl_seconds(normalized_channel, resolved_ttl_seconds)
     token = issue_token(
         user_id,
         email=str(user.get("email") or ""),
@@ -789,6 +807,7 @@ def _issue_authenticated_user_payload(
             "device_name": str(device_name or "").strip() or None,
         },
         ttl_seconds=resolved_ttl_seconds,
+        session_record_ttl_seconds=session_record_ttl_seconds,
     )
     token_payload = _decode_token_payload(token)
     auth_session = get_auth_session(str(token_payload.get("sid") or "").strip())
@@ -799,6 +818,7 @@ def _issue_authenticated_user_payload(
         session_recovery = issue_auth_session_refresh_token(
             str(auth_session.get("session_id") or "").strip(),
             user_id=user_id,
+            ttl_seconds=_resolve_auth_refresh_ttl_seconds(normalized_channel),
         )
     payload = _auth_payload_for_user(
         user,
@@ -4228,6 +4248,7 @@ def issue_token(
     session_family_id: Optional[str] = None,
     session_metadata: Optional[dict[str, Any]] = None,
     ttl_seconds: Optional[int] = None,
+    session_record_ttl_seconds: Optional[int] = None,
 ) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     now = int(time.time())
@@ -4258,7 +4279,7 @@ def issue_token(
         session_id=session_id,
         session_family_id=session_family_id,
         metadata=session_metadata,
-        ttl_seconds=resolved_ttl_seconds,
+        ttl_seconds=session_record_ttl_seconds or resolved_ttl_seconds,
     )
     payload = {
         "sub": str(user_id),
@@ -5382,6 +5403,12 @@ def refresh_authenticated_session(
             },
         )
 
+    refresh_channel = session_record.get("channel") or "mobile"
+    refreshed_access_ttl_seconds = _resolve_auth_session_ttl_seconds(refresh_channel, session_ttl_seconds)
+    refreshed_session_record_ttl_seconds = _resolve_auth_session_record_ttl_seconds(
+        refresh_channel,
+        refreshed_access_ttl_seconds,
+    )
     token = issue_token(
         user_id,
         email=str(user.get("email") or "").strip().lower() or None,
@@ -5402,13 +5429,15 @@ def refresh_authenticated_session(
             "workspace_ids": [item.get("workspace_id") for item in workspace_access if isinstance(item, dict)],
             "role": effective_role,
         },
-        ttl_seconds=session_ttl_seconds,
+        ttl_seconds=refreshed_access_ttl_seconds,
+        session_record_ttl_seconds=refreshed_session_record_ttl_seconds,
     )
     token_payload = _decode_token_payload(token)
     auth_session = get_auth_session(str(token_payload.get("sid") or "").strip())
     session_recovery = issue_auth_session_refresh_token(
         str(auth_session.get("session_id") or "").strip(),
         user_id=user_id,
+        ttl_seconds=_resolve_auth_refresh_ttl_seconds(refresh_channel),
     )
     workspace_identity = _workspace_identity_projection(
         workspace_access,

@@ -840,7 +840,8 @@ def test_mobile_register_user_issues_device_bound_session(monkeypatch: pytest.Mo
     assert created["default_workspace_id"] == created["workspace_access"][0]["workspace_id"]
     assert created["current_workspace_id"] != "default"
     assert created["session_recovery"]["refresh_token"].startswith("esr_")
-    assert created["session_recovery"]["refresh_expires_at"] > created["auth_session"]["expires_at"]
+    assert created["session_recovery"]["refresh_expires_at"] <= created["auth_session"]["expires_at"]
+    assert created["auth_session"]["expires_at"] > token_payload["exp"]
 
 
 def test_mobile_login_user_issues_persistent_workspace_scoped_session(monkeypatch: pytest.MonkeyPatch, tmp_path):
@@ -868,7 +869,8 @@ def test_mobile_login_user_issues_persistent_workspace_scoped_session(monkeypatc
     assert logged_in["current_workspace_id"] == workspace_id
     assert logged_in["default_workspace_id"] == workspace_id
     assert logged_in["session_recovery"]["refresh_token"].startswith("esr_")
-    assert logged_in["session_recovery"]["refresh_expires_at"] > logged_in["auth_session"]["expires_at"]
+    assert logged_in["session_recovery"]["refresh_expires_at"] <= logged_in["auth_session"]["expires_at"]
+    assert logged_in["auth_session"]["expires_at"] > token_payload["exp"]
 
 
 def test_mobile_refresh_session_rotates_bearer_without_repairing(monkeypatch: pytest.MonkeyPatch, tmp_path):
@@ -902,6 +904,43 @@ def test_mobile_refresh_session_rotates_bearer_without_repairing(monkeypatch: py
     assert refreshed["session_recovery"]["refresh_token"] != created["session_recovery"]["refresh_token"]
     current_user = auth.get_current_user(_Request(), authorization=f"Bearer {refreshed['token']}")
     assert current_user["device_id"] == "iphone-refresh"
+
+
+def test_web_refresh_session_survives_expired_access_ttl(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(
+        monkeypatch,
+        tmp_path,
+        {
+            "ORION_JWT_EXP_SECONDS": "60",
+            "EMPYRALIS_AUTH_REFRESH_COOKIE_MAX_AGE_SECONDS": "86400",
+        },
+    )
+    now = 1_700_000_000
+    monkeypatch.setattr(auth.time, "time", lambda: now)
+    created = auth.register_user(
+        "web.refresh@example.com",
+        "password-123",
+        name="Web Refresh",
+        channel="web",
+        workspace_id="default",
+    )
+    token_payload = auth._decode_token_payload(created["token"])
+
+    assert token_payload["channel"] == "web"
+    assert int(token_payload["exp"]) - int(token_payload["iat"]) == 60
+    assert created["auth_session"]["expires_at"] >= now + 86400
+    assert created["session_recovery"]["refresh_expires_at"] <= created["auth_session"]["expires_at"]
+
+    monkeypatch.setattr(auth.time, "time", lambda: now + 120)
+    refreshed = auth.refresh_authenticated_session(
+        created["session_recovery"]["refresh_token"],
+        workspace_id=created["workspace_access"][0]["workspace_id"],
+    )
+
+    assert refreshed["token"] != created["token"]
+    assert refreshed["auth_session"]["session_id"] == created["auth_session"]["session_id"]
+    refreshed_payload = auth._decode_token_payload(refreshed["token"])
+    assert int(refreshed_payload["exp"]) - int(refreshed_payload["iat"]) == 60
 
 
 def test_stale_mobile_bearer_can_be_recovered_with_refresh(monkeypatch: pytest.MonkeyPatch, tmp_path):

@@ -208,11 +208,11 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
         self.assertTrue(service.message_requests_tool_inventory("/tools"))
         self.assertTrue(service.message_requests_tool_inventory("show tool inventory"))
         self.assertTrue(service.message_requests_tool_inventory("List tool inventory"))
-        self.assertFalse(service.message_requests_tool_inventory("what can you do?"))
-        self.assertFalse(service.message_requests_tool_inventory("what capabilities do you have?"))
-        self.assertFalse(service.message_requests_tool_inventory("what tools do you have?"))
+        self.assertTrue(service.message_requests_tool_inventory("what can you do?"))
+        self.assertTrue(service.message_requests_tool_inventory("what capabilities do you have?"))
+        self.assertTrue(service.message_requests_tool_inventory("what tools do you have?"))
+        self.assertTrue(service.message_requests_tool_inventory("What can you help me with here right now?"))
         self.assertFalse(service.message_requests_tool_inventory("List your tools"))
-        self.assertFalse(service.message_requests_tool_inventory("What can you help me with here right now?"))
         self.assertFalse(service.message_requests_tool_inventory("use the web search tool"))
 
     def test_tool_inventory_reply_uses_actual_tool_list(self) -> None:

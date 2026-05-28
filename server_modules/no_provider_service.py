@@ -512,6 +512,8 @@ def has_obvious_direct_tool_intent(
         return True
     if parse_memory_write(message) is not None or parse_memory_read(message) is not None:
         return True
+    if any(token in compact for token in ("screenshot", "screen shot", "capture screen", "take a screenshot")):
+        return "screenshot__capture" in tool_names or "hardware__action" in tool_names
     if extract_web_query(message):
         return True
     url = extract_first_url(message)

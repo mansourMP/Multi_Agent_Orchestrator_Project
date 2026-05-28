@@ -432,7 +432,19 @@ def message_requests_tool_inventory(message: str) -> bool:
         "list tool inventory",
         "open tool inventory",
     }
-    return compact in explicit_commands
+    if compact in explicit_commands:
+        return True
+    if compact.endswith("?"):
+        compact = compact[:-1].strip()
+    capability_questions = (
+        "what can you do",
+        "what can you help me with",
+        "what capabilities do you have",
+        "what tools do you have",
+        "what can sage do",
+        "what can empyralis do",
+    )
+    return any(compact.startswith(question) for question in capability_questions)
 
 
 def _tool_group_label(name: str) -> str:

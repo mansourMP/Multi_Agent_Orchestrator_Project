@@ -2,7 +2,7 @@ import unittest
 import importlib.util
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from server_modules import direct_chat_operator_binding_service
 
@@ -174,7 +174,11 @@ def _rebuild_operator_chat_exports() -> None:
         "message_can_use_direct_connector_tools": "_message_can_use_direct_connector_tools",
     }
     for public_name, private_name in public_aliases.items():
-        if public_name not in operator_chat.__dict__ and private_name in operator_chat.__dict__:
+        current_public = operator_chat.__dict__.get(public_name)
+        if (
+            private_name in operator_chat.__dict__
+            and not isinstance(current_public, Mock)
+        ):
             operator_chat.__dict__[public_name] = operator_chat.__dict__[private_name]
 
 
@@ -335,16 +339,21 @@ class OperatorChatTests(unittest.TestCase):
                 workspace_id="default",
                 requested_model="gpt-5.4",
                 requested_provider="openai",
-                availability={"ai_ready": True},
+                availability={
+                    "ai_ready": True,
+                    "credential_plane": "workspace_connection",
+                    "billing_source": "user_api_key",
+                },
             )
 
         self.assertEqual(payload["reply"], "Hello")
         self.assertEqual(payload["provider"], "openai")
 
     @patch("operator_chat_under_test.can_auto_start_run_handoff", return_value=False)
+    @patch("operator_chat_under_test.preferred_provider", return_value=("openai", {"api_key": "sk-test"}))
     @patch("operator_chat_under_test.provider_has_key", return_value=True)
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    def test_streaming_reply_does_not_duplicate_final_chunk(self, _capabilities, _provider_has_key, _handoff):
+    def test_streaming_reply_does_not_duplicate_final_chunk(self, _capabilities, _provider_has_key, _preferred_provider, _handoff):
         def fake_stream(**kwargs):
             def _iterator():
                 yield {"type": "chunk", "delta": "Hel"}
@@ -378,7 +387,12 @@ class OperatorChatTests(unittest.TestCase):
                 workspace_id="default",
                 requested_model="gpt-5.4",
                 requested_provider="openai",
-                availability={"ai_ready": True},
+                availability={
+                    "ai_ready": True,
+                    "credential_plane": "workspace_connection",
+                    "billing_source": "user_api_key",
+                    "local_worker_online": False,
+                },
             ))
 
         chunk_deltas = [str(event.get("delta") or "") for event in events if str(event.get("type") or "") == "chunk"]
@@ -398,7 +412,11 @@ class OperatorChatTests(unittest.TestCase):
             workspace_id="default",
             requested_model="gpt-5.4",
             requested_provider="openai",
-            availability={"ai_ready": True},
+            availability={
+                "ai_ready": True,
+                "credential_plane": "workspace_connection",
+                "billing_source": "user_api_key",
+            },
         )
 
         self.assertEqual(payload["reply"], "Email can be discussed normally.")
@@ -629,15 +647,20 @@ class OperatorChatTests(unittest.TestCase):
         "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
         return_value=("Hello.", {"provider": "codex_cli", "model": "gpt-5.4"}, "codex_cli", ""),
     )
+    @patch("operator_chat_under_test.preferred_provider", return_value=("openai", {"api_key": "sk-test"}))
     @patch("operator_chat_under_test.provider_has_key", return_value=True)
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    def test_context_used_exposes_requested_vs_effective_provider(self, _capabilities, _provider_has_key, _generate_reply):
+    def test_context_used_exposes_requested_vs_effective_provider(self, _capabilities, _provider_has_key, _preferred_provider, _generate_reply):
         payload = build_direct_operator_reply(
             message="hello",
             workspace_id="default",
             requested_model="gpt-5.4",
             requested_provider="openai",
-            availability={"ai_ready": True},
+            availability={
+                "ai_ready": True,
+                "credential_plane": "workspace_connection",
+                "billing_source": "user_api_key",
+            },
         )
 
         self.assertEqual(payload["context_used"]["requested_provider"], "openai")
@@ -695,7 +718,7 @@ class OperatorChatTests(unittest.TestCase):
             "approval_required_actions": [],
         }],
     )
-    def test_capability_question_uses_model_reply(self, _capabilities, _provider_has_key, generate_reply):
+    def test_capability_question_uses_tool_catalog_reply(self, _capabilities, _provider_has_key, generate_reply):
         payload = build_direct_operator_reply(
             message="What can you do in this environment?",
             workspace_id="default",
@@ -704,10 +727,10 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["reply"], "I can access Google Workspace here.")
+        self.assertIn("Here is what I can actually do", payload["reply"])
         self.assertIn("Google Workspace", payload["reply"])
         self.assertEqual(payload["mode"], "answer")
-        generate_reply.assert_called_once()
+        generate_reply.assert_not_called()
 
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
     @patch(

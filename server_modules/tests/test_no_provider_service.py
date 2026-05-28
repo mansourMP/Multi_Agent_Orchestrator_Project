@@ -347,6 +347,17 @@ class NoProviderServiceTests(unittest.TestCase):
                 parse_memory_read=lambda message: "name",
             )
         )
+        self.assertTrue(
+            no_provider_service.has_obvious_direct_tool_intent(
+                "take a screenshot and see what you see",
+                [{"name": "hardware__action"}],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+            )
+        )
         self.assertFalse(
             no_provider_service.has_obvious_direct_tool_intent(
                 "Explain the tradeoffs between SQLite and Postgres",

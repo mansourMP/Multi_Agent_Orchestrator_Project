@@ -1131,8 +1131,6 @@ export function isCatalogProviderRecord(provider: ProviderCatalogRecord): boolea
   return Boolean(providerId) && (kind === '' || kind === 'provider') && provider.hidden !== true;
 }
 
-export const LAUNCH_CHAT_PROVIDER_PRIORITY = ['deepseek', 'gemini', 'openai', 'ollama_cloud', 'ollama'] as const;
-export const LAUNCH_CHAT_PROVIDER_IDS = new Set<string>(LAUNCH_CHAT_PROVIDER_PRIORITY);
 export const EMPYRALIS_TIER_IDS = ['light', 'pro', 'max'] as const;
 export const EMPYRALIS_TIER_SET = new Set<string>(EMPYRALIS_TIER_IDS);
 export const EMPYRALIS_TIER_LABELS: Record<typeof EMPYRALIS_TIER_IDS[number], string> = {
@@ -1165,23 +1163,8 @@ export type ChatHostedCreditState = {
   totalAvailableCredits: number;
 };
 
-export function chatProviderPriority(provider: ProviderCatalogRecord): number {
-  const providerId = readString(provider.id).toLowerCase();
-  const index = LAUNCH_CHAT_PROVIDER_PRIORITY.indexOf(providerId as typeof LAUNCH_CHAT_PROVIDER_PRIORITY[number]);
-  return index >= 0 ? index : LAUNCH_CHAT_PROVIDER_PRIORITY.length;
-}
-
-export function isLaunchChatProvider(provider: ProviderCatalogRecord): boolean {
-  const providerId = readString(provider.id).toLowerCase();
-  return LAUNCH_CHAT_PROVIDER_IDS.has(providerId);
-}
-
 export function sortLaunchChatProviders(providers: ProviderCatalogRecord[]): ProviderCatalogRecord[] {
   return [...providers].sort((left, right) => {
-    const priorityDelta = chatProviderPriority(left) - chatProviderPriority(right);
-    if (priorityDelta !== 0) {
-      return priorityDelta;
-    }
     return (readString(left.label) || readString(left.id)).localeCompare(readString(right.label) || readString(right.id));
   });
 }
@@ -1258,9 +1241,6 @@ export function isProviderEligibleForModelSelector(provider: ProviderCatalogReco
   if (!isCatalogProviderRecord(provider)) {
     return false;
   }
-  if (!isLaunchChatProvider(provider)) {
-    return false;
-  }
   const scopes = readProviderScopes(provider);
   if (scopes.length > 0 && !scopes.includes('sage_personal')) {
     return false;
@@ -1273,9 +1253,6 @@ export function isProviderEligibleForModelSelector(provider: ProviderCatalogReco
 
 export function isProviderEligibleForWorkspaceDefault(provider: ProviderCatalogRecord): boolean {
   if (!isCatalogProviderRecord(provider)) {
-    return false;
-  }
-  if (!isLaunchChatProvider(provider)) {
     return false;
   }
   const scopes = readProviderScopes(provider);

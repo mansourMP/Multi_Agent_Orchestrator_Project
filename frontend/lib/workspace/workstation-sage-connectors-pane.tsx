@@ -19,6 +19,7 @@ import type {
   ProviderCatalogRecord,
   ProviderProfileRecord,
   VaultCredentialRecord,
+  WorkspaceAiRouteKind,
   WorkspaceAiRoutePayload,
 } from '@/lib/workspace/workstation-client';
 
@@ -259,7 +260,7 @@ type ExternalIntegrationCardRecord = {
   channel?: PersonalCommunicationChannel | null;
 };
 
-type IntegrationWorkbenchCategoryId = 'ai_runtime' | 'plugins';
+type IntegrationWorkbenchCategoryId = 'ai_runtime' | 'connections' | 'plugins';
 
 type IntegrationWorkbenchGroup = {
   id: IntegrationWorkbenchCategoryId;
@@ -529,10 +530,16 @@ function normalizeIntegrationCategoryId(value: unknown): IntegrationWorkbenchCat
     case 'ai':
     case 'ai_accounts':
     case 'ai_runtime':
+      return 'ai_runtime';
+    case 'connections':
+    case 'connection':
+    case 'hardware':
+    case 'runtime':
     case 'computers':
     case 'computer':
     case 'agent_computer':
-      return 'ai_runtime';
+    case 'connected_computer':
+      return 'connections';
     case 'apps':
     case 'app_connections':
     case 'connected_apps':
@@ -1078,6 +1085,27 @@ function providerActiveSummaryDetail(
     return hostedProviderDetailLabel(hostedSageAi, activeProviderCard);
   }
   return `${providerActiveModelLabel(activeProviderCard)} · ${providerPathLabel(activeProviderCard)}`;
+}
+
+function workspaceAiRouteNeedsSetup(route: Record<string, unknown> | null): boolean {
+  if (!route) {
+    return false;
+  }
+  const status = readString(route.status).toLowerCase();
+  const description = readString(route.description).toLowerCase();
+  return (
+    status === 'setup_required'
+    || status === 'degraded'
+    || status === 'disabled'
+    || status === 'unavailable'
+    || description.includes('credential resolution failed')
+    || description.includes('credential id not found')
+  );
+}
+
+function errorMentionsMissingCredential(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.toLowerCase().includes('credential id not found');
 }
 
 function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
@@ -1937,7 +1965,35 @@ export function WorkstationSageConnectorsPane({
     [profiles],
   );
 
+  const workspaceDefaultRoute = useMemo(
+    () => (workspaceAiRoute?.workspaceDefault && typeof workspaceAiRoute.workspaceDefault === 'object'
+      ? workspaceAiRoute.workspaceDefault
+      : null),
+    [workspaceAiRoute],
+  );
+  const workspaceDefaultRouteNeedsSetup = useMemo(
+    () => workspaceAiRouteNeedsSetup(workspaceDefaultRoute),
+    [workspaceDefaultRoute],
+  );
+
   const activeProviderCard = useMemo(() => {
+    if (workspaceDefaultRoute && !workspaceDefaultRouteNeedsSetup) {
+      const routeKind = readString(workspaceDefaultRoute.kind).toLowerCase();
+      const routeProviderId = readString(workspaceDefaultRoute.providerId).toLowerCase();
+      if (routeKind === 'empyralis_managed') {
+        return hostedProviderCard;
+      }
+      if (routeProviderId) {
+        const routeCard = providerCards.find((record) => record.provider.id === routeProviderId) ?? null;
+        if (routeCard && (!providerIsLocalOnly(routeCard) || providerPickerConnected(routeCard, localCompanionOnline))) {
+          return routeCard;
+        }
+      }
+      return null;
+    }
+    if (workspaceDefaultRouteNeedsSetup) {
+      return null;
+    }
     const explicitProviderId = readString(explicitSelectedProfile?.provider).toLowerCase();
     if (explicitProviderId) {
       const explicitCard = providerCards.find((record) => record.provider.id === explicitProviderId) ?? null;
@@ -1949,7 +2005,7 @@ export function WorkstationSageConnectorsPane({
       ?? providerCards.find((record) => record.provider.active && (!providerIsLocalOnly(record) || providerPickerConnected(record, localCompanionOnline)))
       ?? providerCards.find((record) => providerPickerConnected(record, localCompanionOnline) && !providerIsLocalOnly(record))
       ?? null;
-  }, [explicitSelectedProfile, hostedProviderCard, localCompanionOnline, providerCards]);
+  }, [explicitSelectedProfile, hostedProviderCard, localCompanionOnline, providerCards, workspaceDefaultRoute, workspaceDefaultRouteNeedsSetup]);
 
   const backupProviderCard = useMemo(() => {
     const backupPriority = ['gemini', 'openai', 'anthropic'];
@@ -1985,13 +2041,11 @@ export function WorkstationSageConnectorsPane({
   }, [activeProviderCard, backupProviderCard, explicitSelectedProfile, hostedProviderCard, hostedSageAi, localCompanionOnline]);
 
   const providerPickerSections = useMemo<ProviderPickerSection[]>(() => {
-    const orderedByokIds = ['deepseek', 'gemini', 'openai', 'anthropic', 'ollama_cloud'];
-    const byokItems = orderedByokIds
-      .map((providerId) => providerCards.find((record) => record.provider.id === providerId) ?? null)
-      .filter((record): record is ProviderCardRecord => Boolean(record));
-    const localItems = ['ollama']
-      .map((providerId) => providerCards.find((record) => record.provider.id === providerId) ?? null)
-      .filter((record): record is ProviderCardRecord => Boolean(record));
+    const visibleProviderCards = providerCards.filter((record) =>
+      record.provider.sageVisible && !record.provider.hidden,
+    );
+    const byokItems = visibleProviderCards.filter((record) => !providerIsLocalOnly(record));
+    const localItems = visibleProviderCards.filter(providerIsLocalOnly);
     const sections: ProviderPickerSection[] = [];
     if (hostedProviderCard || hostedSageAi.planAllowsHostedAi) {
       sections.push({
@@ -2221,11 +2275,23 @@ export function WorkstationSageConnectorsPane({
     groups.push({
       id: 'ai_runtime',
       label: 'AI & Runtime',
-      description: 'Default AI route, provider accounts, local models, and Agent Computer.',
+      description: 'Default AI route, provider accounts, and model source.',
       detail: aiProviderSummary.activeLabel,
-      countLabel: activeProviderCard || thisComputerCards.some((card) => card.statusTone === 'connected') ? 'Active' : 'Setup',
-      statusTone: activeProviderCard || thisComputerCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'warning',
+      countLabel: activeProviderCard ? 'Active' : 'Setup',
+      statusTone: activeProviderCard ? 'connected' : 'warning',
     });
+
+    if (showPersonalSurface && thisComputerCards.length > 0) {
+      const connectedComputer = thisComputerCards.some((card) => card.statusTone === 'connected');
+      groups.push({
+        id: 'connections',
+        label: 'Connections',
+        description: 'Computers and local runtime connections Sage can use when you ask.',
+        detail: 'Computer, browser, files, shell, screenshots, local AI, and personal channels.',
+        countLabel: connectedComputer ? 'Connected' : 'Setup',
+        statusTone: connectedComputer ? 'connected' : 'warning',
+      });
+    }
 
     groups.push({
       id: 'plugins',
@@ -2406,9 +2472,31 @@ export function WorkstationSageConnectorsPane({
     }
   }
 
-  async function setActiveProvider(record: ProviderCardRecord, { hosted = false }: { hosted?: boolean } = {}): Promise<void> {
+  async function setActiveProvider(
+    record: ProviderCardRecord,
+    {
+      hosted = false,
+      profileOverride = null,
+      credentialOverride = null,
+    }: {
+      hosted?: boolean;
+      profileOverride?: ProviderProfileRecord | null;
+      credentialOverride?: VaultCredentialRecord | null;
+    } = {},
+  ): Promise<void> {
     const activeModel = providerActiveModelLabel(record);
-    const nextProfiles = sortProfiles(profiles).filter((profile) => {
+    const overrideProviderId = readString(profileOverride?.provider).toLowerCase();
+    const mergedProfiles = profileOverride
+      ? [
+          ...profiles.filter((profile) => {
+            const sameId = readString(profile.id) && readString(profile.id) === readString(profileOverride.id);
+            const sameProvider = overrideProviderId && readString(profile.provider).toLowerCase() === overrideProviderId;
+            return !sameId && !sameProvider;
+          }),
+          profileOverride,
+        ]
+      : profiles;
+    const nextProfiles = sortProfiles(mergedProfiles).filter((profile) => {
       const providerId = readString(profile.provider).toLowerCase();
       return providerId && providerCards.some((card) => card.provider.id === providerId);
     });
@@ -2419,8 +2507,8 @@ export function WorkstationSageConnectorsPane({
         id: null,
         provider: targetProviderId,
         label: `Sage ${record.provider.label}`,
-        credentialId: readString(record.credential?.id) || null,
-        authMode: readString(record.provider.defaultAuthMode) || null,
+        credentialId: readString(credentialOverride?.id) || readString(record.credential?.id) || readString(profileOverride?.credential_id) || null,
+        authMode: readString(profileOverride?.auth_mode) || readString(record.provider.defaultAuthMode) || null,
         priority: 10,
         enabled: true,
         model: activeModel || null,
@@ -2433,16 +2521,37 @@ export function WorkstationSageConnectorsPane({
     const hostedPreset = hosted && ['light', 'pro', 'max'].includes(activeModel.toLowerCase())
       ? activeModel.toLowerCase()
       : null;
-    await services.client.updateWorkspaceAiRouteDefault({
-      kind: hosted
-        ? 'empyralis_managed'
-        : providerIsLocalOnly(record)
-          ? 'local_model'
-          : 'user_api_key',
+    const routeKind: WorkspaceAiRouteKind = hosted
+      ? 'empyralis_managed'
+      : providerIsLocalOnly(record)
+        ? 'local_model'
+        : 'user_api_key';
+    const routeUpdate = {
+      kind: routeKind,
       provider: targetProviderId,
       model: activeModel || null,
       modelPreset: hostedPreset,
-    });
+    };
+    try {
+      await services.client.updateWorkspaceAiRouteDefault(routeUpdate);
+    } catch (routeError) {
+      const staleProviderId = readString(workspaceDefaultRoute?.providerId).toLowerCase();
+      if (
+        errorMentionsMissingCredential(routeError)
+        && staleProviderId
+        && staleProviderId !== targetProviderId
+      ) {
+        await services.client.deleteWorkspaceProviderCredential({ provider: staleProviderId });
+        emitWorkstationProviderChanged({
+          workspaceId: services.scope.workspaceId,
+          providerId: staleProviderId,
+          action: 'deleted',
+        });
+        await services.client.updateWorkspaceAiRouteDefault(routeUpdate);
+      } else {
+        throw routeError;
+      }
+    }
 
     emitWorkstationProviderChanged({
       workspaceId: services.scope.workspaceId,
@@ -2499,12 +2608,14 @@ export function WorkstationSageConnectorsPane({
     setError(null);
     setStatus(null);
     try {
-      await services.client.upsertWorkspaceProviderCredential({
+      const savedProvider = await services.client.upsertWorkspaceProviderCredential({
         provider: record.provider.id,
         apiKey: draftApiKey,
         baseUrl: draftBaseUrl || null,
         model: null,
       });
+      const savedProfile = normalizeProviderProfiles({ items: [savedProvider?.['profile']] })[0] ?? null;
+      const savedCredential = normalizeVaultCredentials({ items: [savedProvider?.['credential']] })[0] ?? null;
       emitWorkstationProviderChanged({
         workspaceId: services.scope.workspaceId,
         providerId: record.provider.id,
@@ -2513,7 +2624,19 @@ export function WorkstationSageConnectorsPane({
       await loadState();
       setProviderDraftKeys((current) => ({ ...current, [record.id]: '' }));
       setProviderDraftBaseUrls((current) => ({ ...current, [record.id]: '' }));
-      await setActiveProvider(record);
+      await setActiveProvider(
+        {
+          ...record,
+          profile: savedProfile ?? record.profile,
+          credential: savedCredential ?? record.credential,
+          connected: true,
+          status: 'connected',
+        },
+        {
+          profileOverride: savedProfile,
+          credentialOverride: savedCredential,
+        },
+      );
       setProviderPickerDraftId(null);
       setProviderPickerOpen(false);
     } catch (saveError) {
@@ -3718,16 +3841,6 @@ export function WorkstationSageConnectorsPane({
               />
               {activeConnected ? 'Connected' : 'Needs setup'}
             </span>
-            <AppButton
-              type="button"
-              tone="secondary"
-              onClick={() => {
-                setProviderPickerOpen(true);
-                setProviderPickerDraftId(null);
-              }}
-            >
-              Change model
-            </AppButton>
           </div>
 
           <details className="sage-progressive-disclosure" open={Boolean(explicitSelectedProfile)}>
@@ -3764,41 +3877,24 @@ export function WorkstationSageConnectorsPane({
   }
 
   function renderAiRouteSummary() {
-    const currentRoute = workspaceAiRoute?.workspaceDefault && typeof workspaceAiRoute.workspaceDefault === 'object'
-      ? workspaceAiRoute.workspaceDefault
-      : null;
+    const currentRoute = workspaceDefaultRoute;
     const routeBudgets = workspaceAiRoute?.budgets && typeof workspaceAiRoute.budgets === 'object'
       ? workspaceAiRoute.budgets
       : null;
-    const usedByRows = Array.isArray(workspaceAiRoute?.usedBy)
-      ? workspaceAiRoute.usedBy.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-      : [];
-    const availableRoutes = Array.isArray(workspaceAiRoute?.availableRoutes)
-      ? workspaceAiRoute.availableRoutes
-          .filter((route): route is Record<string, unknown> => Boolean(route) && typeof route === 'object')
-          .map((route) => readString(route.label) || readString(route.publicLabel))
-          .filter(Boolean)
-      : [];
     const monthlyCapUsd = readNumber(routeBudgets?.workspaceMonthlyCapUsd, Number.NaN);
     const remainingCredits = readInteger(routeBudgets?.remainingCredits, Number.NaN);
-    const fallbackAllowed = routeBudgets
-      ? routeBudgets.fallbackAllowed === true
-      : true;
     const budgetDetail = Number.isFinite(remainingCredits)
       ? `${formatCredits(remainingCredits)} credits remaining`
       : Number.isFinite(monthlyCapUsd)
         ? `$${monthlyCapUsd.toFixed(2)} monthly cap`
-        : aiProviderSummary.creditsDetail;
-    const routeLabels = availableRoutes.length > 0
-      ? availableRoutes
-      : [
-          'Empyralis managed AI',
-          'OpenAI API key',
-          'Anthropic API key',
-          'Google Gemini API key',
-          'Local model on This Mac',
-          'Local model on VPS',
-        ];
+        : `Credits: ${aiProviderSummary.creditsDetail}`;
+    const routeNeedsSetup = workspaceDefaultRouteNeedsSetup;
+    const routeLabel = routeNeedsSetup
+      ? 'Needs setup'
+      : readString(currentRoute?.label) || aiProviderSummary.activeLabel;
+    const routeDescription = routeNeedsSetup
+      ? readString(currentRoute?.description) || 'Reconnect this provider before it can be the workspace AI route.'
+      : readString(currentRoute?.description) || aiProviderSummary.activeDetail;
     return (
       <section className="sage-unified-section sage-ai-route-summary" aria-label="Workspace AI route">
         <p className="sage-unified-section__label">AI & Runtime</p>
@@ -3808,40 +3904,10 @@ export function WorkstationSageConnectorsPane({
         <div className="sage-ai-route-summary__grid">
           <article className="sage-ai-route-summary__card sage-ai-route-summary__card--primary">
             <span>Current route</span>
-            <strong>Workspace default: {readString(currentRoute?.label) || aiProviderSummary.activeLabel}</strong>
-            <p>{readString(currentRoute?.description) || aiProviderSummary.activeDetail}</p>
+            <strong>Workspace default: {routeLabel}</strong>
+            <p>{routeDescription}</p>
+            <p className="sage-ai-route-summary__credits">{budgetDetail}</p>
           </article>
-          <article className="sage-ai-route-summary__card">
-            <span>Used by</span>
-            <ul className="sage-ai-route-summary__list">
-              {(usedByRows.length > 0 ? usedByRows : [
-                { label: 'Sage', detail: 'Workspace default' },
-                { label: 'Studio agents', detail: 'Workspace default' },
-                { label: 'Mini-apps', detail: 'Workspace default' },
-              ]).map((row) => (
-                <li key={readString(row.label)}>
-                  <strong>{readString(row.label)}</strong>
-                  <em>{readString(row.detail) || 'Workspace default'}</em>
-                </li>
-              ))}
-            </ul>
-          </article>
-          <article className="sage-ai-route-summary__card">
-            <span>Budgets</span>
-            <ul className="sage-ai-route-summary__list">
-              <li><strong>Workspace monthly cap</strong><em>{budgetDetail}</em></li>
-              <li><strong>Per-agent cap</strong><em>Inherits workspace route</em></li>
-              <li><strong>Fallback</strong><em>{fallbackAllowed ? 'Allowed when configured' : 'Disabled'}</em></li>
-            </ul>
-          </article>
-        </div>
-        <div className="sage-ai-route-summary__routes" aria-label="Available AI routes">
-          <span>Available routes</span>
-          <div>
-            {routeLabels.map((route) => (
-              <span key={route}>{route}</span>
-            ))}
-          </div>
         </div>
       </section>
     );
@@ -3960,6 +4026,13 @@ export function WorkstationSageConnectorsPane({
       <>
         {renderAiRouteSummary()}
         {showProviders ? renderAiOverview() : null}
+      </>
+    );
+  }
+
+  function renderConnectionsOverview() {
+    return (
+      <>
         {showPersonalSurface && thisComputerCards.length > 0 ? renderAgentComputerConnections() : null}
       </>
     );
@@ -4251,6 +4324,8 @@ export function WorkstationSageConnectorsPane({
     switch (selectedIntegrationGroup.id) {
       case 'ai_runtime':
         return renderAiRuntimeOverview();
+      case 'connections':
+        return renderConnectionsOverview();
       case 'plugins':
       default:
         return renderPluginsOverview();

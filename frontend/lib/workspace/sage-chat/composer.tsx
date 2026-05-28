@@ -10,21 +10,11 @@ type ComposerOption = {
   disabled?: boolean;
 };
 
-type ComposerModelOption = ComposerOption | {
-  label: string;
-  options: ComposerOption[];
-};
-
 export interface SageComposerProps {
   draft: string;
   onDraftChange: (draft: string) => void;
   onSendMessage: () => void;
   onStopStreaming: () => void;
-  onOpenIntegrations: () => void;
-  effectiveSelectedModel: string;
-  composerModelOptions: ComposerModelOption[];
-  modelProviderLabel?: string | null;
-  handleModelChange: (model: string) => void;
   reasoningEffort: ChatReasoningEffort;
   reasoningOptions: ComposerOption[];
   onReasoningEffortChange: (effort: string) => void;
@@ -47,11 +37,6 @@ export const SageComposer = memo(function SageComposer(props: SageComposerProps)
       onDraftChange={props.onDraftChange}
       onSubmit={props.onSendMessage}
       onStop={props.onStopStreaming}
-      onOpenIntegrations={props.onOpenIntegrations}
-      model={props.effectiveSelectedModel}
-      modelOptions={props.composerModelOptions}
-      modelProviderLabel={props.modelProviderLabel ?? null}
-      onModelChange={props.handleModelChange}
       reasoningEffort={props.reasoningEffort}
       reasoningOptions={props.reasoningOptions}
       onReasoningEffortChange={props.onReasoningEffortChange}

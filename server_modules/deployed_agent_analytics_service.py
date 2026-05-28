@@ -102,9 +102,10 @@ async def summarize_deployed_agent_analytics(
                 "top_outcome": "open",
             },
             "cost_burn": empty_cost,
+            "daily_series": [],
         }
 
-    activity_rollup, session_rows, cost_summary = await asyncio.gather(
+    activity_rollup, session_rows, cost_summary, daily_series = await asyncio.gather(
         control_plane_repository.summarize_deployed_agent_activity_rollup(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -122,6 +123,13 @@ async def summarize_deployed_agent_analytics(
             workspace_id=workspace_id,
             deployed_agent_id=deployed_agent_id,
             usage_month=_month_start_iso(),
+        ),
+        control_plane_repository.list_deployed_agent_daily_activity_series(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            deployed_agent_id=deployed_agent_id,
+            backing_install_id=backing_install_id,
+            days=30,
         ),
     )
 
@@ -178,6 +186,7 @@ async def summarize_deployed_agent_analytics(
             "percent_used": percent_used if percent_used is not None else _read_float(current_cycle.get("percent_used")),
             "last_threshold_reached": _normalize_optional_text(current_cycle.get("last_threshold_reached")),
         },
+        "daily_series": [dict(item) for item in list(daily_series or []) if isinstance(item, dict)],
     }
 
 

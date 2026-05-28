@@ -484,6 +484,35 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FROM agent_channel_events", query)
         self.assertIn("message_count_month", query)
 
+    async def test_repository_lists_deployed_agent_daily_activity_series_from_channel_events(self) -> None:
+        connection = AsyncMock()
+        connection.fetch = AsyncMock(
+            return_value=[
+                {"date": "2026-04-12", "conversation_count": 1, "message_count": 5},
+                {"date": "2026-04-13", "conversation_count": 2, "message_count": 8},
+            ]
+        )
+
+        with patch(
+            "server_modules.control_plane_repository._scoped_connection",
+            new=_fake_scoped_connection(connection),
+        ):
+            rows = await control_plane_repository.list_deployed_agent_daily_activity_series(
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                deployed_agent_id="dagent_1",
+                backing_install_id="ainstall_1",
+                days=30,
+            )
+
+        self.assertEqual(rows[0]["date"], "2026-04-12")
+        self.assertEqual(rows[1]["conversation_count"], 2)
+        self.assertEqual(rows[1]["message_count"], 8)
+        query = connection.fetch.await_args.args[0]
+        self.assertIn("GENERATE_SERIES", query)
+        self.assertIn("COUNT(DISTINCT session_key)", query)
+        self.assertIn("FROM agent_channel_events", query)
+
     async def test_repository_lists_deployed_agent_session_analytics_using_existing_event_truth(self) -> None:
         connection = AsyncMock()
         connection.fetch = AsyncMock(

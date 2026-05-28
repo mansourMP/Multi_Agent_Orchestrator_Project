@@ -69,6 +69,15 @@ class DeployedAgentAnalyticsServiceTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch(
+                "server_modules.deployed_agent_analytics_service.control_plane_repository.list_deployed_agent_daily_activity_series",
+                new=AsyncMock(
+                    return_value=[
+                        {"date": "2026-04-12", "conversation_count": 1, "message_count": 5},
+                        {"date": "2026-04-13", "conversation_count": 2, "message_count": 8},
+                    ]
+                ),
+            ),
+            patch(
                 "server_modules.deployed_agent_analytics_service.run_state_repository.get_live_run",
                 new=AsyncMock(return_value=None),
             ),
@@ -94,6 +103,13 @@ class DeployedAgentAnalyticsServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["cost_burn"]["current_burn_usd"], 12.5)
         self.assertEqual(payload["cost_burn"]["cap_usd"], 25.0)
         self.assertEqual(payload["cost_burn"]["percent_used"], 50.0)
+        self.assertEqual(
+            payload["daily_series"],
+            [
+                {"date": "2026-04-12", "conversation_count": 1, "message_count": 5},
+                {"date": "2026-04-13", "conversation_count": 2, "message_count": 8},
+            ],
+        )
 
     async def test_summarize_workspace_deployed_agent_analytics_returns_item_per_deployment(self) -> None:
         with patch(

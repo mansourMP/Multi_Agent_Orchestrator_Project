@@ -22,6 +22,7 @@ from server_modules.sqlite_helpers import connect_sqlite_rw
 
 LOGGER = logging.getLogger(__name__)
 LOCAL_IDENTITY_SCHEMA_READY_PATHS: set[str] = set()
+LOCAL_CONTROL_PLANE_SCHEMA_READY_PATHS: set[str] = set()
 NEW_ACCOUNT_HOSTED_SAGE_AI_POLICY = "enabled_with_cap"
 
 
@@ -57,12 +58,17 @@ EMPYRALIS_STATE_HOME = Path(
     os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
 ).expanduser()
 LOCAL_IDENTITY_DB_FILE = (EMPYRALIS_STATE_HOME / "auth" / "users.db").expanduser()
+LOCAL_CONTROL_PLANE_DB_FILE = Path(
+    os.getenv(
+        "EMPYRALIS_LOCAL_CONTROL_PLANE_DB",
+        str(EMPYRALIS_STATE_HOME / "control-plane" / "control-plane.sqlite3"),
+    )
+).expanduser()
 _LOCAL_IDENTITY_LOCK = threading.Lock()
 _LOCAL_AGENT_THREAD_LOCK = threading.RLock()
 _LOCAL_AGENT_THREADS: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 _LOCAL_AGENT_TURNS: Dict[tuple[str, str, str], List[Dict[str, Any]]] = {}
 _LOCAL_DEPLOYED_AGENT_LOCK = threading.RLock()
-_LOCAL_DEPLOYED_AGENTS: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 WORKSPACE_LOOKUP_CACHE_TTL_SECONDS = max(
     float(os.getenv("ORION_WORKSPACE_LOOKUP_CACHE_TTL_SECONDS", "3")),
     0.5,
@@ -1652,29 +1658,144 @@ def _row_to_deployed_agent(row: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def _local_deployed_agent_key(tenant_id: str, workspace_id: str, deployed_agent_id: str) -> tuple[str, str, str]:
-    return (
-        str(tenant_id or "").strip(),
-        str(workspace_id or "").strip(),
-        str(deployed_agent_id or "").strip(),
+def _connect_local_control_plane_db() -> sqlite3.Connection:
+    connection = connect_sqlite_rw(LOCAL_CONTROL_PLANE_DB_FILE, logger=LOGGER, label="local_control_plane")
+    schema_key = str(LOCAL_CONTROL_PLANE_DB_FILE)
+    if schema_key in LOCAL_CONTROL_PLANE_SCHEMA_READY_PATHS:
+        return connection
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS deployed_agents (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            owner_workspace_id TEXT NOT NULL,
+            backing_install_id TEXT,
+            created_by_user_id TEXT,
+            name TEXT NOT NULL,
+            avatar TEXT,
+            persona TEXT NOT NULL DEFAULT '',
+            system_prompt TEXT NOT NULL DEFAULT '',
+            deployment_state TEXT NOT NULL DEFAULT 'draft',
+            channels TEXT NOT NULL DEFAULT '{}',
+            knowledge_sources TEXT NOT NULL DEFAULT '[]',
+            runtime_target TEXT NOT NULL DEFAULT 'cloud',
+            billing_plan TEXT NOT NULL DEFAULT 'free',
+            is_public INTEGER NOT NULL DEFAULT 0,
+            quality_stars INTEGER,
+            cost_tier TEXT,
+            category TEXT,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            operational_state TEXT NOT NULL DEFAULT '{}',
+            last_deployed_at TEXT,
+            last_paused_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
     )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_local_deployed_agents_workspace_created
+        ON deployed_agents(tenant_id, owner_workspace_id, created_at DESC, id DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_local_deployed_agents_backing_install
+        ON deployed_agents(tenant_id, owner_workspace_id, backing_install_id)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_local_deployed_agents_workspace_state
+        ON deployed_agents(tenant_id, owner_workspace_id, deployment_state)
+        """
+    )
+    connection.commit()
+    LOCAL_CONTROL_PLANE_SCHEMA_READY_PATHS.add(schema_key)
+    return connection
 
 
-def _clone_local_deployed_agent(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    return _row_to_deployed_agent(dict(record))
+def _local_deployed_agent_values(record: Dict[str, Any]) -> Dict[str, Any]:
+    now = _utc_now_iso()
+    return {
+        "id": str(record.get("id") or "").strip(),
+        "tenant_id": str(record.get("tenant_id") or "").strip(),
+        "owner_workspace_id": str(record.get("owner_workspace_id") or "").strip(),
+        "backing_install_id": str(record.get("backing_install_id") or "").strip() or None,
+        "created_by_user_id": str(record.get("created_by_user_id") or "").strip() or None,
+        "name": str(record.get("name") or "").strip(),
+        "avatar": str(record.get("avatar") or "").strip() or None,
+        "persona": str(record.get("persona") or "").strip(),
+        "system_prompt": str(record.get("system_prompt") or "").strip(),
+        "deployment_state": str(record.get("deployment_state") or "draft").strip().lower() or "draft",
+        "channels": _to_json(record.get("channels"), default={}),
+        "knowledge_sources": _to_json(record.get("knowledge_sources"), default=[]),
+        "runtime_target": str(record.get("runtime_target") or "cloud").strip() or "cloud",
+        "billing_plan": str(record.get("billing_plan") or "free").strip() or "free",
+        "is_public": 1 if bool(record.get("is_public")) else 0,
+        "quality_stars": int(record.get("quality_stars")) if record.get("quality_stars") is not None else None,
+        "cost_tier": str(record.get("cost_tier") or "").strip().lower() or None,
+        "category": str(record.get("category") or "").strip() or None,
+        "metadata": _to_json(record.get("metadata"), default={}),
+        "operational_state": _to_json(record.get("operational_state"), default={}),
+        "last_deployed_at": _iso(record.get("last_deployed_at")),
+        "last_paused_at": _iso(record.get("last_paused_at")),
+        "created_at": _iso(record.get("created_at")) or now,
+        "updated_at": _iso(record.get("updated_at")) or now,
+    }
 
 
 def _local_store_deployed_agent(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    key = _local_deployed_agent_key(
-        str(record.get("tenant_id") or ""),
-        str(record.get("owner_workspace_id") or ""),
-        str(record.get("id") or ""),
-    )
-    if not all(key):
+    values = _local_deployed_agent_values(record)
+    if not values["id"] or not values["tenant_id"] or not values["owner_workspace_id"] or not values["name"]:
         return None
     with _LOCAL_DEPLOYED_AGENT_LOCK:
-        _LOCAL_DEPLOYED_AGENTS[key] = dict(record)
-        return _clone_local_deployed_agent(_LOCAL_DEPLOYED_AGENTS[key])
+        with _connect_local_control_plane_db() as connection:
+            connection.execute(
+                """
+                INSERT INTO deployed_agents (
+                    id, tenant_id, owner_workspace_id, backing_install_id, created_by_user_id,
+                    name, avatar, persona, system_prompt, deployment_state, channels, knowledge_sources,
+                    runtime_target, billing_plan, is_public, quality_stars, cost_tier, category,
+                    metadata, operational_state, last_deployed_at, last_paused_at, created_at, updated_at
+                ) VALUES (
+                    :id, :tenant_id, :owner_workspace_id, :backing_install_id, :created_by_user_id,
+                    :name, :avatar, :persona, :system_prompt, :deployment_state, :channels, :knowledge_sources,
+                    :runtime_target, :billing_plan, :is_public, :quality_stars, :cost_tier, :category,
+                    :metadata, :operational_state, :last_deployed_at, :last_paused_at, :created_at, :updated_at
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    tenant_id = excluded.tenant_id,
+                    owner_workspace_id = excluded.owner_workspace_id,
+                    backing_install_id = excluded.backing_install_id,
+                    created_by_user_id = excluded.created_by_user_id,
+                    name = excluded.name,
+                    avatar = excluded.avatar,
+                    persona = excluded.persona,
+                    system_prompt = excluded.system_prompt,
+                    deployment_state = excluded.deployment_state,
+                    channels = excluded.channels,
+                    knowledge_sources = excluded.knowledge_sources,
+                    runtime_target = excluded.runtime_target,
+                    billing_plan = excluded.billing_plan,
+                    is_public = excluded.is_public,
+                    quality_stars = excluded.quality_stars,
+                    cost_tier = excluded.cost_tier,
+                    category = excluded.category,
+                    metadata = excluded.metadata,
+                    operational_state = excluded.operational_state,
+                    last_deployed_at = excluded.last_deployed_at,
+                    last_paused_at = excluded.last_paused_at,
+                    updated_at = excluded.updated_at
+                """,
+                values,
+            )
+            row = connection.execute(
+                "SELECT * FROM deployed_agents WHERE id = ? LIMIT 1",
+                (values["id"],),
+            ).fetchone()
+    return _row_to_deployed_agent(row)
 
 
 def _local_get_deployed_agent(
@@ -1687,15 +1808,25 @@ def _local_get_deployed_agent(
     if not resolved_id:
         return None
     with _LOCAL_DEPLOYED_AGENT_LOCK:
-        for (tenant_key, workspace_key, agent_key), record in _LOCAL_DEPLOYED_AGENTS.items():
-            if agent_key != resolved_id:
-                continue
-            if tenant_id is not None and tenant_key != str(tenant_id or "").strip():
-                continue
-            if owner_workspace_id is not None and workspace_key != str(owner_workspace_id or "").strip():
-                continue
-            return _clone_local_deployed_agent(record)
-    return None
+        with _connect_local_control_plane_db() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM deployed_agents
+                WHERE id = ?
+                  AND (? = '' OR tenant_id = ?)
+                  AND (? = '' OR owner_workspace_id = ?)
+                LIMIT 1
+                """,
+                (
+                    resolved_id,
+                    str(tenant_id or "").strip(),
+                    str(tenant_id or "").strip(),
+                    str(owner_workspace_id or "").strip(),
+                    str(owner_workspace_id or "").strip(),
+                ),
+            ).fetchone()
+    return _row_to_deployed_agent(row)
 
 
 def _local_get_deployed_agent_by_backing_install_id(
@@ -1708,15 +1839,26 @@ def _local_get_deployed_agent_by_backing_install_id(
     if not resolved_install_id:
         return None
     with _LOCAL_DEPLOYED_AGENT_LOCK:
-        for (tenant_key, workspace_key, _agent_key), record in _LOCAL_DEPLOYED_AGENTS.items():
-            if str(record.get("backing_install_id") or "").strip() != resolved_install_id:
-                continue
-            if tenant_id is not None and tenant_key != str(tenant_id or "").strip():
-                continue
-            if owner_workspace_id is not None and workspace_key != str(owner_workspace_id or "").strip():
-                continue
-            return _clone_local_deployed_agent(record)
-    return None
+        with _connect_local_control_plane_db() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM deployed_agents
+                WHERE backing_install_id = ?
+                  AND (? = '' OR tenant_id = ?)
+                  AND (? = '' OR owner_workspace_id = ?)
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (
+                    resolved_install_id,
+                    str(tenant_id or "").strip(),
+                    str(tenant_id or "").strip(),
+                    str(owner_workspace_id or "").strip(),
+                    str(owner_workspace_id or "").strip(),
+                ),
+            ).fetchone()
+    return _row_to_deployed_agent(row)
 
 
 def _local_list_deployed_agents_for_workspace(
@@ -1729,20 +1871,101 @@ def _local_list_deployed_agents_for_workspace(
     resolved_workspace_id = str(owner_workspace_id or "").strip()
     resolved_tenant_id = str(tenant_id or "").strip()
     resolved_state = str(deployment_state or "").strip().lower()
-    rows: List[Dict[str, Any]] = []
     with _LOCAL_DEPLOYED_AGENT_LOCK:
-        for (tenant_key, workspace_key, _agent_key), record in _LOCAL_DEPLOYED_AGENTS.items():
-            if workspace_key != resolved_workspace_id:
-                continue
-            if resolved_tenant_id and tenant_key != resolved_tenant_id:
-                continue
-            if resolved_state and str(record.get("deployment_state") or "").strip().lower() != resolved_state:
-                continue
-            projected = _clone_local_deployed_agent(record)
-            if isinstance(projected, dict):
-                rows.append(projected)
-    rows.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("id") or "")), reverse=True)
-    return rows[: max(1, int(limit))]
+        with _connect_local_control_plane_db() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM deployed_agents
+                WHERE owner_workspace_id = ?
+                  AND (? = '' OR tenant_id = ?)
+                  AND (? = '' OR deployment_state = ?)
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (
+                    resolved_workspace_id,
+                    resolved_tenant_id,
+                    resolved_tenant_id,
+                    resolved_state,
+                    resolved_state,
+                    max(1, int(limit)),
+                ),
+            ).fetchall()
+    return [item for item in (_row_to_deployed_agent(row) for row in rows) if item]
+
+
+def _local_update_deployed_agent(
+    deployed_agent_id: str,
+    *,
+    tenant_id: str,
+    owner_workspace_id: str,
+    updates: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    resolved_id = str(deployed_agent_id or "").strip()
+    resolved_tenant_id = str(tenant_id or "").strip()
+    resolved_workspace_id = str(owner_workspace_id or "").strip()
+    if not resolved_id or not resolved_tenant_id or not resolved_workspace_id:
+        return None
+    allowed_columns = {
+        "name",
+        "avatar",
+        "persona",
+        "system_prompt",
+        "deployment_state",
+        "channels",
+        "knowledge_sources",
+        "runtime_target",
+        "billing_plan",
+        "is_public",
+        "quality_stars",
+        "cost_tier",
+        "category",
+        "metadata",
+        "operational_state",
+        "last_deployed_at",
+        "last_paused_at",
+    }
+    set_clauses: List[str] = []
+    params: List[Any] = []
+    for key in allowed_columns:
+        if key not in updates:
+            continue
+        value = updates.get(key)
+        if key in {"channels", "metadata", "operational_state"}:
+            params.append(_to_json(value, default={}))
+        elif key == "knowledge_sources":
+            params.append(_to_json(value, default=[]))
+        elif key in {"last_deployed_at", "last_paused_at"}:
+            params.append(_iso(value))
+        elif key == "is_public":
+            params.append(1 if bool(value) else 0)
+        elif key == "deployment_state":
+            params.append(str(value or "draft").strip().lower() or "draft")
+        else:
+            params.append(value)
+        set_clauses.append(f"{key} = ?")
+    if not set_clauses:
+        return _local_get_deployed_agent(
+            resolved_id,
+            tenant_id=resolved_tenant_id,
+            owner_workspace_id=resolved_workspace_id,
+        )
+    set_clauses.append("updated_at = ?")
+    params.append(_utc_now_iso())
+    params.extend([resolved_id, resolved_tenant_id, resolved_workspace_id])
+    with _LOCAL_DEPLOYED_AGENT_LOCK:
+        with _connect_local_control_plane_db() as connection:
+            row = connection.execute(
+                f"""
+                UPDATE deployed_agents
+                SET {", ".join(set_clauses)}
+                WHERE id = ? AND tenant_id = ? AND owner_workspace_id = ?
+                RETURNING *
+                """,
+                params,
+            ).fetchone()
+    return _row_to_deployed_agent(row)
 
 
 def _row_to_deployed_agent_daily_message_usage(row: Any) -> Optional[Dict[str, Any]]:
@@ -1999,6 +2222,18 @@ def _row_to_deployed_agent_activity_rollup(row: Any) -> Optional[Dict[str, Any]]
         "message_count_week": int(payload.get("message_count_week") or 0),
         "message_count_month": int(payload.get("message_count_month") or 0),
         "latest_message_at": _iso(payload.get("latest_message_at")),
+    }
+
+
+def _row_to_deployed_agent_daily_activity_series(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    bucket_date = payload.get("date")
+    return {
+        "date": bucket_date.isoformat() if isinstance(bucket_date, date) else str(bucket_date or "").strip() or None,
+        "conversation_count": int(payload.get("conversation_count") or 0),
+        "message_count": int(payload.get("message_count") or 0),
     }
 
 
@@ -7949,6 +8184,84 @@ async def summarize_deployed_agent_activity_rollup(
     }
 
 
+async def list_deployed_agent_daily_activity_series(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    backing_install_id: str,
+    days: int = 30,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = str(deployed_agent_id or "").strip()
+    resolved_backing_install_id = str(backing_install_id or "").strip()
+    safe_days = max(1, min(int(days or 30), 90))
+    if not resolved_deployed_agent_id or not resolved_backing_install_id:
+        return []
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            WITH bounds AS (
+                SELECT
+                    ((NOW() AT TIME ZONE 'UTC')::date - (($5::int - 1) * INTERVAL '1 day'))::date AS start_day,
+                    (NOW() AT TIME ZONE 'UTC')::date AS end_day
+            ),
+            day_spine AS (
+                SELECT GENERATE_SERIES(bounds.start_day, bounds.end_day, INTERVAL '1 day')::date AS bucket_day
+                FROM bounds
+            ),
+            filtered_events AS (
+                SELECT
+                    (created_at AT TIME ZONE 'UTC')::date AS bucket_day,
+                    session_key,
+                    event_type
+                FROM agent_channel_events, bounds
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND created_at >= bounds.start_day::timestamptz
+                  AND created_at < (bounds.end_day + INTERVAL '1 day')::timestamptz
+                  AND (
+                    COALESCE(metadata->>'deployed_agent_id', '') = $3
+                    OR responder_install_id = $4
+                  )
+            ),
+            daily_counts AS (
+                SELECT
+                    bucket_day,
+                    COUNT(DISTINCT session_key) FILTER (
+                        WHERE COALESCE(session_key, '') <> ''
+                    )::int AS conversation_count,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'message'
+                    )::int AS message_count
+                FROM filtered_events
+                GROUP BY bucket_day
+            ),
+            has_data AS (
+                SELECT EXISTS(SELECT 1 FROM daily_counts) AS value
+            )
+            SELECT
+                day_spine.bucket_day AS date,
+                COALESCE(daily_counts.conversation_count, 0)::int AS conversation_count,
+                COALESCE(daily_counts.message_count, 0)::int AS message_count
+            FROM day_spine
+            LEFT JOIN daily_counts ON daily_counts.bucket_day = day_spine.bucket_day
+            CROSS JOIN has_data
+            WHERE has_data.value
+            ORDER BY day_spine.bucket_day ASC
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_backing_install_id,
+            safe_days,
+        )
+    return [item for item in (_row_to_deployed_agent_daily_activity_series(row) for row in rows) if item]
+
+
 async def get_deployed_agent_admin_dashboard(
     *,
     tenant_id: str,
@@ -8677,7 +8990,12 @@ async def update_deployed_agent(
     """
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
-            return None
+            return _local_update_deployed_agent(
+                resolved_id,
+                tenant_id=resolved_tenant_id,
+                owner_workspace_id=resolved_workspace_id,
+                updates=updates,
+            )
         row = await connection.fetchrow(query, *params)
     return _row_to_deployed_agent(row)
 

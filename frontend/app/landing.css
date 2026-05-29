@@ -1,14 +1,14 @@
 .landing-root {
-  --landing-bg: #070707;
-  --landing-panel: #101010;
-  --landing-panel-soft: #151515;
-  --landing-panel-raised: #1a1a1a;
-  --landing-border: rgba(255, 255, 255, 0.1);
-  --landing-border-strong: rgba(255, 255, 255, 0.18);
-  --landing-text: #f4f1eb;
-  --landing-muted: rgba(244, 241, 235, 0.66);
-  --landing-faint: rgba(244, 241, 235, 0.42);
-  --landing-accent: #c8b88a;
+  --landing-bg: #0A0A0A;
+  --landing-panel: #0F0F0F;
+  --landing-panel-soft: #141414;
+  --landing-panel-raised: #1A1A1A;
+  --landing-border: rgba(255, 255, 255, 0.08);
+  --landing-border-strong: rgba(255, 255, 255, 0.12);
+  --landing-text: #E8E8E8;
+  --landing-muted: rgba(232, 232, 232, 0.66);
+  --landing-faint: rgba(232, 232, 232, 0.42);
+  --landing-accent: #00D992;
   min-height: 100vh;
   overflow-x: hidden;
   background: var(--landing-bg);
@@ -66,11 +66,12 @@
   place-items: center;
   width: 30px;
   height: 30px;
-  border: 1px solid var(--landing-border-strong);
+  border: 1px solid rgba(0, 217, 146, 0.25);
   border-radius: 8px;
-  background: #111;
-  color: var(--landing-text);
+  background: rgba(0, 217, 146, 0.10);
+  color: #00D992;
   font-size: 12px;
+  font-weight: 700;
 }
 
 .landing-nav__links {
@@ -228,8 +229,8 @@
   overflow: hidden;
   border: 1px solid var(--landing-border-strong);
   border-radius: 8px;
-  background: #0b0b0b;
-  box-shadow: 0 48px 120px rgba(0, 0, 0, 0.48);
+  background: #0F0F0F;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   transform: translateY(22px);
 }
 
@@ -353,8 +354,8 @@
 }
 
 .landing-product__item--active {
-  border-color: rgba(200, 184, 138, 0.42);
-  background: rgba(200, 184, 138, 0.09);
+  border-color: rgba(0, 217, 146, 0.42);
+  background: rgba(0, 217, 146, 0.09);
 }
 
 .landing-product__workspace {
@@ -380,7 +381,7 @@
 .landing-product__workspace-head em {
   min-height: 28px;
   padding: 6px 10px;
-  border: 1px solid rgba(200, 184, 138, 0.36);
+  border: 1px solid rgba(0, 217, 146, 0.36);
   border-radius: 8px;
   color: var(--landing-accent);
   font-size: 12px;
@@ -402,7 +403,7 @@
   left: 13%;
   right: 13%;
   height: 1px;
-  background: rgba(200, 184, 138, 0.38);
+  background: rgba(0, 217, 146, 0.38);
 }
 
 .landing-product__lane::after {
@@ -498,7 +499,7 @@
   border: 1px solid var(--landing-border);
   border-radius: 8px;
   color: var(--landing-accent);
-  background: rgba(200, 184, 138, 0.08);
+  background: rgba(0, 217, 146, 0.08);
 }
 
 .landing-layer__label {

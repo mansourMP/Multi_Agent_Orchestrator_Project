@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -52,7 +53,7 @@ _DEFAULT_IFRAME_SANDBOX = [
     "allow-scripts",
 ]
 _DEFAULT_IFRAME_ALLOW: List[str] = []
-_LAUNCH_TOKEN_TTL_SECONDS = 15 * 60
+_LAUNCH_TOKEN_TTL_SECONDS = 5 * 60
 
 
 def _normalized_text(value: Any) -> str:
@@ -131,6 +132,7 @@ def issue_hosted_launch_token(
         "install_id": _normalized_text(install_id),
         "origin": normalized_origin,
         "bridge_nonce": secrets.token_urlsafe(24),
+        "jti": uuid.uuid4().hex,
         "iat": now,
         "exp": now + max(30, int(ttl_seconds or _LAUNCH_TOKEN_TTL_SECONDS)),
     }
@@ -406,6 +408,36 @@ def normalize_hosted_app_fields(
         "permissions": normalized_permissions,
         "context_envelope": normalized_context_envelope,
     }
+
+
+def build_mini_app_csp_header(
+    *,
+    app_hosted_url: str,
+    allowed_origins: Optional[List[str]] = None,
+) -> str:
+    origins = " ".join(
+        str(origin).strip()
+        for origin in (allowed_origins or [])
+        if str(origin).strip()
+    ) or "'none'"
+    app_origin = "'none'"
+    try:
+        parsed = urlparse(str(app_hosted_url or "").strip())
+        if parsed.scheme and parsed.netloc:
+            app_origin = f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        pass
+    directives = [
+        "default-src 'none'",
+        f"script-src {app_origin}",
+        f"style-src {app_origin} 'unsafe-inline'",
+        f"img-src {app_origin} data: blob:",
+        f"connect-src {app_origin} {origins}",
+        f"frame-ancestors {origins}",
+        "base-uri 'none'",
+        "form-action 'none'",
+    ]
+    return "; ".join(directives)
 
 
 def build_hosted_mini_app_manifest(

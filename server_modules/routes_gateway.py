@@ -1187,6 +1187,7 @@ async def execute_gateway_tool(
             workspace_id=resolved_workspace_id,
             timeout_seconds=int(body.timeout_seconds or gateway_protocol_service.DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS),
             request_id=str(body.request_id or "").strip() or None,
+            screenshot_retention=gateway_policy.screenshot_retention,
         )
     except ValueError as exc:
         detail = str(exc)

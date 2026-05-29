@@ -238,6 +238,113 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(attachment["gateway_identity"]["device_id"], "device-local-1")
         self.assertTrue(attachment["trust_model"]["gateway_identity_bound"])
 
+    def test_gateway_attachment_requires_live_fresh_session_for_this_device(self) -> None:
+        runtime_attachment_service._RUNTIME_ATTACHMENTS_CACHE.clear()
+        registration = {
+            "gateway_id": "gateway-local-1",
+            "device_id": "device-local-1",
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-1",
+            "user_id": "user-1",
+            "status": "active",
+            "device_trust_state": "verified",
+            "display_name": "Mansur Mac",
+            "platform": "macos-arm64",
+            "metadata": {
+                "health_state": "online",
+                "capability_readiness": {"ready": ["screen.read"]},
+            },
+            "capabilities": ["screen.read"],
+            "last_seen_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "last_heartbeat_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        with (
+            patch("server_modules.runtime_attachment_service.agent_registry_repository.list_runtime_profiles", new=AsyncMock(return_value=[])),
+            patch("server_modules.runtime_attachment_service.run_state_repository.list_fleet_workers", new=AsyncMock(return_value=[])),
+            patch(
+                "server_modules.runtime_attachment_service.gateway_state_repository.list_workspace_gateway_registrations",
+                return_value=[registration],
+            ),
+            patch("server_modules.runtime_attachment_service.gateway_state_repository.GATEWAY_STATE_DB_FILE", Path(__file__)),
+            patch("server_modules.gateway_protocol_service.gateway_connection_is_live", return_value=False),
+            patch(
+                "server_modules.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "online",
+                    "heartbeat_fresh": True,
+                    "reported_health_state": "online",
+                    "heartbeat_age_seconds": 1,
+                    "latest_session_status": "connected",
+                },
+            ),
+            patch("server_modules.runtime_attachment_service.auth.get_user_device_link", return_value=None),
+        ):
+            inventory = asyncio.run(
+                runtime_attachment_service.list_workspace_runtime_attachments(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+            )
+
+        attachment = inventory["attachments"][0]
+        self.assertFalse(attachment["online"])
+        self.assertFalse(attachment["healthy"])
+        self.assertEqual(attachment["status_reason"], "gateway_offline")
+        self.assertFalse(attachment["target_selection"]["selectable"])
+
+    def test_gateway_attachment_reports_online_when_target_selection_is_fresh(self) -> None:
+        runtime_attachment_service._RUNTIME_ATTACHMENTS_CACHE.clear()
+        registration = {
+            "gateway_id": "gateway-local-1",
+            "device_id": "device-local-1",
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-1",
+            "user_id": "user-1",
+            "status": "active",
+            "device_trust_state": "verified",
+            "display_name": "Mansur Mac",
+            "platform": "macos-arm64",
+            "metadata": {
+                "health_state": "online",
+                "capability_readiness": {"ready": ["screen.read"]},
+            },
+            "capabilities": ["screen.read"],
+            "last_seen_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "last_heartbeat_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        with (
+            patch("server_modules.runtime_attachment_service.agent_registry_repository.list_runtime_profiles", new=AsyncMock(return_value=[])),
+            patch("server_modules.runtime_attachment_service.run_state_repository.list_fleet_workers", new=AsyncMock(return_value=[])),
+            patch(
+                "server_modules.runtime_attachment_service.gateway_state_repository.list_workspace_gateway_registrations",
+                return_value=[registration],
+            ),
+            patch("server_modules.runtime_attachment_service.gateway_state_repository.GATEWAY_STATE_DB_FILE", Path(__file__)),
+            patch("server_modules.gateway_protocol_service.gateway_connection_is_live", return_value=True),
+            patch(
+                "server_modules.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "online",
+                    "heartbeat_fresh": True,
+                    "reported_health_state": "online",
+                    "heartbeat_age_seconds": 1,
+                    "latest_session_status": "connected",
+                },
+            ),
+            patch("server_modules.runtime_attachment_service.auth.get_user_device_link", return_value=None),
+        ):
+            inventory = asyncio.run(
+                runtime_attachment_service.list_workspace_runtime_attachments(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+            )
+
+        attachment = inventory["attachments"][0]
+        self.assertTrue(attachment["online"])
+        self.assertTrue(attachment["healthy"])
+        self.assertEqual(attachment["target_selection"]["connection_status"], "online")
+
     def test_list_workspace_runtime_attachments_maps_worker_only_local_runtime_to_local_companion(self) -> None:
         inventory = asyncio.run(
             runtime_attachment_service.list_workspace_runtime_attachments(
@@ -779,6 +886,52 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(str(ctx.exception), "Selected runtime attachment is offline.")
+
+    def test_resolve_install_runtime_plan_rejects_local_attachment_when_capability_not_ready(self) -> None:
+        install = {
+            "runtime_mode": "local_secure",
+            "runtime_profile": {
+                "id": "profile-local",
+                "runtime_class": "desktop_companion",
+                "runtime_id": "runtime-local",
+                "machine_id": "machine-local",
+            },
+            "agent_definition_version": {"placement_manifest": {"allowed_runtime_classes": ["desktop_companion"]}},
+        }
+        inventory = {
+            "deployment_mode": "local_only",
+            "attachments": [
+                {
+                    "attachment_id": "local_companion:profile-local",
+                    "attachment_kind": "local_companion",
+                    "runtime_class": "desktop_companion",
+                    "runtime_profile_id": "profile-local",
+                    "runtime_id": "runtime-local",
+                    "machine_id": "machine-local",
+                    "online": True,
+                    "healthy": True,
+                    "control_state": "active",
+                    "capabilities": ["shell.execute"],
+                    "capability_readiness": {
+                        "passive_services": ["postgres"],
+                        "service_statuses": {"postgres": "ready"},
+                    },
+                }
+            ],
+        }
+
+        with self.assertRaises(runtime_attachment_service.RuntimeAttachmentSelectionError) as ctx:
+            asyncio.run(
+                runtime_attachment_service.resolve_install_runtime_plan(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    install=install,
+                    inventory=inventory,
+                    policy_context={"required_capabilities": ["shell.execute"]},
+                )
+            )
+
+        self.assertEqual(ctx.exception.reason, "gateway_capability_not_ready")
 
     def test_resolve_install_runtime_plan_allows_requested_machine_for_unprofiled_local_worker(self) -> None:
         install = {

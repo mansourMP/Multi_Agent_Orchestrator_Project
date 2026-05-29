@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { type ReactNode, memo, useMemo, useState } from 'react';
+import { type ReactNode, memo, useState } from 'react';
 import {
   Brain,
   Check,
@@ -102,43 +102,12 @@ function stepIcon(kind: string) {
   }
 }
 
-type ThinkingDisclosureSection = {
-  id: string;
-  title: string;
-  detail: string;
-};
-
-type ThinkingDisclosureContent = {
-  sections: ThinkingDisclosureSection[];
-  fallbackText: string;
-  showsDisclosure: boolean;
-};
-
-const THINKING_ACTIVITY_PREFIXES = [
-  'running ',
-  'completed ',
-  'failed ',
-  'stopped ',
-  'read ',
-  'reading ',
-  'search ',
-  'searched ',
-  'searching ',
-  'exploring ',
-  'list ',
-  'listing ',
-  'open ',
-  'opened ',
-  'find ',
-  'finding ',
-  'edit ',
-  'edited ',
-  'write ',
-  'writing ',
-  'wrote ',
-  'apply ',
-  'applied ',
-] as const;
+const SYNTHETIC_THINKING_TEXT = new Set([
+  'planning the response',
+  'planning the next step',
+  'prepared the next action',
+  'answer ready',
+]);
 
 function normalizedThinkingContent(rawText: string): string {
   const trimmed = rawText.trim();
@@ -154,119 +123,20 @@ function normalizedThinkingContent(rawText: string): string {
   return trimmed;
 }
 
-function summaryTitle(line: string): string | null {
-  const match = line.match(/^\s*\*\*(.+?)\*\*\s*$/);
-  return match?.[1]?.trim() || null;
+function thinkingSyntheticKey(value: string): string {
+  return value.toLowerCase().replace(/[.!]+$/g, '').trim();
 }
 
-function joinedThinkingBlock(lines: string[]): string {
-  return lines.join('\n').trim();
-}
-
-function coalescedAdjacentSections(sections: ThinkingDisclosureSection[]): ThinkingDisclosureSection[] {
-  const collapsed: ThinkingDisclosureSection[] = [];
-  for (const section of sections) {
-    const previous = collapsed.at(-1);
-    if (!previous || previous.title !== section.title) {
-      collapsed.push(section);
-      continue;
-    }
-    const mergedDetail = previous.detail === section.detail || !section.detail
-      ? previous.detail
-      : !previous.detail || section.detail.includes(previous.detail)
-        ? section.detail
-        : previous.detail.includes(section.detail)
-          ? previous.detail
-          : [previous.detail, section.detail].filter(Boolean).join('\n\n');
-    collapsed[collapsed.length - 1] = {
-      ...previous,
-      detail: mergedDetail,
-    };
+function visibleThinkingContent(rawText: string): string {
+  const text = normalizedThinkingContent(rawText);
+  if (!text) {
+    return '';
   }
-  return collapsed;
-}
-
-function parseThinkingDisclosure(rawText: string): ThinkingDisclosureContent {
-  const normalizedText = normalizedThinkingContent(rawText);
-  if (!normalizedText) {
-    return { sections: [], fallbackText: '', showsDisclosure: false };
-  }
-  const lines = normalizedText.split('\n');
-  const preambleLines: string[] = [];
-  const sections: ThinkingDisclosureSection[] = [];
-  let currentTitle: string | null = null;
-  let currentDetailLines: string[] = [];
-
-  const flushCurrent = () => {
-    if (!currentTitle) {
-      return;
-    }
-    sections.push({
-      id: `${sections.length}-${currentTitle}`,
-      title: currentTitle,
-      detail: joinedThinkingBlock(currentDetailLines),
-    });
-    currentDetailLines = [];
-  };
-
-  for (const line of lines) {
-    const title = summaryTitle(line);
-    if (title) {
-      flushCurrent();
-      currentTitle = title;
-      continue;
-    }
-    if (currentTitle === null) {
-      preambleLines.push(line);
-    } else {
-      currentDetailLines.push(line);
-    }
-  }
-  flushCurrent();
-
-  if (sections.length > 0) {
-    const preamble = joinedThinkingBlock(preambleLines);
-    if (preamble) {
-      const first = sections[0];
-      sections[0] = {
-        ...first,
-        detail: [preamble, first.detail].filter(Boolean).join('\n\n'),
-      };
-    }
-    const mergedSections = coalescedAdjacentSections(sections);
-    return {
-      sections: mergedSections,
-      fallbackText: normalizedText,
-      showsDisclosure: mergedSections.length > 0,
-    };
-  }
-
-  return {
-    sections: [],
-    fallbackText: normalizedText,
-    showsDisclosure: false,
-  };
-}
-
-function compactActivityPreview(text: string): string | null {
-  const lines = normalizedThinkingContent(text)
+  return text
     .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (lines.length === 0) {
-    return null;
-  }
-  const activityLines = lines.filter((line) => {
-    const lower = line.toLowerCase();
-    return THINKING_ACTIVITY_PREFIXES.some((prefix) => lower.startsWith(prefix));
-  });
-  if (activityLines.length === lines.length) {
-    return activityLines.at(-1) ?? null;
-  }
-  if (activityLines.length === 1) {
-    return activityLines[0] ?? null;
-  }
-  return null;
+    .filter((line) => !SYNTHETIC_THINKING_TEXT.has(thinkingSyntheticKey(line)))
+    .join('\n')
+    .trim();
 }
 
 const ThinkingRow = memo(({
@@ -275,27 +145,12 @@ const ThinkingRow = memo(({
   message: WorkstationChatMessageRecord;
 }) => {
   const [expanded, setExpanded] = useState(false);
-  const text = String(message.metadata.thinking_text ?? message.content ?? '').trim();
-  const activityLine = useMemo(
-    () => compactActivityPreview(text),
-    [text],
-  );
-  const disclosure = useMemo(
-    () => parseThinkingDisclosure(text),
-    [text],
-  );
+  const text = visibleThinkingContent(String(message.metadata.thinking_text ?? message.content ?? ''));
   const isStreaming = message.metadata.step_streaming === true;
   const isDimmed = message.metadata.step_dimmed === true;
 
-  if (activityLine) {
-    return (
-      <article className={`app-chat-thinking-row${isStreaming ? ' app-chat-thinking-row--streaming' : ''}${isDimmed ? ' app-chat-thinking-row--dimmed' : ''}`}>
-        <div className="app-chat-thinking-row__header">
-          <span className="app-chat-thinking-row__label">Thinking</span>
-        </div>
-        <div className="app-chat-thinking-row__activity">{activityLine}</div>
-      </article>
-    );
+  if (!text) {
+    return null;
   }
 
   return (
@@ -303,6 +158,7 @@ const ThinkingRow = memo(({
       <button
         type="button"
         className="app-chat-thinking-row__toggle"
+        aria-expanded={expanded}
         onClick={() => setExpanded((current) => !current)}
       >
         <ChevronRight
@@ -311,20 +167,11 @@ const ThinkingRow = memo(({
           className={`app-chat-thinking-row__chevron${expanded ? ' app-chat-thinking-row__chevron--expanded' : ''}`}
           aria-hidden="true"
         />
-        <span className="app-chat-thinking-row__label">Thinking</span>
+        <span className="app-chat-thinking-row__label">Thought through response</span>
       </button>
       {expanded ? (
         <div className="app-chat-thinking-row__detail">
-          {disclosure.showsDisclosure
-            ? disclosure.sections.map((section) => (
-              <div key={section.id} className="app-chat-thinking-row__section">
-                <div className="app-chat-thinking-row__section-title">{section.title}</div>
-                {section.detail ? (
-                  <pre className="app-chat-thinking-row__detail-text">{section.detail}</pre>
-                ) : null}
-              </div>
-            ))
-            : <pre className="app-chat-thinking-row__detail-text">{disclosure.fallbackText}</pre>}
+          <pre className="app-chat-thinking-row__detail-text">{text}</pre>
         </div>
       ) : null}
     </article>

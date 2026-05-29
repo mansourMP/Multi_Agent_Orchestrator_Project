@@ -226,7 +226,7 @@ type ChannelKind = 'whatsapp' | 'telegram';
 type GatewayOperatorSection = 'all' | 'status' | 'channels' | 'approvals' | 'activity';
 type MyComputerStatusLabel = 'Not connected' | 'Pairing' | 'Online' | 'Reconnecting' | 'Needs approval' | 'Offline' | 'Revoked';
 type CapabilitySurfaceItem = {
-  id: 'files' | 'shell' | 'browser' | 'screenshots' | 'clipboard' | 'telegram' | 'whatsapp' | 'ollama';
+  id: 'gateway' | 'supervisor';
   label: string;
   description: string;
   available: boolean;
@@ -793,102 +793,22 @@ function gatewayTrustSummary(selectedGateway: GatewayRegistrationRecord | null):
   };
 }
 
-function normalizeCapabilityTokenSet(values: string[]): Set<string> {
-  return new Set(
-    values
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean),
-  );
-}
-
-function tokenSetHasAny(tokens: Set<string>, fragments: string[]): boolean {
-  for (const token of tokens) {
-    if (fragments.some((fragment) => token.includes(fragment))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function summarizeMyComputerCapabilities(
   selectedGatewayCapabilities: string[],
-  providerItems: Record<string, unknown>[],
 ): CapabilitySurfaceItem[] {
-  const capabilityTokens = normalizeCapabilityTokenSet(selectedGatewayCapabilities);
-  const providerTokens = new Set(
-    providerItems
-      .flatMap((item) => [readString(item.id, ''), readString(item.label, ''), readString(item.state, '')])
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean),
-  );
-  const ollamaProviderAvailable = providerItems.some((item) => {
-    const id = readString(item.id, '').trim().toLowerCase();
-    const label = readString(item.label, '').trim().toLowerCase();
-    const state = readString(item.state, '').trim().toLowerCase();
-    if (!(id.includes('ollama') || label.includes('ollama'))) {
-      return false;
-    }
-    return state === 'active' || state === 'configured' || state === 'ready' || state === 'connected' || state === 'usable';
-  });
-  const hasFiles = tokenSetHasAny(capabilityTokens, ['file.', 'files.', 'fs.', 'workspace.file', 'local.file']);
-  const hasShell = tokenSetHasAny(capabilityTokens, ['shell.', 'terminal.', '.exec', 'command.run']);
-  const hasBrowser = tokenSetHasAny(capabilityTokens, ['browser.', 'web.', 'session.', 'navigator.']);
-  const hasScreenshots = tokenSetHasAny(capabilityTokens, ['screenshot', 'screen.capture', 'browser.capture']);
-  const hasClipboard = tokenSetHasAny(capabilityTokens, ['clipboard.']);
-  const hasTelegram = tokenSetHasAny(capabilityTokens, ['telegram']);
-  const hasWhatsApp = tokenSetHasAny(capabilityTokens, ['whatsapp']);
-  const hasOllama = ollamaProviderAvailable
-    || tokenSetHasAny(capabilityTokens, ['ollama'])
-    || Array.from(providerTokens).some((token) => token.includes('ollama'));
-
+  const supervisorReady = selectedGatewayCapabilities.length > 0;
   return [
     {
-      id: 'files',
-      label: 'Files',
-      description: 'Read and list local files from the selected computer.',
-      available: hasFiles,
+      id: 'gateway',
+      label: 'Gateway',
+      description: 'Keeps the selected computer connected to Empyralis.',
+      available: supervisorReady,
     },
     {
-      id: 'shell',
-      label: 'Shell',
-      description: 'Run safe terminal commands on the selected computer.',
-      available: hasShell,
-    },
-    {
-      id: 'browser',
-      label: 'Browser',
-      description: 'Use local browser sessions and actions.',
-      available: hasBrowser,
-    },
-    {
-      id: 'screenshots',
-      label: 'Screenshots',
-      description: 'Capture visual snapshots during local work.',
-      available: hasScreenshots,
-    },
-    {
-      id: 'clipboard',
-      label: 'Clipboard',
-      description: 'Read/write clipboard content when allowed.',
-      available: hasClipboard,
-    },
-    {
-      id: 'telegram',
-      label: 'Telegram',
-      description: 'Use personal Telegram through This Device.',
-      available: hasTelegram,
-    },
-    {
-      id: 'whatsapp',
-      label: 'WhatsApp',
-      description: 'Use personal WhatsApp through This Device.',
-      available: hasWhatsApp,
-    },
-    {
-      id: 'ollama',
-      label: 'Ollama',
-      description: 'Use local Ollama models when available on the selected computer.',
-      available: hasOllama,
+      id: 'supervisor',
+      label: 'Supervisor',
+      description: 'Executes governed hardware actions for the selected computer.',
+      available: supervisorReady,
     },
   ];
 }
@@ -928,7 +848,7 @@ function summarizeMyComputerStatus(params: {
       id: 'not_connected',
       label: 'Not connected',
       tone: 'neutral',
-      detail: 'Connect a computer when Sage needs local files, browser, screenshots, or app context.',
+      detail: 'Connect a computer when Empyralis needs to run on this hardware.',
       primaryAction: {
         label: 'Connect a computer',
         tone: 'primary',
@@ -1955,7 +1875,7 @@ export function WorkstationGatewayOperatorPane({
     whatsappState: String(whatsapp?.state?.status ?? (whatsapp?.state?.qr_code ? 'pending' : 'idle')).trim().toLowerCase(),
     telegramState: String(telegram?.state?.status ?? (telegram?.state?.login_hint ? 'pending' : 'idle')).trim().toLowerCase(),
   });
-  const myComputerCapabilities = summarizeMyComputerCapabilities(selectedGatewayCapabilities, providerItems);
+  const myComputerCapabilities = summarizeMyComputerCapabilities(selectedGatewayCapabilities);
   const showStatusSection = initialSection === 'all' || initialSection === 'status';
   const showChannelsSection = initialSection === 'all' || initialSection === 'channels';
   const showApprovalsSection = initialSection === 'all' || initialSection === 'approvals';
@@ -1999,7 +1919,7 @@ export function WorkstationGatewayOperatorPane({
         <div className="gateway-computer-sheet__header">
           <div>
             <h2>Connect a computer</h2>
-            <p>Agent Computer is optional local runtime for files, browser, terminal, desktop apps, and personal channels.</p>
+            <p>Gateway and Supervisor connect this hardware to Empyralis.</p>
           </div>
           <AppButton
             type="button"
@@ -2020,15 +1940,14 @@ export function WorkstationGatewayOperatorPane({
               <span className={`sage-computer-connect__status${myComputerStatus.id === 'online' ? ' sage-computer-connect__status--online' : ''}`}>
                 {myComputerStatus.id === 'online' ? 'Online and ready' : myComputerStatus.label}
               </span>
-              <strong>Selected local runtime for Sage.</strong>
+              <strong>Selected hardware runtime.</strong>
               <p>
-                Browser, files, shell, screenshots, personal channels, and local models stay on the selected computer.
-                Sage can use them only through the governed runtime when you ask.
+                The connected computer is treated as full hardware. Gateway keeps it online; Supervisor carries out governed work.
               </p>
             </div>
           </div>
-          <div className="sage-computer-connect__capabilities" aria-label="Included local capabilities">
-            {['Browser', 'Files', 'Shell', 'Screenshots', 'Personal apps', 'Telegram/WhatsApp', 'Local AI'].map((label) => (
+          <div className="sage-computer-connect__capabilities" aria-label="Hardware runtime components">
+            {['Gateway', 'Supervisor'].map((label) => (
               <span key={label}>{label}</span>
             ))}
           </div>
@@ -2092,8 +2011,8 @@ export function WorkstationGatewayOperatorPane({
 
         {diagnosticsSectionVisible ? (
           <FormSection
-          title="What Sage can use on This Device"
-          description="Capability groups from the selected computer, shown without protocol or token detail."
+          title="Hardware runtime components"
+          description="Implementation status for the selected computer."
         >
           {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
           {errorMessage ? <WorkstationSurfaceNotice tone="danger">{errorMessage}</WorkstationSurfaceNotice> : null}
@@ -2442,7 +2361,7 @@ export function WorkstationGatewayOperatorPane({
         ) : diagnosticsSectionVisible && gateways.length === 0 ? (
           <EmptyPanel
             title="No computers connected"
-            body="Connecting a computer is optional. It allows Sage to use your local files, browser, or terminal when you explicitly grant permission."
+            body="Connect a computer to bring Gateway and Supervisor online for this workspace."
           />
         ) : diagnosticsSectionVisible ? (
           <WorkstationSurfaceList>

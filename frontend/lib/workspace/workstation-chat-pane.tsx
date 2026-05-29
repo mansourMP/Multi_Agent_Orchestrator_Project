@@ -600,6 +600,28 @@ function legacyTraceIdForReplay(message: WorkstationChatMessageRecord): string |
   return readString(metadata.trace_id) || readString(contextUsed.trace_id) || null;
 }
 
+const TYPED_EXECUTION_STREAM_EVENTS = new Set([
+  'thinking',
+  'tool_call',
+  'tool_result',
+  'bash_output',
+  'response',
+]);
+
+function typedTimelineEventFromStreamEvent(event: { event: string; payload: Record<string, unknown> }): TimelineProjectionEvent | null {
+  const eventType = readString(event.event).toLowerCase();
+  if (!TYPED_EXECUTION_STREAM_EVENTS.has(eventType)) {
+    return null;
+  }
+  return {
+    type: 'typed',
+    payload: {
+      ...event.payload,
+      event_type: eventType,
+    },
+  };
+}
+
 function HardwareOptionIcon({ value }: { value: string }) {
   const Icon = value === 'auto'
     ? SlidersHorizontal
@@ -2664,26 +2686,8 @@ export function WorkstationChatPane() {
         type: 'user',
         payload: { content: displayMessage },
       },
-      {
-        type: 'step',
-        payload: {
-          id: `thinking:${clientRequestId}`,
-          kind: 'thinking',
-          label: 'Thinking',
-          detail: 'Planning the response',
-          status: 'active',
-        },
-      },
     ]);
-    setLiveActivitySteps([{
-      id: `thinking:${clientRequestId}`,
-      kind: 'thinking',
-      label: 'Thinking',
-      detail: 'Planning the response',
-      status: 'active',
-      toolCallId: null,
-      createdAt: new Date().toISOString(),
-    }]);
+    setLiveActivitySteps([]);
     setLiveTrace({
       traceId: null,
       transport: 'external',
@@ -2870,6 +2874,21 @@ export function WorkstationChatPane() {
             const step = normalizeStepEvent(event.payload);
             if (step) {
               setLiveActivitySteps((current) => upsertLiveActivityStep(current, step));
+            }
+            return;
+          }
+
+          const typedTimelineEvent = typedTimelineEventFromStreamEvent(event);
+          if (typedTimelineEvent) {
+            setLiveTimelineEvents((current) => [...current, typedTimelineEvent]);
+            if (event.event === 'response') {
+              const delta = readString(event.payload.delta)
+                || readString(event.payload.text)
+                || readString(event.payload.content)
+                || readString(event.payload.message);
+              if (delta) {
+                setStreamingAssistantText((current) => stripInternalToolMarkup(`${current}${delta}`));
+              }
             }
             return;
           }

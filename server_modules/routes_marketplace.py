@@ -48,6 +48,12 @@ class MarketplaceDistributionRuntimeEventRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class MarketplaceAppReviewRequest(BaseModel):
+    approved: bool
+    reason: Optional[str] = Field(default=None, max_length=500)
+    verification_status: Optional[str] = Field(default=None, pattern="^(unverified|partner|verified)$")
+
+
 @router.get("/marketplace/agents", response_model=MarketplaceAgentListResponse)
 async def list_marketplace_agents(
     category: Optional[str] = None,
@@ -78,10 +84,27 @@ async def record_marketplace_upgrade_click(
 async def list_workspace_marketplace_packages(
     workspace_id: str,
     kind: Optional[str] = Query(default=None),
+    runtime_type: Optional[str] = Query(default=None),
+    include_review_queue: bool = Query(default=False),
     current_user=Depends(get_current_user),
 ):
-    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
-    return marketplace_distribution_service.list_marketplace_packages(resolved_workspace_id, kind=kind)
+    minimum_role = "owner" if include_review_queue else "viewer"
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role=minimum_role)
+    return marketplace_distribution_service.list_marketplace_packages(
+        resolved_workspace_id,
+        kind=kind,
+        runtime_type=runtime_type,
+        include_review_queue=include_review_queue,
+    )
+
+
+@router.get("/workspaces/{workspace_id}/marketplace/app-submissions")
+async def list_workspace_marketplace_app_submissions(
+    workspace_id: str,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="owner")
+    return marketplace_distribution_service.list_marketplace_app_submissions(resolved_workspace_id)
 
 
 @router.get("/workspaces/{workspace_id}/studio/templates")
@@ -166,11 +189,34 @@ async def register_workspace_marketplace_app(
 ):
     resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
     try:
-        return marketplace_distribution_service.register_marketplace_package(
+        return marketplace_distribution_service.submit_community_app(
             resolved_workspace_id,
             actor_user_id=str((current_user or {}).get("user_id") or "").strip() or None,
-            payload={**body.model_dump(exclude_none=True), "kind": "app"},
+            payload=body.model_dump(exclude_none=True),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workspaces/{workspace_id}/marketplace/packages/{package_id}/review")
+async def review_workspace_marketplace_app_submission(
+    workspace_id: str,
+    package_id: str,
+    body: MarketplaceAppReviewRequest,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="owner")
+    try:
+        return marketplace_distribution_service.review_marketplace_app_submission(
+            resolved_workspace_id,
+            package_id=package_id,
+            actor_user_id=str((current_user or {}).get("user_id") or "").strip() or None,
+            approved=body.approved,
+            reason=body.reason,
+            verification_status=body.verification_status,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -531,7 +531,12 @@ export function isSyntheticTranscriptMessage(message: WorkstationChatMessageReco
   }
   const metadata = readObject(message.metadata);
   const displayKind = readString(metadata.display_kind).toLowerCase();
-  if (displayKind === 'status_notice' || displayKind === 'local_access_notice' || displayKind === 'provider_error') {
+  if (
+    displayKind === 'status_notice'
+    || displayKind === 'local_access_notice'
+    || displayKind === 'provider_error'
+    || displayKind === 'thinking_row'
+  ) {
     return true;
   }
   const normalized = readString(message.content).toLowerCase();

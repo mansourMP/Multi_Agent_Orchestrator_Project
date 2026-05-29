@@ -4,13 +4,15 @@ import Link from 'next/link';
 import type { FormEvent } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import type { LucideIcon } from 'lucide-react';
 import {
-  ExternalLink,
+  Activity,
+  BookOpen,
   Globe2,
   LockKeyhole,
+  MoreVertical,
   PackageOpen,
   Plus,
-  Sparkles,
 } from 'lucide-react';
 
 import { buildCookieAuthHeaders } from '@/lib/auth/csrf';
@@ -25,7 +27,14 @@ type HostedMiniAppListItem = {
   app_id: string;
   label: string;
   description?: string | null;
+  icon_url?: string | null;
+  category?: string | null;
+  runtime_type?: string | null;
+  destination_url?: string | null;
+  platform_route?: string | null;
+  verification_status?: string | null;
   delivery_mode?: string | null;
+  install_status?: string | null;
   memory_scope?: string | null;
   permissions?: string[];
   bridge_contracts?: Record<string, string[]>;
@@ -50,6 +59,31 @@ type MiniAppListingPayload = {
   items?: HostedMiniAppListItem[];
 };
 
+type OfficialMiniApp = {
+  app_id: 'flashcards' | 'calorie_tracking';
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  accent: 'blue' | 'green';
+};
+
+const OFFICIAL_MINI_APPS: readonly OfficialMiniApp[] = [
+  {
+    app_id: 'flashcards',
+    label: 'Flashcards',
+    description: 'A focused study deck for notes, terms, and quick review.',
+    icon: BookOpen,
+    accent: 'blue',
+  },
+  {
+    app_id: 'calorie_tracking',
+    label: 'Calorie Tracker',
+    description: 'A compact food log with daily totals and lightweight meal history.',
+    icon: Activity,
+    accent: 'green',
+  },
+];
+
 async function fetchHostedMiniApps(workspaceId: string): Promise<HostedMiniAppListItem[]> {
   const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps`, {
     credentials: 'include',
@@ -60,7 +94,7 @@ async function fetchHostedMiniApps(workspaceId: string): Promise<HostedMiniAppLi
   }
   const payload = (await response.json()) as MiniAppListingPayload;
   const items = Array.isArray(payload.items) ? payload.items : [];
-  return items.filter((item) => item.delivery_mode === 'hosted' && Boolean(item.hosted_app?.hosted_url));
+  return items.filter((item) => item.install_status !== 'removed' && String(item.runtime_type || '').trim().toLowerCase() !== 'link');
 }
 
 async function upsertHostedMiniApp(
@@ -91,24 +125,22 @@ async function upsertHostedMiniApp(
   return responsePayload as HostedMiniAppListItem;
 }
 
-function humanizeToken(value: string): string {
-  return value
-    .split(/[._-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
+function officialMiniAppFor(appId: string): OfficialMiniApp | null {
+  return OFFICIAL_MINI_APPS.find((app) => app.app_id === appId) || null;
 }
 
-function bridgeContractCount(contracts: Record<string, string[]> | undefined): number {
-  return Object.values(contracts || {}).reduce((total, items) => total + items.length, 0);
-}
-
-function summarizeBridgeKinds(contracts: Record<string, string[]> | undefined): string {
-  const kinds = Object.keys(contracts || {});
-  if (!kinds.length) {
-    return 'No bridge contracts';
+function appInitials(label: string): string {
+  const parts = label
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) {
+    return 'A';
   }
-  return kinds.map(humanizeToken).join(' · ');
+  return parts
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('');
 }
 
 function appIdFromName(name: string): string {
@@ -135,6 +167,7 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [privateAppName, setPrivateAppName] = useState('');
   const [privateAppUrl, setPrivateAppUrl] = useState('');
+  const [privateAppIconUrl, setPrivateAppIconUrl] = useState('');
   const [privateAppError, setPrivateAppError] = useState<string | null>(null);
   const [privateAppSaving, setPrivateAppSaving] = useState(false);
   const [privateAppSaved, setPrivateAppSaved] = useState(false);
@@ -168,6 +201,7 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
       setPrivateAppSaved(false);
       const name = privateAppName.trim();
       const rawUrl = privateAppUrl.trim();
+      const rawIconUrl = privateAppIconUrl.trim();
       if (!name) {
         setPrivateAppError('Enter an app name.');
         return;
@@ -183,11 +217,26 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
         setPrivateAppError('Private apps require an HTTPS URL. Localhost is allowed only in development.');
         return;
       }
+      let parsedIconUrl: URL | null = null;
+      if (rawIconUrl) {
+        try {
+          parsedIconUrl = new URL(rawIconUrl);
+        } catch {
+          setPrivateAppError('Enter a valid icon URL.');
+          return;
+        }
+        if (parsedIconUrl.protocol !== 'https:' && !(process.env.NODE_ENV !== 'production' && urlTargetsLocalDevelopment(parsedIconUrl))) {
+          setPrivateAppError('Private app icons require HTTPS. Localhost is allowed only in development.');
+          return;
+        }
+      }
       setPrivateAppSaving(true);
       try {
         const created = await upsertHostedMiniApp(workspaceId, appIdFromName(name), {
           label: name,
           description: 'Private workspace app',
+          icon_url: parsedIconUrl?.toString() || undefined,
+          runtime_type: 'private',
           delivery_mode: 'hosted',
           hosted_url: parsedUrl.toString(),
           allowed_origins: [parsedUrl.origin],
@@ -205,6 +254,7 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
         setItems((current) => [created, ...current.filter((item) => item.app_id !== created.app_id)]);
         setPrivateAppName('');
         setPrivateAppUrl('');
+        setPrivateAppIconUrl('');
         setPrivateAppSaved(true);
         router.replace(buildApplicationTabHref(workspaceId, 'installed', searchParams));
       } catch (err) {
@@ -213,31 +263,10 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
         setPrivateAppSaving(false);
       }
     },
-    [privateAppName, privateAppUrl, router, searchParams, workspaceId],
+    [privateAppIconUrl, privateAppName, privateAppUrl, router, searchParams, workspaceId],
   );
 
   const content = useMemo(() => {
-    if (activeTab === 'official') {
-      return (
-        <section className={styles.catalogEmpty} aria-label="Official applications">
-          <div className={styles.emptyIcon}>
-            <Sparkles aria-hidden="true" />
-          </div>
-          <div className={styles.emptyCopyBlock}>
-            <p className={styles.emptyTitle}>No official apps yet.</p>
-            <p className={styles.emptyCopy}>Empyralis-built apps will appear here when they are ready to add.</p>
-          </div>
-          <button
-            type="button"
-            className={styles.secondaryAction}
-            onClick={() => router.replace(buildApplicationTabHref(workspaceId, 'installed', searchParams))}
-          >
-            Back to apps
-          </button>
-        </section>
-      );
-    }
-
     if (activeTab === 'my_apps') {
       return (
         <section className={styles.privateAppPanel} aria-label="Private applications">
@@ -279,6 +308,20 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
                 autoComplete="off"
               />
             </label>
+            <label className={styles.fieldLabel}>
+              Icon URL
+              <input
+                className={styles.textInput}
+                value={privateAppIconUrl}
+                onChange={(event) => {
+                  setPrivateAppIconUrl(event.target.value);
+                  setPrivateAppError(null);
+                  setPrivateAppSaved(false);
+                }}
+                placeholder="https://apps.example.com/icon.png"
+                autoComplete="off"
+              />
+            </label>
             {privateAppError ? <p className={styles.formError}>{privateAppError}</p> : null}
             {privateAppSaved ? <p className={styles.formSuccess}>Private app added.</p> : null}
             <div className={styles.actionRow}>
@@ -307,24 +350,24 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
     }
     if (!items.length) {
       return (
-        <section className={styles.installedEmpty} aria-label="Installed applications">
+        <section className={styles.installedEmpty} aria-label="Applications">
           <div className={styles.commandPanel}>
             <div className={styles.commandIcon}>
               <PackageOpen aria-hidden="true" />
             </div>
             <div className={styles.commandCopy}>
               <p className={styles.commandKicker}>Apps</p>
-              <h2 className={styles.commandTitle}>No apps installed</h2>
-              <p className={styles.commandText}>Browse official apps or create a private workspace app.</p>
+              <h2 className={styles.commandTitle}>No applications yet</h2>
+              <p className={styles.commandText}>Browse apps or create a private workspace app.</p>
             </div>
             <div className={styles.actionRow}>
               <button
                 type="button"
                 className={styles.primaryAction}
-                onClick={() => router.replace(buildApplicationTabHref(workspaceId, 'official', searchParams))}
+                onClick={() => router.push(`/w/${encodeURIComponent(workspaceId)}/applications/store`)}
               >
                 <Globe2 aria-hidden="true" />
-                Browse official
+                Browse apps
               </button>
               <button
                 type="button"
@@ -340,20 +383,20 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
       );
     }
     return (
-      <section className={styles.appsSection} aria-label="Installed applications">
+      <section className={styles.appsSection} aria-label="Applications">
         <div className={styles.appsToolbar}>
           <div>
             <p className={styles.commandKicker}>Apps</p>
-            <h2 className={styles.sectionTitle}>Installed apps</h2>
+            <h2 className={styles.sectionTitle}>Applications</h2>
           </div>
           <div className={styles.actionRow}>
             <button
               type="button"
               className={styles.secondaryAction}
-              onClick={() => router.replace(buildApplicationTabHref(workspaceId, 'official', searchParams))}
+              onClick={() => router.push(`/w/${encodeURIComponent(workspaceId)}/applications/store`)}
             >
               <Globe2 aria-hidden="true" />
-              Browse official
+              Browse apps
             </button>
             <button
               type="button"
@@ -366,57 +409,45 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
           </div>
         </div>
         <div className={styles.grid}>
-          {items.map((item) => (
-            <article key={item.app_id} className={styles.card}>
-              <div className={styles.header}>
-                <p className={styles.eyebrow}>App</p>
-                <h2 className={styles.cardTitle}>{item.label}</h2>
-                <p className={styles.copy}>{item.description || 'No description yet.'}</p>
-              </div>
-              <div className={styles.cardMeta}>
-                <span className={styles.chip}>{item.hosted_app?.embed?.kind || 'iframe'}</span>
-                <span className={styles.chip}>{item.permissions?.length || 0} permission(s)</span>
-                <span className={styles.chip}>
-                  {item.hosted_app?.allowed_origins?.length || 0} allowed origin{(item.hosted_app?.allowed_origins?.length || 0) === 1 ? '' : 's'}
+          {items.map((item) => {
+            const officialApp = officialMiniAppFor(item.app_id);
+            const Icon = officialApp?.icon || PackageOpen;
+            const accent = officialApp?.accent || 'neutral';
+            const internalHref = `/w/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(item.app_id)}`;
+            const detailsHref = `${internalHref}?details=1`;
+            const launcherContent = (
+              <>
+                <span className={`${styles.appIcon} ${styles[`appIcon_${accent}`]}`}>
+                  {item.icon_url ? (
+                    <img src={item.icon_url} alt="" />
+                  ) : officialApp ? (
+                    <Icon aria-hidden="true" />
+                  ) : (
+                    <span>{appInitials(item.label)}</span>
+                  )}
                 </span>
-                <span className={styles.chip}>
-                  {bridgeContractCount(item.hosted_app?.bridge?.allowed_contracts || item.bridge_contracts)} bridge contract{bridgeContractCount(item.hosted_app?.bridge?.allowed_contracts || item.bridge_contracts) === 1 ? '' : 's'}
-                </span>
-              </div>
-              <div className={styles.factStack}>
-                <div className={styles.factBlock}>
-                  <p className={styles.factLabel}>AI usage</p>
-                  <p className={styles.factValue}>
-                    Uses the workspace AI route by default. Apps request capabilities; they do not own provider keys.
-                  </p>
-                </div>
-                <div className={styles.factBlock}>
-                  <p className={styles.factLabel}>Bridge</p>
-                  <p className={styles.factValue}>
-                    {summarizeBridgeKinds(item.hosted_app?.bridge?.allowed_contracts || item.bridge_contracts)}
-                  </p>
-                </div>
-              </div>
-              <div className={styles.linkRow}>
+                <span className={styles.appName}>{item.label}</span>
+              </>
+            );
+            return (
+              <article key={item.app_id} className={styles.appTile}>
                 <Link
-                  className={styles.linkButton}
-                  href={`/w/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(item.app_id)}`}
+                  className={styles.appLauncher}
+                  href={internalHref}
+                  aria-label={`Open ${item.label}`}
                 >
-                  Open
+                  {launcherContent}
                 </Link>
-                {item.hosted_app?.hosted_url ? (
-                  <a
-                    className={styles.linkSecondary}
-                    href={item.hosted_app.hosted_url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Source <ExternalLink aria-hidden="true" />
-                  </a>
-                ) : null}
-              </div>
-            </article>
-          ))}
+                <Link
+                  className={styles.appDetailAction}
+                  href={detailsHref}
+                  aria-label={`Details for ${item.label}`}
+                >
+                  <MoreVertical aria-hidden="true" />
+                </Link>
+              </article>
+            );
+          })}
         </div>
       </section>
     );
@@ -427,6 +458,7 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
     items,
     loading,
     privateAppError,
+    privateAppIconUrl,
     privateAppName,
     privateAppSaved,
     privateAppSaving,

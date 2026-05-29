@@ -353,22 +353,22 @@ export function WorkstationSageToolsPane() {
         <AppNotice tone="warning">Skill packages could not load. Try again when the workspace is ready.</AppNotice>
       ) : null}
 
-      <section className="sage-skills-library" aria-label="Sage capability readiness">
+      <section className="sage-skills-library" aria-label="Sage runtime readiness">
         <header className="sage-skills-library__header">
           <div>
-            <p className="sage-unified-section__label">Capability readiness</p>
-            <h3>What Sage can use after policy checks.</h3>
+            <p className="sage-unified-section__label">Runtime readiness</p>
+            <h3>Workspace tools after policy checks.</h3>
           </div>
-          <div className="sage-skills-library__stats" aria-label="Capability counts">
+          <div className="sage-skills-library__stats" aria-label="Runtime counts">
             <span>{capabilitySummary.readyCount} ready</span>
             <span>{capabilitySummary.needsApprovalCount} review</span>
             <span>{capabilitySummary.totalCount} total</span>
           </div>
         </header>
-        <div className="sage-skills-install" aria-label="Capability class counts">
+        <div className="sage-skills-install" aria-label="Runtime class counts">
           <div className="sage-skills-install__copy">
             <strong>Memory, Skill.md, and MCP stay permissioned</strong>
-            <span>Sage only sees callable capabilities that are enabled for this workspace and session.</span>
+            <span>Sage follows the enabled workspace policy and session runtime.</span>
           </div>
           <div className="sage-skills-install__actions">
             <span className="sage-skills-install__option">{capabilitySummary.memoryCount} memory</span>

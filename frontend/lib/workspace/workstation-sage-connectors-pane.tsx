@@ -1280,9 +1280,9 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
-      detail: 'Connect a computer so Sage can use your browser and personal apps when you ask.',
-      summary: 'Connected Computer keeps browser, files, and personal apps on the selected computer until you approve use.',
-      nextStep: 'Open computer setup and connect the selected computer.',
+      detail: 'Connect a computer so Empyralis can run on selected hardware.',
+      summary: 'Connected Computer brings Gateway and Supervisor online for this workspace.',
+      nextStep: 'Open computer setup and connect the selected hardware.',
     };
   }
   const connectionStatus = readString(gateway.connection_status || gateway.status).toLowerCase();
@@ -1292,7 +1292,7 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Connected',
       statusTone: 'connected',
       detail: 'Connected Computer is connected and ready.',
-      summary: 'Sage can use the selected computer for browser and personal apps when you ask and approve it.',
+      summary: 'Gateway is online and Supervisor is ready for governed hardware work.',
       nextStep: null,
     };
   }
@@ -2124,14 +2124,14 @@ export function WorkstationSageConnectorsPane({
         id: 'computer_gateway',
         label: 'Connected Computer',
         detail: device.statusTone === 'connected'
-          ? 'Connected. Sage can use browser, files, apps, channels, and local AI from the selected computer when you ask.'
-          : 'Connect once. The selected computer gives Sage full local capability when you ask.',
+          ? 'Connected. Gateway and Supervisor are online for this workspace.'
+          : 'Connect once. The selected computer becomes the hardware runtime for Empyralis.',
         summary: device.statusTone === 'connected'
-          ? 'Connected Computer is the local power layer for Sage. Capabilities stay on the selected computer and remain approval-gated where needed.'
-          : 'No capability picking here. Connect a computer and Sage gets the local power layer by default.',
+          ? 'Connected Computer is the hardware layer for Empyralis. Policy and approvals stay in the platform.'
+          : 'No capability picking here. Connect a computer and Empyralis gets the hardware runtime by default.',
         nextStep: device.statusTone === 'connected'
           ? 'Connected. Manage or revoke it only when needed.'
-          : 'Connect the selected computer to enable browser, files, personal apps, channels, and local models.',
+          : 'Connect the selected computer to bring Gateway and Supervisor online.',
         actionLabel: device.statusTone === 'connected' ? 'Manage computer' : 'Connect a computer',
         actionTarget: 'computer',
       });
@@ -2286,8 +2286,8 @@ export function WorkstationSageConnectorsPane({
       groups.push({
         id: 'connections',
         label: 'Connections',
-        description: 'Computers and local runtime connections Sage can use when you ask.',
-        detail: 'Computer, browser, files, shell, screenshots, local AI, and personal channels.',
+        description: 'Connected hardware and runtime links for this workspace.',
+        detail: 'Gateway, Supervisor, and app connections.',
         countLabel: connectedComputer ? 'Connected' : 'Setup',
         statusTone: connectedComputer ? 'connected' : 'warning',
       });
@@ -2296,7 +2296,7 @@ export function WorkstationSageConnectorsPane({
     groups.push({
       id: 'plugins',
       label: 'Plugins',
-      description: 'Apps, files, channels, skills, MCP servers, custom APIs, and webhooks Sage can use.',
+      description: 'Apps, channels, skills, MCP servers, custom APIs, and webhooks.',
       detail: 'Gmail, Calendar, GitHub, Notion, Drive, Slack, skills, MCP, and custom tools.',
       countLabel: `${pluginCards.length + mcpServers.length}`,
       statusTone: pluginCards.some((card) => card.statusTone === 'connected') || mcpServers.some((server) => server.enabled !== false) ? 'connected' : 'neutral',
@@ -3535,8 +3535,8 @@ export function WorkstationSageConnectorsPane({
               </p>
             </div>
           </div>
-          <div className="sage-computer-connect__capabilities" aria-label="Included local capabilities">
-            {['Browser', 'Files', 'Shell', 'Screenshots', 'Personal apps', 'Messaging bridges', 'Local AI'].map((label) => (
+          <div className="sage-computer-connect__capabilities" aria-label="Hardware runtime components">
+            {['Gateway', 'Supervisor'].map((label) => (
               <span key={label}>{label}</span>
             ))}
           </div>
@@ -3961,8 +3961,7 @@ export function WorkstationSageConnectorsPane({
       <section className="sage-unified-section sage-agent-computer">
         <p className="sage-unified-section__label">Agent Computer</p>
         <p className="sage-unified-section__description">
-          Sage runs in Cloud by default. Connect a computer only when Sage needs local browser, files, apps, shell,
-          screenshots, or local AI.
+          Sage runs in Cloud by default. Connect a computer when this workspace needs Empyralis to run on selected hardware.
         </p>
         <div className="sage-agent-computer__panel">
           <div className="sage-agent-computer__setting">

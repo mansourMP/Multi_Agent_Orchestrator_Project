@@ -20,6 +20,7 @@ MAX_GATEWAY_JSON_DEPTH = 32
 from server_modules import (
     auth,
     gateway_activity_service,
+    gateway_inventory_service,
     gateway_registry_service,
     gateway_state_repository,
     personal_channels_service,
@@ -841,6 +842,15 @@ async def handle_gateway_websocket(
                 disconnected = True
                 break
             if message_type == "gateway.heartbeat":
+                capability_readiness = gateway_inventory_service.sanitize_capability_readiness(
+                    payload.get("capability_readiness")
+                )
+                service_inventory = gateway_inventory_service.sanitize_service_inventory(
+                    payload.get("service_inventory")
+                )
+                native_runtime = gateway_inventory_service.sanitize_native_runtime(
+                    payload.get("native_runtime")
+                )
                 gateway_state_repository.touch_gateway_session(
                     session_id=session_id,
                     gateway_id=gateway_id,
@@ -850,8 +860,10 @@ async def handle_gateway_websocket(
                     journal_cursor=payload.get("journal_cursor"),
                     checkpoint_cursor=payload.get("checkpoint_cursor"),
                     metadata={
-                        "capability_readiness": payload.get("capability_readiness"),
+                        "capability_readiness": capability_readiness,
                         "queue_depth_summary": payload.get("queue_depth_summary"),
+                        "service_inventory": service_inventory,
+                        "native_runtime": native_runtime,
                         "device_trust_state": str(binding["device_link"].get("trust_state") or "verified").strip()
                         or "verified",
                     },
@@ -870,9 +882,25 @@ async def handle_gateway_websocket(
                 continue
             if message_type == "gateway.state.update":
                 previous_health_state = str(registration.get("metadata", {}).get("health_state") or "").strip().lower()
+                capability_readiness = gateway_inventory_service.sanitize_capability_readiness(
+                    payload.get("capability_readiness")
+                )
+                service_inventory = gateway_inventory_service.sanitize_service_inventory(
+                    payload.get("service_inventory")
+                )
+                native_runtime = gateway_inventory_service.sanitize_native_runtime(
+                    payload.get("native_runtime")
+                )
+                registration_metadata_payload = dict(payload)
+                if "service_inventory" in registration_metadata_payload:
+                    registration_metadata_payload["service_inventory"] = service_inventory
+                if "native_runtime" in registration_metadata_payload:
+                    registration_metadata_payload["native_runtime"] = native_runtime
+                if "capability_readiness" in registration_metadata_payload:
+                    registration_metadata_payload["capability_readiness"] = capability_readiness
                 registration = gateway_state_repository.update_gateway_registration_state(
                     gateway_id=gateway_id,
-                    metadata=payload,
+                    metadata=registration_metadata_payload,
                     journal_cursor=payload.get("journal_cursor"),
                     checkpoint_cursor=payload.get("checkpoint_cursor"),
                 ) or registration
@@ -893,6 +921,9 @@ async def handle_gateway_websocket(
                         "personal_channels": payload.get("personal_channels"),
                         "personal_channel_manifests": payload.get("personal_channel_manifests"),
                         "personal_channel_health": payload.get("personal_channel_health"),
+                        **({"capability_readiness": capability_readiness} if "capability_readiness" in payload else {}),
+                        **({"service_inventory": service_inventory} if "service_inventory" in payload else {}),
+                        **({"native_runtime": native_runtime} if "native_runtime" in payload else {}),
                     },
                 )
                 next_health_state = str(payload.get("health_state") or registration.get("metadata", {}).get("health_state") or "").strip().lower()

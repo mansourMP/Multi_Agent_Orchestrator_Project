@@ -118,6 +118,72 @@ class GatewayBrowserAttachPolicyTests(unittest.TestCase):
         self.assertEqual(payload["gateway_id"], gateway_id)
         self.assertEqual(payload["approval"]["capability_id"], "browser.session.start")
 
+    def test_managed_browser_can_open_url_without_owner_approval(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        execute_mock = AsyncMock(
+            return_value={
+                "status": "active",
+                "browser_session": {
+                    "browser_session_id": "gbsess-open-1",
+                    "status": "active",
+                    "current_url": "https://example.com",
+                    "metadata": {},
+                },
+            }
+        )
+
+        with patch(
+            "server_modules.routes_gateway.gateway_browser_service.execute_browser_capability_via_gateway",
+            execute_mock,
+        ):
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions",
+                json={
+                    "url": "https://example.com",
+                    "session_mode": "managed_profile",
+                    "interactive_actions": ["navigate"],
+                    "run_id": "run-browser-open-1",
+                    "trace_id": "trace-browser-open-1",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["browser_session"]["current_url"], "https://example.com")
+        execute_mock.assert_awaited_once()
+
+    def test_browser_click_requires_approval_in_guarded_mode(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        gateway_state_repository.upsert_gateway_browser_session(
+            browser_session_id="gbsess-click-1",
+            gateway_id=gateway_id,
+            device_id="device-local-1",
+            tenant_id="default",
+            workspace_id="default",
+            user_id="owner-1",
+            run_id="run-browser-seed-1",
+            status="active",
+            execution_target="local_gateway",
+            current_url="https://example.com",
+            metadata={"browser_session_mode": "managed_profile"},
+        )
+
+        response = self.client.post(
+            f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-click-1/actions",
+            json={
+                "action": "click",
+                "action_args": {"selector": "#pay"},
+                "run_id": "run-browser-click-1",
+                "trace_id": "trace-browser-click-1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertEqual(payload["status"], "approval_required")
+        self.assertEqual(payload["approval"]["capability_id"], "browser.session.action")
+
 
 if __name__ == "__main__":
     unittest.main()

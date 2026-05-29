@@ -287,7 +287,6 @@ export function WorkstationDeployedAgentsPane({
   const [isSavingDetailConfig, setIsSavingDetailConfig] = useState(false);
   const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
   const [busyExternalUserId, setBusyExternalUserId] = useState<string | null>(null);
-  const [recentlyCreatedAgentId, setRecentlyCreatedAgentId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [conversationFilters, setConversationFilters] = useState<ConversationFilters>({
@@ -878,13 +877,14 @@ export function WorkstationDeployedAgentsPane({
     if (!agents.some((item) => readString(item.id) === requestedAgentId)) {
       return;
     }
-    setCurrentStudioSubview('agents');
+    const shouldStayInInbox = initialSubview === 'inbox';
+    setCurrentStudioSubview(shouldStayInInbox ? 'inbox' : 'agents');
     setSelectedAgentId(requestedAgentId);
     setSelectedExternalAgentId(null);
     setSelectedAgentComputerId(null);
-    setMobileAgentDetailOpen(true);
+    setMobileAgentDetailOpen(!shouldStayInInbox);
     setOverlayAgentId(null);
-  }, [agents, requestedAgentId]);
+  }, [agents, initialSubview, requestedAgentId]);
 
   useEffect(() => {
     if (!requestedExternalAgentId) {
@@ -1169,7 +1169,6 @@ export function WorkstationDeployedAgentsPane({
       } else {
         selectOverlayTab('overview');
       }
-      setRecentlyCreatedAgentId(recordId || null);
       setStatusMessage(`Created agent ${readString(record.name)}.`);
       if (recordId) {
         await Promise.all([
@@ -1184,7 +1183,6 @@ export function WorkstationDeployedAgentsPane({
         loadAgentAnalytics(recordId),
         loadTelegramReadiness(recordId),
       ]);
-      setRecentlyCreatedAgentId(null);
       setStatusMessage(`Updated ${readString(record.name, 'assistant')} settings.`);
     }
   }
@@ -1682,10 +1680,6 @@ export function WorkstationDeployedAgentsPane({
     openCreateWizard(templateId);
   });
 
-  const handleDismissRecentlyCreated = useStableEvent(() => {
-    setRecentlyCreatedAgentId(null);
-  });
-
   const selectedTranscriptCustomer = readRecord(selectedTranscript?.customer);
   const selectedExternalUserId = readString(selectedTranscriptCustomer.id || readRecord(selectedConversation?.customer).id);
   const selectedExternalUserLabel = readString(
@@ -1796,33 +1790,6 @@ export function WorkstationDeployedAgentsPane({
                   {readString(selectedAgent.name, 'Selected agent')}
                 </span>
               </div>
-              {recentlyCreatedAgentId === readString(selectedAgent.id) ? (
-                <ListDetailPanel
-                  className="studio-panel studio-panel--demo-proof"
-                  eyebrow="Next step"
-                  title="Chat with this agent"
-                  subtitle="Open a private workspace chat, confirm the model route and knowledge, then deploy when the checklist is clear."
-                  actions={(
-                    <div className="app-inline-actions app-inline-actions--tight">
-                      <AppButton type="button" tone="secondary" onClick={handleDismissRecentlyCreated}>
-                        Dismiss
-                      </AppButton>
-                    </div>
-                  )}
-                >
-                  <div className="app-inline-actions app-inline-actions--tight studio-inline-wrap">
-                    <AppButton type="button" onClick={() => selectOverlayTab('chat')}>
-                      Chat with this agent
-                    </AppButton>
-                    <AppButton type="button" tone="secondary" onClick={() => selectOverlayTab('ai')}>
-                      Check model route
-                    </AppButton>
-                    <AppButton type="button" tone="secondary" onClick={() => selectOverlayTab('channels')}>
-                      Connect channel
-                    </AppButton>
-                  </div>
-                </ListDetailPanel>
-              ) : null}
               <AgentDetailView
                 selectedAgent={selectedAgent}
                 overlayTab={overlayTab}

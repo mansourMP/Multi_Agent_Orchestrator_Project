@@ -1,7 +1,7 @@
 # Agent Computer Native Hardware Roadmap
 
 Date: 2026-05-29
-Status: accepted phased roadmap
+Status: accepted phased roadmap; phases 1-6 implemented; Phase 7 harness implemented and physical smoke evidence pending
 
 This roadmap turns Agent Computer hardware nativity into a measured sequence.
 It does not replace the frozen gateway architecture, gateway protocol, or
@@ -14,6 +14,12 @@ Canonical references:
 - `docs/gateway-protocol.md`
 - `docs/agent-computer-runtime.md`
 - `docs/tauri-desktop-companion-contract-2026-05-01.md`
+- `docs/agent-computer-permission-secret-model.md`
+- `docs/agent-computer-user-session-bridge-ipc.md`
+- `docs/agent-computer-threat-model.md`
+- `docs/agent-computer-server-service-mode.md`
+- `docs/agent-computer-native-desktop-action-parity.md`
+- `docs/agent-computer-production-certification.md`
 - `server_modules/runtime_attachment_service.py`
 - `server_modules/hardware_runtime_target_resolver.py`
 - `empyralis-gateway/src/index.ts`
@@ -45,6 +51,32 @@ execution routes, and no service spam in the top bar.
 8. Every phase must add or preserve tests around heartbeat inventory, target
    selection, stale heartbeat, revoke, and approval-gated actions.
 
+## Implementation Progress
+
+- 2026-05-29: Phase 1 implemented gateway heartbeat service inventory, native
+  runtime metadata, backend sanitization, doctor exposure, and heartbeat
+  inventory tests.
+- 2026-05-29: Phase 2 implemented fail-closed target selection for stale,
+  revoked, unhealthy, missing-capability, and passive-only states with backend
+  regression coverage.
+- 2026-05-29: Phase 3 implemented Agent Computer details in settings using
+  runtime attachment data. Top-bar service spam remains out of scope.
+- 2026-05-29: Phase 4 implemented the permission/secret model, user-session
+  bridge IPC contract, threat model update, diagnostic redaction hardening, and
+  permission-denied regression coverage. Desktop service mode remains out of
+  scope.
+- 2026-05-29: Phase 5 implemented guarded Server/VPS service commands, Linux
+  systemd unit rendering/install, guarded macOS server LaunchDaemon path,
+  Windows Service wrapper, Docker deployment with restart policy, and
+  system-service capability filtering.
+- 2026-05-29: Phase 6 implemented desktop permission readiness, blocked
+  permission states in heartbeat metadata, local GUI browser approval behavior,
+  screenshot retention enforcement, and details/settings permission visibility.
+- 2026-05-29: Phase 7 certification harness added an Agent Computer suite for
+  script validation, systemd dry-run, backend/gateway/supervisor tests, and
+  diff hygiene. Physical Mac, Linux/VPS, and Windows smoke evidence remains a
+  release gate.
+
 ## Current Baseline
 
 Already real:
@@ -62,7 +94,7 @@ Already real:
 - Gateway doctor already treats heartbeat freshness as 45 seconds and sweeps
   stale sessions after 15 minutes.
 
-Still missing:
+Roadmap gaps at acceptance time:
 
 - Heartbeat payload does not yet carry a structured passive service inventory.
 - Passive service inventory is not yet normalized into the gateway registration
@@ -261,6 +293,9 @@ Tests:
 
 ## Phase 4: Desktop Permission And Secret Model
 
+Status: implemented as design contract and regression guardrails. It does not
+enable default desktop system service mode.
+
 Goal: design the user-session native bridge before changing default desktop
 install behavior.
 
@@ -278,12 +313,17 @@ Default remains user-session runtime until these are resolved.
 
 Deliverables:
 
-- Permission and secret design doc.
-- Threat model update.
-- IPC contract between core runtime and user-session bridge.
+- Permission and secret design doc:
+  `docs/agent-computer-permission-secret-model.md`.
+- Threat model update: `docs/agent-computer-threat-model.md`.
+- IPC contract between core runtime and user-session bridge:
+  `docs/agent-computer-user-session-bridge-ipc.md`.
 - Regression tests for secret redaction and permission-denied behavior.
 
 ## Phase 5: Server/VPS System Service Mode
+
+Status: implemented for Linux systemd, Docker, and Windows Service wrapper.
+macOS system LaunchDaemon is guarded behind `--server-mac`.
 
 Goal: make headless server runtimes durable without making system service mode
 the default desktop path.
@@ -316,17 +356,21 @@ Tests:
 
 ## Phase 6: Native Desktop Action Parity
 
+Status: implemented for the gateway/control-plane action contract. Physical OS
+certification remains Phase 7.
+
 Goal: expand native desktop control only after permission and bridge design are
 ready.
 
 Work:
 
-- macOS accessibility/screen/session bridge.
-- Windows UI Automation bridge.
-- Linux AT-SPI/X11/Wayland strategy.
+- macOS accessibility/screen/session bridge readiness contract.
+- Windows user-session helper readiness contract.
+- Linux AT-SPI/X11/Wayland readiness contract.
 - Browser attach/open/navigate with explicit approval rules.
 - Screenshot retention policy enforcement.
 - Action audit chain for click/type/key/launch/clipboard.
+- Details/settings visibility for desktop permission states.
 
 Tests:
 
@@ -335,8 +379,13 @@ Tests:
 - Credential, payment, install, system setting, and destructive actions remain
   blocked or approval-gated.
 - Permission-denied states produce blocked results, not partial execution.
+- Permission-denied capability advertisement is removed from heartbeat
+  readiness.
 
 ## Phase 7: Production Certification
+
+Status: certification harness implemented; physical smoke runs must still be
+recorded on real Mac, Linux/VPS, and Windows machines.
 
 Goal: prove the runtime survives real machine conditions.
 

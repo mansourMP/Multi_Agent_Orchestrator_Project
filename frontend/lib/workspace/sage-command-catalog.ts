@@ -61,11 +61,11 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
   {
     id: 'tools',
     slash: '/tools',
-    title: 'What Sage can use',
-    description: 'Show connected tools, apps, and callable capabilities.',
+    title: 'Connections',
+    description: 'Show connected hardware, apps, and routes.',
     actionKind: 'open_tools',
     icon: Puzzle,
-    keywords: ['connections', 'tooling', 'actions', 'capabilities'],
+    keywords: ['connections', 'hardware', 'apps', 'routes'],
   },
   {
     id: 'runtime',

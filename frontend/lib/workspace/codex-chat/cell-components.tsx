@@ -1,13 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { Fragment, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Brain,
   Camera,
   Check,
   ChevronRight,
   CircleAlert,
+  Copy,
   FileText,
   Paperclip,
   Search,
@@ -270,31 +271,12 @@ function MarkdownMessage({ text }: { text: string }) {
   return <div className="app-chat-markdown">{blocks}</div>;
 }
 
-const THINKING_ACTIVITY_PREFIXES = [
-  'running ',
-  'completed ',
-  'failed ',
-  'stopped ',
-  'read ',
-  'reading ',
-  'search ',
-  'searched ',
-  'searching ',
-  'exploring ',
-  'list ',
-  'listing ',
-  'open ',
-  'opened ',
-  'find ',
-  'finding ',
-  'edit ',
-  'edited ',
-  'write ',
-  'writing ',
-  'wrote ',
-  'apply ',
-  'applied ',
-] as const;
+const SYNTHETIC_THINKING_TEXT = new Set([
+  'planning the response',
+  'planning the next step',
+  'prepared the next action',
+  'answer ready',
+]);
 
 function normalizedThinkingContent(rawText: string): string {
   const trimmed = rawText.trim();
@@ -310,25 +292,20 @@ function normalizedThinkingContent(rawText: string): string {
   return trimmed;
 }
 
-function compactActivityPreview(text: string): string | null {
-  const lines = normalizedThinkingContent(text)
+function thinkingSyntheticKey(value: string): string {
+  return value.toLowerCase().replace(/[.!]+$/g, '').trim();
+}
+
+function visibleThinkingContent(rawText: string): string {
+  const text = normalizedThinkingContent(rawText);
+  if (!text) {
+    return '';
+  }
+  return text
     .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (lines.length === 0) {
-    return null;
-  }
-  const activityLines = lines.filter((line) => {
-    const lower = line.toLowerCase();
-    return THINKING_ACTIVITY_PREFIXES.some((prefix) => lower.startsWith(prefix));
-  });
-  if (activityLines.length === lines.length) {
-    return activityLines.at(-1) ?? null;
-  }
-  if (activityLines.length === 1) {
-    return activityLines[0] ?? null;
-  }
-  return null;
+    .filter((line) => !SYNTHETIC_THINKING_TEXT.has(thinkingSyntheticKey(line)))
+    .join('\n')
+    .trim();
 }
 
 function compactSystemDetail(value: string | null | undefined, fallback: string): string {
@@ -452,6 +429,270 @@ function ExecutionOutputBlock({ label, value }: { label: string; value: string |
   );
 }
 
+type ExecutionTraceCellRecord = Extract<CodexTranscriptCell, { kind: 'execution_trace' }>;
+type TraceActivityCellRecord = ExecutionTraceCellRecord['activities'][number];
+
+function traceActivityStatus(cell: TraceActivityCellRecord): 'running' | 'done' | 'error' {
+  if (cell.kind === 'reasoning_summary') {
+    return cell.isStreaming ? 'running' : 'done';
+  }
+  if (cell.kind === 'web_search') {
+    return cell.status === 'searching' ? 'running' : cell.status;
+  }
+  if ('status' in cell) {
+    if (cell.status === 'idle') {
+      return 'running';
+    }
+    return cell.status;
+  }
+  return 'done';
+}
+
+function traceActivityLabel(cell: TraceActivityCellRecord): string {
+  switch (cell.kind) {
+    case 'exec':
+      return 'Bash';
+    case 'tool':
+      return toolActivityLabel(cell.name || 'Tool');
+    case 'web_search':
+      return 'Web search';
+    case 'file_change':
+      return fileActivityLabel(cell.action || 'File');
+    case 'screenshot':
+      return 'Screenshot';
+    case 'artifact':
+      return 'Artifact';
+    case 'status':
+      return statusPrimaryLabel(cell.label || 'Status');
+    default:
+      return 'Tool';
+  }
+}
+
+function traceActivityInput(cell: TraceActivityCellRecord): string {
+  switch (cell.kind) {
+    case 'exec':
+      return cell.command;
+    case 'tool':
+      return String(cell.input ?? cell.name ?? '').trim();
+    case 'web_search':
+      return cell.query;
+    case 'file_change':
+      return cell.filename;
+    case 'screenshot':
+      return cell.caption;
+    case 'artifact':
+      return cell.title;
+    case 'status':
+      return cell.detail || cell.label;
+    default:
+      return '';
+  }
+}
+
+function traceActivityResult(cell: TraceActivityCellRecord): string | null {
+  switch (cell.kind) {
+    case 'exec':
+      return cell.stdoutTail || cell.output || cell.stderrTail || null;
+    case 'tool':
+      return cell.result;
+    case 'web_search':
+      return cell.result;
+    case 'file_change':
+      return cell.status === 'done' ? cell.action : null;
+    case 'screenshot':
+      return cell.caption;
+    case 'artifact':
+      return cell.title;
+    case 'status':
+      return cell.detail;
+    default:
+      return null;
+  }
+}
+
+function traceSummaryParts(activities: TraceActivityCellRecord[]): string[] {
+  const searches = activities.filter((cell) => cell.kind === 'web_search').length;
+  const bash = activities.filter((cell) => cell.kind === 'exec').length;
+  const files = activities.filter((cell) => cell.kind === 'file_change').length;
+  const screenshots = activities.filter((cell) => cell.kind === 'screenshot').length;
+  const genericTools = activities.filter((cell) => cell.kind === 'tool').length;
+  const artifacts = activities.filter((cell) => cell.kind === 'artifact').length;
+  const parts: string[] = [];
+  if (searches > 0) {
+    parts.push(`Searched ${searches} ${searches === 1 ? 'query' : 'queries'}`);
+  }
+  if (bash > 0) {
+    parts.push(`Ran ${bash} bash ${bash === 1 ? 'command' : 'commands'}`);
+  }
+  if (files > 0) {
+    parts.push(`${files === 1 ? 'Checked' : 'Checked'} ${files} ${files === 1 ? 'file' : 'files'}`);
+  }
+  if (screenshots > 0) {
+    parts.push(`Captured ${screenshots} ${screenshots === 1 ? 'screenshot' : 'screenshots'}`);
+  }
+  if (genericTools > 0) {
+    parts.push(`Used ${genericTools} ${genericTools === 1 ? 'tool' : 'tools'}`);
+  }
+  if (artifacts > 0) {
+    parts.push(`Created ${artifacts} ${artifacts === 1 ? 'artifact' : 'artifacts'}`);
+  }
+  return parts.length > 0 ? parts : [`Completed ${activities.length} ${activities.length === 1 ? 'step' : 'steps'}`];
+}
+
+function TraceStatusPill({ status }: { status: 'running' | 'done' | 'error' }) {
+  return (
+    <span className={`app-agent-trace-status app-agent-trace-status--${status}`}>
+      {status === 'running' ? 'loading' : status}
+    </span>
+  );
+}
+
+function ThoughtProcessPanel({
+  cell,
+}: {
+  cell: Extract<CodexTranscriptCell, { kind: 'reasoning_summary' }>;
+}) {
+  const text = visibleThinkingContent(cell.text);
+  if (!text) {
+    return null;
+  }
+
+  return <pre className="app-agent-trace-thinking__body">{text}</pre>;
+}
+
+function TerminalOutputBlock({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const text = value.trim();
+  if (!text) {
+    return null;
+  }
+  return (
+    <div className="app-agent-terminal">
+      <button
+        type="button"
+        className="app-agent-terminal__copy"
+        onClick={() => {
+          void navigator.clipboard?.writeText(text).then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1200);
+          }).catch(() => undefined);
+        }}
+      >
+        <Copy size={12} strokeWidth={2} aria-hidden="true" />
+        <span>{copied ? 'Copied' : 'Copy'}</span>
+      </button>
+      <pre className="app-agent-terminal__output"><code>{text}</code></pre>
+    </div>
+  );
+}
+
+function ToolTraceCard({ cell }: { cell: TraceActivityCellRecord }) {
+  const [expanded, setExpanded] = useState(false);
+  if (cell.kind === 'reasoning_summary') {
+    return null;
+  }
+  const status = traceActivityStatus(cell);
+  const label = traceActivityLabel(cell);
+  const input = traceActivityInput(cell);
+  const result = traceActivityResult(cell);
+  const isLongResult = Boolean(result && result.length > 300);
+  const showInlineResult = Boolean(result && !isLongResult);
+  const showExpandableResult = Boolean(result && isLongResult);
+  const terminalText = cell.kind === 'exec'
+    ? [cell.stdoutTail || cell.output || '', cell.stderrTail || ''].filter(Boolean).join('\n')
+    : '';
+
+  return (
+    <section className={`app-agent-tool-card app-agent-tool-card--${status}`}>
+      <div className="app-agent-tool-card__header">
+        <span className="app-agent-tool-card__label">{label}</span>
+        <TraceStatusPill status={status} />
+      </div>
+      {input ? (
+        <pre className="app-agent-tool-card__input"><code>{input}</code></pre>
+      ) : null}
+      {cell.kind === 'exec' && terminalText ? (
+        <TerminalOutputBlock value={terminalText} />
+      ) : null}
+      {showInlineResult && cell.kind !== 'exec' ? (
+        <div className="app-agent-tool-card__result">{result}</div>
+      ) : null}
+      {showExpandableResult && cell.kind !== 'exec' ? (
+        <>
+          <button
+            type="button"
+            className="app-agent-tool-card__toggle"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? 'Hide output' : 'View output'}
+          </button>
+          {expanded ? (
+            <pre className="app-agent-tool-card__output"><code>{result}</code></pre>
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+export function ExecutionTraceCell({ cell }: { cell: ExecutionTraceCellRecord }) {
+  const [expanded, setExpanded] = useState(false);
+  const thinkingCell = cell.activities.find(
+    (activity): activity is Extract<CodexTranscriptCell, { kind: 'reasoning_summary' }> => (
+      activity.kind === 'reasoning_summary'
+      && Boolean(visibleThinkingContent(activity.text))
+    ),
+  ) ?? null;
+  const toolActivities = cell.activities.filter((activity) => activity.kind !== 'reasoning_summary');
+  const summary = useMemo(
+    () => (toolActivities.length > 0 ? traceSummaryParts(toolActivities).join(' · ') : 'Thought through response'),
+    [toolActivities],
+  );
+  const hasTrace = Boolean(thinkingCell) || toolActivities.length > 0;
+  const showTrace = hasTrace && expanded;
+
+  useEffect(() => {
+    if (cell.isStreaming) {
+      setExpanded(false);
+    }
+  }, [cell.isStreaming]);
+
+  return (
+    <div
+      data-chat-role="assistant"
+      className={`app-agent-trace-turn${cell.isStreaming ? ' app-agent-trace-turn--streaming' : ''}${cell.dimmed ? ' app-agent-trace-turn--dimmed' : ''}`}
+    >
+      {hasTrace ? (
+        <button
+          type="button"
+          className="app-agent-trace-summary"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <ChevronRight
+            size={13}
+            strokeWidth={2}
+            className={`app-agent-trace-summary__chevron${expanded ? ' app-agent-trace-summary__chevron--expanded' : ''}`}
+            aria-hidden="true"
+          />
+          <span>{summary}</span>
+        </button>
+      ) : null}
+      {showTrace ? (
+        <div className="app-agent-trace-stack">
+          {thinkingCell ? <ThoughtProcessPanel cell={thinkingCell} /> : null}
+          {toolActivities.map((activity) => (
+            <ToolTraceCard key={`${activity.kind}:${activity.id}`} cell={activity} />
+          ))}
+        </div>
+      ) : null}
+      {cell.response ? <AssistantCell cell={cell.response} /> : null}
+    </div>
+  );
+}
+
 function statusPrimaryLabel(label: string): string {
   const normalized = label.trim().toLowerCase();
   if (!normalized) {
@@ -557,12 +798,18 @@ export function ReasoningSummaryCell({
 }: {
   cell: Extract<CodexTranscriptCell, { kind: 'reasoning_summary' }>;
 }) {
-  if (!cell.isStreaming) {
+  const [expanded, setExpanded] = useState(false);
+  const text = visibleThinkingContent(cell.text);
+
+  useEffect(() => {
+    if (cell.isStreaming) {
+      setExpanded(false);
+    }
+  }, [cell.isStreaming]);
+
+  if (!text) {
     return null;
   }
-
-  const text = cell.text.trim();
-  const activityLine = compactSystemDetail(cell.activityLine || compactActivityPreview(text), 'Working');
 
   return (
     <article
@@ -570,10 +817,25 @@ export function ReasoningSummaryCell({
       data-chat-activity-kind="thinking"
       className={`app-chat-thinking-row${cell.isStreaming ? ' app-chat-thinking-row--streaming' : ''}${cell.dimmed ? ' app-chat-thinking-row--dimmed' : ''}`}
     >
-      <div className="app-chat-thinking-row__header">
-        <span className="app-chat-thinking-row__label">Thinking</span>
-      </div>
-      <div className="app-chat-thinking-row__activity">{activityLine}</div>
+      <button
+        type="button"
+        className="app-chat-thinking-row__toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <ChevronRight
+          size={12}
+          strokeWidth={2}
+          className={`app-chat-thinking-row__chevron${expanded ? ' app-chat-thinking-row__chevron--expanded' : ''}`}
+          aria-hidden="true"
+        />
+        <span className="app-chat-thinking-row__label">Thought through response</span>
+      </button>
+      {expanded ? (
+        <div className="app-chat-thinking-row__detail">
+          <pre className="app-chat-thinking-row__detail-text">{text}</pre>
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -903,6 +1165,8 @@ export function CodexChatCell({
       return <UserCell cell={cell} />;
     case 'assistant':
       return <AssistantCell cell={cell} />;
+    case 'execution_trace':
+      return <ExecutionTraceCell cell={cell} />;
     case 'reasoning_summary':
       return <ReasoningSummaryCell cell={cell} />;
     case 'exec':

@@ -55,7 +55,7 @@ export const AgentComputerDetailView = memo(({
         hideHeaderText
         eyebrow="Agent Computer"
         title={name}
-        subtitle="A runtime resource that can be attached to native or connected agents. It is not an agent brain by default."
+        subtitle="Connected hardware runtime for native or connected agents."
       >
         <div className="studio-agent-overview">
           <div className="studio-agent-overview__readiness-hero">
@@ -67,7 +67,7 @@ export const AgentComputerDetailView = memo(({
                 </DataBadge>
               </div>
               <h3>{AGENT_STUDIO_OBJECT_LABELS.agent_computer}</h3>
-              <p>Use Agent Computers as scoped execution resources for browser, file, terminal, or self-hosted model work after explicit grants.</p>
+              <p>Gateway keeps the computer connected. Supervisor executes governed hardware actions for attached agents.</p>
               <div className="studio-agent-overview__chips">
                 <span>{humanizeToken(nodeKind, 'Runtime')}</span>
                 <span>{online ? 'Online' : 'Offline'}</span>
@@ -79,32 +79,33 @@ export const AgentComputerDetailView = memo(({
             <AppSurfaceStat label="Resource" value={name} hint="Registered runtime resource" />
             <AppSurfaceStat label="Status" value={humanizeToken(status, 'Unknown')} hint="Runtime-reported state" />
             <AppSurfaceStat label="Last heartbeat" value={formatOptionalTimestamp(heartbeatAt, 'Not seen')} hint="Last runtime check-in" />
-            <AppSurfaceStat label="Chat surface" value="None by default" hint="Attach to an agent before chat use" />
+            <AppSurfaceStat label="Runtime" value="Gateway + Supervisor" hint="The hardware connector and local executor" />
           </AppSurfaceStatGrid>
           <ListDetailPanel
             className="studio-panel studio-panel--detail"
-            eyebrow="Capabilities"
-            title="Runtime capabilities"
-            subtitle="These capabilities describe the machine. Agent chat, knowledge, and memory stay on the attached agent surface."
+            eyebrow="Runtime"
+            title="Gateway and Supervisor"
+            subtitle="The hardware details are implementation status, not a menu of things the agent may advertise."
           >
             {capabilities.length > 0 ? (
               <div className="studio-inline-wrap">
-                {capabilities.map((item) => <DataBadge key={readString(item)}>{humanizeToken(item, 'Capability')}</DataBadge>)}
+                <DataBadge tone={online ? 'success' : 'neutral'}>Gateway</DataBadge>
+                <DataBadge tone={healthy ? 'success' : 'neutral'}>Supervisor</DataBadge>
               </div>
             ) : (
               <div className="studio-agent-overview__grid">
                 <div className="studio-agent-overview__card">
                   <div className="studio-agent-overview__card-icon"><MonitorCheck size={15} aria-hidden="true" /></div>
                   <div>
-                    <strong>No capabilities reported</strong>
-                    <span>Reconnect or refresh the runtime to publish a machine manifest.</span>
+                    <strong>Gateway</strong>
+                    <span>Reconnect or refresh the runtime to publish a hardware heartbeat.</span>
                   </div>
                 </div>
                 <div className="studio-agent-overview__card">
                   <div className="studio-agent-overview__card-icon"><ShieldCheck size={15} aria-hidden="true" /></div>
                   <div>
-                    <strong>Approval boundary</strong>
-                    <span>Machine permissions must be granted by the owner before action use.</span>
+                    <strong>Supervisor</strong>
+                    <span>Governed hardware execution becomes available after the runtime heartbeat.</span>
                   </div>
                 </div>
               </div>

@@ -552,6 +552,70 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
   });
 
+  test('does not render persisted thinking rows in historical transcript', async ({ page }) => {
+    await installTransparencyTurnStub(page, {
+      persistedTurns: [
+        {
+          id: 'turn-user-thinking',
+          role: 'user',
+          status: 'completed',
+          content: 'run safety plan check',
+          created_at: '2026-05-23T12:00:00Z',
+          metadata: {},
+        },
+        {
+          id: 'turn-assistant-thinking-row',
+          role: 'assistant',
+          status: 'completed',
+          content: 'planning the response',
+          created_at: '2026-05-23T12:00:01Z',
+          metadata: {
+            display_kind: 'thinking_row',
+            thinking_text: 'I need to evaluate options first.',
+          },
+        },
+        {
+          id: 'turn-assistant-thinking-final',
+          role: 'assistant',
+          status: 'completed',
+          content: 'Safety plan check complete.',
+          created_at: '2026-05-23T12:00:02Z',
+          metadata: {
+            request_id: 'req-thinking-final',
+            trace_id: 'trace-thinking-final',
+            transcript_events: [
+              {
+                event: 'trace',
+                schema_version: 1,
+                payload: {
+                  event_type: 'tool.started',
+                  tool_call_id: 'tool-thinking-1',
+                  data: {
+                    tool_name: 'security__scan',
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    await loginAsOwner(page);
+    await page.goto('/w/ws-1/sage');
+
+    await expect(page.locator('article.app-chat-message[data-chat-role="assistant"]').filter({ hasText: 'Safety plan check complete.' })).toBeVisible();
+    await expect(page.getByText(/planning the response/i)).toHaveCount(0);
+    await expect(page.locator('.app-chat-thinking-row')).toHaveCount(0);
+    await expect(page.getByText(/thought through response/i)).toHaveCount(0);
+
+    await page.reload();
+
+    await expect(page.locator('article.app-chat-message[data-chat-role="assistant"]').filter({ hasText: 'Safety plan check complete.' })).toBeVisible();
+    await expect(page.getByText(/planning the response/i)).toHaveCount(0);
+    await expect(page.locator('.app-chat-thinking-row')).toHaveCount(0);
+    await expect(page.getByText(/thought through response/i)).toHaveCount(0);
+  });
+
   test('replays older trace IDs inline without exposing raw trace data', async ({ page }) => {
     await installTransparencyTurnStub(page, {
       persistedTurns: [

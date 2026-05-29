@@ -12,9 +12,9 @@ async function waitForWorkspaceShell(page: Page, workspaceId: string): Promise<v
       await page.waitForTimeout(150 * (attempt + 1));
       continue;
     }
-    const rail = page.locator('[data-workstation-switcher="rail"]');
+    const shell = page.locator('[data-workstation-shell="kernel"]');
     const titlebar = page.locator('[data-workstation-titlebar="root"]');
-    if (await rail.count() > 0 && await titlebar.count() > 0 && page.url().includes(`/w/${workspaceId}/`)) {
+    if (await shell.count() > 0 && await titlebar.count() > 0 && page.url().includes(`/w/${workspaceId}/`)) {
       return;
     }
     await page.waitForTimeout(150 * (attempt + 1));
@@ -37,6 +37,6 @@ export async function loginAsOwner(page: Page, workspaceId = 'ws-1'): Promise<vo
   await page.context().clearCookies();
   await loginOwnerSession(page);
   await waitForWorkspaceShell(page, workspaceId);
-  await expect(page.locator('[data-workstation-switcher="rail"]')).toBeVisible();
+  await expect(page.locator('[data-workstation-shell="kernel"]')).toBeVisible();
   await expect(page.locator('[data-workstation-titlebar="root"]')).toBeVisible();
 }

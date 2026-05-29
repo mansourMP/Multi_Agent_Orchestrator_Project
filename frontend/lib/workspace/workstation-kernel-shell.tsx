@@ -15,6 +15,7 @@ import {
   APPLICATION_TITLEBAR_TABS,
   buildApplicationTabHref,
 } from '@/lib/workspace/application-surface-tabs';
+import { WorkstationHardwareStatus } from '@/lib/workspace/workstation-hardware-status';
 import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
 import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
 import type { ConnectedExternalAgentRecord, DeployedAgentRecord } from '@/lib/workspace/workstation-client';
@@ -70,11 +71,10 @@ const SHELL_PRIMARY_TABS: readonly {
 const DISCOVER_FILTERS: readonly {
   id: ShellSectionId;
   label: string;
-  filter: MarketplaceTitlebarFilter | null;
+  filter: MarketplaceTitlebarFilter;
 }[] = [
-  { id: 'marketplace', label: 'All', filter: null },
   { id: 'marketplace', label: 'Agent templates', filter: 'agent_template' },
-  { id: 'marketplace', label: 'Tools', filter: 'skill' },
+  { id: 'marketplace', label: 'Skills', filter: 'skill' },
   { id: 'marketplace', label: 'MCP', filter: 'connector' },
   { id: 'marketplace', label: 'Bundles', filter: 'bundle' },
 ];
@@ -114,7 +114,7 @@ const SAGE_SETUP_NAV_ITEMS: readonly {
 
 const MARKETPLACE_TITLEBAR_FILTERS = [
   { id: 'agent_template', label: 'Agent templates' },
-  { id: 'skill', label: 'Tools' },
+  { id: 'skill', label: 'Skills' },
   { id: 'connector', label: 'MCP' },
   { id: 'bundle', label: 'Bundles' },
 ] as const;
@@ -163,6 +163,14 @@ type ChatHistoryItem = {
   id: string;
   title: string;
   occurredAt: string | null;
+};
+
+type AssistantProjectLink = {
+  id: string;
+  label: string;
+  detail: string;
+  href: string;
+  icon: LucideIcon;
 };
 
 type PanelStackLevel =
@@ -665,6 +673,7 @@ function AssistantPanelContent({
   chatHref,
   client,
   navigationItems,
+  projectLinks,
   setupItems,
   workspaceId,
 }: {
@@ -673,6 +682,7 @@ function AssistantPanelContent({
     listThreads: (options?: { includeTurns?: boolean; limit?: number }) => Promise<Record<string, unknown>>;
   };
   navigationItems: readonly SageContextLink[];
+  projectLinks: readonly AssistantProjectLink[];
   setupItems: readonly SageContextLink[];
   workspaceId: string;
 }) {
@@ -768,7 +778,26 @@ function AssistantPanelContent({
           />
         </button>
         {projectsOpen ? (
-          <div className="workstation-shell-panel__projects-empty">No projects available</div>
+          <div className="workstation-shell-panel__projects-list">
+            {projectLinks.map((project) => {
+              const ProjectIcon = project.icon;
+              return (
+                <Link
+                  key={project.id}
+                  href={project.href}
+                  prefetch
+                  title={project.label}
+                  className="workstation-shell-panel__project-row"
+                >
+                  <ProjectIcon size={14} aria-hidden="true" />
+                  <span>
+                    <strong>{project.label}</strong>
+                    <small>{project.detail}</small>
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
         ) : null}
       </section>
       <div className="workstation-shell-panel__history-list" aria-label="Conversation history">
@@ -950,16 +979,14 @@ function DiscoverPanelContent({
   activeFilter,
   workspaceId,
 }: {
-  activeFilter: MarketplaceTitlebarFilter | null;
+  activeFilter: MarketplaceTitlebarFilter;
   workspaceId: string;
 }) {
   return (
     <nav className="workstation-shell-panel__plain-list" aria-label="Discover filters" data-workstation-shell-panel-content="discover">
       {DISCOVER_FILTERS.map((item) => {
-        const active = item.filter === activeFilter || (item.filter === null && activeFilter === null);
-        const href = item.filter
-          ? buildMarketplaceCategoryHref(workspaceId, item.filter)
-          : buildWorkspaceRouteHref(workspaceId, 'marketplace');
+        const active = item.filter === activeFilter;
+        const href = buildMarketplaceCategoryHref(workspaceId, item.filter);
         return (
           <Link
             key={item.label}
@@ -1327,6 +1354,68 @@ export function WorkstationKernelShell({
     icon: item.icon,
     href: `${buildWorkspaceRouteHref(workspaceId, 'integrations')}?section=${encodeURIComponent(item.section)}`,
   })), [workspaceId]);
+  const sageProjectLinks = useMemo<AssistantProjectLink[]>(() => {
+    const links: AssistantProjectLink[] = [{
+      id: 'studio-agents',
+      label: 'Agent Studio',
+      detail: 'Build and manage agents',
+      href: studioHref,
+      icon: LayoutGrid,
+    }];
+    studioAgents
+      .filter((agent) => {
+        const agentId = readString(agent.id);
+        const state = readString(agent.deployment_state, 'draft').toLowerCase();
+        return Boolean(agentId) && !['archived', 'deleted', 'removed'].includes(state);
+      })
+      .slice(0, 6)
+      .forEach((agent) => {
+        const agentId = readString(agent.id);
+        links.push({
+          id: `agent:${agentId}`,
+          label: readString(agent.name, agentId || 'Agent'),
+          detail: 'Studio agent',
+          href: buildStudioAgentHref(workspaceId, searchParams, agentId),
+          icon: Bot,
+        });
+      });
+    studioConnectedExternalAgents.slice(0, 4).forEach((agent) => {
+      const agentId = readString(agent.id);
+      if (!agentId) {
+        return;
+      }
+      links.push({
+        id: `external-agent:${agentId}`,
+        label: readString(agent.name ?? agent.label, agentId || 'Connected agent'),
+        detail: 'Connected agent',
+        href: buildStudioExternalAgentHref(workspaceId, searchParams, agentId),
+        icon: Link2,
+      });
+    });
+    studioAgentComputers.slice(0, 4).forEach((computer) => {
+      const computerId = readRuntimeAttachmentId(computer);
+      if (!computerId) {
+        return;
+      }
+      links.push({
+        id: `agent-computer:${computerId}`,
+        label: readString(computer.label, computerId || 'Agent Computer'),
+        detail: 'Agent Computer',
+        href: buildStudioAgentComputerHref(workspaceId, searchParams, computerId),
+        icon: Cpu,
+      });
+    });
+    if (links.length === 1) {
+      links.push({
+        id: 'agent-templates',
+        label: 'Agent templates',
+        detail: 'Discover starting points',
+        href: buildMarketplaceCategoryHref(workspaceId, 'agent_template'),
+        icon: Compass,
+      });
+    }
+    return links.slice(0, 10);
+  }, [searchParams, studioAgentComputers, studioAgents, studioConnectedExternalAgents, studioHref, workspaceId]);
   const contextRoutes = useMemo(() => {
     if (activeDestinationId === 'sage') {
       return [];
@@ -1400,7 +1489,7 @@ export function WorkstationKernelShell({
     return false;
   };
   const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('category'));
-  const activeDiscoverFilter = searchParams.get('category') === null ? null : marketplaceFilter;
+  const activeDiscoverFilter = marketplaceFilter;
   const activePanelDestinationId: WorkspaceNavDestinationId = activeDestinationId;
   const activePrimaryTabId: PrimaryShellTabId | null = SHELL_PRIMARY_TABS.some((tab) => tab.id === activePanelDestinationId)
     ? activePanelDestinationId as PrimaryShellTabId
@@ -1586,6 +1675,7 @@ export function WorkstationKernelShell({
                 chatHref={chatHref}
                 client={services.client}
                 navigationItems={sageSidebarLinks}
+                projectLinks={sageProjectLinks}
                 setupItems={sageSetupLinks}
                 workspaceId={workspaceId}
               />
@@ -1685,6 +1775,10 @@ export function WorkstationKernelShell({
             )}
             actions={(
               <>
+                <WorkstationHardwareStatus
+                  runtimeTargets={bootstrap.runtime.runtimeTargets}
+                  settingsHref={settingsHref}
+                />
                 {activeDestinationId === 'studio' ? (
                   <Link
                     href={buildStudioCreateAgentHref(workspaceId, searchParams)}

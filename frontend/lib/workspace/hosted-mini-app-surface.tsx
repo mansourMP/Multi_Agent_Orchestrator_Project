@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { buildCookieAuthHeaders } from '@/lib/auth/csrf';
@@ -11,6 +12,20 @@ type HostedMiniAppManifest = {
   app_id: string;
   label?: string | null;
   description?: string | null;
+  icon_url?: string | null;
+  category?: string | null;
+  publisher_id?: string | null;
+  publisher_name?: string | null;
+  publisher_domain?: string | null;
+  support_url?: string | null;
+  privacy_url?: string | null;
+  terms_url?: string | null;
+  runtime_type?: string | null;
+  runtime_mode?: string | null;
+  destination_url?: string | null;
+  platform_route?: string | null;
+  verification_status?: string | null;
+  official_claim?: Record<string, unknown> | null;
   memory_scope?: string | null;
   permissions?: string[];
   context_envelope?: {
@@ -133,6 +148,14 @@ function humanizeToken(value: string): string {
     .join(' ');
 }
 
+function appInitials(label: string): string {
+  const parts = label.trim().split(/\s+/).filter(Boolean);
+  return (parts.length ? parts : ['App'])
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('');
+}
+
 function isAllowedBridgeRequest(
   bridgeConfig: HostedMiniAppBridgeConfig | null | undefined,
   bridgeKind: string,
@@ -158,16 +181,20 @@ export function HostedMiniAppSurface({
   workspaceId: string;
   appId: string;
 }) {
+  const searchParams = useSearchParams();
+  const showDetails = searchParams.get('details') === '1';
   const [manifest, setManifest] = useState<HostedMiniAppManifest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [bridgeActivity, setBridgeActivity] = useState<BridgeActivity | null>(null);
+  const [frameLoaded, setFrameLoaded] = useState(false);
+  const [, setBridgeActivity] = useState<BridgeActivity | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setFrameLoaded(false);
     void fetchManifest(workspaceId, appId)
       .then((payload) => {
         if (!cancelled) {
@@ -191,7 +218,6 @@ export function HostedMiniAppSurface({
     () => new Set((manifest?.hosted_app?.allowed_origins || []).map((origin) => String(origin))),
     [manifest],
   );
-  const bridgeContracts = useMemo(() => manifest?.hosted_app?.bridge?.allowed_contracts || {}, [manifest]);
   const bridgePermissions = useMemo(
     () => manifest?.hosted_app?.bridge?.permissions || manifest?.permissions || [],
     [manifest],
@@ -328,6 +354,7 @@ export function HostedMiniAppSurface({
   }, [allowedOrigins, bridgeConfig, manifest, postToIframe]);
 
   const handleFrameLoad = useCallback(() => {
+    setFrameLoaded(true);
     const readyType = bridgeConfig?.ready_type || 'empyralis.hosted_app.bridge.ready';
     const targetOrigin = manifest?.hosted_app?.allowed_origins?.[0];
     if (!targetOrigin) {
@@ -371,181 +398,136 @@ export function HostedMiniAppSurface({
     () => (manifest?.hosted_app?.embed?.allow || []).join('; ') || undefined,
     [manifest],
   );
-  const bridgeContractEntries = useMemo(
-    () => Object.entries(bridgeContracts).filter(([, items]) => Array.isArray(items) && items.length > 0),
-    [bridgeContracts],
-  );
-  const bridgeStatusLabel = useMemo(() => {
-    if (!bridgeActivity) {
-      return 'Waiting for explicit bridge requests from the embedded app.';
+  const runtimeType = manifest?.runtime_type || manifest?.runtime_mode || 'community';
+  const detailItems = useMemo(() => {
+    const normalizedRuntime = String(runtimeType || 'community').trim().toLowerCase();
+    const items = [
+      { label: 'Runtime type', value: humanizeToken(normalizedRuntime || 'community') },
+      { label: 'Category', value: manifest?.category || 'Applications' },
+    ];
+    if (normalizedRuntime === 'community') {
+      items.push(
+        { label: 'Publisher', value: manifest?.publisher_name || manifest?.publisher_id || 'Community publisher' },
+        { label: 'Verification', value: humanizeToken(manifest?.verification_status || 'unverified') },
+      );
     }
-    if (bridgeActivity.state === 'pending') {
-      return 'Processing a governed bridge request.';
+    if (normalizedRuntime === 'link') {
+      items.push({
+        label: 'Destination URL',
+        value: manifest?.destination_url || manifest?.hosted_app?.hosted_url || 'Not reported',
+      });
     }
-    if (bridgeActivity.state === 'success') {
-      return 'Last bridge request completed under explicit contract checks.';
-    }
-    return 'Last bridge request was rejected or failed.';
-  }, [bridgeActivity]);
+    return items;
+  }, [manifest, runtimeType]);
 
-  return (
-    <main className={styles.shell}>
-      <header className={styles.frameHeader}>
-        <div className={styles.header}>
-          <p className={styles.eyebrow}>Hosted Mini App</p>
-          <h1 className={styles.title}>{manifest?.label || appId}</h1>
-          <p className={styles.copy}>
-            {manifest?.description || 'This mini application runs inside an isolated embedded surface.'}
-          </p>
-        </div>
-        <div className={styles.linkRow}>
-          <Link
-            className={styles.linkSecondary}
-            href={`/w/${encodeURIComponent(workspaceId)}/deploy`}
-          >
-            Back
-          </Link>
-          {manifest?.hosted_app?.hosted_url ? (
-            <a
-              className={styles.linkButton}
-              href={manifest.hosted_app.hosted_url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open source app
-            </a>
-          ) : null}
-        </div>
-      </header>
+  const appLabel = manifest?.label || appId;
+  const appDescription = manifest?.description || 'This application runs inside an isolated embedded surface.';
+  const appHref = `/w/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}`;
+  const appsHref = `/w/${encodeURIComponent(workspaceId)}/applications`;
 
-      {loading ? (
-        <div className={styles.empty}>Loading hosted mini application…</div>
-      ) : error ? (
-        <div className={`${styles.empty} ${styles.error}`}>Mini app could not load. Try again when ready.</div>
-      ) : manifest?.hosted_app?.hosted_url ? (
-        <section className={styles.frameShell}>
-          <div className={styles.status}>
-            <span className={styles.dot} />
-            {bridgeStatusLabel}
+  if (loading) {
+    return (
+      <main className={styles.shell}>
+        <div className={styles.empty}>Loading application...</div>
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className={styles.shell}>
+        <div className={`${styles.empty} ${styles.error}`}>Application could not load. Try again when ready.</div>
+      </main>
+    );
+  }
+
+  if (!manifest?.hosted_app?.hosted_url) {
+    return (
+      <main className={styles.shell}>
+        <div className={styles.empty}>This app does not expose a hosted entrypoint.</div>
+      </main>
+    );
+  }
+
+  if (showDetails) {
+    return (
+      <main className={styles.shell}>
+        <header className={styles.frameHeader}>
+          <div className={styles.header}>
+            <span className={`${styles.appIcon} ${styles.appIcon_neutral}`} aria-hidden="true">
+              {manifest.icon_url ? <img src={manifest.icon_url} alt="" /> : <span>{appInitials(appLabel)}</span>}
+            </span>
+            <div>
+              <p className={styles.eyebrow}>App details</p>
+              <h1 className={styles.title}>{appLabel}</h1>
+              <p className={styles.copy}>{appDescription}</p>
+            </div>
           </div>
-          <section className={styles.policyGrid}>
-            <article className={styles.policyCard}>
-              <p className={styles.policyLabel}>Memory boundary</p>
-              <h2 className={styles.policyTitle}>No Sage memory by default</h2>
-              <p className={styles.policyCopy}>
-                This app mounts with <strong>{manifest.memory_scope === 'none_by_default' ? 'denied-by-default memory access' : manifest.memory_scope || 'scoped memory'}</strong>.
-                Only explicit context-envelope classes can cross the shell boundary.
-              </p>
-              <div className={styles.inlineList}>
-                {(defaultEnvelopeClasses.length ? defaultEnvelopeClasses : ['user_selected_inputs']).map((item) => (
-                  <span key={item} className={styles.chip}>{humanizeToken(item)}</span>
-                ))}
+          <div className={styles.linkRow}>
+            <Link className={styles.linkSecondary} href={appsHref}>
+              Apps
+            </Link>
+            <Link className={styles.linkButton} href={appHref}>
+              Open app
+            </Link>
+          </div>
+        </header>
+        <section className={styles.card} aria-label="Application details">
+          <div className={styles.factStack}>
+            {detailItems.map((item) => (
+              <div key={item.label} className={styles.factBlock}>
+                <p className={styles.factLabel}>{item.label}</p>
+                <p className={styles.factValue}>{item.value}</p>
               </div>
-            </article>
-
-            <article className={styles.policyCard}>
-              <p className={styles.policyLabel}>Bridge contracts</p>
-              <h2 className={styles.policyTitle}>Explicit postMessage contracts only</h2>
-              <p className={styles.policyCopy}>
-                The shell only forwards requests that match the hosted manifest. Unsupported bridge kinds or types are rejected in the client and again in the backend.
-              </p>
-              {bridgeContractEntries.length ? (
-                <div className={styles.contractList}>
-                  {bridgeContractEntries.map(([kind, items]) => (
-                    <div key={kind} className={styles.contractRow}>
-                      <span className={styles.contractKind}>{humanizeToken(kind)}</span>
-                      <span className={styles.contractTypes}>{items.map(humanizeToken).join(' · ')}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className={styles.policyCopy}>No bridge contracts are granted for this app.</p>
-              )}
-            </article>
-
-            <article className={styles.policyCard}>
-              <p className={styles.policyLabel}>Permissions and denials</p>
-              <h2 className={styles.policyTitle}>Governed runtime access</h2>
-              <p className={styles.policyCopy}>
-                Requested permissions stay explicit. Memory and runtime capabilities that are not granted remain denied by default.
-              </p>
-              <div className={styles.inlineList}>
-                {(bridgePermissions.length ? bridgePermissions : ['no additional bridge permissions']).map((item) => (
-                  <span key={item} className={styles.chip}>{humanizeToken(item)}</span>
-                ))}
-              </div>
-              <div className={styles.inlineList}>
-                {(deniedByDefault.length ? deniedByDefault : ['read_sage_memory']).map((item) => (
-                  <span key={item} className={styles.chipMuted}>{humanizeToken(item)}</span>
-                ))}
-              </div>
-            </article>
-
-            <article className={styles.policyCard}>
-              <p className={styles.policyLabel}>AI usage</p>
-              <h2 className={styles.policyTitle}>Uses workspace default</h2>
-              <p className={styles.policyCopy}>
-                Mini-apps do not own provider keys. They declare needs like text generation, vision, privacy, and budget;
-                the workspace AI route decides where inference runs.
-              </p>
-              <div className={styles.inlineList}>
-                {['text_generation', 'workspace_default_route', 'budget_normal'].map((item) => (
-                  <span key={item} className={styles.chip}>{humanizeToken(item)}</span>
-                ))}
-              </div>
-            </article>
-
-            <article className={styles.policyCard}>
-              <p className={styles.policyLabel}>Origins and bridge activity</p>
-              <h2 className={styles.policyTitle}>Allowed origins only</h2>
-              <p className={styles.policyCopy}>
-                Only the listed origins can talk to the bridge endpoint. Every accepted request is auditable.
-              </p>
-              <div className={styles.inlineList}>
-                {(manifest.hosted_app.allowed_origins || []).map((origin) => (
-                  <span key={origin} className={styles.chip}>{origin}</span>
-                ))}
-              </div>
-              <div className={styles.activityCard}>
-                <p className={styles.activityLabel}>Last bridge activity</p>
-                {bridgeActivity ? (
-                  <>
-                    <p className={styles.activityValue}>
-                      {humanizeToken(bridgeActivity.bridgeKind)} · {humanizeToken(bridgeActivity.bridgeType)} · {bridgeActivity.state.toUpperCase()}
-                    </p>
-                    <p className={styles.activityMeta}>
-                      {bridgeActivity.requestText || 'No request text provided.'}
-                    </p>
-                    <p className={styles.activityMeta}>
-                      Origin: {bridgeActivity.origin}
-                      {bridgeActivity.auditId ? ` · Audit ${bridgeActivity.auditId}` : ''}
-                      {bridgeActivity.runId ? ` · Run ${bridgeActivity.runId}` : ''}
-                      {bridgeActivity.threadId ? ` · Thread ${bridgeActivity.threadId}` : ''}
-                    </p>
-                    {bridgeActivity.error ? <p className={styles.activityError}>{bridgeActivity.error}</p> : null}
-                  </>
-                ) : (
-                  <p className={styles.activityMeta}>No bridge request has been received yet.</p>
-                )}
-              </div>
-            </article>
-          </section>
-          <div className={styles.frameCard}>
-            <iframe
-              ref={iframeRef}
-              className={styles.frame}
-              src={manifest.hosted_app.hosted_url}
-              title={manifest.label || appId}
-              sandbox={embedSandbox}
-              allow={embedAllow}
-              referrerPolicy={(manifest.hosted_app.embed?.referrer_policy as ReferrerPolicy | undefined) || 'origin'}
-              onLoad={handleFrameLoad}
-            />
+            ))}
           </div>
         </section>
-      ) : (
-        <div className={styles.empty}>This mini app does not expose a hosted entrypoint.</div>
-      )}
+      </main>
+    );
+  }
+
+  return (
+    <main className={`${styles.shell} ${styles.shellOpen}`}>
+      <header className={`${styles.frameHeader} ${styles.frameHeaderOpen}`}>
+        <div className={styles.header}>
+          <span className={`${styles.appIcon} ${styles.appIcon_neutral}`} aria-hidden="true">
+            {manifest.icon_url ? <img src={manifest.icon_url} alt="" /> : <span>{appInitials(appLabel)}</span>}
+          </span>
+          <div>
+            <p className={styles.eyebrow}>App</p>
+            <h1 className={styles.title}>{appLabel}</h1>
+          </div>
+        </div>
+        <div className={styles.linkRow}>
+          <Link className={styles.linkSecondary} href={appsHref}>
+            Back
+          </Link>
+          <Link className={styles.linkSecondary} href={`${appHref}?details=1`}>
+            Details
+          </Link>
+        </div>
+      </header>
+      <section className={`${styles.frameShell} ${styles.frameShellOpen}`}>
+        <div className={`${styles.frameCard} ${styles.frameCardOpen}`}>
+          {!frameLoaded ? (
+            <div className={styles.frameLoading} role="status">
+              <span className={styles.frameLoadingDot} />
+              Loading app...
+            </div>
+          ) : null}
+          <iframe
+            ref={iframeRef}
+            className={`${styles.frame} ${styles.frameOpen}`}
+            src={manifest.hosted_app.hosted_url}
+            title={appLabel}
+            sandbox={embedSandbox}
+            allow={embedAllow}
+            scrolling="yes"
+            referrerPolicy={(manifest.hosted_app.embed?.referrer_policy as ReferrerPolicy | undefined) || 'origin'}
+            onLoad={handleFrameLoad}
+          />
+        </div>
+      </section>
     </main>
   );
 }

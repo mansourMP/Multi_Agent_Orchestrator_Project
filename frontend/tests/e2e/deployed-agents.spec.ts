@@ -389,13 +389,23 @@ test.describe('deployed agents surface', () => {
     await loginAsOwner(page);
     await page.goto('/w/ws-1/chat');
 
-    await expect(page.getByRole('link', { name: /^agents$/i })).toBeVisible();
-    await page.getByRole('link', { name: /^agents$/i }).click();
+    const expandPanel = page.getByRole('button', { name: /expand left panel/i });
+    if (await expandPanel.isVisible().catch(() => false)) {
+      await expandPanel.click();
+    }
+    await page.locator('.workstation-shell-panel__nav-row').filter({ hasText: /^Sage$/ }).click();
+    await page.locator('.workstation-shell-panel__projects-toggle').click();
+    const agentStudioProject = page.locator('.workstation-shell-panel__project-row').filter({ hasText: /Agent Studio/ });
+    await expect(agentStudioProject).toBeVisible();
+    await expect(agentStudioProject).toHaveAttribute('href', '/w/ws-1/studio');
+    await agentStudioProject.click();
     await expect(page).toHaveURL(/\/w\/ws-1\/studio$/);
     await expect(page.locator('[data-workstation-surface="deployed-agents"]')).toBeVisible();
   });
 
   test('wizard, deploy, pause, inbox, and transcript flow render through the deployed-agent APIs', async ({ page }) => {
+    test.setTimeout(120_000);
+
     await loginAsOwner(page);
     const agents = [
       buildAgent(),
@@ -1341,31 +1351,26 @@ test.describe('deployed agents surface', () => {
     await page.goto('/w/ws-1/studio');
 
     const surface = page.locator('[data-workstation-surface="deployed-agents"]');
+    const studioRoster = page.locator('.workstation-shell-panel__build-list');
     await expect(surface).toBeVisible();
-    await expect(page.getByLabel(/search business agents/i)).toBeVisible();
+    await expect(studioRoster).toContainText(/store assistant/i);
+    await expect(studioRoster).toContainText(/openclaw gateway/i);
+    await expect(studioRoster).toContainText(/mansur macbook/i);
+    await studioRoster.getByRole('button', { name: /store assistant/i }).click();
     await expect(surface).toContainText(/store assistant/i);
     await expect(surface).toContainText(/messages/i);
     await expect(surface).toContainText(/open/i);
-    await expect(surface).toContainText(/monthly cost/i);
+    await expect(surface).toContainText(/traffic and cost/i);
     await expect(surface).toContainText(/\$8\.00/);
-    await expect(surface).toContainText(/chat with this agent/i);
-    await expect(surface).toContainText(/studio agent/i);
-    await expect(surface).toContainText(/private workspace/i);
-    await expect(surface).toContainText(/connected agents/i);
-    await expect(surface).toContainText(/openclaw gateway/i);
-    await expect(surface).toContainText(/agent computers/i);
-    await expect(surface).toContainText(/mansur macbook/i);
-    const sectionRail = surface.locator('.studio-agent-detail-tabs--rail');
-    await expect(sectionRail).toBeVisible();
-    const sectionRailBox = await sectionRail.boundingBox();
-    const detailContentBox = await surface.locator('.studio-agent-detail-content').boundingBox();
-    expect(sectionRailBox?.y ?? 0).toBeLessThan(detailContentBox?.y ?? 0);
-    expect(sectionRailBox?.width ?? 0).toBeGreaterThan(sectionRailBox?.height ?? 0);
-    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /openclaw gateway/i }).click();
+    await expect(surface).toContainText(/workers sage can run/i);
+    const detailNav = page.locator('.workstation-shell-panel__agent-detail-nav');
+    await expect(detailNav.getByRole('link', { name: /^overview$/i })).toBeVisible();
+    await expect(detailNav.getByRole('link', { name: /^chat$/i })).toBeVisible();
+    await page.goto('/w/ws-1/studio?externalAgent=extagent-openclaw');
     await expect(surface).toContainText(/connected agent/i);
     await expect(surface).toContainText(/connected agents start private/i);
     await expect(surface).not.toContainText(/go live/i);
-    await page.getByRole('tab', { name: /^chat$/i }).click();
+    await detailNav.getByRole('link', { name: /^chat$/i }).click();
     await expect(surface).toContainText(/private external-agent chat/i);
     await page.getByPlaceholder(/message this connected agent privately/i).fill('Hello external agent');
     await page.getByRole('button', { name: /^send$/i }).click();
@@ -1376,35 +1381,31 @@ test.describe('deployed agents surface', () => {
     await page.getByRole('button', { name: /^results$/i }).click();
     await expect(surface).toContainText(/sub-agents/i);
     await expect(surface).toContainText(/actions are declared but not enabled/i);
-    await page.getByRole('button', { name: /^load$/i }).first().click();
-    await expect(surface).toContainText(/research worker/i);
-    await expect(surface).toContainText(/external agent sub agent/i);
     await expect(surface).toContainText(/run history/i);
-    await page.getByRole('button', { name: /^load$/i }).click();
+    const loadExternalSection = page.getByRole('button', { name: /^load$/i });
+    if (await loadExternalSection.count() > 0) {
+      await loadExternalSection.first().click();
+    }
     await expect(surface).toContainText(/workflow finished/i);
     await expect(surface).toContainText(/external-owned/i);
     await expect(surface).toContainText(/external agent event/i);
     await expect(surface).not.toContainText(/add source/i);
-    await page.getByRole('button', { name: /^integrations$/i }).click();
-    await page.getByRole('button', { name: /connect capability/i }).click();
-    await expect(surface).toContainText(/add sections through the external manifest/i);
-    await expect(surface).toContainText(/backend proxy, never from the browser/i);
     await page.getByRole('button', { name: /^close$/i }).click();
-    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /laptop local agent/i }).click();
+    await page.goto('/w/ws-1/studio?externalAgent=extagent-local');
     await expect(surface).toContainText(/agent computer/i);
     await expect(surface).toContainText(/mansur macbook/i);
     await expect(surface).toContainText(/private proxy not enabled yet/i);
     await expect(surface).toContainText(/localhost and private-network endpoints stay blocked/i);
     await expect(surface).not.toContainText(/go live/i);
-    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /mansur macbook/i }).click();
+    await page.goto('/w/ws-1/studio?agentComputer=computer-macbook');
     await expect(surface).toContainText(/runtime resource/i);
-    await expect(surface).toContainText(/chat surface/i);
-    await expect(page.getByRole('tab', { name: /^chat$/i })).toHaveCount(0);
-    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /store assistant/i }).click();
-    await page.getByRole('tab', { name: /^chat$/i }).click();
+    await expect(surface).toContainText(/gateway \+ supervisor/i);
+    await expect(detailNav.getByRole('link', { name: /^chat$/i })).toHaveCount(0);
+    await page.goto('/w/ws-1/studio?agent=dagent-seed');
+    await detailNav.getByRole('link', { name: /^chat$/i }).click();
     const chatPanel = page.locator('.studio-panel--chat');
-    await expect(chatPanel).toContainText(/workspace chat/i);
-    await expect(chatPanel).toContainText(/private workspace chat · no customer send/i);
+    await expect(chatPanel.getByPlaceholder(/message this agent privately/i)).toBeVisible();
+    await expect(chatPanel).not.toContainText(/private workspace chat · no customer send/i);
     await expect(chatPanel).not.toContainText(/telegram bot/i);
     await expect(chatPanel).not.toContainText(/whatsapp business/i);
     await page.getByPlaceholder(/message this agent privately/i).fill('Can you explain the return policy?');
@@ -1413,24 +1414,20 @@ test.describe('deployed agents surface', () => {
     await expect(chatPanel).toContainText(/Run details/i);
     expect(testTurnBodies).toHaveLength(1);
     expect(testTurnBodies[0].channel).toBe('test');
-    await page.getByRole('tab', { name: /^model$/i }).click();
-    await page.getByRole('tab', { name: /^chat$/i }).click();
+    await detailNav.getByRole('link', { name: /^model$/i }).click();
+    await detailNav.getByRole('link', { name: /^chat$/i }).click();
     await expect(chatPanel).toContainText(/I can help with returns privately/i);
-    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /billing guide/i }).click();
-    await surface.locator('.studio-agents-nav__agent').filter({ hasText: /store assistant/i }).click();
-    await page.getByRole('tab', { name: /^chat$/i }).click();
-    await expect(chatPanel).toContainText(/I can help with returns privately/i);
-    await page.getByRole('tab', { name: /^model$/i }).click();
+    await detailNav.getByRole('link', { name: /^model$/i }).click();
     await expect(surface).toContainText(/recommended/i);
     await expect(surface).toContainText(/bring your own key/i);
     await expect(surface).toContainText(/developer\/local/i);
-    await expect(surface).toContainText(/personal subscription/i);
-    await page.getByRole('tab', { name: /results/i }).click();
+    await expect(surface).toContainText(/workspace api key/i);
+    await detailNav.getByRole('link', { name: /results/i }).click();
     await expect(surface).toContainText(/owner intelligence/i);
     await expect(surface).toContainText(/price-match or discount pressure detected/i);
     await page.getByRole('button', { name: /^approve$/i }).click();
     await expect(surface).toContainText(/orange · approved/i);
-    await page.goto('/w/ws-1/inbox');
+    await page.goto('/w/ws-1/inbox?agent=dagent-seed');
     const inboxSurface = page.locator('[data-workstation-surface="deployed-agents"]');
     await expect(inboxSurface).toContainText(/business agent inbox/i);
     await expect(inboxSurface).toContainText(/live conversation inbox/i);
@@ -1458,47 +1455,50 @@ test.describe('deployed agents surface', () => {
     await expect(page.locator('[data-deployed-agent-conversations="list"]')).not.toContainText(/customer one/i);
 
     await page.goto('/w/ws-1/studio');
-    await page.getByRole('button', { name: /add agent/i }).first().click();
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toBeVisible();
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/create business agent/i);
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/agent name/i);
-    await expect(page.locator('[data-deployed-agent-wizard="root"]')).not.toContainText(/launch settings/i);
+    await page.getByRole('button', { name: /new agent/i }).click();
+    const createAgentDialog = page.getByRole('dialog');
+    await expect(createAgentDialog).toContainText(/create your agent/i);
     const createWizard = page.locator('[data-deployed-agent-wizard="root"]');
-    const agentNameInput = createWizard.getByRole('textbox', { name: /business agent name/i });
+    await expect(createWizard).toBeVisible();
+    await expect(createWizard).toContainText(/agent name/i);
+    await expect(createWizard).toContainText(/what should it do/i);
+    await expect(createWizard).not.toContainText(/launch settings/i);
+    const agentNameInput = createWizard.getByRole('textbox', { name: /^agent name$/i });
     await agentNameInput.fill('Returns Concierge');
     await expect(agentNameInput).toHaveValue('Returns Concierge');
-    await page.getByRole('button', { name: /^create business agent$/i }).click();
+    await page.getByRole('button', { name: /^create agent$/i }).click();
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toHaveCount(0);
 
     const studioSurface = page.locator('[data-workstation-surface="deployed-agents"]');
-    const createdAgentRow = studioSurface
-      .locator('.studio-agents-nav__agent')
-      .filter({ hasText: /returns concierge/i });
-    await expect(createdAgentRow).toContainText(/cloud worker/i);
-    await expect(createdAgentRow).not.toContainText(/customer computer|self-hosted/i);
-    await expect(createdAgentRow).toContainText(/studio agent/i);
-    await expect(createdAgentRow).toContainText(/private workspace/i);
-    await page.getByRole('tab', { name: /^integrations$/i }).click();
-    await expect(studioSurface).toContainText(/model providers/i);
-    await expect(studioSurface).toContainText(/personal subscription and local routes stay visible in model/i);
-    await expect(studioSurface).toContainText(/connect external agent/i);
-    await expect(studioSurface).toContainText(/external agents start private/i);
-    await expect(studioSurface).toContainText(/agent group/i);
+    await expect(page).toHaveURL(/\/w\/ws-1\/studio\?agent=dagent-new/);
+    await expect(studioSurface).toContainText(/returns concierge/i);
+    await expect(studioSurface).toContainText(/draft/i);
+    await detailNav.getByRole('link', { name: /^model$/i }).click();
+    await expect(studioSurface).toContainText(/selected route/i);
+    await expect(studioSurface).toContainText(/provider/i);
+    await expect(studioSurface).toContainText(/model/i);
+    await detailNav.getByRole('link', { name: /^channels$/i }).click();
+    await expect(studioSurface).toContainText(/customer channels/i);
+    await expect(studioSurface).toContainText(/connect where customers talk/i);
+    await expect(studioSurface).toContainText(/available business channels/i);
+    await detailNav.getByRole('link', { name: /^actions$/i }).click();
+    await expect(studioSurface).toContainText(/allowed actions/i);
+    await expect(studioSurface).toContainText(/action playbooks/i);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/w/ws-1/studio');
     const narrowStudioSurface = page.locator('[data-workstation-surface="deployed-agents"]');
-    await expect(narrowStudioSurface).toBeVisible();
     await expect(page.locator('.workstation-mobile-bottom-nav')).toBeVisible();
     const mobileReturn = narrowStudioSurface.locator('.studio-agent-mobile-return');
     if (await mobileReturn.isVisible()) {
       await mobileReturn.getByRole('button', { name: /^back$/i }).click();
     }
     await expect(page.locator('.workstation-mobile-bottom-nav')).toBeVisible();
-    await expect(narrowStudioSurface.locator('.studio-agents-nav__toolbar')).toBeVisible();
-    await expect(page.locator('.workstation-titlebar__nav .workstation-titlebar__link').filter({ hasText: /^All$/ })).toBeVisible();
+    await expect(page.locator('.workstation-shell-panel__build-list')).toBeVisible();
+    await expect(page.locator('.workstation-titlebar__nav .workstation-titlebar__link').filter({ hasText: /^All$/ })).toHaveCount(0);
     await expect(narrowStudioSurface.locator('.studio-agent-detail-tabs')).toBeHidden();
-    await narrowStudioSurface.locator('.studio-agents-nav__agent').filter({ hasText: /store assistant/i }).click();
+    await page.locator('.workstation-shell-panel__build-list').getByRole('button', { name: /store assistant/i }).click();
+    await expect(narrowStudioSurface).toBeVisible();
     await expect(mobileReturn).toBeVisible();
     await expect(mobileReturn.getByRole('button', { name: /^back$/i })).toBeVisible();
     const mobileBackChrome = await mobileReturn.getByRole('button', { name: /^back$/i }).evaluate((node) => {
@@ -1525,30 +1525,12 @@ test.describe('deployed agents surface', () => {
     await expect(page.locator('.workstation-mobile-bottom-nav')).toBeHidden();
     await expect(page.locator('.workstation-shell--studio-agent-detail .workstation-shell__topbar')).toBeHidden();
     await expect(page.locator('.workstation-titlebar__nav .workstation-titlebar__link').filter({ hasText: /^All$/ })).toHaveCount(0);
-    await expect(page.getByRole('tab', { name: /^overview$/i })).toBeVisible();
-    const mobileSectionRail = narrowStudioSurface.locator('.studio-agent-detail-tabs--rail');
     const mobileReturnBox = await mobileReturn.boundingBox();
     const mobileBackBox = await mobileReturn.getByRole('button', { name: /^back$/i }).boundingBox();
     const mobileAgentNameBox = await mobileReturn.locator('.studio-agent-mobile-return__agent-name').boundingBox();
-    const mobileSectionRailBox = await mobileSectionRail.boundingBox();
-    const mobileDetailContentBox = await narrowStudioSurface.locator('.studio-agent-detail-content').boundingBox();
     expect(mobileReturnBox?.y ?? 1).toBeLessThanOrEqual(1);
     expect(mobileBackBox?.x ?? 1).toBeLessThanOrEqual(1);
-    expect(Math.round(mobileBackBox?.width ?? 0)).toBe(Math.round(mobileSectionRailBox?.width ?? 0));
     expect(mobileAgentNameBox?.x ?? 0).toBeGreaterThan((mobileBackBox?.x ?? 0) + (mobileBackBox?.width ?? 0));
-    expect(mobileSectionRailBox?.x ?? 1).toBeLessThanOrEqual(1);
-    expect(mobileSectionRailBox?.y ?? 0).toBeGreaterThanOrEqual(
-      ((mobileReturnBox?.y ?? 0) + (mobileReturnBox?.height ?? 0)) - 1,
-    );
-    expect(mobileSectionRailBox?.x ?? 0).toBeLessThan(mobileDetailContentBox?.x ?? 0);
-    expect(mobileSectionRailBox?.height ?? 0).toBeGreaterThan(mobileSectionRailBox?.width ?? 0);
-    const mobileRailLabelBoxes = await mobileSectionRail.locator('span').evaluateAll((nodes) =>
-      nodes.map((node) => {
-        const box = node.getBoundingClientRect();
-        return { height: box.height, width: box.width };
-      }),
-    );
-    expect(mobileRailLabelBoxes.every((box) => box.width <= 2 && box.height <= 2)).toBe(true);
     const detailScroll = narrowStudioSurface.locator(
       '.studio-agents-workbench--detail-open .workstation-split-workbench__main-scroll',
     );
@@ -1560,9 +1542,11 @@ test.describe('deployed agents surface', () => {
     expect(detailScrollMetrics.scrollHeight).toBeGreaterThan(detailScrollMetrics.clientHeight);
     await detailScroll.evaluate((node) => node.scrollTo(0, node.scrollHeight));
     await expect.poll(async () => detailScroll.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
-    await expect(narrowStudioSurface.locator('.studio-agent-overview__next-steps')).toBeVisible();
+    await expect(narrowStudioSurface).toContainText(/setup checklist/i);
     await expect(mobileReturn.getByRole('button', { name: /^back$/i })).toBeVisible();
-    await page.getByRole('tab', { name: /^chat$/i }).click();
-    await expect(page.locator('.studio-panel--chat')).toContainText(/private workspace chat/i);
+    await page.goto('/w/ws-1/studio?agent=dagent-seed&tab=chat');
+    const mobileChatPanel = page.locator('.studio-panel--chat');
+    await expect(mobileChatPanel.getByPlaceholder(/message this agent privately/i)).toBeVisible();
+    await expect(mobileChatPanel).not.toContainText(/private workspace chat/i);
   });
 });

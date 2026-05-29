@@ -756,11 +756,41 @@ class GatewayRoutesTests(unittest.TestCase):
                         "journal_cursor": 5,
                         "checkpoint_cursor": 3,
                         "capability_readiness": {"screen.read": "ready"},
+                        "service_inventory": [
+                            {
+                                "id": "postgres",
+                                "label": "Postgres",
+                                "kind": "database",
+                                "status": "ready",
+                                "detected": True,
+                                "passive": False,
+                                "execution_enabled": True,
+                                "check": "pg_isready -q",
+                                "summary": "ready",
+                                "last_checked_at": "2026-05-29T00:00:00Z",
+                            }
+                        ],
+                        "native_runtime": {
+                            "os": "darwin",
+                            "arch": "arm64",
+                            "release": "25.0.0",
+                            "hostname": "mansur-mac",
+                            "desktop_session": "system_service",
+                            "system_service_mode": True,
+                        },
                     },
                 }
             )
             heartbeat_ack = websocket.receive_json()
             self.assertTrue(heartbeat_ack["ok"])
+            latest_session = gateway_state_repository.get_latest_gateway_session(gateway_id)
+            inventory = latest_session["metadata"]["service_inventory"]
+            self.assertEqual(inventory[0]["id"], "postgres")
+            self.assertTrue(inventory[0]["passive"])
+            self.assertFalse(inventory[0]["execution_enabled"])
+            native_runtime = latest_session["metadata"]["native_runtime"]
+            self.assertEqual(native_runtime["desktop_session"], "system_service")
+            self.assertTrue(native_runtime["system_service_mode"])
 
             websocket.send_json(
                 {
@@ -1648,6 +1678,17 @@ class GatewayRoutesTests(unittest.TestCase):
         with patch(
             "server_modules.gateway_approval_service.capability_requires_owner_approval",
             return_value=False,
+        ), patch(
+            "server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live",
+            return_value=True,
+        ), patch(
+            "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+            return_value={
+                "connection_status": "online",
+                "heartbeat_fresh": True,
+                "reported_health_state": "online",
+                "capability_readiness": {"screen.read": "ready"},
+            },
         ), patch(
             "server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke",
             AsyncMock(side_effect=_dispatch_tool_invoke),

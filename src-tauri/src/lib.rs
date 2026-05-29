@@ -18,6 +18,8 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
 use tauri::{LogicalSize, Manager, RunEvent, Runtime, Size, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
@@ -34,6 +36,10 @@ const WINDOW_TITLE: &str = "Empyralis";
 const WINDOW_WIDTH: f64 = 1280.0;
 const WINDOW_HEIGHT: f64 = 800.0;
 const WORKER_ID: &str = "empyralis-tauri-local";
+const HARDWARE_USAGE_TRAY_ID: &str = "empyralis-hardware-usage";
+const HARDWARE_USAGE_MENU_STATUS_ID: &str = "empyralis_hardware_status";
+const HARDWARE_USAGE_MENU_OPEN_ID: &str = "empyralis_hardware_open";
+const HARDWARE_USAGE_MENU_QUIT_ID: &str = "empyralis_hardware_quit";
 const SERVER_BOOT_TIMEOUT: Duration = Duration::from_secs(45);
 const SERVER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WORKER_BOOT_GRACE: Duration = Duration::from_secs(2);
@@ -736,6 +742,61 @@ struct Sidecars {
 }
 
 struct SidecarState(Mutex<Sidecars>);
+
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return;
+    }
+
+    if let Err(error) = ensure_main_window(app) {
+        eprintln!("Empyralis desktop failed to open from the hardware status item: {error}");
+    }
+}
+
+fn install_hardware_usage_tray(app: &tauri::App) -> Result<(), String> {
+    let status = MenuItemBuilder::with_id(
+        HARDWARE_USAGE_MENU_STATUS_ID,
+        "Empyralis is using this computer",
+    )
+    .enabled(false)
+    .build(app)
+    .map_err(|error| format!("Failed to build hardware status menu item: {error}"))?;
+    let open = MenuItemBuilder::with_id(HARDWARE_USAGE_MENU_OPEN_ID, "Open Empyralis")
+        .build(app)
+        .map_err(|error| format!("Failed to build hardware open menu item: {error}"))?;
+    let quit = MenuItemBuilder::with_id(HARDWARE_USAGE_MENU_QUIT_ID, "Quit Empyralis")
+        .build(app)
+        .map_err(|error| format!("Failed to build hardware quit menu item: {error}"))?;
+    let menu = MenuBuilder::new(app)
+        .item(&status)
+        .separator()
+        .item(&open)
+        .item(&quit)
+        .build()
+        .map_err(|error| format!("Failed to build hardware status menu: {error}"))?;
+
+    let mut tray = TrayIconBuilder::with_id(HARDWARE_USAGE_TRAY_ID)
+        .title("Empyralis")
+        .tooltip("Empyralis is using this computer")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            HARDWARE_USAGE_MENU_OPEN_ID => focus_main_window(app),
+            HARDWARE_USAGE_MENU_QUIT_ID => app.exit(0),
+            _ => {}
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray = tray.icon(icon).icon_as_template(true);
+    }
+
+    tray.build(app)
+        .map(|_| ())
+        .map_err(|error| format!("Failed to install hardware status menu item: {error}"))
+}
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1718,7 +1779,7 @@ fn ensure_main_window<R: Runtime, M: Manager<R>>(app: &M) -> Result<(), String> 
         .parse()
         .map_err(|error| format!("Invalid app URL: {error}"))?;
 
-    let mut window_builder = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(url))
+    let window_builder = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(url))
         .initialization_script(&desktop_bridge_script())
         .title(WINDOW_TITLE)
         .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -2396,6 +2457,10 @@ pub fn run() {
                 release_desktop_start_metadata(&start_meta_path);
                 release_desktop_shell_lock(&lock_path);
                 return Err(Box::new(std::io::Error::other(error)));
+            }
+
+            if let Err(error) = install_hardware_usage_tray(app) {
+                eprintln!("{error}");
             }
 
             Ok(())

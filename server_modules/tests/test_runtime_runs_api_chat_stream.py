@@ -133,6 +133,139 @@ class RuntimeRunsApiChatStreamTests(unittest.TestCase):
         self.assertNotIn("chunk", transcript_snapshot)
         self.assertNotIn("final", transcript_snapshot)
 
+    def test_final_stream_event_does_not_persist_reasoning_metadata(self):
+        captured = {}
+
+        async def _record_assistant_turn(**kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+        session = runtime_runs_api._get_or_create_chat_stream_session(
+            "user:thread:req-reasoning",
+            thread_id="thread",
+            request_id="req-reasoning",
+            workspace_id="default",
+        )
+        session["metadata"] = {
+            "assistant_turn": {
+                "tenant_id": "tenant-1",
+                "workspace_id": "default",
+                "thread_id": "thread",
+                "session_id": "thread",
+                "request_id": "req-reasoning",
+            }
+        }
+
+        with patch.object(runtime_runs_api.thread_service, "record_assistant_turn", _record_assistant_turn):
+            runtime_runs_api._append_chat_stream_event(
+                session,
+                "final",
+                {
+                    "reply": "Done",
+                    "metadata": {
+                        "agent_role": "sage",
+                        "trace_id": "trace-1",
+                        "reasoning": "private reasoning",
+                        "reasoning_effort": "high",
+                        "context_used": {
+                            "provider": "openai",
+                            "reasoning_summary": "internal reasoning",
+                            "chain_of_thought": "more private",
+                        },
+                    },
+                    "result": {
+                        "metadata": {
+                            "thinking": "should be dropped",
+                            "raw_chain_of_thought": "secret",
+                        },
+                    },
+                },
+            )
+
+        result_metadata = captured["metadata"]["result_metadata"]
+        self.assertEqual(captured["metadata"]["request_id"], "req-reasoning")
+        self.assertEqual(result_metadata["agent_role"], "sage")
+        self.assertNotIn("reasoning", result_metadata)
+        self.assertNotIn("thinking", result_metadata)
+        self.assertNotIn("reasoning_summary", result_metadata["context_used"])
+        self.assertNotIn("chain_of_thought", result_metadata["context_used"])
+        self.assertEqual(result_metadata["reasoning_effort"], "high")
+
+    def test_cached_transcript_events_for_final_turn_are_sanitized_before_persist(self):
+        captured = {}
+
+        async def _record_assistant_turn(**kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+        session = runtime_runs_api._get_or_create_chat_stream_session(
+            "user:thread:req-cache",
+            thread_id="thread",
+            request_id="req-cache",
+            workspace_id="default",
+        )
+        session["metadata"] = {
+            "assistant_turn": {
+                "tenant_id": "tenant-1",
+                "workspace_id": "default",
+                "thread_id": "thread",
+                "session_id": "thread",
+                "request_id": "req-cache",
+                "active_agent_install_id": "agent-1",
+                "runtime_profile_id": "runtime-1",
+            },
+            "transcript_events": [
+                {
+                    "event": "trace",
+                    "schema_version": 1,
+                    "payload": {
+                        "event_type": "reasoning.summary.delta",
+                        "data": {"delta": "hidden cached reasoning"},
+                    },
+                },
+                {
+                    "event": "trace",
+                    "schema_version": 1,
+                    "payload": {
+                        "event_type": "tool.started",
+                        "tool_call_id": "shell-1",
+                        "data": {
+                            "tool_name": "shell__exec",
+                            "input": {"command": "cat /etc/hosts"},
+                            "arguments": {"command": "cat /etc/hosts"},
+                        },
+                    },
+                },
+                {
+                    "event": "step",
+                    "schema_version": 1,
+                    "payload": {
+                        "kind": "assistant",
+                        "id": "thinking-1",
+                        "label": "Thinking",
+                        "detail": "private thinking",
+                        "status": "done",
+                    },
+                },
+            ],
+        }
+
+        with patch.object(runtime_runs_api.thread_service, "record_assistant_turn", _record_assistant_turn):
+            runtime_runs_api._append_chat_stream_event(session, "final", {
+                "reply": "Done",
+                "mode": "answer",
+                "metadata": {"agent_role": "sage", "trace_id": "trace-1"},
+            })
+
+        self.assertEqual(captured["metadata"]["trace_id"], "trace-1")
+        self.assertNotIn("thinking", json.dumps(captured["metadata"]))
+        transcript_events = captured["metadata"].get("transcript_events", [])
+        self.assertEqual([item["payload"]["event_type"] for item in transcript_events], ["tool.started"])
+        transcript_snapshot = json.dumps(transcript_events)
+        self.assertNotIn("hidden cached reasoning", transcript_snapshot)
+        self.assertNotIn("cat /etc/hosts", transcript_snapshot)
+        self.assertNotIn("arguments", transcript_snapshot)
+
     def test_final_stream_event_persists_step_proof_rows(self):
         captured = {}
 

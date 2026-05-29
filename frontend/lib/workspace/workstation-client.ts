@@ -913,10 +913,12 @@ export type WorkstationClientPaths = {
   deployedAgentConversationDetail: (deployedAgentId: string, sessionId: string) => string;
   deployedAgentExternalUserDelete: (deployedAgentId: string, externalUserId: string) => string;
   marketplaceAgents: (filters?: { category?: string | null; costTier?: string | null; limit?: number; offset?: number }) => string;
-  marketplacePackages: (kind?: string | null) => string;
+  marketplacePackages: (options?: { kind?: string | null; runtimeType?: string | null; includeReviewQueue?: boolean }) => string;
   studioTemplates: string;
   marketplaceProviderRegister: string;
   marketplaceAppRegister: string;
+  marketplaceAppSubmissions: string;
+  marketplacePackageReview: (packageId: string) => string;
   marketplacePackageInstall: (packageId: string) => string;
   platformAnalytics: string;
   workspaceRouting: string;
@@ -1348,10 +1350,19 @@ export type WorkstationClient = {
   }) => Promise<Record<string, unknown>>;
   listMarketplacePackages: (options?: {
     kind?: string | null;
+    runtimeType?: string | null;
+    includeReviewQueue?: boolean;
   }) => Promise<Record<string, unknown>>;
+  listMarketplaceAppSubmissions: () => Promise<Record<string, unknown>>;
   listStudioTemplates: () => Promise<Record<string, unknown>>;
   registerMarketplaceProvider: (payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
   registerMarketplaceApp: (payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+  reviewMarketplaceAppSubmission: (options: {
+    packageId: string;
+    approved: boolean;
+    reason?: string | null;
+    verificationStatus?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
   installMarketplacePackage: (options: {
     packageId: string;
   }) => Promise<Record<string, unknown> | null>;
@@ -1735,13 +1746,18 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
         limit: filters.limit,
         offset: filters.offset,
       })}`,
-    marketplacePackages: (kind = null) =>
+    marketplacePackages: (options = {}) =>
       `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/packages${buildQueryString({
-        kind,
+        kind: options.kind,
+        runtime_type: options.runtimeType,
+        include_review_queue: options.includeReviewQueue ? 'true' : undefined,
       })}`,
     studioTemplates: `/api/workspaces/${encodeURIComponent(workspaceId)}/studio/templates`,
     marketplaceProviderRegister: `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/providers`,
     marketplaceAppRegister: `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/apps`,
+    marketplaceAppSubmissions: `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/app-submissions`,
+    marketplacePackageReview: (packageId) =>
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/packages/${encodeURIComponent(packageId)}/review`,
     marketplacePackageInstall: (packageId) =>
       `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/packages/${encodeURIComponent(packageId)}/install`,
     platformAnalytics: `/api/platform-analytics${buildQueryString({ workspace_id: workspaceId })}`,
@@ -3701,9 +3717,14 @@ export function createWorkstationClient(
         }),
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
-    listMarketplacePackages: ({ kind = null } = {}) =>
+    listMarketplacePackages: ({ kind = null, runtimeType = null, includeReviewQueue = false } = {}) =>
       requestJson<Record<string, unknown>>({
-        path: paths.marketplacePackages(kind),
+        path: paths.marketplacePackages({ kind, runtimeType, includeReviewQueue }),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listMarketplaceAppSubmissions: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.marketplaceAppSubmissions,
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     listStudioTemplates: () =>
@@ -3728,6 +3749,20 @@ export function createWorkstationClient(
           method: 'POST',
           headers: mergeJsonHeaders(),
           body: JSON.stringify(payload),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    reviewMarketplaceAppSubmission: ({ packageId, approved, reason = null, verificationStatus = null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.marketplacePackageReview(packageId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            approved,
+            reason: reason ?? undefined,
+            verification_status: verificationStatus ?? undefined,
+          }),
         },
         policy: WRITE_REQUEST_POLICY,
       }),

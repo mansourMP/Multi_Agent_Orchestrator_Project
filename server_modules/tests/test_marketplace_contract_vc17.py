@@ -1,11 +1,32 @@
 import pytest
+import json
 
+from server_modules import app_registry_api
 from server_modules import marketplace_distribution_service
 from server_modules import workspace_context
 
 
+def _patch_app_registry(monkeypatch, tmp_path):
+    registry_path = tmp_path / "apps.json"
+
+    def _safe_read_json(path, fallback):
+        if not path.exists():
+            return fallback
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _safe_write_json(path, payload):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    monkeypatch.setattr(app_registry_api, "ORION_APP_REGISTRY_FILE", registry_path, raising=False)
+    monkeypatch.setattr(app_registry_api, "_safe_read_json", _safe_read_json, raising=False)
+    monkeypatch.setattr(app_registry_api, "_safe_write_json", _safe_write_json, raising=False)
+    monkeypatch.setattr(app_registry_api, "_utc_now_iso", lambda: "2026-04-22T00:00:00Z", raising=False)
+
+
 def test_marketplace_contract_manifest_fields_are_normalized(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+    _patch_app_registry(monkeypatch, tmp_path)
 
     registered = marketplace_distribution_service.register_marketplace_package(
         "ws-vc17",

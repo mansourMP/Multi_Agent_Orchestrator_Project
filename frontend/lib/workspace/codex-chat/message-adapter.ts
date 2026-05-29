@@ -67,6 +67,7 @@ export function workstationMessageToCodexCell(message: WorkstationChatMessageRec
       id: message.id,
       kind: 'tool',
       name: readString(metadata.tool_name) || message.content || 'Tool',
+      input: readString(metadata.tool_input) || readString(metadata.input) || null,
       status: normalizeToolStatus(metadata.step_status ?? message.status),
       result: readString(metadata.tool_result) || null,
       dimmed: metadata.step_dimmed === true,

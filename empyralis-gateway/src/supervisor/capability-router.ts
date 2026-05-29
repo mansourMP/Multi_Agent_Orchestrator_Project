@@ -5,6 +5,14 @@ import type {
 } from "../protocol/types";
 import { GatewayBrowserRuntime } from "../browser/runtime";
 import { PersonalChannelRuntimeRegistry } from "../channels/personal-runtime";
+import {
+  agentComputerSystemServiceModeEnabled,
+  agentComputerUserSessionBridgeEnabled,
+} from "../runtime/service-mode";
+import {
+  assertCapabilityPermissionReady,
+  filterCapabilitiesByDesktopPermission,
+} from "../runtime/desktop-permissions";
 import { GatewaySupervisorClient } from "./client";
 
 const RUN_EXECUTOR_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -36,9 +44,12 @@ export class GatewayCapabilityRouter {
   ) {}
 
   supportedCapabilities(): string[] {
+    const desktopBridgeReady = !agentComputerSystemServiceModeEnabled() || agentComputerUserSessionBridgeEnabled();
     return [
       ...this.supervisorClient.supportedCapabilities(),
-      ...(this.browserRuntime?.requestedCapabilities() ?? []),
+      ...(desktopBridgeReady
+        ? filterCapabilitiesByDesktopPermission(this.browserRuntime?.requestedCapabilities() ?? [])
+        : []),
       ...this.personalChannelRuntimes.requestedCapabilities(),
     ];
   }
@@ -65,6 +76,7 @@ export class GatewayCapabilityRouter {
     const traceId = requireToken(payload.trace_id, "trace_id");
     const workspaceId = requireToken(payload.workspace_id, "workspace_id");
     const argumentsPayload = requireObject(payload.arguments ?? {}, "arguments must be an object.");
+    assertCapabilityPermissionReady(capabilityId);
     if (this.browserRuntime?.supportsCapability(capabilityId)) {
       this.trackExecutor(runId, "browser");
       const result = await this.browserRuntime.handleCapabilityInvoke(

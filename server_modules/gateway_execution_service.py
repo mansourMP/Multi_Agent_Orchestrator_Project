@@ -7,11 +7,18 @@ from typing import Any, Dict, Optional
 from server_modules import (
     artifact_service,
     gateway_activity_service,
+    gateway_inventory_service,
+    gateway_registry_service,
     gateway_protocol_service,
     gateway_state_repository,
     gateway_transparency_service,
     secret_redaction_service,
 )
+
+
+def _text(value: Any, fallback: str = "") -> str:
+    token = str(value or "").strip()
+    return token or fallback
 
 
 def _gateway_supervisor_capability(
@@ -29,12 +36,71 @@ def _gateway_supervisor_capability(
     return normalized, args
 
 
+def _has_gateway_capability(registration: Dict[str, Any], capability_id: str) -> bool:
+    return gateway_inventory_service.registration_has_execution_capability(registration, capability_id)
+
+
+def _heartbeat_capability_ready(
+    *,
+    registration: Dict[str, Any],
+    status_payload: Dict[str, Any],
+    capability_id: str,
+) -> bool:
+    registration_metadata = dict(registration.get("metadata") or {})
+    status_metadata = dict(status_payload.get("metadata") or {})
+    return gateway_inventory_service.capability_ready_from_any_metadata(
+        capability_id,
+        registration_metadata,
+        status_metadata,
+        status_payload,
+    )
+
+
+def gateway_registration_execution_readiness(
+    registration: Optional[Dict[str, Any]],
+    *,
+    workspace_id: str,
+    capability_id: str,
+) -> tuple[bool, str]:
+    if not isinstance(registration, dict) or not registration:
+        return False, "gateway_registration_missing"
+    if _text(registration.get("status")).lower() != "active":
+        return False, "gateway_registration_inactive"
+    if _text(registration.get("device_trust_state")).lower() == "revoked":
+        return False, "gateway_device_revoked"
+    registration_workspace_id = _text(registration.get("workspace_id"))
+    if registration_workspace_id and registration_workspace_id != (_text(workspace_id) or "default"):
+        return False, "gateway_workspace_mismatch"
+    if not _has_gateway_capability(registration, capability_id):
+        return False, "gateway_capability_missing"
+    gateway_id = _text(registration.get("gateway_id"))
+    if not gateway_protocol_service.gateway_connection_is_live(gateway_id):
+        return False, "gateway_offline"
+    status_payload = gateway_registry_service.gateway_registration_public_payload(registration)
+    if not bool(status_payload.get("heartbeat_fresh")):
+        return False, "gateway_heartbeat_stale"
+    connection_status = _text(status_payload.get("connection_status")).lower()
+    if connection_status != "online":
+        return False, "gateway_unhealthy"
+    reported_health = _text(status_payload.get("reported_health_state")).lower()
+    if reported_health in {"degraded", "offline", "unhealthy", "error", "blocked"}:
+        return False, "gateway_unhealthy"
+    if not _heartbeat_capability_ready(
+        registration=registration,
+        status_payload=status_payload,
+        capability_id=capability_id,
+    ):
+        return False, "gateway_capability_not_ready"
+    return True, ""
+
+
 def _materialize_gateway_artifacts(
     *,
     capability_id: str,
     response: Dict[str, Any],
     registration: Dict[str, Any],
     run_id: str,
+    screenshot_retention: Optional[str] = None,
 ) -> Dict[str, Any]:
     result = dict(response.get("result") or {})
     if str(capability_id or "").strip() != "screenshot.capture":
@@ -46,6 +112,7 @@ def _materialize_gateway_artifacts(
 
     compact_images = []
     artifacts = []
+    retention = str(screenshot_retention or "session_only").strip().lower() or "session_only"
     for index, item in enumerate(images):
         if not isinstance(item, dict):
             continue
@@ -55,6 +122,11 @@ def _materialize_gateway_artifacts(
             for key, value in item.items()
             if key not in {"data_base64", "base64", "data"}
         }
+        compact_item["screenshot_retention"] = retention
+        if retention == "off":
+            compact_item["artifact_retained"] = False
+            compact_images.append({key: value for key, value in compact_item.items() if value is not None})
+            continue
         if encoded:
             try:
                 content = base64.b64decode(encoded, validate=True)
@@ -75,12 +147,14 @@ def _materialize_gateway_artifacts(
                         "monitor_name": str(item.get("monitor_name") or "").strip() or None,
                         "width": item.get("width"),
                         "height": item.get("height"),
+                        "retention": retention,
                     },
                 )
                 artifact_payload = record.as_payload()
                 artifacts.append(artifact_payload)
                 compact_item["artifact_id"] = artifact_payload.get("artifact_id")
                 compact_item["uri"] = artifact_payload.get("uri")
+                compact_item["artifact_retained"] = True
             except (binascii.Error, ValueError):
                 compact_item["artifact_error"] = "invalid_screenshot_payload"
         compact_images.append({key: value for key, value in compact_item.items() if value is not None})
@@ -125,6 +199,7 @@ async def execute_tool_via_gateway(
     request_id: Optional[str] = None,
     runtime_access_mode: Optional[str] = None,
     empyralis_approved: bool = False,
+    screenshot_retention: Optional[str] = None,
 ) -> Dict[str, Any]:
     registration = _require_active_gateway_registration(gateway_id, workspace_id=workspace_id)
     _gw = str(registration.get("gateway_id") or "").strip()
@@ -132,6 +207,13 @@ async def execute_tool_via_gateway(
     _tid = str(trace_id or "").strip()
     _cap = str(capability_id or "").strip()
     supervisor_capability_id, supervisor_arguments = _gateway_supervisor_capability(_cap, arguments)
+    ready, readiness_reason = gateway_registration_execution_readiness(
+        registration,
+        workspace_id=workspace_id,
+        capability_id=_cap,
+    )
+    if not ready:
+        raise ValueError(readiness_reason)
     gateway_transparency_service.emit_gateway_action_event(
         event_type="gateway_action_started",
         title=f"Gateway action: {_cap}",
@@ -159,6 +241,7 @@ async def execute_tool_via_gateway(
         response=response,
         registration=registration,
         run_id=str(response.get("run_id") or run_id).strip(),
+        screenshot_retention=screenshot_retention,
     )
     activity_payload = {
         "request_id": str(response.get("request_id") or request_id or "").strip() or None,

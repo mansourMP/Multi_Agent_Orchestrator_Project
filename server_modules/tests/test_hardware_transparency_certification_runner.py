@@ -22,6 +22,12 @@ class HardwareTransparencyCertificationRunnerTests(unittest.TestCase):
         self.assertIn("server_modules/tests/test_hardware_gateway_adapter.py", cert.BACKEND_TESTS)
         self.assertIn("server_modules/tests/test_hardware_self_hosted_node_adapter.py", cert.BACKEND_TESTS)
 
+    def test_agent_computer_suite_is_available_with_phase_tests(self) -> None:
+        self.assertIn("agent-computer", cert.VALID_SUITES)
+        self.assertIn("server_modules/tests/test_agent_computer_service_script.py", cert.AGENT_COMPUTER_BACKEND_TESTS)
+        self.assertIn("server_modules/tests/test_gateway_browser_attach_policy.py", cert.AGENT_COMPUTER_BACKEND_TESTS)
+        self.assertIn("dist/__tests__/system-service-mode.test.js", cert.AGENT_COMPUTER_GATEWAY_TESTS)
+
     def test_gateway_missing_inputs_fail_with_setup_details(self) -> None:
         args = argparse.Namespace(gateway_id="")
         with tempfile.TemporaryDirectory() as tmp:

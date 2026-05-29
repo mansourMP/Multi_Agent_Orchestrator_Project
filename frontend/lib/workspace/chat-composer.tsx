@@ -1,6 +1,6 @@
 'use client';
 
-import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
+import type { DragEvent, FormEvent, KeyboardEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
@@ -274,12 +274,14 @@ export function ChatComposer({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const actionLauncherRef = useRef<HTMLDivElement | null>(null);
   const commandPaletteRef = useRef<HTMLDivElement | null>(null);
+  const fileDragDepthRef = useRef(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const draftRef = useRef(draft);
   const [actionPaletteOpen, setActionPaletteOpen] = useState(false);
   const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const [fileDragActive, setFileDragActive] = useState(false);
   const [commandPaletteDismissed, setCommandPaletteDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const hasDraft = draft.trim().length > 0;
@@ -567,6 +569,8 @@ export function ChatComposer({
   const openFilePicker = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
+  const fileDropEnabled = typeof onFilesSelected === 'function' && !controlsDisabled;
+  const eventHasFiles = (event: DragEvent<HTMLElement>) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
   const handleFilesSelected = (files: FileList | null) => {
     const selectedFiles = Array.from(files ?? []);
     if (selectedFiles.length === 0) {
@@ -574,14 +578,53 @@ export function ChatComposer({
     }
     void onFilesSelected?.(selectedFiles);
   };
+  const handleFileDragEnter = (event: DragEvent<HTMLFormElement>) => {
+    if (!fileDropEnabled || !eventHasFiles(event)) {
+      return;
+    }
+    event.preventDefault();
+    fileDragDepthRef.current += 1;
+    setFileDragActive(true);
+  };
+  const handleFileDragOver = (event: DragEvent<HTMLFormElement>) => {
+    if (!fileDropEnabled || !eventHasFiles(event)) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  };
+  const handleFileDragLeave = (event: DragEvent<HTMLFormElement>) => {
+    if (!fileDropEnabled || !eventHasFiles(event)) {
+      return;
+    }
+    event.preventDefault();
+    fileDragDepthRef.current = Math.max(0, fileDragDepthRef.current - 1);
+    if (fileDragDepthRef.current === 0) {
+      setFileDragActive(false);
+    }
+  };
+  const handleFileDrop = (event: DragEvent<HTMLFormElement>) => {
+    if (!fileDropEnabled || !eventHasFiles(event)) {
+      return;
+    }
+    event.preventDefault();
+    fileDragDepthRef.current = 0;
+    setFileDragActive(false);
+    handleFilesSelected(event.dataTransfer.files);
+  };
   return (
     <section data-workstation-chat-composer="root" className="app-chat-composer">
       <form
         className={joinClassNames(
           'app-chat-composer__surface',
+          fileDragActive && 'app-chat-composer__surface--file-dragging',
           showInlineReasoningToggle && 'app-chat-composer__surface--reasoning-visible',
         )}
         onSubmit={handleSubmit}
+        onDragEnter={handleFileDragEnter}
+        onDragOver={handleFileDragOver}
+        onDragLeave={handleFileDragLeave}
+        onDrop={handleFileDrop}
       >
         <textarea
           ref={textareaRef}
@@ -605,6 +648,13 @@ export function ChatComposer({
             event.currentTarget.value = '';
           }}
         />
+
+        {fileDragActive ? (
+          <div className="app-chat-composer__drop-overlay" aria-hidden="true">
+            <Paperclip size={16} strokeWidth={2} />
+            <span>Drop files</span>
+          </div>
+        ) : null}
 
         {smallModelWarning ? (
           <div className="app-chat-composer__small-model-warning" role="status">

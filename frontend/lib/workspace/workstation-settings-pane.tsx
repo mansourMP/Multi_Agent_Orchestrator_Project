@@ -54,7 +54,7 @@ const SETTINGS_SECTIONS: Array<{
     label: 'Agent Computer',
     eyebrow: 'Agent Computer',
     title: 'Agent Computer',
-    description: 'Optional computer power for browser, files, shell, screenshots, and apps.',
+    description: 'Connected hardware runtime for this workspace.',
   },
   {
     id: 'usage',
@@ -121,6 +121,39 @@ type HostedCreditsSnapshot = {
   monthlyCreditsRemaining: number;
 };
 
+type AgentComputerNativeRuntime = {
+  os: string;
+  arch: string;
+  release: string;
+  hostname: string;
+  desktopSession: string;
+  systemServiceMode: boolean;
+};
+
+type AgentComputerAttachment = {
+  attachmentId: string;
+  attachmentKind: string;
+  label: string;
+  online: boolean;
+  healthy: boolean;
+  status: string;
+  statusReason: string | null;
+  heartbeatAt: string | null;
+  capabilities: string[];
+  capabilityReadiness: Record<string, unknown>;
+  nativeRuntime: AgentComputerNativeRuntime | null;
+  targetSelection: Record<string, unknown>;
+};
+
+type AgentComputerTargetSummary = {
+  label: string;
+  online: boolean;
+  healthy: boolean;
+  status: string;
+  statusLabel: string | null;
+  statusReason: string | null;
+} | null;
+
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
@@ -132,6 +165,25 @@ function readOptionalString(value: unknown): string | null {
 function readNumber(value: unknown, fallback = 0): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function readOptionalNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readField(record: Record<string, unknown>, camelKey: string, snakeKey: string): unknown {
+  return record[camelKey] ?? record[snakeKey];
 }
 
 function formatCredits(value: number): string {
@@ -216,6 +268,82 @@ function normalizeProfileRecords(payload: unknown): ProviderProfileRecord[] {
   return Array.isArray(record.items)
     ? record.items.filter((item): item is ProviderProfileRecord => Boolean(item) && typeof item === 'object')
     : [];
+}
+
+function normalizeNativeRuntime(value: unknown): AgentComputerNativeRuntime | null {
+  const record = readRecord(value);
+  const os = readString(record.os);
+  const arch = readString(record.arch);
+  const desktopSession = readString(record.desktop_session);
+  const systemServiceMode = readBoolean(record.system_service_mode);
+  if (!os && !arch && !desktopSession && !systemServiceMode) {
+    return null;
+  }
+  return {
+    os,
+    arch,
+    release: readString(record.release),
+    hostname: readString(record.hostname),
+    desktopSession,
+    systemServiceMode,
+  };
+}
+
+function normalizeAgentComputerAttachments(payload: unknown): AgentComputerAttachment[] {
+  const record = readRecord(payload);
+  const attachments = Array.isArray(record.attachments) ? record.attachments : [];
+  const agentComputerKinds = new Set(['local_companion', 'cloud_computer', 'self_hosted_business_node']);
+
+  return attachments.flatMap((entry) => {
+    const attachment = readRecord(entry);
+    const attachmentKind = readString(readField(attachment, 'attachmentKind', 'attachment_kind'));
+    if (!agentComputerKinds.has(attachmentKind)) {
+      return [];
+    }
+    const attachmentId = readString(readField(attachment, 'attachmentId', 'attachment_id'), attachmentKind);
+    const label = readString(attachment.label, humanizeToken(attachmentKind));
+    return [{
+      attachmentId,
+      attachmentKind,
+      label,
+      online: readBoolean(attachment.online),
+      healthy: readBoolean(attachment.healthy),
+      status: readString(attachment.status, 'offline').toLowerCase(),
+      statusReason: readOptionalString(readField(attachment, 'statusReason', 'status_reason')),
+      heartbeatAt: readOptionalString(readField(attachment, 'heartbeatAt', 'heartbeat_at')),
+      capabilities: Array.isArray(attachment.capabilities)
+        ? attachment.capabilities.map((item) => readString(item)).filter(Boolean)
+        : [],
+      capabilityReadiness: readRecord(readField(attachment, 'capabilityReadiness', 'capability_readiness')),
+      nativeRuntime: normalizeNativeRuntime(readField(attachment, 'nativeRuntime', 'native_runtime')),
+      targetSelection: readRecord(readField(attachment, 'targetSelection', 'target_selection')),
+    }];
+  });
+}
+
+function statusToneClass(status: string, fallbackReady = false): string {
+  const normalized = readString(status).toLowerCase();
+  if (['ready', 'online', 'healthy', 'ok', 'available'].includes(normalized) || fallbackReady) {
+    return 'settings-status--ready';
+  }
+  if (['degraded', 'stale', 'warning', 'warn', 'reconnecting', 'registered', 'promptable'].includes(normalized)) {
+    return 'settings-status--warning';
+  }
+  if (['blocked', 'revoked', 'error', 'failed', 'fail', 'unhealthy', 'denied', 'restricted'].includes(normalized)) {
+    return 'settings-status--danger';
+  }
+  return 'settings-status--muted';
+}
+
+function formatHeartbeatAge(value: unknown): string {
+  const seconds = readOptionalNumber(value);
+  if (seconds === null) {
+    return 'Not reported';
+  }
+  if (seconds < 60) {
+    return `${Math.max(0, Math.round(seconds))}s ago`;
+  }
+  return `${Math.round(seconds / 60)}m ago`;
 }
 
 function deriveActiveModelPath(
@@ -381,6 +509,76 @@ function TransparencyModeSelect({
   );
 }
 
+function AgentComputerDetailsPanel({
+  attachments,
+  localTarget,
+  error,
+}: {
+  attachments: AgentComputerAttachment[];
+  localTarget: AgentComputerTargetSummary;
+  error: string | null;
+}) {
+  const selectedAttachment = attachments.find((attachment) => attachment.attachmentKind === 'local_companion')
+    ?? attachments.find((attachment) => attachment.attachmentKind === 'self_hosted_business_node')
+    ?? attachments.find((attachment) => attachment.attachmentKind === 'cloud_computer')
+    ?? null;
+  const nativeRuntime = selectedAttachment?.nativeRuntime ?? null;
+  const targetSelection = selectedAttachment?.targetSelection ?? {};
+  const heartbeatAge = formatHeartbeatAge(targetSelection.heartbeat_age_seconds);
+  const targetReason = selectedAttachment?.statusReason
+    ?? readOptionalString(targetSelection.reason)
+    ?? localTarget?.statusReason
+    ?? 'No blocker reported.';
+  const status = selectedAttachment?.status ?? localTarget?.status ?? 'offline';
+  const isReady = selectedAttachment
+    ? selectedAttachment.online && selectedAttachment.healthy
+    : Boolean(localTarget?.online && localTarget?.healthy);
+  const statusLabel = selectedAttachment
+    ? humanizeToken(status)
+    : localTarget?.statusLabel || humanizeToken(status);
+  const runtimeLine = nativeRuntime
+    ? [humanizeToken(nativeRuntime.os || 'unknown'), nativeRuntime.arch, nativeRuntime.release].filter(Boolean).join(' · ')
+    : 'Not reported yet';
+  const runtimeMode = nativeRuntime
+    ? nativeRuntime.systemServiceMode
+      ? 'System service mode'
+      : humanizeToken(nativeRuntime.desktopSession || 'user_session')
+    : 'Waiting for heartbeat';
+
+  return (
+    <article className="settings-detail-card settings-agent-computer-details">
+      <div className="settings-detail-card__header">
+        <div className="settings-agent-computer-details__copy">
+          <strong className="settings-detail-card__title">
+            {selectedAttachment?.label || localTarget?.label || 'This Device'}
+          </strong>
+          <p className="settings-detail-card__body">
+            Gateway connects this computer. Supervisor executes governed hardware actions.
+          </p>
+        </div>
+        <span className={joinClassNames('settings-status', statusToneClass(status, isReady))}>
+          {statusLabel}
+        </span>
+      </div>
+
+      {error ? <AppNotice tone="warning">{error}</AppNotice> : null}
+      {!selectedAttachment ? (
+        <AppNotice tone="neutral">Connect Agent Computer to see Gateway and Supervisor status.</AppNotice>
+      ) : null}
+
+      <details className="settings-agent-computer-connection">
+        <summary>Connection details</summary>
+        <FormGrid>
+          <FormReadout label="Target blocker" value={targetReason} />
+          <FormReadout label="Heartbeat" value={heartbeatAge} />
+          <FormReadout label="Native runtime" value={runtimeLine} />
+          <FormReadout label="Desktop mode" value={runtimeMode} />
+        </FormGrid>
+      </details>
+    </article>
+  );
+}
+
 export function WorkstationSettingsPane() {
   const searchParams = useSearchParams();
   const { bootstrap } = useWorkspaceBoundary();
@@ -395,6 +593,8 @@ export function WorkstationSettingsPane() {
   const [billingSummary, setBillingSummary] = useState<BillingSummaryPayload | null>(null);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogRecord[]>([]);
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfileRecord[]>([]);
+  const [runtimeAttachments, setRuntimeAttachments] = useState<AgentComputerAttachment[]>([]);
+  const [runtimeAttachmentError, setRuntimeAttachmentError] = useState<string | null>(null);
   const [transparencySettings, setTransparencySettings] = useState<TransparencySettingsPayload>(DEFAULT_TRANSPARENCY_SETTINGS);
   const [transparencyStatus, setTransparencyStatus] = useState<string | null>(null);
   const [transparencyError, setTransparencyError] = useState<string | null>(null);
@@ -417,6 +617,7 @@ export function WorkstationSettingsPane() {
   useEffect(() => {
     let cancelled = false;
     setAccountDetailsError(null);
+    setRuntimeAttachmentError(null);
 
     void Promise.allSettled([
       me(),
@@ -425,12 +626,21 @@ export function WorkstationSettingsPane() {
       services.client.listProviderProfiles(),
       services.client.getWorkspaceTransparencySettings(),
       listAuthProviders(),
+      services.client.listRuntimeAttachments(),
     ]).then((results) => {
       if (cancelled) {
         return;
       }
 
-      const [profileResult, billingResult, catalogResult, profilesResult, transparencyResult, authProvidersResult] = results;
+      const [
+        profileResult,
+        billingResult,
+        catalogResult,
+        profilesResult,
+        transparencyResult,
+        authProvidersResult,
+        runtimeAttachmentsResult,
+      ] = results;
 
       if (profileResult.status === 'fulfilled') {
         setAccountProfile((profileResult.value ?? null) as AccountProfilePayload | null);
@@ -454,8 +664,13 @@ export function WorkstationSettingsPane() {
           apple: { enabled: authProvidersResult.value?.apple?.enabled === true },
         });
       }
+      if (runtimeAttachmentsResult.status === 'fulfilled') {
+        setRuntimeAttachments(normalizeAgentComputerAttachments(runtimeAttachmentsResult.value));
+      } else {
+        setRuntimeAttachmentError('Agent Computer details could not refresh. Target health is still shown above.');
+      }
 
-      const failed = results.some((result) => result.status === 'rejected');
+      const failed = results.slice(0, 6).some((result) => result.status === 'rejected');
       if (failed) {
         setAccountDetailsError('Some account details could not refresh. Showing the last known basics.');
       }
@@ -752,6 +967,11 @@ export function WorkstationSettingsPane() {
                   value={preferredRuntimeTarget?.approvalMode ? humanizeToken(preferredRuntimeTarget.approvalMode) : 'Auto-run'}
                 />
               </FormGrid>
+              <AgentComputerDetailsPanel
+                attachments={runtimeAttachments}
+                localTarget={localCompanionTarget}
+                error={runtimeAttachmentError}
+              />
               <div className="settings-device-grid">
                 {bootstrap.runtime.runtimeTargets.map((target) => (
                   <article key={target.id} className="settings-detail-card">
@@ -783,7 +1003,7 @@ export function WorkstationSettingsPane() {
                     <strong className="settings-detail-card__title">Approval-gated actions</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    Sage pauses for review before destructive file changes, external sends, purchases, and dangerous shell commands.
+                    Empyralis pauses for review before high-risk hardware actions or external effects.
                   </p>
                 </article>
                 <article className="settings-detail-card">
@@ -799,7 +1019,7 @@ export function WorkstationSettingsPane() {
                     <strong className="settings-detail-card__title">This Device boundary</strong>
                   </div>
                   <p className="settings-detail-card__body">
-                    Local files, browser, clipboard, screenshots, and terminal require an online trusted device.
+                    A trusted online computer is required before Empyralis routes work onto this hardware.
                   </p>
                 </article>
                 <article className="settings-detail-card">

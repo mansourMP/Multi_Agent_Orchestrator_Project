@@ -1,8 +1,7 @@
-export type ApplicationSurfaceTabId = 'installed' | 'official' | 'my_apps';
+export type ApplicationSurfaceTabId = 'installed' | 'my_apps';
 
 export const APPLICATION_SURFACE_TABS: readonly { id: ApplicationSurfaceTabId; label: string }[] = [
   { id: 'installed', label: 'Apps' },
-  { id: 'official', label: 'Official' },
   { id: 'my_apps', label: 'Create app' },
 ];
 

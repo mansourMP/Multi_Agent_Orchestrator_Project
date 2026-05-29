@@ -235,6 +235,38 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(metadata["transcript_events"][0]["payload"]["event_type"], "tool.started")
         self.assertNotIn("input", metadata["transcript_events"][0]["payload"]["data"])
 
+    def test_assistant_turn_metadata_drops_reasoning_content(self):
+        agent_turn_module = importlib.import_module("server_modules.agent_turn")
+
+        metadata = agent_turn_module._assistant_turn_metadata_from_result(
+            {
+                "status": "completed",
+                "reply": "done",
+                "metadata": {
+                    "agent_role": "sage",
+                    "trace_id": "trace-1",
+                    "reasoning": "private chain",
+                    "reasoning_effort": "high",
+                    "context_used": {
+                        "provider": "openai",
+                        "model": "gpt-5.5",
+                        "chain_of_thought": "secret reasoning",
+                        "raw_chain_of_thought": "other secret reasoning",
+                    },
+                    "thinking": "not persisted",
+                },
+            },
+            request_id="req-1",
+        )
+
+        result_metadata = metadata["result_metadata"]
+        self.assertNotIn("reasoning", result_metadata)
+        self.assertNotIn("chain_of_thought", result_metadata.get("context_used", {}))
+        self.assertNotIn("raw_chain_of_thought", result_metadata.get("context_used", {}))
+        self.assertNotIn("thinking", result_metadata)
+        self.assertEqual(result_metadata["reasoning_effort"], "high")
+        self.assertEqual(metadata["request_id"], "req-1")
+
     def test_agent_turn_ensures_thread_before_starting_trace(self):
         turn_request = AgentTurnRequest(
             tenant_id="tenant-1",

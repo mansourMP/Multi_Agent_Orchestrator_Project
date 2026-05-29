@@ -62,6 +62,10 @@ def anyio_backend():
         ),
         ("/api/workspaces/ws-1/marketplace/packages/pkg-1/install", None),
         (
+            "/api/workspaces/ws-1/marketplace/packages/pkg-1/review",
+            {"approved": True},
+        ),
+        (
             "/api/workspaces/ws-1/marketplace/packages/pkg-1/runtime-events",
             {"event_type": "runtime_ok"},
         ),
@@ -151,20 +155,35 @@ async def test_marketplace_routes_register_install_and_track_runtime(monkeypatch
                 json={
                     "label": "Signal Forge Console",
                     "description": "Hosted app package distributed through the Empyralis shell.",
-                    "verification_status": "verified",
-                    "review_state": "approved",
-                    "health_state": "healthy",
+                    "category": "Operations",
                     "publisher": {"label": "Signal Forge"},
-                        "app": {
-                            "app_id": "signalforge_console",
-                            "hosted_url": "https://apps.signalforge.example/embed",
-                            "allowed_origins": ["https://apps.signalforge.example"],
-                            "permissions": ["app.summary.read"],
-                        },
+                    "app": {
+                        "app_id": "signalforge_console",
+                        "hosted_url": "https://apps.signalforge.example/embed",
+                        "icon_url": "https://apps.signalforge.example/icon.png",
+                        "allowed_origins": ["https://apps.signalforge.example"],
+                        "permissions": [],
                     },
-                )
+                },
+            )
             assert create_app.status_code == 200
             app_package_id = create_app.json()["package_id"]
+            assert create_app.json()["review_state"] == "pending"
+
+            queue = await client.get("/api/workspaces/ws-1/marketplace/app-submissions")
+            assert queue.status_code == 200
+            assert queue.json()["items"][0]["package_id"] == app_package_id
+
+            public_apps_before_review = await client.get("/api/workspaces/ws-1/marketplace/packages?kind=app&runtime_type=community")
+            assert public_apps_before_review.status_code == 200
+            assert public_apps_before_review.json()["count"] == 0
+
+            review_app = await client.post(
+                f"/api/workspaces/ws-1/marketplace/packages/{app_package_id}/review",
+                json={"approved": True, "verification_status": "partner", "reason": "Looks good."},
+            )
+            assert review_app.status_code == 200
+            assert review_app.json()["review_state"] == "approved"
 
             install_provider = await client.post(
                 f"/api/workspaces/ws-1/marketplace/packages/{provider_package_id}/install"

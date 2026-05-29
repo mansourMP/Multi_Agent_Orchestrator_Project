@@ -209,7 +209,6 @@ export function DeployedAgentTestTurnPane({
         />
         <div className="deployed-agent-chat__toolbar" aria-label="Workspace chat controls">
           <div className="deployed-agent-chat__controls">
-            <span className="deployed-agent-chat__test-pill">Private workspace chat · no customer send</span>
             <button
               className="deployed-agent-chat__reset"
               type="button"

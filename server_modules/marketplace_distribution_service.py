@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from server_modules import app_registry_api
 from server_modules import mini_apps_service
@@ -15,11 +16,37 @@ from server_modules import workspace_context
 
 MARKETPLACE_DISTRIBUTION_VERSION = 1
 PACKAGE_KINDS = {"agent_template", "app", "connector", "mini_app", "provider", "skill"}
-REVIEW_STATES = {"pending", "approved", "restricted"}
+REVIEW_STATES = {"pending", "approved", "rejected", "restricted"}
 VERIFICATION_STATUSES = {"unverified", "partner", "verified"}
 HEALTH_STATES = {"healthy", "degraded", "setup_required"}
 POLICY_POSTURES = {"governed", "restricted"}
 MONETIZATION_KINDS = {"free", "metered", "subscription", "revenue_share"}
+APP_RUNTIME_TYPES = {"link", "platform", "community", "private"}
+APP_RUNTIME_TYPE_ALIASES = {
+    "link": "link",
+    "url": "link",
+    "external": "link",
+    "external_link": "link",
+    "platform": "platform",
+    "first_party": "platform",
+    "platform_hosted": "platform",
+    "empyralis": "platform",
+    "community": "community",
+    "remote": "community",
+    "hosted": "community",
+    "hosted_url": "community",
+    "remote_server": "community",
+    "publisher_hosted": "community",
+    "private": "private",
+    "workspace_private": "private",
+    # Legacy local app modes are intentionally collapsed into community apps.
+    "local": "community",
+    "local_runtime": "community",
+    "agent_computer": "community",
+    "user_hardware": "community",
+    "customer_local": "community",
+    "hybrid": "community",
+}
 INSTALL_TARGETS = {
     "agent_template": "template_catalog",
     "app": "app_registry",
@@ -73,6 +100,69 @@ MAX_MARKETPLACE_DOMAIN_COUNT = 32
 
 
 PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
+    {
+        "package_id": "link-telegram",
+        "kind": "app",
+        "label": "Telegram",
+        "description": "Open Telegram Web from the Empyralis app launcher.",
+        "category": "Link",
+        "publisher": {"publisher_id": "empyralis", "label": "Empyralis"},
+        "verification_status": "unverified",
+        "review_state": "approved",
+        "health_state": "healthy",
+        "policy_posture": "governed",
+        "app": {
+            "app_id": "telegram_link",
+            "runtime_type": "link",
+            "destination_url": "https://web.telegram.org/",
+            "icon_url": "https://telegram.org/img/t_logo.png",
+            "allowed_origins": ["https://web.telegram.org"],
+            "permissions": [],
+            "bridge_contracts": {},
+        },
+    },
+    {
+        "package_id": "link-instagram",
+        "kind": "app",
+        "label": "Instagram",
+        "description": "Open Instagram from the Empyralis app launcher.",
+        "category": "Link",
+        "publisher": {"publisher_id": "empyralis", "label": "Empyralis"},
+        "verification_status": "unverified",
+        "review_state": "approved",
+        "health_state": "healthy",
+        "policy_posture": "governed",
+        "app": {
+            "app_id": "instagram_link",
+            "runtime_type": "link",
+            "destination_url": "https://www.instagram.com/",
+            "icon_url": "https://www.google.com/s2/favicons?domain=instagram.com&sz=128",
+            "allowed_origins": ["https://www.instagram.com"],
+            "permissions": [],
+            "bridge_contracts": {},
+        },
+    },
+    {
+        "package_id": "link-slack",
+        "kind": "app",
+        "label": "Slack",
+        "description": "Open Slack from the Empyralis app launcher.",
+        "category": "Link",
+        "publisher": {"publisher_id": "empyralis", "label": "Empyralis"},
+        "verification_status": "unverified",
+        "review_state": "approved",
+        "health_state": "healthy",
+        "policy_posture": "governed",
+        "app": {
+            "app_id": "slack_link",
+            "runtime_type": "link",
+            "destination_url": "https://app.slack.com/client",
+            "icon_url": "https://www.google.com/s2/favicons?domain=slack.com&sz=128",
+            "allowed_origins": ["https://app.slack.com"],
+            "permissions": [],
+            "bridge_contracts": {},
+        },
+    },
     {
         "package_id": "preview-restaurant-orders",
         "kind": "agent_template",
@@ -216,6 +306,108 @@ PREVIEW_MARKETPLACE_PACKAGES: List[Dict[str, Any]] = [
     },
 ]
 
+TOP_AGENT_STUDIO_SKILL_SEEDS: List[Dict[str, Any]] = [
+    {
+        "skill_id": "browser_automation",
+        "label": "Browser Automation",
+        "description": "Navigate pages, click controls, fill forms, and capture browser evidence through governed browser actions.",
+        "category": "Browser",
+        "permissions": ["browser:navigate", "browser:interact", "browser:screenshot"],
+        "tool_contracts": {"browser": ["navigate", "click", "type", "screenshot"]},
+        "runtime": "virtual_browser",
+    },
+    {
+        "skill_id": "file_workspace",
+        "label": "Workspace Files",
+        "description": "Read, search, and propose edits for workspace files with explicit write approval.",
+        "category": "Files",
+        "permissions": ["filesystem:read", "filesystem:edit_with_approval"],
+        "tool_contracts": {"files": ["read", "search", "propose_edit"]},
+        "runtime": "local",
+    },
+    {
+        "skill_id": "git_repository",
+        "label": "Git Repository",
+        "description": "Inspect branches, diffs, commits, and repository history before generating safe code changes.",
+        "category": "Developer",
+        "permissions": ["git:read", "git:diff", "git:status"],
+        "tool_contracts": {"git": ["status", "diff", "log"]},
+        "runtime": "local",
+    },
+    {
+        "skill_id": "postgres_query",
+        "label": "Postgres Query",
+        "description": "Inspect schemas and run read-only SQL queries against approved Postgres connections.",
+        "category": "Data",
+        "permissions": ["database:schema_read", "database:query_read"],
+        "tool_contracts": {"database": ["schema", "query_read"]},
+        "runtime": "auto",
+    },
+    {
+        "skill_id": "document_reader",
+        "label": "Document Reader",
+        "description": "Extract and summarize PDFs, docs, and long files into auditable workspace context.",
+        "category": "Knowledge",
+        "permissions": ["document:read", "document:extract"],
+        "tool_contracts": {"document": ["read", "extract", "summarize"]},
+        "runtime": "cloud",
+    },
+    {
+        "skill_id": "spreadsheet_analysis",
+        "label": "Spreadsheet Analysis",
+        "description": "Read tables, profile columns, calculate summaries, and prepare CSV or spreadsheet outputs.",
+        "category": "Data",
+        "permissions": ["spreadsheet:read", "spreadsheet:analyze"],
+        "tool_contracts": {"spreadsheet": ["read", "profile", "summarize"]},
+        "runtime": "cloud",
+    },
+    {
+        "skill_id": "email_drafting",
+        "label": "Email Drafting",
+        "description": "Draft replies and summaries for connected mailboxes without sending unless approval allows it.",
+        "category": "Communication",
+        "permissions": ["email:read_metadata", "email:draft"],
+        "tool_contracts": {"email": ["summarize", "draft_reply"]},
+        "runtime": "cloud",
+    },
+    {
+        "skill_id": "calendar_scheduling",
+        "label": "Calendar Scheduling",
+        "description": "Find availability and prepare calendar events while keeping final scheduling approval-gated.",
+        "category": "Operations",
+        "permissions": ["calendar:availability", "calendar:draft_event"],
+        "tool_contracts": {"calendar": ["availability", "draft_event"]},
+        "runtime": "cloud",
+    },
+]
+
+for _skill_seed in TOP_AGENT_STUDIO_SKILL_SEEDS:
+    PREVIEW_MARKETPLACE_PACKAGES.append(
+        {
+            "package_id": f"preview-{_skill_seed['skill_id'].replace('_', '-')}",
+            "kind": "skill",
+            "label": _skill_seed["label"],
+            "description": _skill_seed["description"],
+            "category": _skill_seed["category"],
+            "publisher": {"publisher_id": "empyralis", "label": "Empyralis", "website": "https://empyralis.dev"},
+            "onboarding": {"docs_url": "/docs/studio-marketplace-ux-boundary-2026-04-30.md"},
+            "verification_status": "verified",
+            "review_state": "approved",
+            "health_state": "setup_required",
+            "policy_posture": "governed",
+            "billing": {
+                "monetization_kind": "metered",
+                "accounting_hook": {"ledger_key": f"skill.{_skill_seed['skill_id']}", "hook_kind": "tool_usage"},
+            },
+            "skill": {
+                "skill_id": _skill_seed["skill_id"],
+                "runtime": _skill_seed["runtime"],
+                "permissions": list(_skill_seed["permissions"]),
+                "tool_contracts": dict(_skill_seed["tool_contracts"]),
+            },
+        }
+    )
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -234,6 +426,10 @@ def _slug_token(value: Any, *, allow_dot: bool = False) -> str:
     token = re.sub(pattern, "-", str(value or "").strip().lower())
     token = re.sub(r"-{2,}", "-", token).strip("-")
     return token
+
+
+def _brand_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
 
 
 def _compact_text(value: Any, *, limit: int = 600) -> str:
@@ -259,6 +455,76 @@ def _normalize_list_of_strings(value: Any) -> List[str]:
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _normalize_domain(value: Any) -> Optional[str]:
+    token = str(value or "").strip().lower()
+    if not token:
+        return None
+    candidate = token if "://" in token else f"https://{token}"
+    parsed = urlparse(candidate)
+    host = (parsed.hostname or token.split("/", 1)[0]).strip(".").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
+
+
+def _domain_matches(domain: Optional[str], allowed_domains: set[str]) -> bool:
+    normalized = _normalize_domain(domain)
+    if not normalized:
+        return False
+    return any(normalized == allowed or normalized.endswith(f".{allowed}") for allowed in allowed_domains)
+
+
+def _normalize_url(value: Any) -> Optional[str]:
+    token = str(value or "").strip()
+    return token or None
+
+
+def _normalize_public_https_url(value: Any, *, field_name: str) -> Optional[str]:
+    token = _normalize_url(value)
+    if not token:
+        return None
+    parsed = urlparse(token)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError(f"{field_name} must be a public HTTPS URL.")
+    return token
+
+
+def _normalize_internal_route(value: Any, *, default: Optional[str] = None) -> Optional[str]:
+    token = str(value or default or "").strip()
+    if not token:
+        return None
+    if not token.startswith("/"):
+        raise ValueError("Platform app routes must be internal paths.")
+    if token.startswith("//"):
+        raise ValueError("Platform app routes must be internal paths.")
+    return token
+
+
+def _normalize_app_runtime_type(value: Any, *, default: str = "community") -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    if not token:
+        return default if default in APP_RUNTIME_TYPES else "community"
+    return APP_RUNTIME_TYPE_ALIASES.get(token, default if default in APP_RUNTIME_TYPES else "community")
+
+
+def _normalize_domain_proof(value: Any, *, publisher_id: str, publisher_domain: Optional[str]) -> Dict[str, Any]:
+    payload = _coerce_dict(value)
+    method = str(payload.get("method") or payload.get("proof_method") or "").strip().lower() or None
+    proof_token = str(payload.get("token") or payload.get("proof_token") or payload.get("value") or "").strip() or None
+    expected_token = f"empyralis-publisher={publisher_id}" if publisher_id else None
+    status = str(payload.get("status") or "").strip().lower()
+    if status not in {"verified", "pending", "missing", "failed"}:
+        status = "verified" if proof_token and expected_token and proof_token == expected_token else "pending"
+    return {
+        "publisher_domain": publisher_domain,
+        "method": method,
+        "status": status,
+        "token": proof_token,
+        "expected_token": expected_token,
+        "verified_at": str(payload.get("verified_at") or "").strip() or None,
+    }
 
 
 def _default_state() -> Dict[str, Any]:
@@ -342,12 +608,26 @@ def _normalize_publisher(value: Any, *, package_id: str) -> Dict[str, Any]:
     payload = _coerce_dict(value)
     publisher_id = _slug_token(payload.get("publisher_id") or payload.get("id") or package_id, allow_dot=True)
     label = _compact_text(payload.get("label") or payload.get("name") or publisher_id or "Unknown publisher", limit=160)
+    website = _normalize_url(payload.get("website"))
+    publisher_domain = _normalize_domain(
+        payload.get("publisher_domain")
+        or payload.get("domain")
+        or website
+    )
+    domain_proof = _normalize_domain_proof(
+        payload.get("domain_proof") or payload.get("publisher_domain_proof"),
+        publisher_id=publisher_id or package_id,
+        publisher_domain=publisher_domain,
+    )
     return {
         "publisher_id": publisher_id or package_id,
+        "publisher_name": label or package_id,
         "label": label or package_id,
-        "website": str(payload.get("website") or "").strip() or None,
-        "support_url": str(payload.get("support_url") or "").strip() or None,
-        "docs_url": str(payload.get("docs_url") or "").strip() or None,
+        "publisher_domain": publisher_domain,
+        "domain_proof": domain_proof,
+        "website": website,
+        "support_url": _normalize_url(payload.get("support_url")),
+        "docs_url": _normalize_url(payload.get("docs_url")),
         "contact_email": str(payload.get("contact_email") or "").strip().lower() or None,
     }
 
@@ -374,10 +654,10 @@ def _normalize_billing(value: Any) -> Dict[str, Any]:
 def _normalize_onboarding(value: Any) -> Dict[str, Any]:
     payload = _coerce_dict(value)
     return {
-        "docs_url": str(payload.get("docs_url") or "").strip() or None,
-        "terms_url": str(payload.get("terms_url") or "").strip() or None,
-        "privacy_url": str(payload.get("privacy_url") or "").strip() or None,
-        "support_url": str(payload.get("support_url") or "").strip() or None,
+        "docs_url": _normalize_url(payload.get("docs_url")),
+        "terms_url": _normalize_url(payload.get("terms_url")),
+        "privacy_url": _normalize_url(payload.get("privacy_url")),
+        "support_url": _normalize_url(payload.get("support_url")),
         "contact_email": str(payload.get("contact_email") or "").strip().lower() or None,
         "installation_notes": _compact_text(payload.get("installation_notes"), limit=500) or None,
     }
@@ -453,19 +733,55 @@ def _normalize_app_payload(package_id: str, value: Any) -> Dict[str, Any]:
     app_id = _slug_token(payload.get("app_id") or package_id)
     if not app_id:
         raise ValueError("Marketplace app packages require an app_id.")
-    hosted_url = str(payload.get("hosted_url") or "").strip()
-    if not hosted_url:
-        raise ValueError("Marketplace app packages require a hosted_url.")
+    runtime_type = _normalize_app_runtime_type(
+        payload.get("runtime_type") or payload.get("runtime_mode") or payload.get("runtime"),
+        default="community",
+    )
+    hosted_url: Optional[str] = None
+    destination_url: Optional[str] = None
+    platform_route: Optional[str] = None
+    if runtime_type == "link":
+        destination_url = _normalize_public_https_url(
+            payload.get("destination_url") or payload.get("hosted_url") or payload.get("url"),
+            field_name="Link app destination_url",
+        )
+        hosted_url = destination_url
+    elif runtime_type == "platform":
+        platform_route = _normalize_internal_route(
+            payload.get("platform_route") or payload.get("entry_route"),
+            default=f"/w/{{workspace_id}}/applications/{app_id}",
+        )
+        hosted_url = _normalize_url(payload.get("hosted_url"))
+    elif runtime_type == "private":
+        hosted_url = _normalize_url(payload.get("hosted_url") or payload.get("url"))
+    else:
+        hosted_url = _normalize_public_https_url(
+            payload.get("hosted_url") or payload.get("url"),
+            field_name="Community app hosted_url",
+        )
     release_channel = str(payload.get("release_channel") or "stable").strip().lower() or "stable"
+    icon_url = _normalize_url(payload.get("icon_url") or payload.get("iconUrl") or payload.get("image_url"))
+    if runtime_type in {"link", "community"} and icon_url:
+        icon_url = _normalize_public_https_url(icon_url, field_name="App icon_url")
     return {
         "app_id": app_id,
         "version": str(payload.get("version") or "1.0.0").strip() or "1.0.0",
         "latest_version": str(payload.get("latest_version") or payload.get("version") or "1.0.0").strip() or "1.0.0",
         "release_channel": release_channel,
         "hosted_url": hosted_url,
+        "destination_url": destination_url,
+        "platform_route": platform_route,
+        "icon_url": icon_url,
+        "runtime_type": runtime_type,
+        "runtime_mode": runtime_type,
         "embed_kind": str(payload.get("embed_kind") or "iframe").strip().lower() or "iframe",
-        "entry_route": str(payload.get("entry_route") or f"/applications/{app_id}").strip() or f"/applications/{app_id}",
+        "entry_route": str(payload.get("entry_route") or platform_route or f"/applications/{app_id}").strip() or f"/applications/{app_id}",
         "icon": str(payload.get("icon") or "apps").strip() or "apps",
+        "publisher_id": str(payload.get("publisher_id") or "").strip() or None,
+        "publisher_name": _compact_text(payload.get("publisher_name"), limit=160) or None,
+        "support_url": _normalize_url(payload.get("support_url")),
+        "privacy_url": _normalize_url(payload.get("privacy_url")),
+        "terms_url": _normalize_url(payload.get("terms_url")),
         "permissions": _normalize_list_of_strings(payload.get("permissions")),
         "allowed_origins": _normalize_list_of_strings(payload.get("allowed_origins")),
         "bridge_contracts": {
@@ -475,6 +791,61 @@ def _normalize_app_payload(package_id: str, value: Any) -> Dict[str, Any]:
         },
         "context_envelope": _coerce_dict(payload.get("context_envelope")),
     }
+
+
+def _app_listing_url(
+    package_payload: Dict[str, Any],
+    onboarding: Dict[str, Any],
+    publisher: Dict[str, Any],
+    key: str,
+) -> Optional[str]:
+    if package_payload.get(key):
+        return str(package_payload.get(key) or "").strip()
+    if onboarding.get(key):
+        return str(onboarding.get(key) or "").strip()
+    if key == "support_url" and publisher.get("support_url"):
+        return str(publisher.get("support_url") or "").strip()
+    return None
+
+
+def _enrich_app_identity_payload(
+    package_payload: Dict[str, Any],
+    *,
+    publisher: Dict[str, Any],
+    onboarding: Dict[str, Any],
+) -> Dict[str, Any]:
+    enriched = dict(package_payload)
+    enriched["publisher_id"] = enriched.get("publisher_id") or publisher.get("publisher_id")
+    enriched["publisher_name"] = enriched.get("publisher_name") or publisher.get("publisher_name") or publisher.get("label")
+    enriched["support_url"] = _app_listing_url(enriched, onboarding, publisher, "support_url")
+    enriched["privacy_url"] = _app_listing_url(enriched, onboarding, publisher, "privacy_url")
+    enriched["terms_url"] = _app_listing_url(enriched, onboarding, publisher, "terms_url")
+    return enriched
+
+
+def _app_identity_review_findings(
+    *,
+    package_kind: str,
+    package_id: str,
+    label: str,
+    package_payload: Dict[str, Any],
+    publisher: Dict[str, Any],
+    onboarding: Dict[str, Any],
+    verification_status: str,
+) -> List[str]:
+    if package_kind not in {"app", "mini_app"}:
+        return []
+    findings: List[str] = []
+    runtime_type = _normalize_app_runtime_type(package_payload.get("runtime_type"), default="community")
+    if runtime_type in {"link", "community"} and not str(package_payload.get("icon_url") or "").strip():
+        findings.append("missing_app_icon")
+    if runtime_type == "link" and not str(package_payload.get("destination_url") or package_payload.get("hosted_url") or "").strip():
+        findings.append("missing_destination_url")
+    if runtime_type in {"community", "private"} and not str(package_payload.get("hosted_url") or "").strip():
+        findings.append("missing_hosted_url")
+    if runtime_type == "platform" and not str(package_payload.get("platform_route") or package_payload.get("entry_route") or "").strip():
+        findings.append("missing_platform_route")
+    return _unique_strings(findings)
 
 
 def _normalize_connector_payload(package_id: str, value: Any) -> Dict[str, Any]:
@@ -564,6 +935,8 @@ def _derive_required_permissions(package_kind: str, package_payload: Dict[str, A
 def _derive_required_runtime(package_kind: str, package_payload: Dict[str, Any], explicit_runtime: str) -> str:
     if explicit_runtime in VALID_MARKETPLACE_RUNTIME_REQUIREMENTS:
         return explicit_runtime
+    if package_kind in {"app", "mini_app"}:
+        return "cloud"
     if package_kind == "provider":
         return "cloud"
     if package_kind == "connector":
@@ -706,12 +1079,32 @@ def _normalize_package_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         package_payload = _normalize_skill_payload(package_id, payload.get("skill"))
     else:
         package_payload = _normalize_provider_payload(package_id, payload.get("provider"))
+    publisher = _normalize_publisher(payload.get("publisher"), package_id=package_id)
+    onboarding = _normalize_onboarding(payload.get("onboarding"))
+    verification_status = _normalize_verification_status(payload.get("verification_status"))
+    if package_kind in {"app", "mini_app"}:
+        package_payload = _enrich_app_identity_payload(
+            package_payload,
+            publisher=publisher,
+            onboarding=onboarding,
+        )
     marketplace_contract = _normalize_marketplace_contract(
         payload,
         package_kind=package_kind,
         package_payload=package_payload,
     )
-    review_findings = _marketplace_contract_review_findings(marketplace_contract)
+    review_findings = _unique_strings(
+        _marketplace_contract_review_findings(marketplace_contract)
+        + _app_identity_review_findings(
+            package_kind=package_kind,
+            package_id=package_id,
+            label=label,
+            package_payload=package_payload,
+            publisher=publisher,
+            onboarding=onboarding,
+            verification_status=verification_status,
+        )
+    )
     install_target = INSTALL_TARGETS[package_kind]
     return {
         "package_id": package_id,
@@ -719,9 +1112,9 @@ def _normalize_package_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "label": label,
         "description": description,
         "category": str(payload.get("category") or DEFAULT_CATEGORIES[package_kind]).strip() or DEFAULT_CATEGORIES[package_kind],
-        "publisher": _normalize_publisher(payload.get("publisher"), package_id=package_id),
-        "onboarding": _normalize_onboarding(payload.get("onboarding")),
-        "verification_status": _normalize_verification_status(payload.get("verification_status")),
+        "publisher": publisher,
+        "onboarding": onboarding,
+        "verification_status": verification_status,
         "review_state": _normalize_review_state(payload.get("review_state")),
         "health_state": _normalize_health_state(payload.get("health_state")),
         "policy_posture": _normalize_policy_posture(payload.get("policy_posture")),
@@ -829,8 +1222,15 @@ def _preview_marketplace_packages() -> Dict[str, Dict[str, Any]]:
             and existing_verification in {"verified", "partner"}
             and existing_posture == "governed"
         )
-        package["preview_only"] = preview_catalog_package or not (installable_seed or has_trust_metadata)
-        if not preview_catalog_package and (installable_seed or has_trust_metadata):
+        package_payload = _coerce_dict(package.get(str(package.get("kind") or "").strip()))
+        curated_link_app = (
+            str(package.get("kind") or "").strip() == "app"
+            and _normalize_app_runtime_type(package_payload.get("runtime_type"), default="community") == "link"
+            and existing_review == "approved"
+            and existing_posture == "governed"
+        )
+        package["preview_only"] = preview_catalog_package or not (installable_seed or has_trust_metadata or curated_link_app)
+        if not preview_catalog_package and (installable_seed or has_trust_metadata or curated_link_app):
             package["install_target"] = INSTALL_TARGETS.get(str(package.get("kind") or "").strip(), "marketplace_contract")
             package["review_state"] = "approved"
             package["verification_status"] = "verified"
@@ -864,6 +1264,7 @@ def _ensure_app_registry_exports() -> None:
 def _upsert_marketplace_app_registry_item(package: Dict[str, Any], *, installed: bool) -> Dict[str, Any]:
     _ensure_app_registry_exports()
     app_payload = _coerce_dict(package.get("app"))
+    publisher = _coerce_dict(package.get("publisher"))
     app_id = str(app_payload.get("app_id") or "").strip()
     if not app_id:
         raise ValueError("Marketplace app payload is missing app_id.")
@@ -876,11 +1277,12 @@ def _upsert_marketplace_app_registry_item(package: Dict[str, Any], *, installed:
                 "name": str(package.get("label") or app_id).strip() or app_id,
                 "description": str(package.get("description") or "").strip(),
                 "icon": str(app_payload.get("icon") or "apps").strip() or "apps",
+                "icon_url": app_payload.get("icon_url"),
                 "category": str(package.get("category") or "Marketplace").strip() or "Marketplace",
                 "status": "available",
                 "version": str(app_payload.get("version") or "1.0.0").strip() or "1.0.0",
                 "latest_version": str(app_payload.get("latest_version") or app_payload.get("version") or "1.0.0").strip() or "1.0.0",
-                "publisher": str(_coerce_dict(package.get("publisher")).get("label") or "marketplace").strip() or "marketplace",
+                "publisher": str(publisher.get("label") or "marketplace").strip() or "marketplace",
                 "entry_route": str(app_payload.get("entry_route") or f"/applications/{app_id}").strip() or f"/applications/{app_id}",
                 "permissions": list(app_payload.get("permissions") or []),
                 "source": "third_party_marketplace",
@@ -890,11 +1292,24 @@ def _upsert_marketplace_app_registry_item(package: Dict[str, Any], *, installed:
             {
                 "name": str(package.get("label") or app_item.get("name") or app_id).strip() or app_id,
                 "description": str(package.get("description") or app_item.get("description") or "").strip(),
+                "icon": str(app_payload.get("icon") or app_item.get("icon") or "apps").strip() or "apps",
+                "icon_url": app_payload.get("icon_url"),
                 "category": str(package.get("category") or app_item.get("category") or "Marketplace").strip() or "Marketplace",
                 "version": str(app_payload.get("version") or app_item.get("version") or "1.0.0").strip() or "1.0.0",
                 "latest_version": str(app_payload.get("latest_version") or app_payload.get("version") or app_item.get("latest_version") or "1.0.0").strip() or "1.0.0",
-                "publisher": str(_coerce_dict(package.get("publisher")).get("label") or app_item.get("publisher") or "marketplace").strip() or "marketplace",
+                "publisher": str(publisher.get("label") or app_item.get("publisher") or "marketplace").strip() or "marketplace",
+                "publisher_id": app_payload.get("publisher_id") or publisher.get("publisher_id"),
+                "publisher_name": app_payload.get("publisher_name") or publisher.get("publisher_name") or publisher.get("label"),
+                "support_url": app_payload.get("support_url") or publisher.get("support_url"),
+                "privacy_url": app_payload.get("privacy_url"),
+                "terms_url": app_payload.get("terms_url"),
                 "entry_route": str(app_payload.get("entry_route") or app_item.get("entry_route") or f"/applications/{app_id}").strip() or f"/applications/{app_id}",
+                "hosted_url": app_payload.get("hosted_url"),
+                "destination_url": app_payload.get("destination_url"),
+                "platform_route": app_payload.get("platform_route"),
+                "runtime_type": app_payload.get("runtime_type") or "community",
+                "runtime_mode": app_payload.get("runtime_type") or "community",
+                "allowed_origins": list(app_payload.get("allowed_origins") or []),
                 "permissions": list(app_payload.get("permissions") or []),
                 "source": "third_party_marketplace",
                 "package_id": str(package.get("package_id") or "").strip() or None,
@@ -905,7 +1320,8 @@ def _upsert_marketplace_app_registry_item(package: Dict[str, Any], *, installed:
                     "review_state": package.get("review_state"),
                     "health_state": package.get("health_state"),
                     "policy_posture": package.get("policy_posture"),
-                    "billing": _coerce_dict(package.get("billing")),
+                    "runtime_type": app_payload.get("runtime_type") or "community",
+                    "publisher": publisher,
                 },
             }
         )
@@ -930,7 +1346,18 @@ def _sync_marketplace_app_to_mini_apps(workspace_id: str, package: Dict[str, Any
         str(app_payload.get("app_id") or "").strip(),
         label=package.get("label"),
         description=package.get("description"),
-        delivery_mode="hosted",
+        icon_url=app_payload.get("icon_url"),
+        publisher_id=app_payload.get("publisher_id"),
+        publisher_name=app_payload.get("publisher_name"),
+        support_url=app_payload.get("support_url"),
+        privacy_url=app_payload.get("privacy_url"),
+        terms_url=app_payload.get("terms_url"),
+        runtime_type=app_payload.get("runtime_type"),
+        destination_url=app_payload.get("destination_url"),
+        platform_route=app_payload.get("platform_route"),
+        category=package.get("category"),
+        verification_status=package.get("verification_status"),
+        delivery_mode="hosted" if app_payload.get("hosted_url") else "structured",
         hosted_url=app_payload.get("hosted_url"),
         embed_kind=app_payload.get("embed_kind"),
         allowed_origins=app_payload.get("allowed_origins"),
@@ -947,13 +1374,31 @@ def _package_open_href(workspace_id: str, package: Dict[str, Any]) -> Optional[s
         if template_id:
             return f"/w/{workspace_id}/studio?proof_agent={template_id}"
     if package_kind == "app":
-        app_id = str(_coerce_dict(package.get("app")).get("app_id") or "").strip()
+        app_payload = _coerce_dict(package.get("app"))
+        runtime_type = _normalize_app_runtime_type(app_payload.get("runtime_type"), default="community")
+        if runtime_type == "link":
+            return str(app_payload.get("destination_url") or app_payload.get("hosted_url") or "").strip() or None
+        if runtime_type == "platform":
+            platform_route = str(app_payload.get("platform_route") or app_payload.get("entry_route") or "").strip()
+            if "{workspace_id}" in platform_route:
+                platform_route = platform_route.replace("{workspace_id}", workspace_id)
+            return platform_route or None
+        app_id = str(app_payload.get("app_id") or "").strip()
         if app_id:
             return f"/w/{workspace_id}/applications/{app_id}"
     if package_kind == "mini_app":
-        app_id = str(_coerce_dict(package.get("mini_app")).get("app_id") or "").strip()
+        app_payload = _coerce_dict(package.get("mini_app"))
+        runtime_type = _normalize_app_runtime_type(app_payload.get("runtime_type"), default="community")
+        if runtime_type == "link":
+            return str(app_payload.get("destination_url") or app_payload.get("hosted_url") or "").strip() or None
+        if runtime_type == "platform":
+            platform_route = str(app_payload.get("platform_route") or app_payload.get("entry_route") or "").strip()
+            if "{workspace_id}" in platform_route:
+                platform_route = platform_route.replace("{workspace_id}", workspace_id)
+            return platform_route or None
+        app_id = str(app_payload.get("app_id") or "").strip()
         if app_id:
-            return f"/w/{workspace_id}/mini-apps/{app_id}"
+            return f"/w/{workspace_id}/applications/{app_id}"
     if package_kind == "provider":
         return f"/w/{workspace_id}/integrations"
     if package_kind == "connector":
@@ -968,9 +1413,10 @@ def _runtime_truth_projection(workspace_id: str, package: Dict[str, Any], instal
     install_state = "installed" if isinstance(install, dict) else "available"
     surface = INSTALL_TARGETS.get(kind, "marketplace_contract")
     runtime_state = str(package.get("health_state") or "setup_required").strip() or "setup_required"
+    package_payload = _coerce_dict(package.get(kind))
     if kind == "provider" and install_state == "installed" and runtime_state == "healthy":
         runtime_state = "setup_required"
-    return {
+    projection = {
         "surface": surface,
         "install_state": install_state,
         "health_state": runtime_state,
@@ -979,15 +1425,20 @@ def _runtime_truth_projection(workspace_id: str, package: Dict[str, Any], instal
         "policy_posture": str(package.get("policy_posture") or "governed").strip() or "governed",
         "open_href": _package_open_href(workspace_id, package),
     }
+    if kind in {"app", "mini_app"}:
+        projection["runtime_type"] = _normalize_app_runtime_type(package_payload.get("runtime_type"), default="community")
+        projection["runtime_mode"] = projection["runtime_type"]
+    return projection
 
 
 def _install_blockers(package: Dict[str, Any]) -> List[str]:
     blockers: List[str] = []
+    kind = str(package.get("kind") or "").strip().lower()
     if bool(package.get("preview_only")):
         blockers.append("preview_only")
     if str(package.get("review_state") or "").strip() != "approved":
         blockers.append("review_not_approved")
-    if str(package.get("verification_status") or "").strip() == "unverified":
+    if kind not in {"app", "mini_app"} and str(package.get("verification_status") or "").strip() == "unverified":
         blockers.append("verification_required")
     if str(package.get("policy_posture") or "").strip() != "governed":
         blockers.append("policy_restricted")
@@ -1002,6 +1453,14 @@ def _install_blockers(package: Dict[str, Any]) -> List[str]:
         blockers.append("unsafe_local_runtime_permission_combo")
     if "owner_resource_boundary_violation" in review_findings:
         blockers.append("owner_resource_boundary_violation")
+    for finding in (
+        "missing_app_icon",
+        "missing_destination_url",
+        "missing_hosted_url",
+        "missing_platform_route",
+    ):
+        if finding in review_findings:
+            blockers.append(finding)
     return blockers
 
 
@@ -1039,6 +1498,11 @@ def _public_package_payload(workspace_id: str, package: Dict[str, Any], install:
         },
         "marketplace_review_findings": _normalize_list_of_strings(package.get("marketplace_review_findings")),
         "marketplace_proof": _coerce_dict(package.get("marketplace_proof")),
+        "submitted_by_user_id": package.get("submitted_by_user_id"),
+        "submitted_at": package.get("submitted_at"),
+        "reviewed_by_user_id": package.get("reviewed_by_user_id"),
+        "reviewed_at": package.get("reviewed_at"),
+        "review_reason": package.get("review_reason"),
         "analytics": {
             "install_count": int(analytics.get("install_count") or 0),
             "runtime_event_count": int(analytics.get("runtime_event_count") or 0),
@@ -1053,10 +1517,17 @@ def _public_package_payload(workspace_id: str, package: Dict[str, Any], install:
     }
 
 
-def list_marketplace_packages(workspace_id: str, *, kind: Optional[str] = None) -> Dict[str, Any]:
+def list_marketplace_packages(
+    workspace_id: str,
+    *,
+    kind: Optional[str] = None,
+    runtime_type: Optional[str] = None,
+    include_review_queue: bool = False,
+) -> Dict[str, Any]:
     normalized_workspace_id = _normalize_workspace_id(workspace_id)
     state = _safe_read_state(normalized_workspace_id)
     requested_kind = str(kind or "").strip().lower()
+    requested_runtime_type = _normalize_app_runtime_type(runtime_type, default="") if runtime_type else ""
     source_packages = state.get("packages", {})
     if not source_packages:
         source_packages = _preview_marketplace_packages()
@@ -1064,7 +1535,40 @@ def list_marketplace_packages(workspace_id: str, *, kind: Optional[str] = None) 
     for package_id, entry in sorted(source_packages.items()):
         if not isinstance(entry, dict):
             continue
-        if requested_kind and str(entry.get("kind") or "").strip().lower() != requested_kind:
+        entry_kind = str(entry.get("kind") or "").strip().lower()
+        if requested_kind and entry_kind != requested_kind:
+            continue
+        if entry_kind in {"app", "mini_app"}:
+            entry_payload = _coerce_dict(entry.get(entry_kind))
+            entry_runtime_type = _normalize_app_runtime_type(entry_payload.get("runtime_type"), default="community")
+            if requested_runtime_type and entry_runtime_type != requested_runtime_type:
+                continue
+            if not include_review_queue:
+                if entry_runtime_type == "private":
+                    continue
+                if str(entry.get("review_state") or "").strip() != "approved":
+                    continue
+        install = _coerce_dict(state.get("installs", {}).get(package_id))
+        items.append(_public_package_payload(normalized_workspace_id, entry, install if install else None))
+    return {
+        "workspace_id": normalized_workspace_id,
+        "version": MARKETPLACE_DISTRIBUTION_VERSION,
+        "count": len(items),
+        "items": items,
+        "updated_at": state.get("updated_at"),
+    }
+
+
+def list_marketplace_app_submissions(workspace_id: str) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    state = _safe_read_state(normalized_workspace_id)
+    items: List[Dict[str, Any]] = []
+    for package_id, entry in sorted((state.get("packages") or {}).items()):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("kind") or "").strip().lower() != "app":
+            continue
+        if str(entry.get("review_state") or "").strip() == "approved":
             continue
         install = _coerce_dict(state.get("installs", {}).get(package_id))
         items.append(_public_package_payload(normalized_workspace_id, entry, install if install else None))
@@ -1129,6 +1633,89 @@ def register_marketplace_package(
     )
     registered["registered_by_user_id"] = actor_user_id
     return registered
+
+
+def submit_community_app(
+    workspace_id: str,
+    *,
+    actor_user_id: Optional[str],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    clean_payload = dict(payload or {})
+    app_payload = _coerce_dict(clean_payload.get("app"))
+    if not str(clean_payload.get("label") or "").strip():
+        raise ValueError("Community app submissions require an app name.")
+    if not str(clean_payload.get("description") or "").strip():
+        raise ValueError("Community app submissions require a short description.")
+    if not str(clean_payload.get("category") or "").strip():
+        raise ValueError("Community app submissions require a category.")
+    if not str(app_payload.get("hosted_url") or app_payload.get("url") or "").strip():
+        raise ValueError("Community app submissions require a public HTTPS hosted URL.")
+    if not str(app_payload.get("icon_url") or app_payload.get("iconUrl") or "").strip():
+        raise ValueError("Community app submissions require an icon URL.")
+    clean_payload["kind"] = "app"
+    clean_payload["verification_status"] = "unverified"
+    clean_payload["review_state"] = "pending"
+    clean_payload["health_state"] = "setup_required"
+    clean_payload["policy_posture"] = "governed"
+    clean_payload["approval_required"] = False
+    app_payload["runtime_type"] = "community"
+    app_payload["permissions"] = _normalize_list_of_strings(app_payload.get("permissions"))
+    app_payload["bridge_contracts"] = _coerce_dict(app_payload.get("bridge_contracts"))
+    clean_payload["app"] = app_payload
+    submitted = register_marketplace_package(
+        workspace_id,
+        actor_user_id=actor_user_id,
+        payload=clean_payload,
+    )
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_package_id = _slug_token(submitted.get("package_id"), allow_dot=True)
+    state = _safe_read_state(normalized_workspace_id)
+    package = _coerce_dict(state.get("packages", {}).get(normalized_package_id))
+    package["submitted_by_user_id"] = str(actor_user_id or "").strip() or None
+    package["submitted_at"] = package.get("submitted_at") or _utc_now_iso()
+    packages = dict(state.get("packages") or {})
+    packages[normalized_package_id] = package
+    state["packages"] = packages
+    _save_state(normalized_workspace_id, state)
+    return _public_package_payload(normalized_workspace_id, package, None)
+
+
+def review_marketplace_app_submission(
+    workspace_id: str,
+    *,
+    package_id: str,
+    actor_user_id: Optional[str],
+    approved: bool,
+    reason: Optional[str] = None,
+    verification_status: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_package_id = _slug_token(package_id, allow_dot=True)
+    state = _safe_read_state(normalized_workspace_id)
+    packages = dict(state.get("packages") or {})
+    package = _coerce_dict(packages.get(normalized_package_id))
+    if not package:
+        raise KeyError(f"Marketplace package '{normalized_package_id}' was not found.")
+    if str(package.get("kind") or "").strip() != "app":
+        raise ValueError("Only app submissions can be reviewed with this action.")
+    package["review_state"] = "approved" if approved else "rejected"
+    package["health_state"] = "healthy" if approved else "setup_required"
+    if verification_status is not None:
+        package["verification_status"] = _normalize_verification_status(verification_status)
+    elif approved:
+        package["verification_status"] = _normalize_verification_status(package.get("verification_status"))
+    else:
+        package["verification_status"] = "unverified"
+    package["reviewed_by_user_id"] = str(actor_user_id or "").strip() or None
+    package["reviewed_at"] = _utc_now_iso()
+    package["review_reason"] = _compact_text(reason, limit=500) or None
+    package["updated_at"] = _utc_now_iso()
+    packages[normalized_package_id] = package
+    state["packages"] = packages
+    _save_state(normalized_workspace_id, state)
+    install = _coerce_dict(state.get("installs", {}).get(normalized_package_id))
+    return _public_package_payload(normalized_workspace_id, package, install if install else None)
 
 
 def install_marketplace_package(

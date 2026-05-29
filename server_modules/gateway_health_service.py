@@ -9,6 +9,7 @@ from server_modules import (
     control_plane_repository,
     deployed_agent_service,
     gateway_approval_service,
+    gateway_inventory_service,
     gateway_state_repository,
     personal_channels_service,
     personal_channels_repository,
@@ -422,9 +423,16 @@ def gateway_doctor_payload(gateway_id: str, *, force_provider_probe: bool = Fals
 
     heartbeat_age = _age_seconds((latest_session or {}).get("last_heartbeat_at") if latest_session else registration.get("last_heartbeat_at"))
     session_status = str((latest_session or {}).get("status") or "").strip().lower()
-    reported_health = str((latest_session or {}).get("metadata", {}).get("health_state") or registration.get("metadata", {}).get("health_state") or "").strip().lower()
+    session_metadata = dict((latest_session or {}).get("metadata") or {})
+    registration_metadata = dict(registration.get("metadata") or {})
+    reported_health = str(session_metadata.get("health_state") or registration_metadata.get("health_state") or "").strip().lower()
     session_connected = session_status == "connected"
     heartbeat_fresh = heartbeat_age is not None and heartbeat_age <= 45
+    service_inventory = gateway_inventory_service.service_inventory_payload(
+        session_metadata=session_metadata,
+        registration_metadata=registration_metadata,
+        heartbeat_fresh=heartbeat_fresh,
+    )
     registration_active = str(registration.get("status") or "").strip().lower() == "active"
     device_verified = str(registration.get("device_trust_state") or "").strip().lower() not in {"revoked", ""}
     checkpoint_drift = max(
@@ -469,6 +477,15 @@ def gateway_doctor_payload(gateway_id: str, *, force_provider_probe: bool = Fals
             "status": _check_status(resume_ready, warn=registration_active),
             "summary": "Checkpoint state is resumable." if resume_ready else "Checkpoint state is not ready for resume.",
             "drift": checkpoint_drift,
+        },
+        {
+            "id": "passive_service_inventory",
+            "status": _text(service_inventory.get("status"), "warn"),
+            "summary": _text(
+                service_inventory.get("summary"),
+                "Passive service inventory is unavailable.",
+            ),
+            "count": int(service_inventory.get("count") or 0),
         },
         {
             "id": "pending_approvals",
@@ -707,6 +724,7 @@ def gateway_doctor_payload(gateway_id: str, *, force_provider_probe: bool = Fals
         "whatsapp_personal": whatsapp_state,
         "telegram_personal": telegram_state,
         "personal_channels": personal_channel_health,
+        "service_inventory": service_inventory,
         "browser": {
             "status": "pass" if active_browser_sessions else ("warn" if browser_sessions else "pass"),
             "summary": (

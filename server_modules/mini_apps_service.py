@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from server_modules import mini_app_host_service, workspace_context
 
@@ -29,6 +30,30 @@ MINI_APP_TRUST_TIERS = (
 FIRST_PARTY_MINI_APP_IDS = {
     "calorie_tracking",
     "flashcards",
+}
+APP_RUNTIME_TYPES = {"link", "platform", "community", "private"}
+APP_RUNTIME_TYPE_ALIASES = {
+    "link": "link",
+    "url": "link",
+    "external": "link",
+    "external_link": "link",
+    "platform": "platform",
+    "first_party": "platform",
+    "platform_hosted": "platform",
+    "empyralis": "platform",
+    "community": "community",
+    "remote": "community",
+    "hosted": "community",
+    "hosted_url": "community",
+    "remote_server": "community",
+    "publisher_hosted": "community",
+    "private": "private",
+    "workspace_private": "private",
+    "local": "community",
+    "local_runtime": "community",
+    "agent_computer": "community",
+    "user_hardware": "community",
+    "hybrid": "community",
 }
 SUPPORTED_RETRIEVE_FILTERS = (
     "ids",
@@ -77,6 +102,35 @@ def _normalize_workspace_id(workspace_id: Any) -> str:
 def _normalize_app_id(app_id: Any) -> str:
     token = re.sub(r"[^a-z0-9_-]+", "_", str(app_id or "").strip().lower()).strip("_")
     return token
+
+
+def _normalize_url(value: Any) -> Optional[str]:
+    token = str(value or "").strip()
+    return token or None
+
+
+def _normalize_domain(value: Any) -> Optional[str]:
+    token = str(value or "").strip().lower()
+    if not token:
+        return None
+    candidate = token if "://" in token else f"https://{token}"
+    parsed = urlparse(candidate)
+    host = (parsed.hostname or token.split("/", 1)[0]).strip(".").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
+
+
+def _normalize_runtime_mode(value: Any) -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    return APP_RUNTIME_TYPE_ALIASES.get(token, "community")
+
+
+def _normalize_runtime_type(value: Any, *, app_id: Any = None) -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    if not token:
+        return "platform" if _normalize_app_id(app_id) in FIRST_PARTY_MINI_APP_IDS else "private"
+    return APP_RUNTIME_TYPE_ALIASES.get(token, "private")
 
 
 def _default_trust_tier(app_id: Any) -> str:
@@ -154,6 +208,21 @@ def _default_app_entry(app_id: str) -> Dict[str, Any]:
         "id": app_id,
         "label": " ".join(part.capitalize() for part in app_id.replace("-", "_").split("_") if part) or app_id,
         "description": "",
+        "icon_url": None,
+        "category": None,
+        "publisher_id": None,
+        "publisher_name": None,
+        "publisher_domain": None,
+        "support_url": None,
+        "privacy_url": None,
+        "terms_url": None,
+        "runtime_type": "platform" if _normalize_app_id(app_id) in FIRST_PARTY_MINI_APP_IDS else "private",
+        "runtime_mode": "platform" if _normalize_app_id(app_id) in FIRST_PARTY_MINI_APP_IDS else "private",
+        "destination_url": None,
+        "platform_route": None,
+        "verification_status": "unverified",
+        "official_claim": {},
+        "domain_proof": {},
         "delivery_mode": "structured",
         "visibility": "workspace_private",
         "install_status": "installed",
@@ -209,6 +278,21 @@ def _safe_read_state(workspace_id: str) -> Dict[str, Any]:
             "id": app_id,
             "label": str(entry.get("label") or base["label"]).strip() or base["label"],
             "description": str(entry.get("description") or "").strip(),
+            "icon_url": _normalize_url(entry.get("icon_url")),
+            "category": str(entry.get("category") or "").strip() or None,
+            "publisher_id": str(entry.get("publisher_id") or "").strip() or None,
+            "publisher_name": str(entry.get("publisher_name") or "").strip() or None,
+            "publisher_domain": _normalize_domain(entry.get("publisher_domain")),
+            "support_url": _normalize_url(entry.get("support_url")),
+            "privacy_url": _normalize_url(entry.get("privacy_url")),
+            "terms_url": _normalize_url(entry.get("terms_url")),
+            "runtime_type": _normalize_runtime_type(entry.get("runtime_type") or entry.get("runtime_mode"), app_id=app_id),
+            "runtime_mode": _normalize_runtime_type(entry.get("runtime_type") or entry.get("runtime_mode"), app_id=app_id),
+            "destination_url": _normalize_url(entry.get("destination_url")),
+            "platform_route": str(entry.get("platform_route") or "").strip() or None,
+            "verification_status": str(entry.get("verification_status") or "unverified").strip().lower() or "unverified",
+            "official_claim": dict(entry.get("official_claim") or {}) if isinstance(entry.get("official_claim"), dict) else {},
+            "domain_proof": dict(entry.get("domain_proof") or {}) if isinstance(entry.get("domain_proof"), dict) else {},
             "delivery_mode": str(entry.get("delivery_mode") or base["delivery_mode"]).strip().lower() or base["delivery_mode"],
             "visibility": str(entry.get("visibility") or base["visibility"]).strip().lower() or base["visibility"],
             "install_status": str(entry.get("install_status") or base["install_status"]).strip().lower() or base["install_status"],
@@ -415,6 +499,21 @@ def _normalized_contract_payload(workspace_id: str, entry: Dict[str, Any]) -> Di
         "kind": "structured_mini_app",
         "label": str(entry.get("label") or app_id).strip() or app_id,
         "description": str(entry.get("description") or "").strip(),
+        "icon_url": _normalize_url(entry.get("icon_url")),
+        "category": str(entry.get("category") or "").strip() or None,
+        "publisher_id": str(entry.get("publisher_id") or "").strip() or None,
+        "publisher_name": str(entry.get("publisher_name") or "").strip() or None,
+        "publisher_domain": _normalize_domain(entry.get("publisher_domain")),
+        "support_url": _normalize_url(entry.get("support_url")),
+        "privacy_url": _normalize_url(entry.get("privacy_url")),
+        "terms_url": _normalize_url(entry.get("terms_url")),
+        "runtime_type": _normalize_runtime_type(entry.get("runtime_type") or entry.get("runtime_mode"), app_id=app_id),
+        "runtime_mode": _normalize_runtime_type(entry.get("runtime_type") or entry.get("runtime_mode"), app_id=app_id),
+        "destination_url": _normalize_url(entry.get("destination_url")),
+        "platform_route": str(entry.get("platform_route") or "").strip() or None,
+        "verification_status": str(entry.get("verification_status") or "unverified").strip().lower() or "unverified",
+        "official_claim": dict(entry.get("official_claim") or {}) if isinstance(entry.get("official_claim"), dict) else {},
+        "domain_proof": dict(entry.get("domain_proof") or {}) if isinstance(entry.get("domain_proof"), dict) else {},
         "delivery_mode": hosted_fields["delivery_mode"],
         "visibility": str(entry.get("visibility") or "workspace_private").strip().lower() or "workspace_private",
         "install_status": str(entry.get("install_status") or "installed").strip().lower() or "installed",
@@ -587,6 +686,21 @@ def upsert_mini_app_contract(
     *,
     label: Any = None,
     description: Any = None,
+    icon_url: Any = None,
+    category: Any = None,
+    publisher_id: Any = None,
+    publisher_name: Any = None,
+    publisher_domain: Any = None,
+    support_url: Any = None,
+    privacy_url: Any = None,
+    terms_url: Any = None,
+    runtime_type: Any = None,
+    runtime_mode: Any = None,
+    destination_url: Any = None,
+    platform_route: Any = None,
+    verification_status: Any = None,
+    official_claim: Any = None,
+    domain_proof: Any = None,
     delivery_mode: Any = None,
     hosted_url: Any = None,
     embed_kind: Any = None,
@@ -617,6 +731,37 @@ def upsert_mini_app_contract(
         entry["label"] = str(label or "").strip() or entry["label"]
     if description is not None:
         entry["description"] = str(description or "").strip()
+    if icon_url is not None:
+        entry["icon_url"] = _normalize_url(icon_url)
+    if category is not None:
+        entry["category"] = str(category or "").strip() or None
+    if publisher_id is not None:
+        entry["publisher_id"] = str(publisher_id or "").strip() or None
+    if publisher_name is not None:
+        entry["publisher_name"] = str(publisher_name or "").strip() or None
+    if publisher_domain is not None:
+        entry["publisher_domain"] = _normalize_domain(publisher_domain)
+    if support_url is not None:
+        entry["support_url"] = _normalize_url(support_url)
+    if privacy_url is not None:
+        entry["privacy_url"] = _normalize_url(privacy_url)
+    if terms_url is not None:
+        entry["terms_url"] = _normalize_url(terms_url)
+    if runtime_type is not None or runtime_mode is not None:
+        normalized_runtime_type = _normalize_runtime_type(runtime_type if runtime_type is not None else runtime_mode, app_id=normalized_app_id)
+        entry["runtime_type"] = normalized_runtime_type
+        entry["runtime_mode"] = normalized_runtime_type
+    if destination_url is not None:
+        entry["destination_url"] = _normalize_url(destination_url)
+    if platform_route is not None:
+        entry["platform_route"] = str(platform_route or "").strip() or None
+    if verification_status is not None:
+        token = str(verification_status or "unverified").strip().lower() or "unverified"
+        entry["verification_status"] = token if token in {"unverified", "partner", "verified"} else "unverified"
+    if isinstance(official_claim, dict):
+        entry["official_claim"] = dict(official_claim)
+    if isinstance(domain_proof, dict):
+        entry["domain_proof"] = dict(domain_proof)
     if visibility is not None:
         normalized_visibility = str(visibility or "workspace_private").strip().lower() or "workspace_private"
         if normalized_visibility not in {"workspace_private", "unlisted_link"}:
@@ -700,6 +845,21 @@ def get_hosted_mini_app_manifest(workspace_id: str, app_id: str, *, user_id: str
         "app_id": contract["app_id"],
         "label": contract.get("label"),
         "description": contract.get("description"),
+        "icon_url": contract.get("icon_url"),
+        "category": contract.get("category"),
+        "publisher_id": contract.get("publisher_id"),
+        "publisher_name": contract.get("publisher_name"),
+        "publisher_domain": contract.get("publisher_domain"),
+        "support_url": contract.get("support_url"),
+        "privacy_url": contract.get("privacy_url"),
+        "terms_url": contract.get("terms_url"),
+        "runtime_type": contract.get("runtime_type"),
+        "runtime_mode": contract.get("runtime_mode"),
+        "destination_url": contract.get("destination_url"),
+        "platform_route": contract.get("platform_route"),
+        "verification_status": contract.get("verification_status"),
+        "official_claim": dict(contract.get("official_claim") or {}),
+        "domain_proof": dict(contract.get("domain_proof") or {}),
         **manifest,
     }
 

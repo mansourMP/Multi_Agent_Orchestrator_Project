@@ -1,0 +1,20 @@
+services:
+  agent-computer:
+    build:
+      context: ../..
+      dockerfile: deploy/agent-computer/Dockerfile
+    restart: unless-stopped
+    environment:
+      EMPYRALIS_AGENT_COMPUTER_SYSTEM_SERVICE_MODE: "1"
+      EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET: server_vps
+      EMPYRALIS_GATEWAY_API_URL: "${EMPYRALIS_GATEWAY_API_URL:-https://api.empyralis.ai/api}"
+      EMPYRALIS_GATEWAY_PAIRING_TOKEN: "${EMPYRALIS_GATEWAY_PAIRING_TOKEN:-}"
+      EMPYRALIS_GATEWAY_TOKEN: "${EMPYRALIS_GATEWAY_TOKEN:-}"
+      EMPYRALIS_GATEWAY_DISPLAY_NAME: "${EMPYRALIS_GATEWAY_DISPLAY_NAME:-Agent Computer Server}"
+    volumes:
+      - agent-computer-state:/app/.orion-stack/agent-computer
+      - agent-computer-logs:/app/.orion-stack/logs
+
+volumes:
+  agent-computer-state:
+  agent-computer-logs:

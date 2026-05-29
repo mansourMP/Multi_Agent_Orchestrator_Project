@@ -125,6 +125,49 @@ function toolInputRecord(data: Record<string, unknown>): Record<string, unknown>
   return {};
 }
 
+function compactJsonPreview(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value.trim().slice(0, 1000);
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value, null, 2).slice(0, 1000);
+  } catch {
+    return '';
+  }
+}
+
+function toolInputPreview(data: Record<string, unknown>): string | null {
+  const command = shellCommandFromData(data);
+  if (command) {
+    return command;
+  }
+  const input = toolInputRecord(data);
+  const query = readString(data.query) || readString(input.query);
+  if (query) {
+    return query;
+  }
+  const url = readString(data.url) || readString(input.url);
+  if (url) {
+    return url;
+  }
+  const path = filePathFromData(data);
+  if (path) {
+    return path;
+  }
+  const directInput = compactJsonPreview(data.input ?? data.arguments ?? data.args ?? data.parameters);
+  if (directInput) {
+    return directInput;
+  }
+  const summary = readString(data.summary) || readString(data.detail);
+  return summary || null;
+}
+
 function toolResultText(data: Record<string, unknown>): string | null {
   return readString(data.summary)
     || readString(data.result)
@@ -454,6 +497,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       type: 'tool_started',
       id,
       name: toolDisplayName(toolName),
+      input: toolInputPreview(data),
     }];
   }
 
@@ -533,6 +577,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       type: 'tool_result',
       id,
       name: toolDisplayName(toolName),
+      input: toolInputPreview(data),
       status,
       result,
     }];
@@ -810,6 +855,96 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
   return [];
 }
 
+function projectTypedStreamEvent(payload: Record<string, unknown>, fallbackIndex: number): CodexChatEvent[] {
+  const rawType = readString(payload.event_type || payload.type || payload.event || payload.kind).toLowerCase();
+  const data = readObject(payload.payload);
+  const merged = Object.keys(data).length > 0 ? { ...payload, ...data } : payload;
+  const id = eventId('typed', merged.tool_call_id || merged.id || merged.item_id, fallbackIndex);
+  if (rawType === 'thinking') {
+    const text = readString(merged.delta)
+      || readString(merged.text)
+      || readString(merged.content)
+      || readString(merged.message);
+    return text
+      ? [{
+          type: 'reasoning_delta',
+          id: 'reasoning_summary',
+          text,
+          isStreaming: readString(merged.status).toLowerCase() !== 'done' && merged.done !== true,
+        }]
+      : [];
+  }
+  if (rawType === 'tool_call') {
+    const name = readString(merged.tool_name) || readString(merged.name) || readString(merged.tool) || 'Tool';
+    const command = shellCommandFromData(merged);
+    const input = toolInputPreview(merged);
+    if (isShellToolName(name, command)) {
+      return [{
+        type: 'exec_started',
+        id,
+        command: command || input || 'Running shell',
+      }];
+    }
+    return [{
+      type: 'tool_started',
+      id,
+      name: toolDisplayName(name),
+      input,
+    }];
+  }
+  if (rawType === 'tool_result') {
+    const name = readString(merged.tool_name) || readString(merged.name) || readString(merged.tool) || null;
+    const command = shellCommandFromData(merged);
+    const input = toolInputPreview(merged);
+    const status = normalizeToolResultStatus(merged.status);
+    if (isShellToolName(name || '', command)) {
+      if (status === 'running') {
+        return [{
+          type: 'exec_started',
+          id,
+          command: command || input || 'Running shell',
+        }];
+      }
+      return [{
+        type: 'exec_result',
+        id,
+        command: command || input || undefined,
+        status,
+        output: outputTail(merged.output, merged.result, merged.text, merged.summary),
+        exitCode: readNumber(merged.exit_code),
+      }];
+    }
+    return [{
+      type: 'tool_result',
+      id,
+      name: name ? toolDisplayName(name) : null,
+      input,
+      status,
+      result: toolResultText(merged),
+    }];
+  }
+  if (rawType === 'bash_output') {
+    return [{
+      type: 'exec_delta',
+      id,
+      output: readString(merged.delta)
+        || readString(merged.output)
+        || readString(merged.stdout)
+        || readString(merged.text),
+    }];
+  }
+  if (rawType === 'response') {
+    const text = readString(merged.delta)
+      || readString(merged.text)
+      || readString(merged.content)
+      || readString(merged.message);
+    return text
+      ? [{ type: 'assistant_delta', id: 'assistant', delta: text, provider: null, model: null }]
+      : [];
+  }
+  return [];
+}
+
 export function projectRawEventToCodexEvents(
   event: TimelineProjectionEvent,
   fallbackIndex = 0,
@@ -828,6 +963,10 @@ export function projectRawEventToCodexEvents(
 
   if (event.type === 'trace') {
     return projectTraceEvent(readObject(event.payload), fallbackIndex);
+  }
+
+  if (event.type === 'typed') {
+    return projectTypedStreamEvent(readObject(event.payload), fallbackIndex);
   }
 
   if (event.type === 'chunk') {

@@ -4,6 +4,7 @@ export type TimelineProjectionEvent =
   | { type: 'user'; payload: { content: string } }
   | { type: 'step'; payload: Record<string, unknown> }
   | { type: 'trace'; payload: Record<string, unknown> }
+  | { type: 'typed'; payload: Record<string, unknown> & { event_type?: string } }
   | { type: 'chunk'; payload: { delta: string } }
   | { type: 'final'; payload: Record<string, unknown> };
 
@@ -63,6 +64,7 @@ export type CodexExecCell = CodexCellBase & {
 export type CodexToolCell = CodexCellBase & {
   kind: 'tool';
   name: string;
+  input?: string | null;
   status: 'running' | 'done' | 'error';
   result: string | null;
 };
@@ -118,6 +120,24 @@ export type CodexErrorCell = CodexCellBase & {
   retryable: boolean;
 };
 
+export type CodexTraceActivityCell =
+  | CodexReasoningSummaryCell
+  | CodexExecCell
+  | CodexToolCell
+  | CodexWebSearchCell
+  | CodexFileChangeCell
+  | CodexScreenshotCell
+  | CodexArtifactCell
+  | CodexStatusCell;
+
+export type CodexExecutionTraceCell = CodexCellBase & {
+  kind: 'execution_trace';
+  activities: CodexTraceActivityCell[];
+  response: CodexAssistantCell | null;
+  isStreaming: boolean;
+  isIncomplete: boolean;
+};
+
 export type CodexTranscriptCell =
   | CodexUserCell
   | CodexAssistantCell
@@ -130,7 +150,8 @@ export type CodexTranscriptCell =
   | CodexArtifactCell
   | CodexApprovalRequestCell
   | CodexStatusCell
-  | CodexErrorCell;
+  | CodexErrorCell
+  | CodexExecutionTraceCell;
 
 export type CodexStreamStatus = 'idle' | 'streaming' | 'complete' | 'aborted' | 'error';
 
@@ -155,8 +176,8 @@ export type CodexChatEvent =
   | { type: 'reasoning_delta'; id: string; text: string; isStreaming: boolean }
   | { type: 'assistant_delta'; id: string; delta: string; provider: string | null; model: string | null }
   | { type: 'assistant_final'; id: string; content: string; isIncomplete: boolean; provider: string | null; model: string | null }
-  | { type: 'tool_started'; id: string; name: string }
-  | { type: 'tool_result'; id: string; name: string | null; status: 'running' | 'done' | 'error'; result: string | null }
+  | { type: 'tool_started'; id: string; name: string; input?: string | null }
+  | { type: 'tool_result'; id: string; name: string | null; input?: string | null; status: 'running' | 'done' | 'error'; result: string | null }
   | {
       type: 'exec_started';
       id: string;

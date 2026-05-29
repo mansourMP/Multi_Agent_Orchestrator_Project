@@ -56,6 +56,122 @@ class HardwareGatewayAdapterTests(unittest.TestCase):
             (True, ""),
         )
 
+    def test_execution_readiness_fails_closed_for_stale_heartbeat(self) -> None:
+        with (
+            patch(
+                "server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live",
+                return_value=True,
+            ),
+            patch(
+                "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "degraded",
+                    "heartbeat_fresh": False,
+                    "reported_health_state": "online",
+                },
+            ),
+        ):
+            self.assertEqual(
+                gateway_adapter.gateway_execution_service.gateway_registration_execution_readiness(
+                    _registration(capabilities=["shell.execute"]),
+                    workspace_id="ws-1",
+                    capability_id="shell.execute",
+                ),
+                (False, "gateway_heartbeat_stale"),
+            )
+
+    def test_execution_readiness_fails_closed_for_missing_capability(self) -> None:
+        self.assertEqual(
+            gateway_adapter.gateway_execution_service.gateway_registration_execution_readiness(
+                _registration(capabilities=["screenshot.capture"]),
+                workspace_id="ws-1",
+                capability_id="shell.execute",
+            ),
+            (False, "gateway_capability_missing"),
+        )
+
+    def test_execution_readiness_allows_fresh_healthy_registered_capability(self) -> None:
+        with (
+            patch(
+                "server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live",
+                return_value=True,
+            ),
+            patch(
+                "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "online",
+                    "heartbeat_fresh": True,
+                    "reported_health_state": "online",
+                    "capability_readiness": {"ready": ["shell.execute"]},
+                },
+            ),
+        ):
+            self.assertEqual(
+                gateway_adapter.gateway_execution_service.gateway_registration_execution_readiness(
+                    _registration(
+                        capabilities=["shell.execute"],
+                        metadata={"capability_readiness": {"ready": ["shell.execute"]}},
+                    ),
+                    workspace_id="ws-1",
+                    capability_id="shell.execute",
+                ),
+                (True, ""),
+            )
+
+    def test_execution_readiness_requires_heartbeat_capability_ready(self) -> None:
+        with (
+            patch(
+                "server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live",
+                return_value=True,
+            ),
+            patch(
+                "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "online",
+                    "heartbeat_fresh": True,
+                    "reported_health_state": "online",
+                    "metadata": {
+                        "service_inventory": [
+                            {
+                                "id": "postgres",
+                                "status": "ready",
+                                "passive": True,
+                                "execution_enabled": False,
+                            }
+                        ],
+                        "capability_readiness": {
+                            "passive_services": ["postgres"],
+                            "service_statuses": {"postgres": "ready"},
+                        },
+                    },
+                },
+            ),
+        ):
+            self.assertEqual(
+                gateway_adapter.gateway_execution_service.gateway_registration_execution_readiness(
+                    _registration(
+                        capabilities=["shell.execute"],
+                        metadata={
+                            "service_inventory": [
+                                {
+                                    "id": "postgres",
+                                    "status": "ready",
+                                    "passive": True,
+                                    "execution_enabled": False,
+                                }
+                            ],
+                            "capability_readiness": {
+                                "passive_services": ["postgres"],
+                                "service_statuses": {"postgres": "ready"},
+                            },
+                        },
+                    ),
+                    workspace_id="ws-1",
+                    capability_id="shell.execute",
+                ),
+                (False, "gateway_capability_not_ready"),
+            )
+
     def test_execution_summary_uses_user_visible_result_text(self) -> None:
         self.assertEqual(
             gateway_adapter.execution_summary(

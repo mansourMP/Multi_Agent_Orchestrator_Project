@@ -316,12 +316,57 @@ def _should_persist_direct_chat_result(result: Any) -> bool:
     return bool(reply or interventions)
 
 
+_THINKING_METADATA_ALLOWLIST = {"reasoning_effort", "reasoning_tokens", "supports_reasoning"}
+_THINKING_METADATA_BLOCKLIST = {
+    "thinking",
+    "thinking_text",
+    "reasoning",
+    "reasoning_text",
+    "reasoning_summary",
+    "reasoning_output",
+    "chain_of_thought",
+    "raw_chain_of_thought",
+    "internal_reasoning",
+    "private_reasoning",
+}
+
+
+def _is_thinking_metadata_key(raw_key: Any) -> bool:
+    key = str(raw_key or "").strip().lower()
+    if not key:
+        return False
+    if key in _THINKING_METADATA_ALLOWLIST:
+        return False
+    if key in _THINKING_METADATA_BLOCKLIST:
+        return True
+    if "chain_of_thought" in key or "raw_chain_of_thought" in key or "private_reasoning" in key:
+        return True
+    if key in {"thought", "thoughts"}:
+        return True
+    if "thinking" in key and not key.endswith("_mode"):
+        return True
+    return False
+
+
+def _strip_thinking_metadata(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: Dict[str, Any] = {}
+        for key, nested_value in value.items():
+            if _is_thinking_metadata_key(key):
+                continue
+            sanitized[str(key)] = _strip_thinking_metadata(nested_value)
+        return sanitized
+    if isinstance(value, list):
+        return [_strip_thinking_metadata(item) for item in value]
+    return value
+
+
 def _assistant_turn_metadata_from_result(
     result: Dict[str, Any],
     *,
     request_id: Optional[str],
 ) -> Dict[str, Any]:
-    metadata = _metadata_dict(result.get("metadata"))
+    metadata = _strip_thinking_metadata(_metadata_dict(result.get("metadata")))
     assistant_metadata: Dict[str, Any] = {
         "request_id": request_id,
         "result_metadata": metadata,

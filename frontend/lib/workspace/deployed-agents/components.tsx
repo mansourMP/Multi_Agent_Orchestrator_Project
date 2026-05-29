@@ -322,7 +322,7 @@ export function RuntimeModeSelector({
         <small>{option.hint}</small>
         <dl className="deployed-agents-wizard__runtime-metadata">
           <div>
-            <dt>What it can do</dt>
+            <dt>Runtime role</dt>
             <dd>{option.capabilities}</dd>
           </div>
           <div>

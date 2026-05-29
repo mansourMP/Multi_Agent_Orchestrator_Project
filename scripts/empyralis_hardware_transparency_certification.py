@@ -19,11 +19,16 @@ from urllib import error, parse, request
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-VALID_SUITES = {"automated", "gateway", "self-hosted", "cloud-computer", "full"}
+VALID_SUITES = {"automated", "agent-computer", "gateway", "self-hosted", "cloud-computer", "full"}
 
 BACKEND_TESTS = [
+    "server_modules/tests/test_agent_computer_permission_secret_model.py",
+    "server_modules/tests/test_agent_computer_service_script.py",
     "server_modules/tests/test_transcript_events_service.py",
     "server_modules/tests/test_agent_turn.py",
+    "server_modules/tests/test_gateway_browser_attach_policy.py",
+    "server_modules/tests/test_gateway_execution_service.py",
+    "server_modules/tests/test_gateway_health_service.py",
     "server_modules/tests/test_hardware_action_broker_service.py",
     "server_modules/tests/test_hardware_cloud_computer_adapter.py",
     "server_modules/tests/test_hardware_gateway_adapter.py",
@@ -33,6 +38,26 @@ BACKEND_TESTS = [
     "server_modules/tests/test_runtime_runs_api_chat_stream.py",
     "server_modules/tests/test_thread_transcript_event_append.py",
     "server_modules/tests/test_virtual_computer_ephemeral_session.py",
+]
+
+AGENT_COMPUTER_BACKEND_TESTS = [
+    "server_modules/tests/test_agent_computer_permission_secret_model.py",
+    "server_modules/tests/test_agent_computer_service_script.py",
+    "server_modules/tests/test_gateway_browser_attach_policy.py",
+    "server_modules/tests/test_gateway_execution_service.py",
+    "server_modules/tests/test_gateway_health_service.py",
+    "server_modules/tests/test_gateway_routes.py",
+    "server_modules/tests/test_gateway_phase5_routes.py",
+    "server_modules/tests/test_gateway_phase7_routes.py",
+    "server_modules/tests/test_hardware_gateway_adapter.py",
+    "server_modules/tests/test_runtime_attachment_service.py",
+    "server_modules/tests/test_agent_computer_approval_decision_service.py",
+]
+
+AGENT_COMPUTER_GATEWAY_TESTS = [
+    "dist/__tests__/service-inventory.test.js",
+    "dist/__tests__/heartbeat-service-inventory.test.js",
+    "dist/__tests__/system-service-mode.test.js",
 ]
 
 
@@ -694,6 +719,61 @@ def automated_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]
     return results
 
 
+def agent_computer_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
+    python = sys.executable or "python3"
+    return [
+        _run_step(
+            name="agent_computer_script_syntax",
+            command=["bash", "-n", "scripts/agent_computer.sh"],
+            timeout=30,
+            log_dir=log_dir,
+        ),
+        _run_step(
+            name="agent_computer_linux_systemd_dry_run",
+            command=[
+                "bash",
+                "-lc",
+                "EMPYRALIS_AGENT_COMPUTER_TEST_UNAME=Linux "
+                "EMPYRALIS_AGENT_COMPUTER_SERVICE_USER=agentuser "
+                "bash scripts/agent_computer.sh service-install --system --dry-run",
+            ],
+            timeout=30,
+            log_dir=log_dir,
+        ),
+        _run_step(
+            name="agent_computer_backend_tests",
+            command=[python, "-m", "pytest", *AGENT_COMPUTER_BACKEND_TESTS, "-q"],
+            timeout=args.backend_timeout,
+            log_dir=log_dir,
+        ),
+        _run_step(
+            name="agent_computer_gateway_typecheck",
+            command=["npm", "run", "typecheck", "--silent"],
+            cwd=ROOT_DIR / "empyralis-gateway",
+            timeout=args.frontend_timeout,
+            log_dir=log_dir,
+        ),
+        _run_step(
+            name="agent_computer_gateway_phase_tests",
+            command=[
+                "bash",
+                "-lc",
+                "npm run build --silent && node --test "
+                + " ".join(shlex.quote(path) for path in AGENT_COMPUTER_GATEWAY_TESTS),
+            ],
+            cwd=ROOT_DIR / "empyralis-gateway",
+            timeout=args.e2e_timeout,
+            log_dir=log_dir,
+        ),
+        _run_step(
+            name="agent_computer_supervisor_tests",
+            command=["cargo", "test", "--manifest-path", "empyralis-supervisor/Cargo.toml"],
+            timeout=args.backend_timeout,
+            log_dir=log_dir,
+        ),
+    ]
+
+
 def cloud_computer_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
     client, workspace_id, tenant_id = _authenticate(args, require_existing_workspace=False)
     command = ["scripts/empyralis_hardware_transparency_certification.py", "--suite", "cloud-computer"]
@@ -1351,6 +1431,8 @@ def run_certification(args: argparse.Namespace) -> int:
     results: list[StepResult] = []
     if args.suite in {"automated", "full"}:
         results.extend(automated_steps(args, log_dir))
+    if args.suite in {"agent-computer", "full"}:
+        results.extend(agent_computer_steps(args, log_dir))
     if args.suite in {"cloud-computer", "full"}:
         results.extend(cloud_computer_steps(args, log_dir))
     if args.suite in {"gateway", "full"}:

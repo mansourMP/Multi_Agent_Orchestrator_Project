@@ -5,6 +5,11 @@ import {
   signSupervisorExecuteRequest,
   signSupervisorInterruptRequest,
 } from "./signing";
+import {
+  agentComputerSystemServiceModeEnabled,
+  agentComputerUserSessionBridgeEnabled,
+} from "../runtime/service-mode";
+import { filterCapabilitiesByDesktopPermission } from "../runtime/desktop-permissions";
 
 interface SupervisorExecuteHttpResponse {
   success?: boolean;
@@ -45,7 +50,7 @@ export class GatewaySupervisorClient {
   constructor(private readonly config: Pick<GatewayConfig, "supervisorUrl" | "supervisorSecret" | "supervisorTimeoutMs">) {}
 
   supportedCapabilities(): string[] {
-    return [
+    const capabilities = [
       "filesystem.read_write",
       "shell.execute",
       "screenshot.capture",
@@ -64,6 +69,27 @@ export class GatewaySupervisorClient {
       "computer_control.applescript",
       "computer_control.speak",
     ];
+    if (agentComputerSystemServiceModeEnabled() && !agentComputerUserSessionBridgeEnabled()) {
+      const desktopOnly = new Set([
+        "screenshot.capture",
+        "computer_control.ocr",
+        "computer_control.move",
+        "computer_control.click",
+        "computer_control.type",
+        "computer_control.key",
+        "computer_control.clipboard_read",
+        "computer_control.clipboard_write",
+        "computer_control.list_windows",
+        "computer_control.list_apps",
+        "computer_control.launch",
+        "computer_control.launch_app",
+        "computer_control.notify",
+        "computer_control.applescript",
+        "computer_control.speak",
+      ]);
+      return capabilities.filter((capability) => !desktopOnly.has(capability));
+    }
+    return filterCapabilitiesByDesktopPermission(capabilities);
   }
 
   async execute(input: GatewaySupervisorExecuteInput): Promise<Record<string, unknown>> {

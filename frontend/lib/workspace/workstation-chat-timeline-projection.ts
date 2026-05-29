@@ -3,7 +3,11 @@
 import { useMemo } from 'react';
 
 import type { WorkstationChatMessageRecord } from '@/lib/workspace/chat-message';
-import type { CodexTranscriptCell } from '@/lib/workspace/codex-chat/cells';
+import type {
+  CodexAssistantCell,
+  CodexTraceActivityCell,
+  CodexTranscriptCell,
+} from '@/lib/workspace/codex-chat/cells';
 import type { TimelineProjectionEvent } from '@/lib/workspace/codex-chat/timeline-reducer';
 import { projectCodexTimeline } from '@/lib/workspace/codex-chat/timeline-reducer';
 import { workstationMessageToCodexCell } from '@/lib/workspace/codex-chat/message-adapter';
@@ -59,6 +63,7 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'delivery_transport',
   'description',
   'detail',
+  'delta',
   'duration_ms',
   'durationMs',
   'event',
@@ -159,7 +164,6 @@ const BLOCKED_TRACE_EVENTS = new Set([
   'assistant.message.delta',
   'final',
   'message.delta',
-  'reasoning.summary.delta',
   'trace.started',
 ]);
 const BLOCKED_TRACE_EVENT_TOKENS = [
@@ -213,6 +217,9 @@ function looksInternalText(value: string): boolean {
 }
 
 function isSafeTraceEventType(eventType: string): boolean {
+  if (eventType === 'reasoning.summary.delta') {
+    return true;
+  }
   if (!eventType || BLOCKED_TRACE_EVENTS.has(eventType)) {
     return false;
   }
@@ -357,6 +364,10 @@ function isProofCell(cell: CodexTranscriptCell): boolean {
   );
 }
 
+function isReplayProofCell(cell: CodexTranscriptCell): boolean {
+  return isProofCell(cell) && cell.kind !== 'reasoning_summary';
+}
+
 function replayProofCellsForMessage(
   message: WorkstationChatMessageRecord,
   options: Pick<TimelineProjectionOptions, 'isProviderGateSystemCell' | 'legacyTraceEventsByTraceId'>,
@@ -369,13 +380,77 @@ function replayProofCellsForMessage(
     return [];
   }
   return projectCodexTimeline(replayEvents).cells
-    .filter((cell) => isProofCell(cell) && !options.isProviderGateSystemCell(cell))
+    .filter((cell) => isReplayProofCell(cell) && !options.isProviderGateSystemCell(cell))
     .map((cell) => ({
       ...cell,
       id: `${message.id}:transcript:${cell.id}`,
       createdAt: cell.createdAt || message.createdAt,
       dimmed: cell.kind === 'approval_request' ? cell.dimmed : true,
     }));
+}
+
+function isTraceActivityCell(cell: CodexTranscriptCell): cell is CodexTraceActivityCell {
+  return (
+    cell.kind === 'reasoning_summary'
+    || cell.kind === 'exec'
+    || cell.kind === 'tool'
+    || cell.kind === 'web_search'
+    || cell.kind === 'file_change'
+    || cell.kind === 'screenshot'
+    || cell.kind === 'artifact'
+    || cell.kind === 'status'
+  );
+}
+
+function traceActivityIsRunning(cell: CodexTraceActivityCell): boolean {
+  if (cell.kind === 'reasoning_summary') {
+    return cell.isStreaming;
+  }
+  if (cell.kind === 'web_search') {
+    return cell.status === 'searching';
+  }
+  return 'status' in cell && cell.status === 'running';
+}
+
+function groupExecutionTraceCells(cells: CodexTranscriptCell[]): CodexTranscriptCell[] {
+  const grouped: CodexTranscriptCell[] = [];
+  let activities: CodexTraceActivityCell[] = [];
+
+  const flushTrace = (response: CodexAssistantCell | null = null) => {
+    if (activities.length === 0) {
+      if (response) {
+        grouped.push(response);
+      }
+      return;
+    }
+    const isStreaming = Boolean(response?.isStreaming) || activities.some(traceActivityIsRunning);
+    grouped.push({
+      id: `execution-trace:${response?.id ?? activities[0]?.id ?? grouped.length}`,
+      kind: 'execution_trace',
+      activities,
+      response,
+      isStreaming,
+      isIncomplete: response?.isIncomplete === true,
+      createdAt: activities[0]?.createdAt ?? response?.createdAt ?? null,
+      dimmed: activities.every((activity) => activity.dimmed === true),
+    });
+    activities = [];
+  };
+
+  for (const cell of cells) {
+    if (isTraceActivityCell(cell)) {
+      activities.push(cell);
+      continue;
+    }
+    if (cell.kind === 'assistant') {
+      flushTrace(cell);
+      continue;
+    }
+    flushTrace();
+    grouped.push(cell);
+  }
+  flushTrace();
+  return grouped;
 }
 
 export function useWorkstationTimelineProjection(options: TimelineProjectionOptions) {
@@ -401,7 +476,7 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
     [options, projectedTimelineCells],
   );
 
-  const pinnedTimelineCells = options.isSending ? projectedSystemCells : [];
+  const pinnedTimelineCells: CodexTranscriptCell[] = [];
 
   const pendingApprovalCells = useMemo<CodexTranscriptCell[]>(() => (
     options.approvals.map((approval, index) => {
@@ -454,7 +529,7 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
       nextCells.push(workstationMessageToCodexCell(options.pendingUserMessage));
     }
     const trailingCell = nextCells[nextCells.length - 1] ?? null;
-    const scrollableSystemCells = options.isSending || insertedReplayProofForLatestAssistant ? [] : projectedSystemCells;
+    const scrollableSystemCells = insertedReplayProofForLatestAssistant ? [] : projectedSystemCells;
     const shouldInsertStepsBeforeFinalAssistant = scrollableSystemCells.length > 0
       && trailingCell?.kind === 'assistant';
     if (shouldInsertStepsBeforeFinalAssistant && trailingCell) {
@@ -469,7 +544,7 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
     if (pendingApprovalCells.length > 0) {
       nextCells.push(...pendingApprovalCells);
     }
-    return nextCells;
+    return groupExecutionTraceCells(nextCells);
   }, [
     options,
     pendingApprovalCells,

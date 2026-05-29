@@ -3,11 +3,13 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from server_modules import (
+    agent_computer_permission_secret_model,
     agent_trace_service,
     execution_mode_policy,
     gateway_approval_service,
     gateway_execution_service,
     gateway_protocol_service,
+    gateway_registry_service,
     gateway_state_repository,
     hardware_access_policy_service,
     hardware_result_correlator_service,
@@ -39,11 +41,20 @@ def find_gateway_registration(
         if text(item.get("status")).lower() == "active"
         and text(item.get("device_trust_state")).lower() != "revoked"
     ]
+    first_live: Optional[Dict[str, Any]] = None
     for registration in active:
         candidate_gateway_id = text(registration.get("gateway_id"))
-        if candidate_gateway_id and gateway_protocol_service.gateway_connection_is_live(candidate_gateway_id):
+        if not candidate_gateway_id or not gateway_protocol_service.gateway_connection_is_live(candidate_gateway_id):
+            continue
+        if first_live is None:
+            first_live = registration
+        try:
+            public_payload = gateway_registry_service.gateway_registration_public_payload(registration)
+            if text(public_payload.get("connection_status")).lower() == "online":
+                return registration
+        except Exception:
             return registration
-    return active[0] if active else None
+    return first_live or (active[0] if active else None)
 
 
 def registration_is_usable(registration: Optional[Dict[str, Any]], *, workspace_id: str) -> tuple[bool, str]:
@@ -139,14 +150,13 @@ async def execute_gateway_action(
 
     gateway_token = text((registration or {}).get("gateway_id"))
     device_token = text(device_id) or text((registration or {}).get("device_id"))
-    runtime_session = await hardware_runtime_session_service.update_runtime_session(
-        runtime_session,
-        state="running",
-        audit_action="hardware_action.gateway_selected",
-        extra_metadata={"gateway_id": gateway_token, "device_id": device_token},
+    ready, not_ready_reason = gateway_execution_service.gateway_registration_execution_readiness(
+        registration,
+        workspace_id=text(workspace_id) or "default",
+        capability_id=capability_id,
     )
-    if not gateway_protocol_service.gateway_connection_is_live(gateway_token):
-        reason = "gateway_offline"
+    if not ready:
+        reason = not_ready_reason or "gateway_unavailable"
         runtime_session = await hardware_runtime_session_service.update_runtime_session(
             runtime_session,
             state="offline",
@@ -158,7 +168,7 @@ async def execute_gateway_action(
             trace_context,
             tool_call_id=tool_call_id,
             status="offline",
-            summary="Gateway is paired but currently offline.",
+            summary="Gateway is not ready for this hardware action.",
             capability_id=capability_id,
             arguments=arguments,
             runtime_session=runtime_session,
@@ -173,6 +183,13 @@ async def execute_gateway_action(
             "runtime_session": runtime_session,
             "trace_id": trace_id,
         }
+
+    runtime_session = await hardware_runtime_session_service.update_runtime_session(
+        runtime_session,
+        state="running",
+        audit_action="hardware_action.gateway_selected",
+        extra_metadata={"gateway_id": gateway_token, "device_id": device_token},
+    )
 
     approval_required = hardware_access_policy_service.hardware_action_requires_software_approval(
         runtime_access_mode=runtime_access_mode,
@@ -251,31 +268,36 @@ async def execute_gateway_action(
             empyralis_approved=runtime_access_mode == FULL_RUNTIME_ACCESS_MODE,
         )
     except Exception as exc:
-        message = str(exc)
-        state = "offline" if "not currently connected" in message.lower() else "failed"
+        failure = agent_computer_permission_secret_model.local_failure_classification(exc)
+        state = text(failure.get("state")) or "failed"
+        reason = text(failure.get("reason")) or "hardware_action_failed"
+        summary = text(failure.get("summary")) or "Hardware action failed."
+        metadata = agent_computer_permission_secret_model.diagnostic_metadata(
+            {"gateway_id": gateway_token, "device_id": device_token, "failure_reason": reason}
+        )
         runtime_session = await hardware_runtime_session_service.update_runtime_session(
             runtime_session,
             state=state,
             audit_action="hardware_action.failed",
-            reason=message,
-            extra_metadata={"gateway_id": gateway_token, "device_id": device_token, "failure_reason": message},
+            reason=reason,
+            extra_metadata=metadata,
         )
         await hardware_result_correlator_service.emit_tool_result(
             trace_context,
             tool_call_id=tool_call_id,
             status=state,
-            summary=message or "Hardware action failed.",
+            summary=summary,
             capability_id=capability_id,
             arguments=arguments,
             runtime_session=runtime_session,
             runtime_target=runtime_target,
             request_id=request_id,
             action_id=action_id,
-            metadata={"gateway_id": gateway_token, "device_id": device_token, "failure_reason": message},
+            metadata=metadata,
         )
         return {
             "status": state,
-            "reason": message,
+            "reason": reason,
             "runtime_session": runtime_session,
             "trace_id": trace_id,
         }

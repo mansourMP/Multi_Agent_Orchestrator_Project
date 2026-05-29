@@ -1,7 +1,7 @@
 # Agent Computer Runtime
 
-Last verified: 2026-05-25
-Status: Launch-slice runtime contract
+Last verified: 2026-05-29
+Status: Launch-slice runtime contract; native hardware phases 1-6 implemented
 
 Agent Computer is the user-facing name for an explicitly selected machine where
 Sage, and later native Studio agents, can run local work. The platform remains
@@ -67,8 +67,50 @@ scripts/agent_computer.sh launchd-install
 scripts/agent_computer.sh launchd-uninstall
 ```
 
+The macOS user LaunchAgent runs a foreground `launchd-run` loop so the desktop
+runtime remains a user-session process with launchd restart ownership.
+
+Server/VPS service mode is explicit and not the default desktop path:
+
+```bash
+scripts/agent_computer.sh service-install --system
+scripts/agent_computer.sh service-status
+scripts/agent_computer.sh service-uninstall --system
+```
+
+On Linux this installs a systemd service. On macOS the system LaunchDaemon path
+requires `--server-mac`; desktop Macs should use the user-session
+`launchd-install` command until the user-session bridge is implemented.
+
 The script stores local runtime config in `.orion-stack/agent-computer` and logs
 in `.orion-stack/logs`.
+
+## Desktop Permission Readiness
+
+Agent Computer reports desktop permission state in heartbeat metadata. These
+states affect execution readiness, not passive service detection.
+
+Permission environment variables:
+
+```bash
+EMPYRALIS_AGENT_COMPUTER_PERMISSION_SCREEN_RECORDING=granted
+EMPYRALIS_AGENT_COMPUTER_PERMISSION_ACCESSIBILITY=granted
+EMPYRALIS_AGENT_COMPUTER_PERMISSION_CLIPBOARD=granted
+EMPYRALIS_AGENT_COMPUTER_PERMISSION_AUTOMATION=granted
+EMPYRALIS_AGENT_COMPUTER_PERMISSION_BROWSER=granted
+```
+
+Allowed states are `granted`, `promptable`, `denied`, `restricted`, and
+`unknown`. Any non-`granted` state blocks the matching desktop capability from
+readiness and direct execution.
+
+System service mode without a ready user-session bridge treats desktop
+capabilities as restricted. Default desktop user-session mode preserves current
+behavior when no explicit permission state is reported.
+
+Screenshot capture honors policy retention. When `screenshot_retention=off`,
+gateway responses strip inline image bytes and do not create retained screenshot
+artifacts.
 
 ## Runtime Components
 

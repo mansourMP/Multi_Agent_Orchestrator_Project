@@ -132,9 +132,26 @@ function updateCell<T extends CodexTranscriptCell>(
 
 function dimSystemCells(cells: CodexTranscriptCell[]): CodexTranscriptCell[] {
   return cells.map((cell) => {
+    if (cell.kind === 'reasoning_summary') {
+      return { ...cell, isStreaming: false, dimmed: true };
+    }
+    if (cell.kind === 'exec' && cell.status === 'running') {
+      return { ...cell, status: 'done', dimmed: true };
+    }
+    if (cell.kind === 'tool' && cell.status === 'running') {
+      return { ...cell, status: 'done', dimmed: true };
+    }
+    if (cell.kind === 'web_search' && cell.status === 'searching') {
+      return { ...cell, status: 'done', dimmed: true };
+    }
+    if (cell.kind === 'file_change' && cell.status === 'running') {
+      return { ...cell, status: 'done', dimmed: true };
+    }
+    if (cell.kind === 'status' && (cell.status === 'idle' || cell.status === 'running')) {
+      return { ...cell, status: 'done', dimmed: true };
+    }
     if (
-      cell.kind === 'reasoning_summary'
-      || cell.kind === 'exec'
+      cell.kind === 'exec'
       || cell.kind === 'tool'
       || cell.kind === 'web_search'
       || cell.kind === 'file_change'
@@ -259,6 +276,7 @@ function applyCodexEvent(
         id: event.id,
         kind: 'tool' as const,
         name: event.name,
+        input: event.input ?? null,
         status: 'running' as const,
         result: null,
         createdAt: nowIso(),
@@ -266,6 +284,7 @@ function applyCodexEvent(
       (current) => ({
         ...current,
         name: event.name || current.name,
+        input: event.input ?? current.input ?? null,
         status: 'running',
       }),
     );
@@ -281,6 +300,7 @@ function applyCodexEvent(
         id: event.id,
         kind: 'tool' as const,
         name: event.name || 'Tool',
+        input: event.input ?? null,
         status: event.status,
         result: event.result,
         createdAt: nowIso(),
@@ -288,6 +308,7 @@ function applyCodexEvent(
       (current) => ({
         ...current,
         name: event.name || current.name,
+        input: event.input ?? current.input ?? null,
         status: event.status,
         result: event.result ?? current.result,
       }),

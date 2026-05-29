@@ -11,9 +11,11 @@ SUPERVISOR_PID_FILE="${PID_DIR}/agent-computer-supervisor.pid"
 EDGE_PID_FILE="${PID_DIR}/agent-computer-edge.pid"
 SUPERVISOR_BIN="${ROOT_DIR}/empyralis-supervisor/target/release/empyralis-supervisor"
 EDGE_ENTRY="${ROOT_DIR}/empyralis-gateway/dist/index.js"
+NODE_BIN_CANDIDATES=("/opt/homebrew/bin/node" "/usr/local/bin/node" "/usr/bin/node")
 SUPERVISOR_URL="${EMPYRALIS_SUPERVISOR_URL:-http://127.0.0.1:7788}"
 CONTROL_PLANE_URL="${EMPYRALIS_GATEWAY_API_URL:-http://127.0.0.1:8001/api}"
 DISPLAY_NAME="${EMPYRALIS_GATEWAY_DISPLAY_NAME:-$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "Agent Computer")}"
+SERVICE_NAME="${EMPYRALIS_AGENT_COMPUTER_SERVICE_NAME:-ai.empyralis.agent-computer}"
 
 usage() {
   cat <<'EOF'
@@ -24,13 +26,18 @@ Usage:
   scripts/agent_computer.sh start
   scripts/agent_computer.sh stop
   scripts/agent_computer.sh status
+  scripts/agent_computer.sh service-install --system [--dry-run]
+  scripts/agent_computer.sh service-uninstall --system [--dry-run]
+  scripts/agent_computer.sh service-status
   scripts/agent_computer.sh launchd-install
   scripts/agent_computer.sh launchd-uninstall
+  scripts/agent_computer.sh launchd-run
 
 Environment:
   EMPYRALIS_GATEWAY_PAIRING_TOKEN   Pairing token from Empyralis, used on first start.
   EMPYRALIS_GATEWAY_TOKEN           Existing paired-device token.
   EMPYRALIS_GATEWAY_API_URL         Control plane URL. Defaults to local dev runtime.
+  EMPYRALIS_AGENT_COMPUTER_SERVICE_USER  User for Linux/macOS server service mode.
 EOF
 }
 
@@ -47,6 +54,81 @@ PY
 
 mkdirs() {
   mkdir -p "${STATE_DIR}" "${LOG_DIR}" "${PID_DIR}"
+}
+
+host_os() {
+  if [[ -n "${EMPYRALIS_AGENT_COMPUTER_TEST_UNAME:-}" ]]; then
+    echo "${EMPYRALIS_AGENT_COMPUTER_TEST_UNAME}"
+    return 0
+  fi
+  uname -s
+}
+
+has_arg() {
+  local target="$1"
+  shift || true
+  local arg
+  for arg in "$@"; do
+    [[ "${arg}" == "${target}" ]] && return 0
+  done
+  return 1
+}
+
+dry_run_requested() {
+  [[ "${EMPYRALIS_AGENT_COMPUTER_DRY_RUN:-}" == "1" ]] || has_arg "--dry-run" "$@"
+}
+
+require_system_flag() {
+  if ! has_arg "--system" "$@"; then
+    echo "[Agent Computer] Refusing service command without --system."
+    echo "This path is for Server/VPS service mode only; desktop auto-start uses launchd-install/user-session mode."
+    exit 2
+  fi
+}
+
+validate_service_name() {
+  if [[ ! "${SERVICE_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
+    echo "[Agent Computer] Invalid service name. Use only letters, numbers, dot, underscore, and dash."
+    exit 2
+  fi
+}
+
+service_user() {
+  local user="${EMPYRALIS_AGENT_COMPUTER_SERVICE_USER:-${SUDO_USER:-$(id -un 2>/dev/null || echo root)}}"
+  echo "${user}"
+}
+
+validate_service_user() {
+  local user="$1"
+  if [[ ! "${user}" =~ ^[A-Za-z_][A-Za-z0-9_.-]{0,63}$ ]]; then
+    echo "[Agent Computer] Invalid service user. Use a local account name without path or control characters."
+    exit 2
+  fi
+}
+
+require_root() {
+  if [[ "$(id -u)" != "0" ]]; then
+    echo "[Agent Computer] ${1:-This service command} must be run as root."
+    exit 1
+  fi
+}
+
+xml_escape() {
+  local value="$1"
+  value="${value//&/&amp;}"
+  value="${value//</&lt;}"
+  value="${value//>/&gt;}"
+  value="${value//\"/&quot;}"
+  value="${value//\'/&apos;}"
+  printf "%s" "${value}"
+}
+
+systemd_unit_path() {
+  printf "/etc/systemd/system/%s.service" "${SERVICE_NAME}"
+}
+
+launchdaemon_plist_path() {
+  printf "/Library/LaunchDaemons/%s.plist" "${SERVICE_NAME}"
 }
 
 load_env_if_present() {
@@ -73,6 +155,18 @@ export EMPYRALIS_GATEWAY_STATE_DIR=$(shell_quote "${state_dir}")
 export EMPYRALIS_GATEWAY_DISPLAY_NAME=$(shell_quote "${DISPLAY_NAME}")
 export EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT=$(shell_quote "${ROOT_DIR}")
 EOF
+  if [[ -n "${EMPYRALIS_GATEWAY_PAIRING_TOKEN:-}" ]]; then
+    echo "export EMPYRALIS_GATEWAY_PAIRING_TOKEN=$(shell_quote "${EMPYRALIS_GATEWAY_PAIRING_TOKEN}")" >> "${ENV_FILE}"
+  fi
+  if [[ -n "${EMPYRALIS_GATEWAY_TOKEN:-}" ]]; then
+    echo "export EMPYRALIS_GATEWAY_TOKEN=$(shell_quote "${EMPYRALIS_GATEWAY_TOKEN}")" >> "${ENV_FILE}"
+  fi
+  if [[ -n "${EMPYRALIS_AGENT_COMPUTER_SYSTEM_SERVICE_MODE:-}" ]]; then
+    echo "export EMPYRALIS_AGENT_COMPUTER_SYSTEM_SERVICE_MODE=$(shell_quote "${EMPYRALIS_AGENT_COMPUTER_SYSTEM_SERVICE_MODE}")" >> "${ENV_FILE}"
+  fi
+  if [[ -n "${EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET:-}" ]]; then
+    echo "export EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET=$(shell_quote "${EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET}")" >> "${ENV_FILE}"
+  fi
   chmod 600 "${ENV_FILE}" 2>/dev/null || true
 }
 
@@ -124,6 +218,51 @@ kill_tree() {
     kill -9 "${pids[$idx]}" 2>/dev/null || true
   done
   kill -9 "${root_pid}" 2>/dev/null || true
+}
+
+resolve_node_bin() {
+  local configured="${EMPYRALIS_AGENT_COMPUTER_NODE_BIN:-}"
+  if [[ -n "${configured}" && -x "${configured}" ]]; then
+    echo "${configured}"
+    return 0
+  fi
+  local path_node
+  path_node="$(command -v node 2>/dev/null || true)"
+  if [[ -n "${path_node}" && -x "${path_node}" ]]; then
+    echo "${path_node}"
+    return 0
+  fi
+  local candidate
+  for candidate in "${NODE_BIN_CANDIDATES[@]}"; do
+    if [[ -x "${candidate}" ]]; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_runtime_dirs_safe_for_root_chown() {
+  local stack_real
+  stack_real="$(cd "${STACK_DIR}" && pwd -P)"
+  local dir dir_real
+  for dir in "${STATE_DIR}" "${LOG_DIR}" "${PID_DIR}"; do
+    if [[ -L "${dir}" ]]; then
+      echo "[Agent Computer] Refusing to chown symlinked runtime path: ${dir}"
+      exit 2
+    fi
+    dir_real="$(cd "${dir}" && pwd -P)"
+    case "${dir_real}" in
+      "${stack_real}"|"${stack_real}"/*) ;;
+      *)
+        if [[ "${EMPYRALIS_AGENT_COMPUTER_ALLOW_EXTERNAL_STATE_CHOWN:-}" != "1" ]]; then
+          echo "[Agent Computer] Refusing to chown runtime path outside ${STACK_DIR}: ${dir}"
+          echo "[Agent Computer] Set EMPYRALIS_AGENT_COMPUTER_ALLOW_EXTERNAL_STATE_CHOWN=1 only for an intentional server-owned state directory."
+          exit 2
+        fi
+        ;;
+    esac
+  done
 }
 
 install_runtime() {
@@ -207,6 +346,11 @@ start_edge() {
     echo "  EMPYRALIS_GATEWAY_PAIRING_TOKEN=... scripts/agent_computer.sh start"
     return 0
   fi
+  local node_bin
+  if ! node_bin="$(resolve_node_bin)"; then
+    echo "[Agent Computer] Node.js was not found. Install Node.js or set EMPYRALIS_AGENT_COMPUTER_NODE_BIN."
+    exit 1
+  fi
   echo "[Agent Computer] Starting cloud connection..."
   nohup env \
     EMPYRALIS_SUPERVISOR_SECRET="${EMPYRALIS_SUPERVISOR_SECRET}" \
@@ -217,7 +361,7 @@ start_edge() {
     EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT="${EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT}" \
     EMPYRALIS_GATEWAY_PAIRING_TOKEN="${EMPYRALIS_GATEWAY_PAIRING_TOKEN:-}" \
     EMPYRALIS_GATEWAY_TOKEN="${EMPYRALIS_GATEWAY_TOKEN:-}" \
-    node "${EDGE_ENTRY}" \
+    "${node_bin}" "${EDGE_ENTRY}" \
     > "${LOG_DIR}/agent-computer-edge.log" 2>&1 &
   echo "$!" > "${EDGE_PID_FILE}"
   chmod 600 "${EDGE_PID_FILE}" 2>/dev/null || true
@@ -275,16 +419,338 @@ status_runtime() {
   echo "logs: ${LOG_DIR}/agent-computer-supervisor.log, ${LOG_DIR}/agent-computer-edge.log"
 }
 
-launchd_install() {
-  if [[ "$(uname -s)" != "Darwin" ]]; then
-    echo "launchd-install is only available on macOS."
-    exit 1
+render_systemd_unit() {
+  local user="$1"
+  cat <<EOF
+[Unit]
+Description=Empyralis Agent Computer Server Runtime
+Documentation=https://github.com/empyralis/empyralis
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${user}
+WorkingDirectory=${ROOT_DIR}
+Environment=EMPYRALIS_AGENT_COMPUTER_SYSTEM_SERVICE_MODE=1
+Environment=EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET=server_vps
+ExecStart=/bin/bash ${ROOT_DIR}/scripts/agent_computer.sh service-run --system
+ExecStop=/bin/bash ${ROOT_DIR}/scripts/agent_computer.sh stop
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+render_launchdaemon_plist() {
+  local user="$1"
+  local service_name_xml root_dir_xml log_path_xml user_xml
+  service_name_xml="$(xml_escape "${SERVICE_NAME}")"
+  root_dir_xml="$(xml_escape "${ROOT_DIR}")"
+  log_path_xml="$(xml_escape "${LOG_DIR}/agent-computer-system.log")"
+  user_xml="$(xml_escape "${user}")"
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${service_name_xml}</string>
+  <key>UserName</key>
+  <string>${user_xml}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>${root_dir_xml}/scripts/agent_computer.sh</string>
+    <string>service-run</string>
+    <string>--system</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${root_dir_xml}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>EMPYRALIS_AGENT_COMPUTER_SYSTEM_SERVICE_MODE</key>
+    <string>1</string>
+    <key>EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET</key>
+    <string>server_vps</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${log_path_xml}</string>
+  <key>StandardErrorPath</key>
+  <string>${log_path_xml}</string>
+</dict>
+</plist>
+EOF
+}
+
+service_install_systemd() {
+  local user
+  validate_service_name
+  user="$(service_user)"
+  validate_service_user "${user}"
+  if dry_run_requested "$@"; then
+    render_systemd_unit "${user}"
+    return 0
   fi
+  require_root "service-install --system"
+  ensure_installed
   mkdirs
-  local plist_dir="${HOME}/Library/LaunchAgents"
-  local plist_path="${plist_dir}/ai.empyralis.agent-computer.plist"
-  mkdir -p "${plist_dir}"
-  cat > "${plist_path}" <<EOF
+  write_env
+  ensure_runtime_dirs_safe_for_root_chown
+  chown -R "${user}" "${STATE_DIR}" "${LOG_DIR}" "${PID_DIR}" 2>/dev/null || true
+  local unit_path
+  unit_path="$(systemd_unit_path)"
+  render_systemd_unit "${user}" > "${unit_path}"
+  chmod 644 "${unit_path}"
+  systemctl daemon-reload
+  systemctl enable --now "${SERVICE_NAME}"
+  echo "[Agent Computer] Installed Linux system service: ${unit_path}"
+  echo "[Agent Computer] Status: scripts/agent_computer.sh service-status"
+}
+
+service_uninstall_systemd() {
+  validate_service_name
+  if dry_run_requested "$@"; then
+    echo "systemctl disable --now ${SERVICE_NAME}"
+    echo "rm -f $(systemd_unit_path)"
+    return 0
+  fi
+  require_root "service-uninstall --system"
+  systemctl disable --now "${SERVICE_NAME}" >/dev/null 2>&1 || true
+  rm -f "$(systemd_unit_path)"
+  systemctl daemon-reload
+  echo "[Agent Computer] Removed Linux system service."
+}
+
+service_install_launchdaemon_system() {
+  local user
+  validate_service_name
+  user="$(service_user)"
+  validate_service_user "${user}"
+  if ! has_arg "--server-mac" "$@" && [[ "${EMPYRALIS_AGENT_COMPUTER_ALLOW_MAC_SYSTEM_SERVICE:-}" != "1" ]]; then
+    echo "[Agent Computer] Refusing macOS system LaunchDaemon install by default."
+    echo "Desktop Macs must use launchd-install user-session mode until the user-session bridge is implemented."
+    echo "For a server-style Mac, rerun with --server-mac after accepting that desktop capabilities will stay blocked."
+    exit 2
+  fi
+  if dry_run_requested "$@"; then
+    render_launchdaemon_plist "${user}"
+    return 0
+  fi
+  require_root "macOS service-install --system --server-mac"
+  ensure_installed
+  mkdirs
+  write_env
+  ensure_runtime_dirs_safe_for_root_chown
+  chown -R "${user}" "${STATE_DIR}" "${LOG_DIR}" "${PID_DIR}" 2>/dev/null || true
+  local plist_path
+  plist_path="$(launchdaemon_plist_path)"
+  render_launchdaemon_plist "${user}" > "${plist_path}"
+  chmod 644 "${plist_path}"
+  launchctl bootout "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+  launchctl bootstrap system "${plist_path}"
+  launchctl enable "system/${SERVICE_NAME}"
+  launchctl kickstart -k "system/${SERVICE_NAME}"
+  echo "[Agent Computer] Installed macOS server LaunchDaemon: ${plist_path}"
+}
+
+service_uninstall_launchdaemon_system() {
+  validate_service_name
+  if dry_run_requested "$@"; then
+    echo "launchctl bootout system/${SERVICE_NAME}"
+    echo "rm -f $(launchdaemon_plist_path)"
+    return 0
+  fi
+  require_root "macOS service-uninstall --system"
+  launchctl bootout "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+  launchctl disable "system/${SERVICE_NAME}" >/dev/null 2>&1 || true
+  rm -f "$(launchdaemon_plist_path)"
+  echo "[Agent Computer] Removed macOS server LaunchDaemon."
+}
+
+service_install() {
+  require_system_flag "$@"
+  case "$(host_os)" in
+    Linux) service_install_systemd "$@" ;;
+    Darwin) service_install_launchdaemon_system "$@" ;;
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+      echo "[Agent Computer] Windows Service install is provided through the PowerShell service script, not this bash path."
+      echo "Use: scripts/install_agent_computer_windows_service.ps1 -Action install"
+      exit 2
+      ;;
+    *)
+      echo "[Agent Computer] Unsupported system service host: $(host_os)"
+      exit 2
+      ;;
+  esac
+}
+
+service_uninstall() {
+  require_system_flag "$@"
+  case "$(host_os)" in
+    Linux) service_uninstall_systemd "$@" ;;
+    Darwin) service_uninstall_launchdaemon_system "$@" ;;
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+      echo "[Agent Computer] Windows Service uninstall is provided through the PowerShell service script."
+      echo "Use: scripts/install_agent_computer_windows_service.ps1 -Action uninstall"
+      exit 2
+      ;;
+    *)
+      echo "[Agent Computer] Unsupported system service host: $(host_os)"
+      exit 2
+      ;;
+  esac
+}
+
+service_status() {
+  validate_service_name
+  echo "== Agent Computer service status =="
+  case "$(host_os)" in
+    Linux)
+      if command -v systemctl >/dev/null 2>&1; then
+        systemctl status --no-pager "${SERVICE_NAME}" || true
+      else
+        echo "systemctl: unavailable"
+      fi
+      ;;
+    Darwin)
+      launchctl print "system/${SERVICE_NAME}" 2>/dev/null || echo "LaunchDaemon: not loaded"
+      ;;
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+      echo "Use: scripts/install_agent_computer_windows_service.ps1 -Action status"
+      ;;
+    *)
+      echo "Unsupported service host: $(host_os)"
+      ;;
+  esac
+  status_runtime
+}
+
+service_supervisor_pid=""
+service_edge_pid=""
+
+cleanup_service_run() {
+  local pid
+  for pid in "${service_edge_pid:-}" "${service_supervisor_pid:-}"; do
+    if is_pid_alive "${pid}"; then
+      kill_tree "${pid}"
+    fi
+  done
+}
+
+start_supervisor_for_service() {
+  local mode_label="${1:-service mode}"
+  if wait_for_supervisor; then
+    echo "[Agent Computer] Local runner health is already reachable at ${SUPERVISOR_URL}."
+    return 0
+  fi
+  echo "[Agent Computer] Starting local runner in ${mode_label}..."
+  env \
+    EMPYRALIS_SUPERVISOR_SECRET="${EMPYRALIS_SUPERVISOR_SECRET}" \
+    EMPYRALIS_SUPERVISOR_AUDIT_DB="${EMPYRALIS_SUPERVISOR_AUDIT_DB}" \
+    "${SUPERVISOR_BIN}" \
+    >> "${LOG_DIR}/agent-computer-supervisor.log" 2>&1 &
+  service_supervisor_pid="$!"
+  echo "${service_supervisor_pid}" > "${SUPERVISOR_PID_FILE}"
+  chmod 600 "${SUPERVISOR_PID_FILE}" 2>/dev/null || true
+  if ! wait_for_supervisor; then
+    echo "[Agent Computer] Local runner failed to become healthy."
+    return 1
+  fi
+}
+
+configure_edge_service_mode() {
+  local system_mode="$1"
+  local default_target="$2"
+  if [[ -n "${system_mode}" ]]; then
+    export EMPYRALIS_AGENT_COMPUTER_SYSTEM_SERVICE_MODE="${system_mode}"
+  else
+    unset EMPYRALIS_AGENT_COMPUTER_SYSTEM_SERVICE_MODE
+    unset EMPYRALIS_AGENT_COMPUTER_SERVICE_MODE
+  fi
+  export EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET="${EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET:-${default_target}}"
+}
+
+run_edge_forever() {
+  local mode_label="$1"
+  local default_target="$2"
+  local system_mode="${3:-}"
+  while true; do
+    load_env_if_present
+    configure_edge_service_mode "${system_mode}" "${default_target}"
+    if ! has_pairing_material; then
+      echo "[Agent Computer] ${mode_label} is running, but this computer is not paired yet."
+      echo "[Agent Computer] Add EMPYRALIS_GATEWAY_PAIRING_TOKEN or EMPYRALIS_GATEWAY_TOKEN, then the edge will start."
+      sleep 30
+      continue
+    fi
+
+    local existing_pid
+    existing_pid="$(pid_from_file "${EDGE_PID_FILE}")"
+    if is_pid_alive "${existing_pid}"; then
+      echo "[Agent Computer] Cloud connection already running (pid ${existing_pid}); monitoring."
+      while is_pid_alive "${existing_pid}"; do
+        sleep 5
+      done
+      rm -f "${EDGE_PID_FILE}"
+      echo "[Agent Computer] Cloud connection exited; restarting in 5 seconds."
+      sleep 5
+      continue
+    fi
+
+    local node_bin
+    if ! node_bin="$(resolve_node_bin)"; then
+      echo "[Agent Computer] Node.js was not found. Install Node.js or set EMPYRALIS_AGENT_COMPUTER_NODE_BIN."
+      sleep 30
+      continue
+    fi
+    echo "[Agent Computer] Starting cloud connection in ${mode_label}..."
+    env \
+      EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET="${EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET:-${default_target}}" \
+      EMPYRALIS_SUPERVISOR_SECRET="${EMPYRALIS_SUPERVISOR_SECRET}" \
+      EMPYRALIS_SUPERVISOR_URL="${EMPYRALIS_SUPERVISOR_URL}" \
+      EMPYRALIS_GATEWAY_API_URL="${EMPYRALIS_GATEWAY_API_URL}" \
+      EMPYRALIS_GATEWAY_STATE_DIR="${EMPYRALIS_GATEWAY_STATE_DIR}" \
+      EMPYRALIS_GATEWAY_DISPLAY_NAME="${EMPYRALIS_GATEWAY_DISPLAY_NAME}" \
+      EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT="${EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT}" \
+      EMPYRALIS_GATEWAY_PAIRING_TOKEN="${EMPYRALIS_GATEWAY_PAIRING_TOKEN:-}" \
+      EMPYRALIS_GATEWAY_TOKEN="${EMPYRALIS_GATEWAY_TOKEN:-}" \
+      "${node_bin}" "${EDGE_ENTRY}" \
+      >> "${LOG_DIR}/agent-computer-edge.log" 2>&1 &
+    service_edge_pid="$!"
+    echo "${service_edge_pid}" > "${EDGE_PID_FILE}"
+    chmod 600 "${EDGE_PID_FILE}" 2>/dev/null || true
+    wait "${service_edge_pid}" || true
+    service_edge_pid=""
+    rm -f "${EDGE_PID_FILE}"
+    echo "[Agent Computer] Cloud connection exited; restarting in 5 seconds."
+    sleep 5
+  done
+}
+
+service_run_system() {
+  require_system_flag "$@"
+  ensure_installed
+  load_runtime_env
+  configure_edge_service_mode "1" "server_vps"
+  trap cleanup_service_run INT TERM EXIT
+  start_supervisor_for_service "system service mode"
+  run_edge_forever "system service mode" "server_vps" "1"
+}
+
+render_launchagent_plist() {
+  local root_dir_xml log_path_xml
+  root_dir_xml="$(xml_escape "${ROOT_DIR}")"
+  log_path_xml="$(xml_escape "${LOG_DIR}/agent-computer-launchd.log")"
+  cat <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -294,22 +760,38 @@ launchd_install() {
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>${ROOT_DIR}/scripts/agent_computer.sh</string>
-    <string>start</string>
+    <string>${root_dir_xml}/scripts/agent_computer.sh</string>
+    <string>launchd-run</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>${ROOT_DIR}</string>
+  <string>${root_dir_xml}</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>${LOG_DIR}/agent-computer-launchd.log</string>
+  <string>${log_path_xml}</string>
   <key>StandardErrorPath</key>
-  <string>${LOG_DIR}/agent-computer-launchd.log</string>
+  <string>${log_path_xml}</string>
 </dict>
 </plist>
 EOF
+}
+
+launchd_install() {
+  if [[ "$(host_os)" != "Darwin" ]]; then
+    echo "launchd-install is only available on macOS."
+    exit 1
+  fi
+  mkdirs
+  local plist_dir="${HOME}/Library/LaunchAgents"
+  local plist_path="${plist_dir}/ai.empyralis.agent-computer.plist"
+  mkdir -p "${plist_dir}"
+  if dry_run_requested "$@"; then
+    render_launchagent_plist
+    return 0
+  fi
+  render_launchagent_plist > "${plist_path}"
   launchctl bootout "gui/$(id -u)/ai.empyralis.agent-computer" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "${plist_path}"
   launchctl enable "gui/$(id -u)/ai.empyralis.agent-computer"
@@ -318,7 +800,7 @@ EOF
 }
 
 launchd_uninstall() {
-  if [[ "$(uname -s)" != "Darwin" ]]; then
+  if [[ "$(host_os)" != "Darwin" ]]; then
     echo "launchd-uninstall is only available on macOS."
     exit 1
   fi
@@ -330,14 +812,32 @@ launchd_uninstall() {
   echo "[Agent Computer] Removed macOS auto-start service."
 }
 
+launchd_run() {
+  if [[ "$(host_os)" != "Darwin" ]]; then
+    echo "launchd-run is only available on macOS."
+    exit 1
+  fi
+  ensure_installed
+  load_runtime_env
+  configure_edge_service_mode "" "this_device"
+  trap cleanup_service_run INT TERM EXIT
+  start_supervisor_for_service "user-session launchd mode"
+  run_edge_forever "user-session launchd mode" "this_device" ""
+}
+
 cmd="${1:-}"
 case "${cmd}" in
   install) install_runtime ;;
   start) start_runtime ;;
   stop) stop_runtime ;;
   status) status_runtime ;;
-  launchd-install) launchd_install ;;
+  service-install) shift; service_install "$@" ;;
+  service-uninstall) shift; service_uninstall "$@" ;;
+  service-status) service_status ;;
+  service-run) shift; service_run_system "$@" ;;
+  launchd-install) shift; launchd_install "$@" ;;
   launchd-uninstall) launchd_uninstall ;;
+  launchd-run) launchd_run ;;
   -h|--help|help|"") usage ;;
   *)
     echo "Unknown command: ${cmd}"

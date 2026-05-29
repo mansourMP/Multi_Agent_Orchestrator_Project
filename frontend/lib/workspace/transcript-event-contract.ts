@@ -141,6 +141,7 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'delivery_transport',
   'description',
   'detail',
+  'delta',
   'duration_ms',
   'durationMs',
   'event',
@@ -213,7 +214,7 @@ const SAFE_STEP_KEYS = new Set([
 ]);
 
 const BLOCKED_STEP_KINDS = new Set(['thinking', 'reasoning', 'assistant', 'message', 'final', 'chunk']);
-const BLOCKED_TRACE_EVENTS = new Set(['assistant.message.delta', 'final', 'message.delta', 'reasoning.summary.delta', 'trace.started']);
+const BLOCKED_TRACE_EVENTS = new Set(['assistant.message.delta', 'final', 'message.delta', 'trace.started']);
 const SAFE_STEP_KINDS = new Set([
   'approval',
   'artifact',
@@ -379,6 +380,9 @@ function sanitizeRecord(value: unknown, safeKeys: Set<string>): Record<string, u
 
 function isTranscriptTracePayload(payload: Record<string, unknown>): boolean {
   const eventType = readString(payload.event_type).toLowerCase();
+  if (eventType === 'reasoning.summary.delta') {
+    return true;
+  }
   if (!eventType || BLOCKED_TRACE_EVENTS.has(eventType)) {
     return false;
   }

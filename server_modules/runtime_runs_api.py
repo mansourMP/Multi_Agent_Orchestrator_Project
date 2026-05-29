@@ -137,17 +137,64 @@ def _coerce_dict(value: Any) -> dict[str, Any]:
     return dict(value or {}) if isinstance(value, dict) else {}
 
 
+_THINKING_METADATA_ALLOWLIST = {"reasoning_effort", "reasoning_tokens", "supports_reasoning"}
+_THINKING_METADATA_BLOCKLIST = {
+    "thinking",
+    "thinking_text",
+    "reasoning",
+    "reasoning_text",
+    "reasoning_summary",
+    "reasoning_output",
+    "chain_of_thought",
+    "raw_chain_of_thought",
+    "internal_reasoning",
+    "private_reasoning",
+}
+
+
+def _is_thinking_metadata_key(raw_key: Any) -> bool:
+    key = str(raw_key or "").strip().lower()
+    if not key:
+        return False
+    if key in _THINKING_METADATA_ALLOWLIST:
+        return False
+    if key in _THINKING_METADATA_BLOCKLIST:
+        return True
+    if "chain_of_thought" in key or "raw_chain_of_thought" in key or "private_reasoning" in key:
+        return True
+    if key in {"thought", "thoughts"}:
+        return True
+    if "thinking" in key and not key.endswith("_mode"):
+        return True
+    return False
+
+
+def _strip_thinking_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in payload.items():
+        if _is_thinking_metadata_key(key):
+            continue
+        if isinstance(value, dict):
+            sanitized[str(key)] = _strip_thinking_metadata(value)
+        elif isinstance(value, list):
+            sanitized[str(key)] = [
+                _strip_thinking_metadata(item)
+                if isinstance(item, (dict, list))
+                else item
+                for item in value
+            ]
+        else:
+            sanitized[str(key)] = value
+    return sanitized
+
+
 def _chat_stream_result_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     metadata = _coerce_dict(payload.get("metadata"))
     nested_result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     nested_metadata = _coerce_dict(nested_result.get("metadata"))
-    if not metadata:
-        return nested_metadata
-    if nested_metadata:
-        merged = dict(nested_metadata)
-        merged.update(metadata)
-        return merged
-    return metadata
+    merged = dict(nested_metadata)
+    merged.update(metadata)
+    return _strip_thinking_metadata(merged)
 
 
 def _chat_stream_assistant_status(payload: dict[str, Any]) -> str:
@@ -173,7 +220,7 @@ def _chat_stream_transcript_events(session: dict[str, Any]) -> list[dict[str, An
     metadata = _coerce_dict(session.get("metadata"))
     cached_events = metadata.get("transcript_events")
     if isinstance(cached_events, list):
-        return [dict(item) for item in cached_events if isinstance(item, dict)]
+        return transcript_events_service.transcript_events_from_stream_records(cached_events)
     events = session.get("events") if isinstance(session.get("events"), list) else []
     return transcript_events_service.transcript_events_from_stream_records(events)
 

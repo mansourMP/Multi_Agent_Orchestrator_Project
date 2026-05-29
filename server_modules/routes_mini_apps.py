@@ -90,6 +90,21 @@ def _enforce_mini_app_request_limit(
 class MiniAppContractUpsertRequest(BaseModel):
     label: Optional[str] = Field(default=None, max_length=120)
     description: Optional[str] = Field(default=None, max_length=2_000)
+    icon_url: Optional[str] = Field(default=None, max_length=2_048)
+    category: Optional[str] = Field(default=None, max_length=120)
+    publisher_id: Optional[str] = Field(default=None, max_length=160)
+    publisher_name: Optional[str] = Field(default=None, max_length=240)
+    publisher_domain: Optional[str] = Field(default=None, max_length=255)
+    support_url: Optional[str] = Field(default=None, max_length=2_048)
+    privacy_url: Optional[str] = Field(default=None, max_length=2_048)
+    terms_url: Optional[str] = Field(default=None, max_length=2_048)
+    runtime_type: Optional[str] = Field(default=None, max_length=80)
+    runtime_mode: Optional[str] = Field(default=None, max_length=80)
+    destination_url: Optional[str] = Field(default=None, max_length=2_048)
+    platform_route: Optional[str] = Field(default=None, max_length=2_048)
+    verification_status: Optional[str] = Field(default=None, max_length=80)
+    official_claim: Optional[Dict[str, Any]] = None
+    domain_proof: Optional[Dict[str, Any]] = None
     delivery_mode: Optional[str] = Field(default=None, max_length=80)
     hosted_url: Optional[str] = Field(default=None, max_length=2_048)
     embed_kind: Optional[str] = Field(default=None, max_length=80)
@@ -945,6 +960,21 @@ async def upsert_mini_app_contract(
             app_id,
             label=body.label,
             description=body.description,
+            icon_url=body.icon_url,
+            category=body.category,
+            publisher_id=body.publisher_id,
+            publisher_name=body.publisher_name,
+            publisher_domain=body.publisher_domain,
+            support_url=body.support_url,
+            privacy_url=body.privacy_url,
+            terms_url=body.terms_url,
+            runtime_type=body.runtime_type,
+            runtime_mode=body.runtime_mode,
+            destination_url=body.destination_url,
+            platform_route=body.platform_route,
+            verification_status=body.verification_status,
+            official_claim=body.official_claim,
+            domain_proof=body.domain_proof,
             delivery_mode=body.delivery_mode,
             hosted_url=body.hosted_url,
             embed_kind=body.embed_kind,

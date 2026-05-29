@@ -15,6 +15,7 @@ INSTALLABLE_PROOF_PACKAGES = {
     "studio-proof-restaurant-order-taker": "restaurant-order-taker",
     "studio-proof-dental-receptionist": "dental-receptionist",
 }
+CURATED_LINK_APPS = {"link-instagram", "link-slack", "link-telegram"}
 
 
 def _patch_app_registry(monkeypatch, tmp_path):
@@ -47,6 +48,7 @@ def test_empty_marketplace_returns_preview_packages(monkeypatch, tmp_path):
     assert "preview-deepseek-provider" not in package_ids
     assert all(item["kind"] != "provider" for item in payload["items"])
     assert set(INSTALLABLE_PROOF_PACKAGES).issubset(package_ids)
+    assert CURATED_LINK_APPS.issubset(package_ids)
     installable_items = [
         item for item in payload["items"] if item["package_id"] in INSTALLABLE_PROOF_PACKAGES
     ]
@@ -63,13 +65,16 @@ def test_empty_marketplace_returns_preview_packages(monkeypatch, tmp_path):
         assert contract["monetization_hint"]["suggested_offer"]
         assert contract["analytics_events"]
         assert contract["business_metrics"]["dashboard_cards"]
+    link_items = [item for item in payload["items"] if item["package_id"] in CURATED_LINK_APPS]
+    assert {item["runtime_truth"]["runtime_type"] for item in link_items} == {"link"}
+    assert all(item["install_eligible"] is True for item in link_items)
     shop_assistant = next(item for item in payload["items"] if item["package_id"] == "studio-proof-shop-assistant")
     assert shop_assistant["marketplace_proof"]["vertical"] == "shop_assistant"
     assert "answers_catalog_question_without_inventory_hallucination" in shop_assistant["marketplace_proof"]["golden_tests"]
     assert shop_assistant["package"]["template_id"] == "shop-assistant"
     preview_packages = [
         item for item in payload["items"]
-        if item["package_id"] not in INSTALLABLE_PROOF_PACKAGES
+        if item["package_id"] not in INSTALLABLE_PROOF_PACKAGES and item["package_id"] not in CURATED_LINK_APPS
     ]
     assert all(item["preview_only"] is True for item in preview_packages)
     assert all(item["install_eligible"] is False for item in preview_packages)
@@ -113,23 +118,20 @@ def test_install_marketplace_app_syncs_app_registry_and_hosted_contract(monkeypa
             "label": "Weather Lab Console",
             "description": "Third-party weather intelligence app for the Empyralis shell.",
             "category": "Research",
-            "verification_status": "verified",
+            "verification_status": "unverified",
             "review_state": "approved",
             "health_state": "healthy",
             "publisher": {
                 "publisher_id": "weather-lab",
                 "label": "Weather Lab",
                 "website": "https://weather.example",
-            },
-            "billing": {
-                "monetization_kind": "subscription",
-                "billing_product_id": "weather-pro",
-                "revenue_share_bps": 1500,
-                "accounting_hook": {"ledger_key": "weather-lab.console.install"},
+                "support_url": "https://weather.example/support",
             },
             "app": {
                 "app_id": "weather_console",
                 "hosted_url": "https://apps.weather.example/embed",
+                "icon_url": "https://apps.weather.example/icon.png",
+                "runtime_type": "community",
                 "allowed_origins": ["https://apps.weather.example"],
                 "permissions": ["app.summary.read", "app.bridge.sage.request"],
                 "bridge_contracts": {"app_to_sage": ["summary_request"]},
@@ -150,10 +152,8 @@ def test_install_marketplace_app_syncs_app_registry_and_hosted_contract(monkeypa
 
     assert installed["installed"] is True
     assert installed["runtime_truth"]["surface"] == "app_registry"
+    assert installed["runtime_truth"]["runtime_type"] == "community"
     assert installed["runtime_truth"]["open_href"] == "/w/ws-1/applications/weather_console"
-    assert installed["billing"]["revenue_share_bps"] == 1500
-    assert installed["billing"]["payment_processing_live"] is False
-    assert installed["billing"]["billing_status"] == "metadata_only"
 
     with app_registry_api.APP_REGISTRY_LOCK:
         data = app_registry_api._load_app_registry()
@@ -162,13 +162,164 @@ def test_install_marketplace_app_syncs_app_registry_and_hosted_contract(monkeypa
     assert app_item["status"] == "installed"
     assert app_item["source"] == "third_party_marketplace"
     assert app_item["install_source"] == "marketplace_distribution"
-    assert app_item["distribution_metadata"]["verification_status"] == "verified"
+    assert app_item["icon_url"] == "https://apps.weather.example/icon.png"
+    assert app_item["runtime_type"] == "community"
+    assert app_item["distribution_metadata"]["verification_status"] == "unverified"
 
     hosted_contract = mini_apps_service.get_mini_app_contract("ws-1", "weather_console")
     assert hosted_contract["hosted_url"] == "https://apps.weather.example/embed"
     assert hosted_contract["delivery_mode"] == "hosted"
+    assert hosted_contract["icon_url"] == "https://apps.weather.example/icon.png"
+    assert hosted_contract["runtime_type"] == "community"
     assert "app.summary.read" in hosted_contract["permissions"]
     assert "app.bridge.sage.request" in hosted_contract["permissions"]
+
+
+def test_public_marketplace_app_without_icon_is_blocked(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+    _patch_app_registry(monkeypatch, tmp_path)
+
+    registered = marketplace_distribution_service.register_marketplace_package(
+        "ws-1",
+        actor_user_id="reviewer-1",
+        payload={
+            "package_id": "no-icon-app",
+            "kind": "app",
+            "label": "No Icon App",
+            "description": "Public app missing required marketplace icon.",
+            "verification_status": "partner",
+            "review_state": "approved",
+            "policy_posture": "governed",
+            "onboarding": {
+                "privacy_url": "https://apps.example/privacy",
+                "support_url": "https://apps.example/support",
+            },
+            "app": {
+                "app_id": "no_icon_app",
+                "hosted_url": "https://apps.example/no-icon",
+                "runtime_type": "community",
+                "allowed_origins": ["https://apps.example"],
+            },
+        },
+    )
+
+    assert "missing_app_icon" in registered["marketplace_review_findings"]
+    assert registered["install_eligible"] is False
+    assert "missing_app_icon" in registered["install_blockers"]
+
+    with pytest.raises(ValueError, match="missing_app_icon"):
+        marketplace_distribution_service.install_marketplace_package(
+            "ws-1",
+            package_id="no-icon-app",
+            actor_user_id="user-1",
+        )
+
+
+def test_private_workspace_app_without_icon_is_accepted(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+
+    contract = mini_apps_service.upsert_mini_app_contract(
+        "ws-1",
+        "private_customer_portal",
+        label="Private Customer Portal",
+        delivery_mode="hosted",
+        hosted_url="https://apps.example/private",
+        allowed_origins=["https://apps.example"],
+        trust_tier="user_private",
+        runtime_type="private",
+        permissions=[],
+        bridge_contracts={},
+    )
+
+    assert contract["app_id"] == "private_customer_portal"
+    assert contract["delivery_mode"] == "hosted"
+    assert contract["icon_url"] is None
+    assert contract["runtime_type"] == "private"
+
+
+def test_link_app_installs_and_opens_destination_url(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+    _patch_app_registry(monkeypatch, tmp_path)
+
+    registered = marketplace_distribution_service.register_marketplace_package(
+        "ws-1",
+        actor_user_id="reviewer-1",
+        payload={
+            "package_id": "telegram",
+            "kind": "app",
+            "label": "Telegram",
+            "description": "Curated link app for Telegram Web.",
+            "verification_status": "unverified",
+            "review_state": "approved",
+            "health_state": "healthy",
+            "policy_posture": "governed",
+            "app": {
+                "app_id": "telegram_link",
+                "runtime_type": "link",
+                "destination_url": "https://web.telegram.org/",
+                "icon_url": "https://telegram.org/img/t_logo.png",
+                "allowed_origins": ["https://web.telegram.org"],
+            },
+        },
+    )
+
+    assert registered["install_eligible"] is True
+    installed = marketplace_distribution_service.install_marketplace_package(
+        "ws-1",
+        package_id="telegram",
+        actor_user_id="user-1",
+    )
+    assert installed["runtime_truth"]["runtime_type"] == "link"
+    assert installed["runtime_truth"]["open_href"] == "https://web.telegram.org/"
+    contract = mini_apps_service.get_mini_app_contract("ws-1", "telegram_link")
+    assert contract["runtime_type"] == "link"
+    assert contract["destination_url"] == "https://web.telegram.org/"
+
+
+def test_community_submission_enters_pending_queue_and_review_publishes(monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", tmp_path / "workspace")
+    _patch_app_registry(monkeypatch, tmp_path)
+
+    submitted = marketplace_distribution_service.submit_community_app(
+        "ws-1",
+        actor_user_id="developer-1",
+        payload={
+            "label": "Community Notes",
+            "description": "Hosted notes surface for workspace teams.",
+            "category": "Productivity",
+            "publisher": {
+                "publisher_id": "community-dev",
+                "label": "Community Dev",
+            },
+            "app": {
+                "app_id": "community_notes",
+                "hosted_url": "https://notes.example/app",
+                "icon_url": "https://notes.example/icon.png",
+                "allowed_origins": ["https://notes.example"],
+            },
+        },
+    )
+
+    assert submitted["review_state"] == "pending"
+    assert submitted["runtime_truth"]["runtime_type"] == "community"
+    assert marketplace_distribution_service.list_marketplace_packages("ws-1", kind="app")["count"] == 0
+    queue = marketplace_distribution_service.list_marketplace_app_submissions("ws-1")
+    assert queue["count"] == 1
+    assert queue["items"][0]["package_id"] == "community_notes"
+
+    approved = marketplace_distribution_service.review_marketplace_app_submission(
+        "ws-1",
+        package_id="community_notes",
+        actor_user_id="owner-1",
+        approved=True,
+        verification_status="partner",
+    )
+
+    assert approved["review_state"] == "approved"
+    assert approved["verification_status"] == "partner"
+    listed = marketplace_distribution_service.list_marketplace_packages("ws-1", kind="app", runtime_type="community")
+    assert listed["count"] == 1
+    assert listed["items"][0]["package_id"] == "community_notes"
 
 
 def test_marketplace_install_blocks_owner_resource_permissions(monkeypatch, tmp_path):
@@ -187,9 +338,14 @@ def test_marketplace_install_blocks_owner_resource_permissions(monkeypatch, tmp_
             "review_state": "approved",
             "health_state": "healthy",
             "policy_posture": "governed",
+            "onboarding": {
+                "privacy_url": "https://apps.example.com/privacy",
+                "support_url": "https://apps.example.com/support",
+            },
             "app": {
                 "app_id": "unsafe_owner_resource_app",
                 "hosted_url": "https://apps.example.com/unsafe",
+                "icon_url": "https://apps.example.com/unsafe/icon.png",
                 "allowed_origins": ["https://apps.example.com"],
                 "permissions": ["app.summary.read", "read_sage_memory", "connected_computer"],
             },
@@ -284,6 +440,15 @@ def test_install_marketplace_provider_projects_into_provider_catalog(monkeypatch
             "providers": [],
         },
     )
+    monkeypatch.setattr(
+        provider_catalog_service.provider_profiles,
+        "build_provider_runtime_truth",
+        lambda workspace_id: {
+            "workspace_id": workspace_id,
+            "summary": {"available_count": 0, "configured_count": 0},
+            "providers": [],
+        },
+    )
 
     payload = asyncio.run(provider_catalog_service.list_workspace_provider_catalog(workspace_id="ws-1"))
     provider = next(item for item in payload["providers"] if item["id"] == "neuralcloud")
@@ -364,6 +529,10 @@ def test_governed_package_contracts_cover_templates_connectors_skills_and_mini_a
             "verification_status": "verified",
             "review_state": "approved",
             "policy_posture": "governed",
+            "onboarding": {
+                "privacy_url": "https://apps.example/privacy",
+                "support_url": "https://apps.example/support",
+            },
             "billing": {
                 "monetization_kind": "free",
                 "accounting_hook": {"ledger_key": "mini_app.booking_board.install"},
@@ -371,6 +540,8 @@ def test_governed_package_contracts_cover_templates_connectors_skills_and_mini_a
             "mini_app": {
                 "app_id": "booking_board",
                 "hosted_url": "https://apps.example/booking-board",
+                "icon_url": "https://apps.example/booking-board/icon.png",
+                "runtime_type": "community",
                 "allowed_origins": ["https://apps.example"],
                 "permissions": ["app.summary.read"],
                 "bridge_contracts": {"bookings": ["read"]},
@@ -406,7 +577,8 @@ def test_governed_package_contracts_cover_templates_connectors_skills_and_mini_a
         actor_user_id="user-1",
     )
     assert installed_mini_app["runtime_truth"]["surface"] == "mini_app_registry"
-    assert installed_mini_app["runtime_truth"]["open_href"] == "/w/ws-1/mini-apps/booking_board"
+    assert installed_mini_app["runtime_truth"]["runtime_type"] == "community"
+    assert installed_mini_app["runtime_truth"]["open_href"] == "/w/ws-1/applications/booking_board"
     hosted_contract = mini_apps_service.get_mini_app_contract("ws-1", "booking_board")
     assert hosted_contract["hosted_url"] == "https://apps.example/booking-board"
 

@@ -36,7 +36,31 @@ class GatewayHealthServiceTests(unittest.TestCase):
             "last_heartbeat_at": "2099-01-01T00:00:00Z",
             "last_seq": 3,
             "last_ack": 3,
-            "metadata": {"health_state": "healthy"},
+            "metadata": {
+                "health_state": "healthy",
+                "service_inventory": [
+                    {
+                        "id": "postgres",
+                        "label": "Postgres",
+                        "kind": "database",
+                        "status": "ready",
+                        "detected": True,
+                        "passive": True,
+                        "execution_enabled": False,
+                        "check": "pg_isready -q",
+                        "summary": "ready",
+                        "last_checked_at": "2026-05-29T00:00:00Z",
+                    }
+                ],
+                "native_runtime": {
+                    "os": "darwin",
+                    "arch": "arm64",
+                    "release": "25.0.0",
+                    "hostname": "mansur-mac",
+                    "desktop_session": "user_session",
+                    "system_service_mode": False,
+                },
+            },
         }
         projected_specialist = {
             "id": "da-1",
@@ -120,10 +144,73 @@ class GatewayHealthServiceTests(unittest.TestCase):
         self.assertEqual(payload["providers"]["status"], "fail")
         self.assertEqual(payload["providers"]["items"][0]["id"], "gemini")
         self.assertEqual(payload["quota"]["status"], "pass")
+        self.assertEqual(payload["service_inventory"]["status"], "pass")
+        self.assertEqual(payload["service_inventory"]["items"][0]["id"], "postgres")
+        self.assertFalse(payload["service_inventory"]["items"][0]["execution_enabled"])
+        self.assertEqual(payload["service_inventory"]["native_runtime"]["desktop_session"], "user_session")
         check_ids = {item["id"] for item in payload["checks"]}
         self.assertIn("studio_specialists", check_ids)
         self.assertIn("provider_reachability", check_ids)
         self.assertIn("workspace_quota", check_ids)
+        self.assertIn("passive_service_inventory", check_ids)
+
+    def test_gateway_inventory_redacts_secret_like_diagnostics(self) -> None:
+        inventory = gateway_health_service.gateway_inventory_service.sanitize_service_inventory(
+            [
+                {
+                    "id": "postgres",
+                    "label": "Postgres",
+                    "kind": "database",
+                    "status": "ready",
+                    "detected": True,
+                    "execution_enabled": True,
+                    "check": "api-key: TEST_BEARER_CANARY_VALUE",
+                    "summary": "ready with api_key=TEST_SECRET_CANARY_VALUE",
+                    "metadata": {
+                        "api_key": "TEST_SECRET_CANARY_VALUE",
+                        "logs": ["debug token=TEST_COOKIE_CANARY_VALUE"],
+                    },
+                }
+            ]
+        )
+
+        rendered = str(inventory)
+        self.assertEqual(inventory[0]["id"], "postgres")
+        self.assertFalse(inventory[0]["execution_enabled"])
+        self.assertTrue(inventory[0]["passive"])
+        self.assertNotIn("TEST_SECRET_CANARY_VALUE", rendered)
+        self.assertNotIn("TEST_BEARER_CANARY_VALUE", rendered)
+        self.assertNotIn("TEST_COOKIE_CANARY_VALUE", rendered)
+        self.assertIn("[redacted", rendered)
+
+    def test_gateway_capability_readiness_redacts_permission_diagnostics(self) -> None:
+        readiness = gateway_health_service.gateway_inventory_service.sanitize_capability_readiness(
+            {
+                "requested": ["screenshot.capture", "computer_control.click"],
+                "ready": ["screenshot.capture"],
+                "blocked": ["computer_control.click"],
+                "permission_states": {
+                    "computer_control.click": {
+                        "capability_id": "computer_control.click",
+                        "permission": "accessibility",
+                        "state": "denied",
+                        "prompt_available": True,
+                        "summary": "denied with token=TEST_SECRET_CANARY_VALUE",
+                    }
+                },
+                "service_statuses": {"desktop_permissions": "blocked"},
+            }
+        )
+
+        rendered = str(readiness)
+        self.assertEqual(readiness["ready"], ["screenshot.capture"])
+        self.assertEqual(readiness["blocked"], ["computer_control.click"])
+        self.assertEqual(
+            readiness["permission_states"]["computer_control.click"]["state"],
+            "denied",
+        )
+        self.assertNotIn("TEST_SECRET_CANARY_VALUE", rendered)
+        self.assertIn("[redacted", rendered)
 
     def test_gateway_doctor_payload_uses_cached_provider_probe_until_forced(self) -> None:
         registration = {

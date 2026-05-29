@@ -29,6 +29,8 @@ import { HeartbeatLoop } from "./heartbeat";
 import { ReconnectBackoff, classifyReconnectError, classifyCloseCode, sleep, type CloseCodeContext } from "./reconnect";
 import { GatewayCapabilityRouter } from "../supervisor/capability-router";
 import { PersonalChannelRuntimeRegistry } from "../channels/personal-runtime";
+import { buildGatewayHeartbeatPayload } from "./heartbeat-payload";
+import { collectPassiveInventorySnapshot } from "../health/service-inventory";
 
 /**
  * Message types that are safe to replay automatically.
@@ -363,17 +365,19 @@ export class GatewayWsClient {
   async sendHeartbeat(scope: GatewayScope, runtimeMetadata: GatewayRuntimeMetadata): Promise<void> {
     const checkpoints = await this.checkpoints.load();
     const outboxSummary = await this.outbox.summarize();
+    const inventory = await collectPassiveInventorySnapshot({
+      requestedCapabilities: runtimeMetadata.requestedCapabilities,
+    });
+    const payload = buildGatewayHeartbeatPayload({
+      runtimeMetadata,
+      inventory,
+      journalCursor: await this.journal.lastCursor(),
+      checkpointCursor: checkpoints.lastAck ?? 0,
+      queueDepthSummary: { ...outboxSummary },
+    });
     await this.sendRequest(
       "gateway.heartbeat",
-      {
-        health_state: "online",
-        journal_cursor: await this.journal.lastCursor(),
-        checkpoint_cursor: checkpoints.lastAck ?? 0,
-        queue_depth_summary: outboxSummary,
-        capability_readiness: {
-          requested: runtimeMetadata.requestedCapabilities,
-        },
-      },
+      payload,
       scope,
       {
         replayable: false,

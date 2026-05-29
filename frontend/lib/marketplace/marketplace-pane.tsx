@@ -39,11 +39,16 @@ type ComposerKind = 'app' | 'provider';
 
 function isVisibleMarketplaceKind(kind: string): boolean {
   const normalized = kind.trim().toLowerCase();
-  return normalized === 'agent_template' || normalized === 'skill' || normalized === 'connector' || normalized === 'bundle';
+  return (
+    normalized === 'agent_template'
+    || normalized === 'skill'
+    || normalized === 'connector'
+    || normalized === 'bundle'
+  );
 }
 
-function marketplaceKindMatchesFilter(kind: string, filter: KindFilter): boolean {
-  const normalized = kind.trim().toLowerCase();
+function marketplaceKindMatchesFilter(item: MarketplacePackageRecord, filter: KindFilter): boolean {
+  const normalized = readString(item.kind).trim().toLowerCase();
   if (filter === 'bundle') {
     return normalized === 'bundle';
   }
@@ -67,6 +72,10 @@ type BaseComposerDraft = {
   publisherLabel: string;
   publisherWebsite: string;
   docsUrl: string;
+  supportUrl: string;
+  privacyUrl: string;
+  termsUrl: string;
+  publisherDomain: string;
   verificationStatus: string;
   reviewState: string;
   healthState: string;
@@ -83,9 +92,8 @@ type BaseComposerDraft = {
 type AppComposerDraft = BaseComposerDraft & {
   appId: string;
   hostedUrl: string;
+  iconUrl: string;
   version: string;
-  latestVersion: string;
-  releaseChannel: string;
   permissions: string;
   allowedOrigins: string;
   bridgeContracts: string;
@@ -135,6 +143,10 @@ const DEFAULT_APP_DRAFT: AppComposerDraft = {
   publisherLabel: '',
   publisherWebsite: '',
   docsUrl: '',
+  supportUrl: '',
+  privacyUrl: '',
+  termsUrl: '',
+  publisherDomain: '',
   verificationStatus: 'unverified',
   reviewState: 'pending',
   healthState: 'setup_required',
@@ -148,9 +160,8 @@ const DEFAULT_APP_DRAFT: AppComposerDraft = {
   approvalRequired: false,
   appId: '',
   hostedUrl: '',
+  iconUrl: '',
   version: '1.0.0',
-  latestVersion: '',
-  releaseChannel: 'stable',
   permissions: '',
   allowedOrigins: '',
   bridgeContracts: '',
@@ -162,7 +173,11 @@ const DEFAULT_PROVIDER_DRAFT: ProviderComposerDraft = {
   category: 'Models',
   publisherLabel: '',
   publisherWebsite: '',
+  publisherDomain: '',
   docsUrl: '',
+  supportUrl: '',
+  privacyUrl: '',
+  termsUrl: '',
   verificationStatus: 'unverified',
   reviewState: 'pending',
   healthState: 'setup_required',
@@ -239,8 +254,17 @@ function packageKindLabel(kind: string): string {
   if (normalized === 'agent_template') {
     return 'Agent template';
   }
+  if (normalized === 'link') {
+    return 'Link';
+  }
+  if (normalized === 'community') {
+    return 'Community';
+  }
+  if (normalized === 'platform') {
+    return 'Platform';
+  }
   if (normalized === 'skill') {
-    return 'Tool';
+    return 'Skill';
   }
   return humanizeToken(normalized || 'package');
 }
@@ -466,6 +490,27 @@ type MarketplaceDetailSection = {
   items?: string[];
 };
 
+type MarketplaceAppMetadataItem = {
+  label: string;
+  value: string;
+  href?: string;
+};
+
+function marketplaceAppMetadataItems(card: MarketplaceCardView, details: MarketplaceSelectedDetails): MarketplaceAppMetadataItem[] {
+  if (card.kind !== 'app' && card.kind !== 'mini_app') {
+    return [];
+  }
+  const runtimeType = readString(details.packagePayload.runtime_type, readString(details.runtimeTruth.runtime_type, 'community'));
+  const destinationUrl = readString(details.packagePayload.destination_url);
+  return [
+    { label: 'Runtime', value: humanizeToken(runtimeType) },
+    { label: 'Category', value: card.category },
+    runtimeType === 'community' ? { label: 'Publisher', value: card.publisherLabel } : null,
+    runtimeType === 'community' ? { label: 'Verification', value: humanizeToken(card.verificationStatus) } : null,
+    runtimeType === 'link' && destinationUrl ? { label: 'URL', value: destinationUrl, href: destinationUrl } : null,
+  ].filter((item): item is MarketplaceAppMetadataItem => Boolean(item));
+}
+
 function buildMarketplaceSelectedDetails(item: MarketplacePackageRecord): MarketplaceSelectedDetails {
   const publisher = readRecord(item.publisher);
   const onboarding = readRecord(item.onboarding);
@@ -540,6 +585,14 @@ function marketplaceBlockerLabel(blocker: string): string {
       return 'Requests unsafe local-computer permissions.';
     case 'owner_resource_boundary_violation':
       return 'Requests owner resources that require review.';
+    case 'missing_app_icon':
+      return 'Link and community apps must provide an icon.';
+    case 'missing_destination_url':
+      return 'Link apps must provide a destination URL.';
+    case 'missing_hosted_url':
+      return 'Community apps must provide a hosted URL.';
+    case 'missing_platform_route':
+      return 'Platform apps must provide an internal route.';
     default:
       return humanizeToken(blocker);
   }
@@ -608,6 +661,10 @@ function marketplaceIconForCard(card: MarketplaceCardView): LucideIcon {
 
 function marketplaceCardBadges(card: MarketplaceCardView, details: MarketplaceSelectedDetails): string[] {
   const specificPayload = marketplacePackageSpecificPayload(card, details);
+  if (card.kind === 'app' || card.kind === 'mini_app') {
+    const runtimeType = readString(specificPayload.runtime_type, 'community');
+    return [humanizeToken(runtimeType), humanizeToken(card.reviewState)].filter(Boolean);
+  }
   const requiredConnectors = readStringList(specificPayload.required_connectors);
   const setupToken = card.previewOnly
     ? 'Preview'
@@ -699,6 +756,9 @@ function marketplaceSetupItems(card: MarketplaceCardView, details: MarketplaceSe
 }
 
 function marketplaceCostSummary(card: MarketplaceCardView, details: MarketplaceSelectedDetails): string {
+  if (card.kind === 'app' || card.kind === 'mini_app') {
+    return 'No platform payment processing is attached to this app listing.';
+  }
   const label = marketplaceBillingPilotLabel(details.billing, card.monetizationKind);
   if (card.monetizationKind === 'free') {
     return 'Free. Uses credits for messages and actions.';
@@ -707,7 +767,10 @@ function marketplaceCostSummary(card: MarketplaceCardView, details: MarketplaceS
 }
 
 function marketplaceDetailSections(card: MarketplaceCardView, details: MarketplaceSelectedDetails): MarketplaceDetailSection[] {
-  return [
+  if (card.kind === 'app' || card.kind === 'mini_app') {
+    return [];
+  }
+  const sections: MarketplaceDetailSection[] = [
     {
       title: 'What it does',
       body: marketplaceWhatAddsSummary(card, details),
@@ -736,6 +799,7 @@ function marketplaceDetailSections(card: MarketplaceCardView, details: Marketpla
       icon: DollarSign,
     },
   ];
+  return sections;
 }
 
 function marketplaceTrustTokens(card: MarketplaceCardView): string[] {
@@ -865,12 +929,14 @@ function MarketplacePackageDetail({
 }) {
   const DetailIcon = marketplaceIconForCard(card);
   const detailSections = marketplaceDetailSections(card, details);
+  const appMetadataItems = marketplaceAppMetadataItems(card, details);
+  const appIconUrl = readString(details.packagePayload.icon_url);
 
   return (
     <div className="marketplace-pane__detail-stack">
       <div className="marketplace-pane__detail-hero">
         <div className="marketplace-pane__detail-icon" aria-hidden="true">
-          <DetailIcon />
+          {appIconUrl ? <img src={appIconUrl} alt="" /> : <DetailIcon />}
         </div>
         <div className="marketplace-pane__detail-hero-copy">
           <strong className="marketplace-pane__detail-hero-title">{card.name}</strong>
@@ -895,6 +961,23 @@ function MarketplacePackageDetail({
           <p className="marketplace-pane__detail-description">{card.description}</p>
         </div>
       </div>
+
+      {appMetadataItems.length ? (
+        <div className="marketplace-pane__detail-grid" aria-label="App details">
+          {appMetadataItems.map((item) => (
+            <div key={`${item.label}:${item.value}`} className="marketplace-pane__detail-item">
+              <span className="marketplace-pane__detail-label">{item.label}</span>
+              {item.href ? (
+                <a className="marketplace-pane__detail-value" href={item.href} target="_blank" rel="noreferrer">
+                  {item.value}
+                </a>
+              ) : (
+                <span className="marketplace-pane__detail-value">{item.value}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <div className="marketplace-pane__detail-section-list">
         {detailSections.map((section) => {
@@ -973,6 +1056,7 @@ export function MarketplacePane() {
   const requestedKindFilter = normalizeMarketplaceKindFilter(searchParams.get('category'));
   const [kindFilter, setKindFilter] = useState<KindFilter>(requestedKindFilter);
   const [items, setItems] = useState<MarketplacePackageRecord[]>([]);
+  const [submissionItems, setSubmissionItems] = useState<MarketplacePackageRecord[]>([]);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -983,6 +1067,7 @@ export function MarketplacePane() {
   const [composerError, setComposerError] = useState<string | null>(null);
   const [composerStatus, setComposerStatus] = useState<string | null>(null);
   const [submittingComposer, setSubmittingComposer] = useState(false);
+  const [reviewingPackageId, setReviewingPackageId] = useState<string | null>(null);
   const [showDeveloperRegistration, setShowDeveloperRegistration] = useState(false);
   const canPublishPackages = hasCapability('workspace_admin_enabled');
   const activeRequestControllerRef = useRef<AbortController | null>(null);
@@ -1024,6 +1109,22 @@ export function MarketplacePane() {
     }
   }, [services.client]);
 
+  const loadMarketplaceAppSubmissions = useCallback(async () => {
+    if (!canPublishPackages) {
+      setSubmissionItems([]);
+      return [];
+    }
+    try {
+      const payload = await services.client.listMarketplaceAppSubmissions();
+      const nextItems = normalizeMarketplacePackages(payload);
+      setSubmissionItems(nextItems);
+      return nextItems;
+    } catch {
+      setSubmissionItems([]);
+      return [];
+    }
+  }, [canPublishPackages, services.client]);
+
   useEffect(() => {
     void loadMarketplacePackages(kindFilter);
     return () => {
@@ -1031,6 +1132,12 @@ export function MarketplacePane() {
       activeRequestControllerRef.current = null;
     };
   }, [kindFilter, loadMarketplacePackages]);
+
+  useEffect(() => {
+    if (showDeveloperRegistration) {
+      void loadMarketplaceAppSubmissions();
+    }
+  }, [loadMarketplaceAppSubmissions, showDeveloperRegistration]);
 
   useEffect(() => {
     if (!items.length) {
@@ -1042,7 +1149,7 @@ export function MarketplacePane() {
     if (selectedPackageId === null) {
       return;
     }
-    const visibleItems = items.filter((item) => marketplaceKindMatchesFilter(readString(item.kind), kindFilter));
+    const visibleItems = items.filter((item) => marketplaceKindMatchesFilter(item, kindFilter));
     const hasSelected = visibleItems.some((item) => readString(item.package_id) === selectedPackageId);
     if (!hasSelected) {
       setSelectedPackageId(null);
@@ -1069,6 +1176,27 @@ export function MarketplacePane() {
     }
   }
 
+  async function handleReviewSubmission(packageId: string, approved: boolean) {
+    setReviewingPackageId(packageId);
+    setError(null);
+    try {
+      await services.client.reviewMarketplaceAppSubmission({
+        packageId,
+        approved,
+        reason: approved ? 'Approved for public community listing.' : 'Rejected by workspace review.',
+        verificationStatus: 'unverified',
+      });
+      await Promise.all([
+        loadMarketplacePackages(kindFilter),
+        loadMarketplaceAppSubmissions(),
+      ]);
+    } catch (reviewError) {
+      setError(reviewError instanceof Error ? reviewError.message : 'Review action failed.');
+    } finally {
+      setReviewingPackageId(null);
+    }
+  }
+
   async function handleComposerSubmit() {
     setComposerError(null);
     setComposerStatus(null);
@@ -1083,31 +1211,23 @@ export function MarketplacePane() {
             label: appDraft.publisherLabel.trim() || undefined,
             website: appDraft.publisherWebsite.trim() || undefined,
             docs_url: appDraft.docsUrl.trim() || undefined,
+            support_url: appDraft.supportUrl.trim() || undefined,
           },
           onboarding: {
             docs_url: appDraft.docsUrl.trim() || undefined,
-          },
-          verification_status: appDraft.verificationStatus,
-          review_state: appDraft.reviewState,
-          health_state: appDraft.healthState,
-          policy_posture: appDraft.policyPosture,
-          approval_required: appDraft.approvalRequired,
-          billing: {
-            monetization_kind: appDraft.monetizationKind,
-            billing_product_id: appDraft.billingProductId.trim() || undefined,
-            settlement_provider: appDraft.settlementProvider.trim() || undefined,
-            revenue_share_bps: appDraft.revenueShareBps.trim() ? Number(appDraft.revenueShareBps.trim()) : 0,
-            accounting_hook: {
-              ledger_key: appDraft.ledgerKey.trim() || undefined,
-              hook_kind: appDraft.hookKind.trim() || 'distribution_install',
-            },
+            support_url: appDraft.supportUrl.trim() || undefined,
+            privacy_url: appDraft.privacyUrl.trim() || undefined,
+            terms_url: appDraft.termsUrl.trim() || undefined,
           },
           app: {
             app_id: appDraft.appId.trim(),
             hosted_url: appDraft.hostedUrl.trim(),
+            icon_url: appDraft.iconUrl.trim(),
+            runtime_type: 'community',
+            support_url: appDraft.supportUrl.trim() || undefined,
+            privacy_url: appDraft.privacyUrl.trim() || undefined,
+            terms_url: appDraft.termsUrl.trim() || undefined,
             version: appDraft.version.trim() || '1.0.0',
-            latest_version: appDraft.latestVersion.trim() || appDraft.version.trim() || '1.0.0',
-            release_channel: appDraft.releaseChannel.trim() || 'stable',
             permissions: splitCsvTokens(appDraft.permissions),
             allowed_origins: splitCsvTokens(appDraft.allowedOrigins).length
               ? splitCsvTokens(appDraft.allowedOrigins)
@@ -1116,9 +1236,12 @@ export function MarketplacePane() {
           },
         };
         await services.client.registerMarketplaceApp(payload);
-        await loadMarketplacePackages(kindFilter);
+        await Promise.all([
+          loadMarketplacePackages(kindFilter),
+          loadMarketplaceAppSubmissions(),
+        ]);
         setSelectedPackageId(null);
-        setComposerStatus('Governed app package registered. Install it into the shell when you are ready.');
+        setComposerStatus('App submitted for review.');
         setAppDraft(DEFAULT_APP_DRAFT);
         return;
       }
@@ -1132,10 +1255,15 @@ export function MarketplacePane() {
         publisher: {
           label: providerDraft.publisherLabel.trim() || undefined,
           website: providerDraft.publisherWebsite.trim() || undefined,
+          publisher_domain: providerDraft.publisherDomain.trim() || undefined,
           docs_url: providerDraft.docsUrl.trim() || undefined,
+          support_url: providerDraft.supportUrl.trim() || undefined,
         },
         onboarding: {
           docs_url: providerDraft.docsUrl.trim() || undefined,
+          support_url: providerDraft.supportUrl.trim() || undefined,
+          privacy_url: providerDraft.privacyUrl.trim() || undefined,
+          terms_url: providerDraft.termsUrl.trim() || undefined,
         },
         verification_status: providerDraft.verificationStatus,
         review_state: providerDraft.reviewState,
@@ -1180,7 +1308,7 @@ export function MarketplacePane() {
   }
 
   const displayedItems = useMemo(
-    () => items.filter((item) => marketplaceKindMatchesFilter(readString(item.kind), kindFilter)),
+    () => items.filter((item) => marketplaceKindMatchesFilter(item, kindFilter)),
     [items, kindFilter],
   );
 
@@ -1211,20 +1339,9 @@ export function MarketplacePane() {
                 <div className="marketplace-pane__catalog-title-group">
                   <h1 className="marketplace-pane__catalog-title">Discover</h1>
                   <p className="marketplace-pane__catalog-subtitle">
-                    Browse governed agent templates, skills, tools, MCP connectors, and bundles for this workspace.
+                    Browse agent templates, skills, MCP servers, and bundles.
                   </p>
                 </div>
-                {canPublishPackages ? (
-                  <div className="marketplace-pane__catalog-actions">
-                    <AppButton
-                      type="button"
-                      tone="secondary"
-                      onClick={() => setShowDeveloperRegistration(true)}
-                    >
-                      Publish
-                    </AppButton>
-                  </div>
-                ) : null}
               </div>
               <div className="marketplace-pane__browse-panel">
                 {error && !loading ? (
@@ -1243,7 +1360,7 @@ export function MarketplacePane() {
                   <MarketplaceSkeleton />
                 ) : renderedCards.length === 0 ? (
                   <EmptyPanel
-                    title={kindFilter === 'bundle' ? 'No bundles are available yet.' : 'No catalog items are available yet.'}
+                  title={kindFilter === 'bundle' ? 'No bundles are available yet.' : 'No catalog items are available yet.'}
                     body={kindFilter === 'bundle'
                       ? 'Bundles will combine templates, tools, MCP connectors, setup steps, and required access into one installable package.'
                       : 'Discover will show governed capabilities that can be added to this workspace.'}
@@ -1335,14 +1452,14 @@ export function MarketplacePane() {
             </div>
           </div>
           {canPublishPackages && showDeveloperRegistration ? (
-            <aside className="marketplace-pane__detail-scroll marketplace-pane__detail-scroll--developer" aria-label="Operator publishing">
+            <aside className="marketplace-pane__detail-scroll marketplace-pane__detail-scroll--developer" aria-label="App submission">
               <div className="marketplace-pane__secondary-stack">
 
                 <ListDetailPanel
                   className="marketplace-pane__composer-panel"
-                  eyebrow="Operator publishing"
-                  title="Register governed package"
-                  subtitle="Create a governed hosted app package. This stays hidden from the normal install flow so Discover does not turn into an open plugin bazaar."
+                  eyebrow="Developer"
+                  title="Submit app"
+                  subtitle="Submit a public hosted app for review. Approved community apps become visible in Discover."
                   actions={(
                     <AppButton type="button" tone="secondary" onClick={() => setShowDeveloperRegistration(false)}>
                       Hide
@@ -1382,7 +1499,7 @@ export function MarketplacePane() {
                 {composerKind === 'app' ? (
                   <div className="marketplace-pane__form">
                     <div className="marketplace-pane__field-grid">
-                      <MarketplaceField label="Label">
+                    <MarketplaceField label="App name">
                         <input
                           className="marketplace-pane__input"
                           value={appDraft.label}
@@ -1397,7 +1514,7 @@ export function MarketplacePane() {
                         />
                       </MarketplaceField>
                     </div>
-                    <MarketplaceField label="Description">
+                    <MarketplaceField label="Short description">
                       <textarea
                         className="marketplace-pane__textarea"
                         value={appDraft.description}
@@ -1405,7 +1522,7 @@ export function MarketplacePane() {
                       />
                     </MarketplaceField>
                     <div className="marketplace-pane__field-grid">
-                      <MarketplaceField label="Publisher label">
+                      <MarketplaceField label="Publisher name">
                         <input
                           className="marketplace-pane__input"
                           value={appDraft.publisherLabel}
@@ -1421,6 +1538,15 @@ export function MarketplacePane() {
                       </MarketplaceField>
                     </div>
                     <div className="marketplace-pane__field-grid">
+                      <MarketplaceField label="Icon URL" hint="Required. Must be HTTPS.">
+                        <input
+                          className="marketplace-pane__input"
+                          value={appDraft.iconUrl}
+                          onChange={(event) => setAppDraft((current) => ({ ...current, iconUrl: event.target.value }))}
+                        />
+                      </MarketplaceField>
+                    </div>
+                    <div className="marketplace-pane__field-grid">
                       <MarketplaceField label="Docs URL">
                         <input
                           className="marketplace-pane__input"
@@ -1428,7 +1554,7 @@ export function MarketplacePane() {
                           onChange={(event) => setAppDraft((current) => ({ ...current, docsUrl: event.target.value }))}
                         />
                       </MarketplaceField>
-                      <MarketplaceField label="Hosted URL">
+                      <MarketplaceField label="Hosted URL" hint="Required. Must be public HTTPS.">
                         <input
                           className="marketplace-pane__input"
                           value={appDraft.hostedUrl}
@@ -1436,8 +1562,31 @@ export function MarketplacePane() {
                         />
                       </MarketplaceField>
                     </div>
+                    <div className="marketplace-pane__field-grid marketplace-pane__field-grid--triple">
+                      <MarketplaceField label="Support URL">
+                        <input
+                          className="marketplace-pane__input"
+                          value={appDraft.supportUrl}
+                          onChange={(event) => setAppDraft((current) => ({ ...current, supportUrl: event.target.value }))}
+                        />
+                      </MarketplaceField>
+                      <MarketplaceField label="Privacy URL">
+                        <input
+                          className="marketplace-pane__input"
+                          value={appDraft.privacyUrl}
+                          onChange={(event) => setAppDraft((current) => ({ ...current, privacyUrl: event.target.value }))}
+                        />
+                      </MarketplaceField>
+                      <MarketplaceField label="Terms URL">
+                        <input
+                          className="marketplace-pane__input"
+                          value={appDraft.termsUrl}
+                          onChange={(event) => setAppDraft((current) => ({ ...current, termsUrl: event.target.value }))}
+                        />
+                      </MarketplaceField>
+                    </div>
                     <div className="marketplace-pane__field-grid">
-                      <MarketplaceField label="App ID">
+                      <MarketplaceField label="App ID" hint="Optional stable slug. Generated from the name if blank.">
                         <input
                           className="marketplace-pane__input"
                           value={appDraft.appId}
@@ -1449,97 +1598,6 @@ export function MarketplacePane() {
                           className="marketplace-pane__input"
                           value={appDraft.version}
                           onChange={(event) => setAppDraft((current) => ({ ...current, version: event.target.value }))}
-                        />
-                      </MarketplaceField>
-                    </div>
-                    <div className="marketplace-pane__field-grid marketplace-pane__field-grid--triple">
-                      <MarketplaceField label="Verification">
-                        <select
-                          className="marketplace-pane__input"
-                          value={appDraft.verificationStatus}
-                          onChange={(event) => setAppDraft((current) => ({ ...current, verificationStatus: event.target.value }))}
-                        >
-                          {VERIFICATION_OPTIONS.map((option) => <option key={option} value={option}>{humanizeToken(option)}</option>)}
-                        </select>
-                      </MarketplaceField>
-                      <MarketplaceField label="Review">
-                        <select
-                          className="marketplace-pane__input"
-                          value={appDraft.reviewState}
-                          onChange={(event) => setAppDraft((current) => ({ ...current, reviewState: event.target.value }))}
-                        >
-                          {REVIEW_OPTIONS.map((option) => <option key={option} value={option}>{humanizeToken(option)}</option>)}
-                        </select>
-                      </MarketplaceField>
-                      <MarketplaceField label="Health">
-                        <select
-                          className="marketplace-pane__input"
-                          value={appDraft.healthState}
-                          onChange={(event) => setAppDraft((current) => ({ ...current, healthState: event.target.value }))}
-                        >
-                          {HEALTH_OPTIONS.map((option) => <option key={option} value={option}>{humanizeToken(option)}</option>)}
-                        </select>
-                      </MarketplaceField>
-                    </div>
-                    <div className="marketplace-pane__field-grid marketplace-pane__field-grid--triple">
-                      <MarketplaceField label="Policy posture">
-                        <select
-                          className="marketplace-pane__input"
-                          value={appDraft.policyPosture}
-                          onChange={(event) => setAppDraft((current) => ({ ...current, policyPosture: event.target.value }))}
-                        >
-                          {POLICY_OPTIONS.map((option) => <option key={option} value={option}>{humanizeToken(option)}</option>)}
-                        </select>
-                      </MarketplaceField>
-                      <MarketplaceField label="Billing" hint="Metadata only in the pilot; this does not start payment processing.">
-                        <select
-                          className="marketplace-pane__input"
-                          value={appDraft.monetizationKind}
-                          onChange={(event) => setAppDraft((current) => ({ ...current, monetizationKind: event.target.value }))}
-                        >
-                          {MONETIZATION_OPTIONS.map((option) => <option key={option} value={option}>{humanizeToken(option)}</option>)}
-                        </select>
-                      </MarketplaceField>
-                      <MarketplaceField label="Approval gate">
-                        <select
-                          className="marketplace-pane__input"
-                          value={appDraft.approvalRequired ? 'required' : 'not_required'}
-                          onChange={(event) => setAppDraft((current) => ({ ...current, approvalRequired: event.target.value === 'required' }))}
-                        >
-                          <option value="not_required">Not required</option>
-                          <option value="required">Required</option>
-                        </select>
-                      </MarketplaceField>
-                    </div>
-                    <div className="marketplace-pane__field-grid">
-                      <MarketplaceField label="Billing product ID" hint="Reference only; payment/subscription processing is not live from this field.">
-                        <input
-                          className="marketplace-pane__input"
-                          value={appDraft.billingProductId}
-                          onChange={(event) => setAppDraft((current) => ({ ...current, billingProductId: event.target.value }))}
-                        />
-                      </MarketplaceField>
-                      <MarketplaceField label="Revenue share (bps)">
-                        <input
-                          className="marketplace-pane__input"
-                          value={appDraft.revenueShareBps}
-                          onChange={(event) => setAppDraft((current) => ({ ...current, revenueShareBps: event.target.value }))}
-                        />
-                      </MarketplaceField>
-                    </div>
-                    <div className="marketplace-pane__field-grid">
-                      <MarketplaceField label="Accounting ledger key">
-                        <input
-                          className="marketplace-pane__input"
-                          value={appDraft.ledgerKey}
-                          onChange={(event) => setAppDraft((current) => ({ ...current, ledgerKey: event.target.value }))}
-                        />
-                      </MarketplaceField>
-                      <MarketplaceField label="Accounting hook kind">
-                        <input
-                          className="marketplace-pane__input"
-                          value={appDraft.hookKind}
-                          onChange={(event) => setAppDraft((current) => ({ ...current, hookKind: event.target.value }))}
                         />
                       </MarketplaceField>
                     </div>
@@ -1779,12 +1837,56 @@ export function MarketplacePane() {
                     disabled={submittingComposer}
                   >
                     {submittingComposer
-                      ? 'Registering…'
+                      ? 'Submitting…'
                       : composerKind === 'app'
-                        ? 'Register app package'
+                        ? 'Submit app'
                         : 'Register provider package'}
                   </AppButton>
                 </div>
+              </ListDetailPanel>
+              <ListDetailPanel
+                className="marketplace-pane__composer-panel"
+                eyebrow="Review queue"
+                title="Pending apps"
+                subtitle="Workspace admins approve community apps before they appear in Discover."
+              >
+                {submissionItems.length ? (
+                  <div className="marketplace-pane__detail-checklist">
+                    {submissionItems.map((item) => {
+                      const packageId = readString(item.package_id);
+                      const packagePayload = readRecord(item.package);
+                      const hostedUrl = readString(packagePayload.hosted_url);
+                      const busy = reviewingPackageId === packageId;
+                      return (
+                        <div key={packageId} className="marketplace-pane__detail-checklist-item">
+                          <Check aria-hidden="true" />
+                          <span>
+                            {readString(item.label, 'Untitled app')}
+                            {hostedUrl ? ` · ${hostedUrl}` : ''}
+                          </span>
+                          <button
+                            type="button"
+                            className="marketplace-pane__bookmark-link"
+                            disabled={busy}
+                            onClick={() => { void handleReviewSubmission(packageId, true); }}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            className="marketplace-pane__bookmark-link"
+                            disabled={busy}
+                            onClick={() => { void handleReviewSubmission(packageId, false); }}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="marketplace-pane__panel-copy">No pending app submissions.</p>
+                )}
               </ListDetailPanel>
               </div>
             </aside>

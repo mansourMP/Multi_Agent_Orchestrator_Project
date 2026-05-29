@@ -14,6 +14,7 @@ from server_modules import (
     entitlements_service,
     execution_sandbox_service,
     execution_mode_policy,
+    gateway_inventory_service,
     gateway_state_repository,
     hybrid_policy_service,
     memory_service,
@@ -500,6 +501,19 @@ def _attachment_capability_match(attachment: Dict[str, Any], required_capabiliti
     return required.issubset(available)
 
 
+def _local_companion_ready_capability_match(attachment: Dict[str, Any], required_capabilities: List[str]) -> bool:
+    required = [str(item or "").strip() for item in list(required_capabilities or []) if str(item or "").strip()]
+    if not required:
+        return True
+    metadata = {
+        "capability_readiness": attachment.get("capability_readiness"),
+    }
+    for capability_id in required:
+        if not gateway_inventory_service.capability_ready_from_any_metadata(capability_id, metadata):
+            return False
+    return True
+
+
 def _attachment_connector_match(attachment: Dict[str, Any], required_connectors: List[str]) -> bool:
     required = {str(item or "").strip().lower() for item in list(required_connectors or []) if str(item or "").strip()}
     if not required:
@@ -687,26 +701,52 @@ def _self_hosted_node_status(payload: Dict[str, Any], health: Dict[str, Any]) ->
     return "offline"
 
 
-def _gateway_registration_online(registration: Dict[str, Any]) -> bool:
-    payload = {
-        "online": False,
-        "status": str((registration.get("metadata") or {}).get("status") or registration.get("status") or "offline").strip().lower(),
-        "control_state": "revoked"
-        if str(registration.get("status") or "").strip().lower() == "revoked"
-        or str(registration.get("device_trust_state") or "").strip().lower() == "revoked"
-        else "active",
-        "last_seen_at": registration.get("last_seen_at") or registration.get("last_heartbeat_at"),
-        "last_heartbeat_at": registration.get("last_heartbeat_at"),
-        "lease_seconds": 30,
+def _gateway_target_selection_state(registration: Dict[str, Any]) -> Dict[str, Any]:
+    from server_modules import gateway_protocol_service, gateway_registry_service
+
+    registration_status = str(registration.get("status") or "").strip().lower()
+    trust_state = str(registration.get("device_trust_state") or "").strip().lower()
+    gateway_id = str(registration.get("gateway_id") or "").strip()
+    try:
+        public_payload = gateway_registry_service.gateway_registration_public_payload(registration)
+    except Exception:
+        public_payload = {}
+    live_connection = bool(gateway_id and gateway_protocol_service.gateway_connection_is_live(gateway_id))
+    heartbeat_fresh = bool(public_payload.get("heartbeat_fresh"))
+    connection_status = str(public_payload.get("connection_status") or "").strip().lower()
+    reported_health = str(public_payload.get("reported_health_state") or "").strip().lower()
+    reason = ""
+    if registration_status != "active":
+        reason = "gateway_registration_inactive"
+    elif trust_state == "revoked":
+        reason = "gateway_device_revoked"
+    elif not live_connection:
+        reason = "gateway_offline"
+    elif not heartbeat_fresh:
+        reason = "gateway_heartbeat_stale"
+    elif connection_status != "online":
+        reason = "gateway_unhealthy"
+    elif reported_health in {"blocked", "offline", "unhealthy", "error"}:
+        reason = "gateway_unhealthy"
+    selectable = reason == ""
+    return {
+        "selectable": selectable,
+        "reason": reason,
+        "live_connection": live_connection,
+        "heartbeat_fresh": heartbeat_fresh,
+        "connection_status": connection_status or "offline",
+        "reported_health_state": reported_health or None,
+        "heartbeat_age_seconds": public_payload.get("heartbeat_age_seconds"),
+        "latest_session_status": public_payload.get("latest_session_status"),
     }
-    return _infer_attachment_online(payload, payload["control_state"], payload["status"])
 
 
 def _gateway_attachment_from_registration(registration: Dict[str, Any]) -> Dict[str, Any]:
     registration_metadata = dict(registration.get("metadata") or {})
     registration_status = str(registration.get("status") or "active").strip().lower() or "active"
     trust_state = str(registration.get("device_trust_state") or "verified").strip().lower() or "verified"
-    online = _gateway_registration_online(registration)
+    target_selection = _gateway_target_selection_state(registration)
+    online = bool(target_selection.get("selectable"))
     revoked = registration_status == "revoked" or trust_state == "revoked"
     healthy = bool(online and not revoked)
     attachment = {
@@ -728,9 +768,14 @@ def _gateway_attachment_from_registration(registration: Dict[str, Any]) -> Dict[
         "control_state": "revoked" if revoked else "active",
         "status": "revoked"
         if revoked
-        else str(registration_metadata.get("health_state") or registration_metadata.get("status") or "ready").strip().lower()
-        or "ready",
+        else str(target_selection.get("connection_status") or registration_metadata.get("health_state") or registration_metadata.get("status") or "offline").strip().lower()
+        or "offline",
+        "status_reason": str(target_selection.get("reason") or "").strip() or None,
         "capabilities": _list_strings(registration.get("capabilities")),
+        "capability_readiness": dict(registration_metadata.get("capability_readiness") or {}),
+        "service_inventory": gateway_inventory_service.inventory_from_metadata(registration_metadata),
+        "native_runtime": gateway_inventory_service.native_runtime_from_metadata(registration_metadata),
+        "target_selection": target_selection,
         "connectors": [],
         "execution_targets": ["local_companion"],
         "supports_runtime_modes": _attachment_support("local_companion"),
@@ -789,6 +834,15 @@ def _merge_gateway_registration_into_attachment(
     else:
         merged["online"] = bool(attachment.get("online")) or bool(gateway_attachment.get("online"))
         merged["healthy"] = bool(attachment.get("healthy")) or bool(gateway_attachment.get("healthy"))
+        if bool(gateway_attachment.get("target_selection")):
+            merged["online"] = bool(gateway_attachment.get("online"))
+            merged["healthy"] = bool(gateway_attachment.get("healthy"))
+            merged["status"] = gateway_attachment.get("status")
+            merged["status_reason"] = gateway_attachment.get("status_reason")
+            merged["target_selection"] = dict(gateway_attachment.get("target_selection") or {})
+            merged["capability_readiness"] = dict(gateway_attachment.get("capability_readiness") or {})
+            merged["service_inventory"] = list(gateway_attachment.get("service_inventory") or [])
+            merged["native_runtime"] = dict(gateway_attachment.get("native_runtime") or {})
     merged["machine_id"] = str(attachment.get("machine_id") or gateway_attachment.get("machine_id") or "").strip() or None
     merged["runtime_id"] = str(attachment.get("runtime_id") or gateway_attachment.get("runtime_id") or "").strip() or None
     merged["trust_model"] = {
@@ -1669,11 +1723,25 @@ async def resolve_install_runtime_plan(
             enforcement_state=hybrid_policy,
         )
     if not bool(selected.get("online")):
+        target_selection = dict(selected.get("target_selection") or {})
+        if str(target_selection.get("reason") or "").strip():
+            raise RuntimeAttachmentSelectionError(
+                "Selected local Agent Computer is not ready.",
+                reason=str(target_selection.get("reason") or "").strip(),
+                enforcement_state=hybrid_policy,
+            )
         raise RuntimeAttachmentSelectionError(
             "Selected runtime attachment is offline.",
             reason="runtime_attachment_offline",
             enforcement_state=hybrid_policy,
         )
+    if str(selected.get("attachment_kind") or "").strip() == "local_companion":
+        if not _local_companion_ready_capability_match(selected, required_capabilities):
+            raise RuntimeAttachmentSelectionError(
+                "Selected local Agent Computer does not report the required capability as ready.",
+                reason="gateway_capability_not_ready",
+                enforcement_state=hybrid_policy,
+            )
     if runtime_mode == "privileged_device" and not bool(policy.get("privileged_runtime_approved")):
         raise RuntimeAttachmentSelectionError(
             "Privileged device execution requires explicit owner approval.",

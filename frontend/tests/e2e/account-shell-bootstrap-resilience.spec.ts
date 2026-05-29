@@ -369,4 +369,24 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page.locator('[data-workstation-chat-composer="root"] textarea')).toHaveAttribute('placeholder', 'Message Sage...');
     await expect(page.getByText(/^Not Found$/)).toHaveCount(0);
   });
+
+  test('Sage composer accepts dropped files as context', async ({ page }) => {
+    await loginAsOwner(page);
+    await page.goto('/w/ws-1/sage');
+
+    const composer = page.locator('[data-workstation-chat-composer="root"] form');
+    const composerInput = page.locator('[data-workstation-chat-composer="root"] textarea');
+    await expect(composer).toBeVisible();
+
+    const dataTransfer = await page.evaluateHandle(() => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(['demo image'], 'receipt.png', { type: 'image/png' }));
+      return transfer;
+    });
+
+    await composer.dispatchEvent('dragenter', { dataTransfer });
+    await expect(page.getByText(/^Drop files$/)).toBeVisible();
+    await composer.dispatchEvent('drop', { dataTransfer });
+    await expect(composerInput).toHaveValue(/Use receipt\.png as context:/);
+  });
 });

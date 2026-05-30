@@ -114,6 +114,10 @@ class BrowserEngine:
         self._intercepts: Dict[str, List[Dict[str, Any]]] = {}
         self._active_intercept_pattern: Optional[str] = None
         self._response_listener_registered = False
+        self._console_listener_registered = False
+        self._network_listener_registered = False
+        self._console_entries: List[Dict[str, Any]] = []
+        self._network_failures: List[Dict[str, Any]] = []
         self._credential_injections: List[Dict[str, str]] = []
         self._session_mode = BROWSER_SESSION_MODE_MANAGED_PROFILE
         self._attach_endpoint_url: Optional[str] = None
@@ -398,6 +402,15 @@ class BrowserEngine:
         self._tabs[tab_id] = page
         self._page_to_tab_id[page_key] = tab_id
         self._active_tab_id = tab_id
+
+        if not self._console_listener_registered:
+            page.on("console", self._on_console_message)
+            self._console_listener_registered = True
+
+        if not self._network_listener_registered:
+            page.on("requestfailed", self._on_request_failed)
+            self._network_listener_registered = True
+
         return tab_id
 
     async def _active_page(self) -> Any:
@@ -715,5 +728,128 @@ class BrowserEngine:
             }
         )
 
+    # ── Runtime introspection ──────────────────────────────────────────
+
+    def _on_console_message(self, msg: Any) -> None:
+        try:
+            entry = {
+                "type": str(getattr(msg, "type", "") or ""),
+                "text": str(getattr(msg, "text", "") or "")[:4000],
+                "location": str(getattr(msg, "location", "") or ""),
+                "timestamp": _now_token(),
+            }
+            self._console_entries.append(entry)
+            if len(self._console_entries) > 200:
+                self._console_entries = self._console_entries[-100:]
+        except Exception:
+            pass
+
+    def _on_request_failed(self, request: Any) -> None:
+        try:
+            failure = request.failure if hasattr(request, "failure") else None
+            failure_text = str(failure or "") if failure else "unknown"
+            entry = {
+                "url": str(getattr(request, "url", "") or "")[:2000],
+                "method": str(getattr(request, "method", "") or ""),
+                "failure": failure_text[:500],
+                "timestamp": _now_token(),
+            }
+            self._network_failures.append(entry)
+            if len(self._network_failures) > 100:
+                self._network_failures = self._network_failures[-50:]
+        except Exception:
+            pass
+
+    def console_logs(self, *, level: str = "") -> List[Dict[str, Any]]:
+        entries = list(self._console_entries)
+        if level:
+            return [e for e in entries if e.get("type") == str(level).strip().lower()]
+        return entries
+
+    def network_failures(self) -> List[Dict[str, Any]]:
+        return list(self._network_failures)
+
+    # ── Cookies & Storage ─────────────────────────────────────────────
+
+    async def get_cookies(self, url: str = "") -> List[Dict[str, Any]]:
+        await self._ensure_started()
+        cookies = await self._context.cookies(url or None) if self._context else []
+        return [
+            {
+                "name": str(c.get("name", "")),
+                "value": str(c.get("value", "")),
+                "domain": str(c.get("domain", "")),
+                "path": str(c.get("path", "/")),
+                "http_only": bool(c.get("httpOnly", False)),
+                "secure": bool(c.get("secure", False)),
+            }
+            for c in (cookies or [])
+        ]
+
+    async def set_cookies(self, cookies: List[Dict[str, Any]]) -> None:
+        await self._ensure_started()
+        if self._context:
+            await self._context.add_cookies([
+                {
+                    "name": str(c.get("name", "")),
+                    "value": str(c.get("value", "")),
+                    "domain": str(c.get("domain", "")),
+                    "path": str(c.get("path", "/")),
+                    "httpOnly": bool(c.get("http_only", False)),
+                    "secure": bool(c.get("secure", False)),
+                }
+                for c in cookies
+                if c.get("name") and c.get("domain")
+            ])
+
+    async def clear_cookies(self) -> None:
+        await self._ensure_started()
+        if self._context:
+            await self._context.clear_cookies()
+
+    async def get_storage(self, kind: str = "local") -> Dict[str, Any]:
+        page = await self._active_page()
+        if kind == "session":
+            raw = await page.evaluate("() => JSON.stringify(sessionStorage)")
+        else:
+            raw = await page.evaluate("() => JSON.stringify(localStorage)")
+        import json as _json
+        try:
+            return _json.loads(str(raw or "{}"))
+        except Exception:
+            return {}
+
+    async def set_storage_item(self, key: str, value: str, kind: str = "local") -> None:
+        page = await self._active_page()
+        safe_key = str(key or "").strip()
+        safe_value = str(value or "")
+        storage_api = "sessionStorage" if kind == "session" else "localStorage"
+        await page.evaluate(
+            f"() => {{ {storage_api}.setItem({_json_dumps(safe_key)}, {_json_dumps(safe_value)}) }}"
+        )
+
+    async def clear_storage(self, kind: str = "local") -> None:
+        page = await self._active_page()
+        storage_api = "sessionStorage" if kind == "session" else "localStorage"
+        await page.evaluate(f"() => {{ {storage_api}.clear() }}")
+
+    # ── Accessibility ──────────────────────────────────────────────────
+
+    async def snapshot_accessibility_tree(self) -> Dict[str, Any]:
+        page = await self._active_page()
+        try:
+            tree = await page.accessibility.snapshot()
+        except Exception:
+            tree = None
+        return {
+            "available": tree is not None,
+            "tree": tree if tree is not None else {},
+        }
+
     async def close(self) -> None:
         await self._reset_runtime(reset_session_mode=True)
+
+
+def _json_dumps(value: str) -> str:
+    import json as _json
+    return _json.dumps(str(value))

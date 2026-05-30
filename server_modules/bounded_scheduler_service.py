@@ -42,6 +42,59 @@ class SchedulerPolicyBounds:
         return asdict(self)
 
 
+@dataclass(frozen=True, slots=True)
+class RetryPolicy:
+    max_retries: int = 5
+    base_delay_seconds: int = 30
+    max_delay_seconds: int = 3600
+    backoff_multiplier: float = 2.0
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "max_retries": self.max_retries,
+            "base_delay_seconds": self.base_delay_seconds,
+            "max_delay_seconds": self.max_delay_seconds,
+            "backoff_multiplier": self.backoff_multiplier,
+        }
+
+
+DEFAULT_RETRY_POLICY = RetryPolicy()
+
+
+def compute_retry_delay(attempt: int, policy: RetryPolicy | None = None) -> int:
+    if policy is None:
+        policy = DEFAULT_RETRY_POLICY
+    if attempt < 1:
+        return policy.base_delay_seconds
+    delay = int(policy.base_delay_seconds * (policy.backoff_multiplier ** attempt))
+    return min(delay, policy.max_delay_seconds)
+
+
+def build_retry_metadata(
+    *,
+    attempt: int,
+    policy: RetryPolicy | None = None,
+    last_error: str = "",
+) -> Dict[str, Any]:
+    if policy is None:
+        policy = DEFAULT_RETRY_POLICY
+    return {
+        "retry_attempt": attempt,
+        "retry_max": policy.max_retries,
+        "retry_delay_seconds": compute_retry_delay(attempt, policy),
+        "retry_last_error": str(last_error or "")[:500],
+        "retry_next_at": (
+            datetime.now(timezone.utc) + timedelta(seconds=compute_retry_delay(attempt, policy))
+        ).isoformat().replace("+00:00", "Z"),
+    }
+
+
+def should_retry(attempt: int, policy: RetryPolicy | None = None) -> bool:
+    if policy is None:
+        policy = DEFAULT_RETRY_POLICY
+    return attempt < policy.max_retries
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -759,4 +812,60 @@ async def scheduler_status_snapshot(
             "tenant_id": tenant_id,
             "master_agent_install_id": str(_coerce_dict(master_install).get("id") or "").strip() or None,
         },
+    }
+
+
+async def schedule_retry(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    wake_request: Dict[str, Any],
+    error: str = "",
+    retry_policy: RetryPolicy | None = None,
+) -> Optional[Dict[str, Any]]:
+    if retry_policy is None:
+        retry_policy = DEFAULT_RETRY_POLICY
+    payload = _coerce_dict(wake_request)
+    wake_id = str(payload.get("id") or "").strip()
+    if not wake_id:
+        return None
+    existing_meta = _coerce_dict(
+        _coerce_dict(payload.get("metadata")).get("retry", payload.get("retry"))
+    )
+    current_attempt = int(
+        existing_meta.get("retry_attempt", existing_meta.get("attempt", 0))
+    )
+    next_attempt = current_attempt + 1
+    if not should_retry(next_attempt, retry_policy):
+        return await control_plane_repository.update_agent_scheduler_wake_request_status(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            wake_id=wake_id,
+            status="failed_permanent",
+            denial_reason=f"max_retries_exceeded:{next_attempt}",
+        )
+    retry_meta = build_retry_metadata(
+        attempt=next_attempt,
+        policy=retry_policy,
+        last_error=str(error or "")[:500],
+    )
+    delay_seconds = compute_retry_delay(next_attempt, retry_policy)
+    due_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+    return await control_plane_repository.update_agent_scheduler_wake_request_status(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        wake_id=wake_id,
+        status="pending",
+        denial_reason=None,
+        metadata_patch={
+            "retry": retry_meta,
+            "due_at": due_at.isoformat().replace("+00:00", "Z"),
+        },
+    )
+
+
+def retry_queue_status(workspace_id: str) -> Dict[str, Any]:
+    return {
+        "workspace_id": str(workspace_id or "").strip(),
+        "retry_policy": DEFAULT_RETRY_POLICY.as_dict(),
     }

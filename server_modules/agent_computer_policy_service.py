@@ -172,6 +172,7 @@ class AgentComputerPolicy:
     emergency_stop_enabled: bool = True
     approval_ttl_seconds: int = 900
     remembered_approval_rules: tuple[Dict[str, Any], ...] = field(default_factory=tuple)
+    sandbox_type: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -197,6 +198,7 @@ class AgentComputerPolicy:
             "emergency_stop_enabled": self.emergency_stop_enabled,
             "approval_ttl_seconds": self.approval_ttl_seconds,
             "remembered_approval_rules": list(self.remembered_approval_rules),
+            "sandbox_type": self.sandbox_type,
         }
 
 
@@ -439,6 +441,7 @@ def normalize_agent_computer_policy(payload: Mapping[str, Any] | None) -> AgentC
         emergency_stop_enabled=bool(data.get("emergency_stop_enabled", base.emergency_stop_enabled)),
         approval_ttl_seconds=max(int(data.get("approval_ttl_seconds") or base.approval_ttl_seconds), 60),
         remembered_approval_rules=_ordered_dicts(data.get("remembered_approval_rules")),
+        sandbox_type=str(data.get("sandbox_type") or base.sandbox_type).strip() or base.sandbox_type,
     )
 
 

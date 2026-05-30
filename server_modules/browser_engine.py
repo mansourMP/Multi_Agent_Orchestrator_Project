@@ -123,6 +123,7 @@ class BrowserEngine:
         self._attach_endpoint_url: Optional[str] = None
         self._attach_state = "not_attached"
         self._attach_failure: Optional[str] = None
+        self._emulation: Dict[str, Any] = {}
         self._initialized = True
 
     def _load_playwright(self):
@@ -230,6 +231,7 @@ class BrowserEngine:
         self,
         session_mode: Optional[str] = None,
         attach_endpoint_url: Optional[str] = None,
+        emulation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         resolved_mode = _normalize_browser_session_mode(session_mode)
         resolved_attach_endpoint = (
@@ -237,6 +239,7 @@ class BrowserEngine:
             if resolved_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH
             else None
         )
+        self._emulation = dict(emulation or {})
         mode_changed = resolved_mode != self._session_mode
         endpoint_changed = resolved_attach_endpoint != self._attach_endpoint_url
         if mode_changed or endpoint_changed:
@@ -282,6 +285,7 @@ class BrowserEngine:
             "attach_failure": self._attach_failure,
             "status": status,
             "current_url": current_url,
+            "emulation": dict(self._emulation),
         }
 
     async def _ensure_started(self) -> None:
@@ -332,12 +336,49 @@ class BrowserEngine:
                 self._attach_state = "attached"
                 self._attach_failure = None
             else:
-                self._context = await self._playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(self.profile_dir),
-                    headless=self.headless,
-                    accept_downloads=True,
-                    viewport={"width": 1440, "height": 960},
-                )
+                viewport = {
+                    "width": int(self._emulation.get("viewport_width", 1440)),
+                    "height": int(self._emulation.get("viewport_height", 960)),
+                }
+                color_scheme = str(self._emulation.get("color_scheme", "")).strip().lower()
+                if color_scheme not in ("dark", "light", "no-preference"):
+                    color_scheme = ""
+                context_kwargs: Dict[str, Any] = {
+                    "user_data_dir": str(self.profile_dir),
+                    "headless": bool(self.headless),
+                    "accept_downloads": True,
+                    "viewport": viewport,
+                }
+                if color_scheme:
+                    context_kwargs["color_scheme"] = color_scheme
+                locale = str(self._emulation.get("locale", "")).strip()
+                if locale:
+                    context_kwargs["locale"] = locale
+                timezone_id = str(self._emulation.get("timezone", "")).strip()
+                if timezone_id:
+                    context_kwargs["timezone_id"] = timezone_id
+                geolocation = self._emulation.get("geolocation")
+                if isinstance(geolocation, dict) and geolocation.get("latitude") is not None:
+                    context_kwargs["geolocation"] = {
+                        "latitude": float(geolocation["latitude"]),
+                        "longitude": float(geolocation.get("longitude", 0)),
+                        "accuracy": int(geolocation.get("accuracy", 100)),
+                    }
+                device_scale_factor = self._emulation.get("device_scale_factor")
+                if device_scale_factor is not None:
+                    context_kwargs["device_scale_factor"] = float(device_scale_factor)
+                user_agent = str(self._emulation.get("user_agent", "")).strip()
+                if user_agent:
+                    context_kwargs["user_agent"] = user_agent
+                extra_headers = self._emulation.get("extra_http_headers")
+                if isinstance(extra_headers, dict) and extra_headers:
+                    context_kwargs["extra_http_headers"] = {
+                        str(k): str(v) for k, v in extra_headers.items()
+                    }
+                offline = bool(self._emulation.get("offline", False))
+                if offline:
+                    context_kwargs["offline"] = True
+                self._context = await self._playwright.chromium.launch_persistent_context(**context_kwargs)
                 self._attach_state = "not_attached"
                 self._attach_failure = None
         except Exception:

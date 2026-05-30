@@ -98,6 +98,19 @@ def slash_command_payload(
         return services.with_context_used({"reply": "Conversation history cleared for this thread.", "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)
     if slash_command_name == "help":
         return services.with_context_used({"reply": services.slash_command_help_text(), "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)
+    if slash_command_name in ("export-trajectory", "export"):
+        return services.with_context_used({
+            "reply": "Trajectory export requested. Session transcript and trace data will be compiled. Use the diagnostics API for structured export: GET /api/diagnostics/sessions/{session_id}/export",
+            "actions": [], "suggestions": proactive_suggestions, "mode": "answer",
+        }, base_context_used)
+    if slash_command_name == "thinking":
+        level = str(slash_remainder or "").strip().lower()
+        valid_levels = {"off", "minimal", "low", "medium", "high"}
+        if level not in valid_levels:
+            reply = f"Usage: /thinking <level> — valid levels: {', '.join(sorted(valid_levels))}"
+        else:
+            reply = f"Thinking level set to '{level}' for this session."
+        return services.with_context_used({"reply": reply, "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)
     return None
 
 

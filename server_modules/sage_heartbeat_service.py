@@ -301,4 +301,14 @@ async def build_sage_heartbeat_snapshot(
             "minimum_battery_percent": int(policy.get("minimum_battery_percent") or 0),
             "max_self_proposed_per_hour": int(policy.get("max_self_proposed_per_hour") or 0),
         },
+        "retry": bounded_scheduler_service.retry_queue_status(workspace_id),
+        "plugin": _plugin_health_snapshot(),
     }
+
+
+def _plugin_health_snapshot() -> Dict[str, Any]:
+    try:
+        from server_modules.plugin_system import get_global_hook_registry
+        return get_global_hook_registry().snapshot()
+    except Exception:
+        return {"error": "plugin_system_unavailable"}

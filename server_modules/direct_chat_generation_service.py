@@ -17,6 +17,17 @@ from server_modules import secret_redaction_service
 from server_modules.direct_chat_context_service import is_public_generation_error_message
 from server_modules.direct_chat_intervention_service import build_intervention
 from server_modules.direct_tool_config_service import run_async_tool_call
+from server_modules.plugin_system import (
+    HookContext,
+    HookResult,
+    HOOK_AGENT_START,
+    HOOK_AGENT_END,
+    HOOK_LLM_INPUT,
+    HOOK_LLM_OUTPUT,
+    HOOK_TOOL_CALL,
+    HOOK_TOOL_RESULT,
+    get_global_hook_registry,
+)
 
 
 @dataclass(slots=True)
@@ -465,6 +476,28 @@ def stream_provider_backed_direct_chat(
     current_prompt = normalized_message
     max_iterations = resolved_chat_max_iterations
     trace_started_at = time.monotonic()
+
+    registry = get_global_hook_registry()
+    hook_ctx = registry.execute(
+        HOOK_AGENT_START,
+        HookContext(
+            hook_point=HOOK_AGENT_START,
+            workspace_id=normalized_workspace_id,
+            session_id=normalized_thread_id,
+            channel=str(metadata.get("channel", "")),
+            messages=list(conversation_messages),
+            system_prompt=system_prompt or "",
+            tools=list(tools),
+        ),
+    )
+    if hook_ctx.aborted:
+        yield {
+            "reply": hook_ctx.abort_reason or "Agent start aborted by hook.",
+            "interventions": [],
+            "aborted": True,
+        }
+        return
+
     trace_plan_id = uuid.uuid4().hex
     planning_item_id = uuid.uuid4().hex
     assistant_message_id = uuid.uuid4().hex
@@ -1253,6 +1286,21 @@ def stream_provider_backed_direct_chat(
                     "type": "final",
                     "payload": _mask_platform_paid_final_payload(final_response_payload, platform_paid_identity),
                 }
+
+                registry = get_global_hook_registry()
+                registry.execute(
+                    HOOK_AGENT_END,
+                    HookContext(
+                        hook_point=HOOK_AGENT_END,
+                        workspace_id=normalized_workspace_id,
+                        session_id=normalized_thread_id,
+                        channel=str(metadata.get("channel", "")),
+                        reply=final_reply,
+                        usage=usage_masked,
+                        metadata={"provider": actual_provider, "model": actual_model},
+                    ),
+                )
+
                 yield final_payload
                 should_persist_final_reply = not is_public_generation_error_message(final_reply)
                 if should_persist_final_reply:

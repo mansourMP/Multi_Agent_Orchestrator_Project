@@ -463,6 +463,87 @@ class EmpyralisSessionManager:
             },
         )
 
+    def reset_session(self, session_id: str) -> None:
+        session = get_runtime_session(self.db_path, session_id)
+        if not isinstance(session, dict):
+            return
+        actor_key = str(session.get("actor_key") or session_id).strip()
+        handle = self.runtime_cache.peek(actor_key)
+        if handle is not None:
+            self._close_owned_browser(getattr(handle, "browser", None))
+        self.runtime_cache.clear(actor_key)
+        turns = list_runtime_session_turns(
+            self.db_path, session_id=str(session.get("session_id") or ""), statuses=["running", "completed"]
+        )
+        for turn in turns:
+            upsert_runtime_session_turn(
+                self.db_path,
+                {
+                    **turn,
+                    "status": "archived",
+                    "updated_at": _utc_now_iso(),
+                    "completed_at": _utc_now_iso(),
+                },
+            )
+        upsert_runtime_session(
+            self.db_path,
+            {
+                **session,
+                "status": "active",
+                "updated_at": _utc_now_iso(),
+                "last_touched_at": _utc_now_iso(),
+                "reset_count": int(session.get("reset_count", 0)) + 1,
+                "last_reset_at": _utc_now_iso(),
+                "turn_count": 0,
+            },
+        )
+
+    def export_trace(self, session_id: str) -> Dict[str, Any]:
+        session = get_runtime_session(self.db_path, session_id)
+        if not isinstance(session, dict):
+            return {"error": "session_not_found", "session_id": session_id}
+        turns = list_runtime_session_turns(
+            self.db_path,
+            session_id=str(session.get("session_id") or session_id).strip(),
+            statuses=["running", "completed", "error", "archived"],
+        )
+        handle = self.runtime_cache.peek(
+            str(session.get("actor_key") or session_id).strip()
+        )
+        cache_state = None
+        if handle is not None:
+            cache_state = {
+                "has_browser": getattr(handle, "browser", None) is not None,
+                "actor_key": str(getattr(handle, "actor_key", "")),
+            }
+        return {
+            "session_id": str(session.get("session_id") or session_id),
+            "workspace_id": str(session.get("workspace_id") or ""),
+            "status": str(session.get("status") or "active"),
+            "created_at": str(session.get("created_at") or ""),
+            "updated_at": str(session.get("updated_at") or ""),
+            "last_touched_at": str(session.get("last_touched_at") or ""),
+            "reset_count": int(session.get("reset_count", 0)),
+            "turn_count": int(session.get("turn_count", len(turns))),
+            "total_historical_turns": len(turns),
+            "turns": [
+                {
+                    "turn_id": str(t.get("turn_id") or ""),
+                    "status": str(t.get("status") or ""),
+                    "created_at": str(t.get("created_at") or ""),
+                    "completed_at": str(t.get("completed_at") or ""),
+                    "error_text": str(t.get("error_text") or "") or None,
+                }
+                for t in turns
+            ],
+            "runtime_cache": cache_state,
+            "errors": {
+                "total": int(self._error_count),
+                "interrupted_stale": int(self._interrupted_stale_session_count),
+                "evicted_runtime": int(self._evicted_runtime_count),
+            },
+        }
+
     def interrupt_stale_sessions(self, *, now_ts: Optional[float] = None) -> int:
         reference = float(now_ts if now_ts is not None else time.time())
         interrupted = 0

@@ -679,3 +679,40 @@ async def terminate_session(session_id: str) -> None:
     except Exception as exc:
         LOGGER.warning("Control-plane terminate_session mirror failed for %s: %s", token, exc)
     return None
+
+
+async def prune_expired_sessions(workspace_id: str, *, limit: int = 50) -> Dict[str, Any]:
+    resolved_workspace_id = str(workspace_id or "").strip()
+    if not resolved_workspace_id:
+        return {"workspace_id": "", "pruned": 0, "errors": 0}
+    safe_limit = max(1, min(200, int(limit or 50)))
+    sessions = await list_workspace_runtime_sessions(
+        resolved_workspace_id, limit=safe_limit, active_only=False
+    )
+    pruned = 0
+    errors = 0
+    for session in sessions:
+        session_id = str(session.get("session_id") or "")
+        if not session_id:
+            continue
+        status = str(session.get("status") or "")
+        if status != "expired":
+            continue
+        try:
+            await terminate_session(session_id)
+            pruned += 1
+        except Exception:
+            errors += 1
+    return {
+        "workspace_id": resolved_workspace_id,
+        "scanned": len(sessions),
+        "pruned": pruned,
+        "errors": errors,
+    }
+
+
+async def renew_session(session_id: str, *, ttl_seconds: int | None = None) -> Optional[Dict[str, Any]]:
+    token = str(session_id or "").strip()
+    if not token:
+        return None
+    return await extend_session(token)

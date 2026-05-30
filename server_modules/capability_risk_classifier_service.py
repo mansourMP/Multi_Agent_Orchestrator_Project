@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from server_modules import secret_redaction_service
 from server_modules.agent_computer_policy_service import (
     AgentComputerPolicy,
+    AUTONOMY_YOLO,
     DECISION_ALLOW,
     DECISION_APPROVAL_REQUIRED,
     DECISION_BLOCK,
@@ -298,6 +299,23 @@ def classify_capability_risk(
         target_channel=target_channel,
         payload=payload,
     )
+
+    if contract.autonomy_mode == AUTONOMY_YOLO:
+        return CapabilityRiskDecision(
+            decision_id=_decision_id(),
+            policy_version=contract.policy_version,
+            risk_level=RISK_LEVELS[RISK_CLASS_LOW],
+            risk_class=RISK_CLASS_LOW,
+            action_class=normalized_action,
+            capability=normalized_capability,
+            target_summary=summary,
+            decision=DECISION_ALLOW,
+            approval_scopes_required=tuple(),
+            audit_visibility=AUDIT_VISIBILITY_SUMMARY,
+            recording_required=False,
+            retention_class=RETENTION_SHORT,
+            cacheable=True,
+        )
 
     kill_state = str(current_kill_state or "").strip().lower()
     risk_class = _risk_for_capability(normalized_capability, normalized_action, payload)

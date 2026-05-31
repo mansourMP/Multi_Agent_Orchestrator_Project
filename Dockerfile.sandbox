@@ -1,0 +1,16 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY requirements-worker.txt /tmp/requirements-worker.txt
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && if [ -s /tmp/requirements-worker.txt ]; then python -m pip install --no-cache-dir -r /tmp/requirements-worker.txt; fi
+
+COPY server_modules ./server_modules
+
+WORKDIR /workspace
+USER 1000:1000

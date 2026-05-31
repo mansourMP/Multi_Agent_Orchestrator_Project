@@ -4,6 +4,7 @@
 Usage:
   empyralis chat "Your message here"
   empyralis status
+  empyralis doctor --release
   empyralis login <api-key> [--workspace <id>] [--api-url <url>]
   empyralis session reset
   empyralis help
@@ -95,6 +96,21 @@ def cmd_session_reset() -> None:
     print("Session reset. Next chat will start fresh.")
 
 
+def cmd_doctor(args: list[str]) -> None:
+    if not args or args[0] != "--release":
+        print("Usage: empyralis doctor --release")
+        sys.exit(1)
+    from server_modules.release_gate_service import (
+        format_release_gate_report,
+        run_release_gate,
+    )
+
+    checks = run_release_gate(PROJECT_ROOT)
+    print(format_release_gate_report(checks))
+    if any(not check.ok for check in checks):
+        sys.exit(1)
+
+
 def cmd_help() -> None:
     print(__doc__.strip())
 
@@ -102,6 +118,7 @@ def cmd_help() -> None:
 COMMANDS = {
     "chat": cmd_chat,
     "status": cmd_status,
+    "doctor": cmd_doctor,
     "login": cmd_login,
     "session": lambda args: (
         cmd_session_reset() if (args and args[0] == "reset") else print("Usage: empyralis session reset")

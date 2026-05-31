@@ -1958,3 +1958,45 @@ async def acp_turn_endpoint(
         ),
         status_code=501,
     )
+
+
+@router.get("/diagnostics/sessions/{session_id}/export")
+async def export_session_diagnostics_endpoint(
+    session_id: str,
+    workspace_id: str = Query("default", min_length=1),
+    current_user=Depends(require_api_key),
+):
+    resolved_workspace_id = enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="viewer",
+    )
+    from server_modules.session_diagnostics_service import export_session_trace
+
+    payload = await export_session_trace(session_id)
+    if payload.get("error") == "session_id_required":
+        raise HTTPException(status_code=400, detail="session_id_required")
+    if payload.get("error") == "session_not_found":
+        raise HTTPException(status_code=404, detail="session_not_found")
+    session_workspace_id = str((payload.get("session") or {}).get("workspace_id") or "").strip()
+    if session_workspace_id and session_workspace_id != resolved_workspace_id:
+        raise HTTPException(status_code=403, detail="Session is not in the requested workspace.")
+    return payload
+
+
+@router.get("/diagnostics/workspace/{workspace_id}/bundle")
+async def export_workspace_diagnostics_endpoint(
+    workspace_id: str,
+    current_user=Depends(require_api_key),
+):
+    resolved_workspace_id = enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="viewer",
+    )
+    from server_modules.session_diagnostics_service import export_diagnostics_bundle
+
+    payload = await export_diagnostics_bundle(resolved_workspace_id)
+    if payload.get("error") == "workspace_id_required":
+        raise HTTPException(status_code=400, detail="workspace_id_required")
+    return payload

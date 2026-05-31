@@ -63,6 +63,8 @@ def docker_sandbox_command(
         f"--user={os.getuid()}:{os.getgid()}" if sys.platform != "win32" else "--user=1000:1000",
         f"-v={sandbox_root}:{DOCKER_WORKSPACE}:rw",
         f"-w={DOCKER_WORKSPACE}",
+        "-e", "PYTHONPATH=/app",
+        "-e", f"EMPYRALIS_SANDBOX_OUTPUT_FILE={DOCKER_OUTPUT_PATH}",
     ]
     if read_only:
         cmd.append("--read-only")
@@ -74,7 +76,7 @@ def docker_sandbox_command(
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges:true",
         image,
-        sys.executable, "-m", "server_modules.hosted_secure_worker",
+        "python3", "-m", "server_modules.hosted_secure_worker",
     ])
     return cmd
 

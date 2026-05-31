@@ -97,17 +97,16 @@ async function fetchHostedMiniApps(workspaceId: string): Promise<HostedMiniAppLi
   return items.filter((item) => item.install_status !== 'removed' && String(item.runtime_type || '').trim().toLowerCase() !== 'link');
 }
 
-async function upsertHostedMiniApp(
+async function publishMiniApp(
   workspaceId: string,
-  appId: string,
-  payload: Record<string, unknown>,
+  payload: { label: string; destination_url?: string; description?: string; icon_url?: string },
 ): Promise<HostedMiniAppListItem> {
   const response = await fetch(
-    `/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps/${encodeURIComponent(appId)}`,
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps/publish`,
     {
-      method: 'PUT',
+      method: 'POST',
       credentials: 'include',
-      headers: buildCookieAuthHeaders('PUT', {
+      headers: buildCookieAuthHeaders('POST', {
         accept: 'application/json',
         'content-type': 'application/json',
       }),
@@ -117,10 +116,10 @@ async function upsertHostedMiniApp(
   const responsePayload = (await response.json().catch(() => null)) as { detail?: unknown } | HostedMiniAppListItem | null;
   if (!response.ok) {
     const detail = responsePayload && 'detail' in responsePayload ? responsePayload.detail : null;
-    throw new Error(typeof detail === 'string' ? detail : `Application creation failed with status ${response.status}.`);
+    throw new Error(typeof detail === 'string' ? detail : `Publish failed with status ${response.status}.`);
   }
   if (!responsePayload || !('app_id' in responsePayload)) {
-    throw new Error('Application creation returned an invalid response.');
+    throw new Error('Publish returned an invalid response.');
   }
   return responsePayload as HostedMiniAppListItem;
 }
@@ -232,24 +231,11 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
       }
       setPrivateAppSaving(true);
       try {
-        const created = await upsertHostedMiniApp(workspaceId, appIdFromName(name), {
+        const created = await publishMiniApp(workspaceId, {
           label: name,
-          description: 'Private workspace app',
+          destination_url: parsedUrl.toString(),
+          description: '',
           icon_url: parsedIconUrl?.toString() || undefined,
-          runtime_type: 'private',
-          delivery_mode: 'hosted',
-          hosted_url: parsedUrl.toString(),
-          allowed_origins: [parsedUrl.origin],
-          trust_tier: 'user_private',
-          permissions: [],
-          bridge_contracts: {},
-          context_envelope: {
-            default_classes: [],
-            optional_classes: [],
-          },
-          background_ai_allowed: false,
-          visibility: 'workspace_private',
-          install_status: 'installed',
         });
         setItems((current) => [created, ...current.filter((item) => item.app_id !== created.app_id)]);
         setPrivateAppName('');
@@ -272,11 +258,11 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
         <section className={styles.privateAppPanel} aria-label="Private applications">
           <div className={styles.privateAppIntro}>
             <div className={styles.emptyIcon}>
-              <LockKeyhole aria-hidden="true" />
+              <Globe2 aria-hidden="true" />
             </div>
             <div className={styles.emptyCopyBlock}>
-              <p className={styles.emptyTitle}>Add a private app URL</p>
-              <p className={styles.emptyCopy}>Connect an app surface you control. It opens in the workspace shell with no bridge permissions until you explicitly enable them.</p>
+              <p className={styles.emptyTitle}>Publish an application</p>
+              <p className={styles.emptyCopy}>Enter a name and URL. Your app goes live instantly — no review, no config. Add scoped permissions later if needed.</p>
             </div>
           </div>
           <form className={styles.privateAppForm} onSubmit={handlePrivateAppSubmit}>

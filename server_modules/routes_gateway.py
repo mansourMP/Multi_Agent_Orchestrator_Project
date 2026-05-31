@@ -1861,3 +1861,142 @@ async def gateway_websocket(
         session_token=resolved_session_token,
         accept_subprotocol=accept_subprotocol,
     )
+
+
+@router.post("/gateway/acp/turn", status_code=200)
+async def acp_turn_endpoint(
+    request: Request,
+    workspace_id: str = Query(..., description="Workspace ID"),
+):
+    from server_modules.acp_bridge_service import (
+        parse_acp_message,
+        translate_acp_to_gateway,
+        translate_gateway_to_acp,
+        build_acp_error,
+    )
+    from server_modules.sage_agent_runtime_service import handle_sage_chat
+    from server_modules.sage_agent_runtime_contract import SageTurnResult
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            content=build_acp_error("invalid_json", "Request body is not valid JSON."),
+            status_code=400,
+        )
+
+    acp_msg = parse_acp_message(body)
+    if acp_msg.get("error"):
+        return JSONResponse(content=acp_msg, status_code=400)
+
+    gw_frame = translate_acp_to_gateway(acp_msg)
+    msg_type = acp_msg.get("type", "")
+
+    if msg_type == "health.check":
+        from server_modules.acp_bridge_service import build_acp_health_response
+        return JSONResponse(content=build_acp_health_response(), status_code=200)
+
+    if msg_type == "agent.turn":
+        try:
+            params = gw_frame.get("params", {})
+            result = await handle_sage_chat(
+                workspace_id=str(workspace_id or params.get("workspace_id", "")).strip(),
+                message=str(params.get("message", "")).strip(),
+                surface="acp",
+                mode="owner_sage",
+            )
+            if isinstance(result, SageTurnResult):
+                reply_data = {
+                    "reply": result.reply,
+                    "session_id": result.session_id or "",
+                    "provider": result.provider or "",
+                    "model": result.model or "",
+                    "trace_id": result.trace_id or "",
+                }
+            elif isinstance(result, dict):
+                reply_data = {
+                    "reply": str(result.get("reply") or result.get("message") or ""),
+                    "session_id": str(result.get("session_id") or ""),
+                    "trace_id": str(result.get("trace_id") or ""),
+                }
+            else:
+                reply_data = {"reply": str(result)}
+            return JSONResponse(
+                content={
+                    "id": acp_msg.get("id", ""),
+                    "type": "response",
+                    "result": reply_data,
+                    "timestamp": acp_msg.get("timestamp", ""),
+                },
+                status_code=200,
+            )
+        except Exception as exc:
+            return JSONResponse(
+                content=build_acp_error("turn_failed", str(exc), acp_msg.get("id", "")),
+                status_code=500,
+            )
+
+    if msg_type in ("session.create",):
+        return JSONResponse(
+            content={
+                "id": acp_msg.get("id", ""),
+                "type": "response",
+                "result": {
+                    "session_id": gw_frame.get("params", {}).get("session_id", ""),
+                    "status": "created",
+                },
+                "timestamp": acp_msg.get("timestamp", ""),
+            },
+            status_code=200,
+        )
+
+    return JSONResponse(
+        content=build_acp_error(
+            "not_implemented",
+            f"ACP message type '{msg_type}' is recognized but not yet implemented.",
+            acp_msg.get("id", ""),
+        ),
+        status_code=501,
+    )
+
+
+@router.get("/diagnostics/sessions/{session_id}/export")
+async def export_session_diagnostics_endpoint(
+    session_id: str,
+    workspace_id: str = Query("default", min_length=1),
+    current_user=Depends(require_api_key),
+):
+    resolved_workspace_id = enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="viewer",
+    )
+    from server_modules.session_diagnostics_service import export_session_trace
+
+    payload = await export_session_trace(session_id)
+    if payload.get("error") == "session_id_required":
+        raise HTTPException(status_code=400, detail="session_id_required")
+    if payload.get("error") == "session_not_found":
+        raise HTTPException(status_code=404, detail="session_not_found")
+    session_workspace_id = str((payload.get("session") or {}).get("workspace_id") or "").strip()
+    if session_workspace_id and session_workspace_id != resolved_workspace_id:
+        raise HTTPException(status_code=403, detail="Session is not in the requested workspace.")
+    return payload
+
+
+@router.get("/diagnostics/workspace/{workspace_id}/bundle")
+async def export_workspace_diagnostics_endpoint(
+    workspace_id: str,
+    current_user=Depends(require_api_key),
+):
+    resolved_workspace_id = enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="viewer",
+    )
+    from server_modules.session_diagnostics_service import export_diagnostics_bundle
+
+    payload = await export_diagnostics_bundle(resolved_workspace_id)
+    if payload.get("error") == "workspace_id_required":
+        raise HTTPException(status_code=400, detail="workspace_id_required")
+    return payload

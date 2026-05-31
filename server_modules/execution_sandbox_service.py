@@ -13,12 +13,20 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 from server_modules.agent_manifest import AgentManifest
+from server_modules.docker_execution_sandbox import (
+    DOCKER_DRIVER,
+    DEFAULT_DOCKER_IMAGE,
+    _is_docker_available,
+    run_docker_worker,
+    docker_sandbox_result,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 HOSTED_SECURE_BASE_IMAGE = "empyralis-hosted-secure-v1"
 HOSTED_SECURE_DRIVER_SANDBOX_EXEC = "sandbox_exec"
 HOSTED_SECURE_DRIVER_SUBPROCESS = "subprocess_fallback"
+HOSTED_SECURE_DRIVER_DOCKER = DOCKER_DRIVER
 DEFAULT_HOSTED_LIMITS = {
     "cpu_seconds": 20,
     "memory_mb": 512,
@@ -126,12 +134,21 @@ def state_layer_policy(*, runtime_mode: str) -> Dict[str, Any]:
     }
 
 
-def hosted_secure_driver() -> str:
-    return (
-        HOSTED_SECURE_DRIVER_SANDBOX_EXEC
-        if shutil.which("sandbox-exec")
-        else HOSTED_SECURE_DRIVER_SUBPROCESS
-    )
+def hosted_secure_driver(*, prefer: str = "") -> str:
+    requested = str(prefer or "").strip().lower()
+    if requested == DOCKER_DRIVER and _is_docker_available():
+        return DOCKER_DRIVER
+    if requested == HOSTED_SECURE_DRIVER_SANDBOX_EXEC and shutil.which("sandbox-exec"):
+        return HOSTED_SECURE_DRIVER_SANDBOX_EXEC
+    if requested == HOSTED_SECURE_DRIVER_SUBPROCESS:
+        return HOSTED_SECURE_DRIVER_SUBPROCESS
+    if requested and requested not in {DOCKER_DRIVER, HOSTED_SECURE_DRIVER_SANDBOX_EXEC, HOSTED_SECURE_DRIVER_SUBPROCESS}:
+        raise ValueError(f"Unknown sandbox driver: {requested}")
+    if not requested and _is_docker_available():
+        return DOCKER_DRIVER
+    if shutil.which("sandbox-exec"):
+        return HOSTED_SECURE_DRIVER_SANDBOX_EXEC
+    return HOSTED_SECURE_DRIVER_SUBPROCESS
 
 
 def runtime_scope(
@@ -434,6 +451,21 @@ def _run_hosted_worker(
         }
         _write_read_only_base_image(image_root=image_root, payload=payload, scope=scope)
         output_file = outputs_root / "turn-result.json"
+
+        if scope.get("driver") == DOCKER_DRIVER:
+            limits = _coerce_dict(scope.get("limits", {}))
+            completed = run_docker_worker(
+                sandbox_root=str(sandbox_root),
+                payload=payload,
+                memory_mb=int(limits.get("memory_mb", DEFAULT_HOSTED_LIMITS["memory_mb"])),
+                cpu_shares=1024,
+                timeout_seconds=int(limits.get("timeout_seconds", DEFAULT_HOSTED_LIMITS["timeout_seconds"])),
+                network_enabled=bool(
+                    _coerce_dict(scope.get("network_policy", {})).get("allow_outbound", False)
+                ),
+            )
+            return docker_sandbox_result(completed, sandbox_root=str(sandbox_root))
+
         env = _minimal_env(sandbox_root=sandbox_root, output_path=output_file, scope=scope)
         command = [str(Path(sys.executable).resolve()), "-m", "server_modules.hosted_secure_worker"]
         if scope.get("driver") == HOSTED_SECURE_DRIVER_SANDBOX_EXEC:

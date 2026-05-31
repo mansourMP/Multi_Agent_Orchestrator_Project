@@ -24,6 +24,7 @@ from server_modules import calorie_tracking_service
 from server_modules import flashcards_tracking_service
 from server_modules import mini_app_invoke_service
 from server_modules import mini_apps_service
+from server_modules import mini_app_token_exchange_service
 from server_modules import quota_policy_service, quota_response_service
 from server_modules import usage_accounting_service
 
@@ -123,6 +124,13 @@ class MiniAppContractUpsertRequest(BaseModel):
     weekly_summary: Optional[Dict[str, Any]] = None
     long_term_facts: Optional[List[Any]] = None
     records: Optional[List[Dict[str, Any]]] = None
+
+
+class MiniAppPublishRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+    destination_url: Optional[str] = Field(default=None, max_length=2_048)
+    description: Optional[str] = Field(default=None, max_length=2_000)
+    icon_url: Optional[str] = Field(default=None, max_length=2_048)
 
 
 class MiniAppRetrieveRecordsRequest(BaseModel):
@@ -994,6 +1002,51 @@ async def upsert_mini_app_contract(
             long_term_facts=body.long_term_facts,
             records=body.records,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workspaces/{workspace_id}/mini-apps/publish")
+async def publish_mini_app(
+    workspace_id: str,
+    body: MiniAppPublishRequest,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
+    try:
+        return mini_apps_service.publish_mini_app(
+            resolved_workspace_id,
+            label=body.label,
+            destination_url=body.destination_url,
+            description=body.description,
+            icon_url=body.icon_url,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class MiniAppTokenExchangeRequest(BaseModel):
+    launch_token: str = Field(min_length=1)
+    scopes: Optional[List[str]] = Field(default=None, max_length=20)
+
+
+@router.post("/workspaces/{workspace_id}/mini-apps/{app_id}/exchange-token")
+async def exchange_mini_app_token(
+    workspace_id: str,
+    app_id: str,
+    body: MiniAppTokenExchangeRequest,
+    current_user=Depends(get_current_user),
+):
+    auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+    try:
+        return mini_app_token_exchange_service.exchange_launch_token(
+            workspace_id=workspace_id,
+            app_id=app_id,
+            launch_token=body.launch_token,
+            requested_scopes=body.scopes,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

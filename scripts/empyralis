@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Empyralis CLI companion — chat with Sage from the terminal.
+
+Usage:
+  empyralis chat "Your message here"
+  empyralis status
+  empyralis doctor --release
+  empyralis login <api-key> [--workspace <id>] [--api-url <url>]
+  empyralis session reset
+  empyralis help
+"""
+
+import sys
+import os
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from server_modules.cli_companion_service import (
+    load_config,
+    save_config,
+    load_session,
+    save_session,
+    send_turn,
+    format_reply,
+)
+
+
+def cmd_chat(args: list[str]) -> None:
+    message = " ".join(args) if args else ""
+    if not message:
+        print("Usage: empyralis chat <message>")
+        sys.exit(1)
+
+    config = load_config()
+    if not config.get("api_key"):
+        print("Not logged in. Run: empyralis login <your-api-key>")
+        sys.exit(1)
+
+    print(f"Sage: ", end="", flush=True)
+    try:
+        result = send_turn(message)
+        reply = format_reply(result)
+        print(reply)
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+    except Exception as e:
+        print(f"\nError: {e}")
+
+
+def cmd_status() -> None:
+    config = load_config()
+    session = load_session()
+
+    print(f"  API URL:       {config.get('api_url', 'not set')}")
+    print(f"  Workspace:     {config.get('workspace_id', 'not set')}")
+    print(f"  API Key:       {'configured' if config.get('api_key') else 'not set'}")
+    print(f"  Session ID:    {session.get('session_id') or 'none (will auto-create)'}")
+    print(f"  Thread ID:     {session.get('thread_id') or 'none'}")
+
+
+def cmd_login(args: list[str]) -> None:
+    api_key = args[0] if args else ""
+    workspace = "default"
+    api_url = os.environ.get("EMPYRALIS_API_URL", "http://localhost:8000")
+
+    rest = list(args[1:]) if len(args) > 1 else []
+    i = 0
+    while i < len(rest):
+        if rest[i] == "--workspace" and i + 1 < len(rest):
+            workspace = rest[i + 1]
+            i += 2
+        elif rest[i] == "--api-url" and i + 1 < len(rest):
+            api_url = rest[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    if not api_key:
+        print("Usage: empyralis login <api-key> [--workspace <id>] [--api-url <url>]")
+        sys.exit(1)
+
+    config = {
+        "api_key": api_key,
+        "workspace_id": workspace,
+        "api_url": api_url,
+    }
+    save_config(config)
+    save_session({"session_id": "", "thread_id": "", "channel": "cli"})
+    print(f"Logged in. Workspace: {workspace}, API: {api_url}")
+
+
+def cmd_session_reset() -> None:
+    save_session({"session_id": "", "thread_id": "", "channel": "cli"})
+    print("Session reset. Next chat will start fresh.")
+
+
+def cmd_doctor(args: list[str]) -> None:
+    if not args or args[0] != "--release":
+        print("Usage: empyralis doctor --release")
+        sys.exit(1)
+    from server_modules.release_gate_service import (
+        format_release_gate_report,
+        run_release_gate,
+    )
+
+    checks = run_release_gate(PROJECT_ROOT)
+    print(format_release_gate_report(checks))
+    if any(not check.ok for check in checks):
+        sys.exit(1)
+
+
+def cmd_help() -> None:
+    print(__doc__.strip())
+
+
+COMMANDS = {
+    "chat": cmd_chat,
+    "status": cmd_status,
+    "doctor": cmd_doctor,
+    "login": cmd_login,
+    "session": lambda args: (
+        cmd_session_reset() if (args and args[0] == "reset") else print("Usage: empyralis session reset")
+    ),
+    "help": lambda _: cmd_help(),
+    "-h": lambda _: cmd_help(),
+    "--help": lambda _: cmd_help(),
+}
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if not args:
+        cmd_help()
+        sys.exit(0)
+
+    command = args[0].lower()
+    handler = COMMANDS.get(command)
+    if handler:
+        handler(args[1:])
+    else:
+        print(f"Unknown command: {command}")
+        cmd_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

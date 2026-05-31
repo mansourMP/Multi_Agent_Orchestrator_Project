@@ -20,12 +20,14 @@ AUTONOMY_ASK_EVERY_TIME = "ask_every_time"
 AUTONOMY_SAFE_AUTOPILOT = "safe_autopilot"
 AUTONOMY_TRUSTED_WORKSTATION = "trusted_workstation"
 AUTONOMY_EMERGENCY_STOP = "emergency_stop"
+AUTONOMY_YOLO = "yolo"
 AUTONOMY_MODES = {
     AUTONOMY_READ_ONLY,
     AUTONOMY_ASK_EVERY_TIME,
     AUTONOMY_SAFE_AUTOPILOT,
     AUTONOMY_TRUSTED_WORKSTATION,
     AUTONOMY_EMERGENCY_STOP,
+    AUTONOMY_YOLO,
 }
 AUTONOMY_ALIASES = {
     "readonly": AUTONOMY_READ_ONLY,
@@ -39,6 +41,14 @@ AUTONOMY_ALIASES = {
     "trusted_workstation_mode": AUTONOMY_TRUSTED_WORKSTATION,
     "stop": AUTONOMY_EMERGENCY_STOP,
     "killed": AUTONOMY_EMERGENCY_STOP,
+    "full_send": AUTONOMY_YOLO,
+    "full-send": AUTONOMY_YOLO,
+    "fullsend": AUTONOMY_YOLO,
+    "send_it": AUTONOMY_YOLO,
+    "sendit": AUTONOMY_YOLO,
+    "no_limits": AUTONOMY_YOLO,
+    "nolimits": AUTONOMY_YOLO,
+    "unrestricted": AUTONOMY_YOLO,
 }
 
 DECISION_ALLOW = "allow"
@@ -162,6 +172,7 @@ class AgentComputerPolicy:
     emergency_stop_enabled: bool = True
     approval_ttl_seconds: int = 900
     remembered_approval_rules: tuple[Dict[str, Any], ...] = field(default_factory=tuple)
+    sandbox_type: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -187,6 +198,7 @@ class AgentComputerPolicy:
             "emergency_stop_enabled": self.emergency_stop_enabled,
             "approval_ttl_seconds": self.approval_ttl_seconds,
             "remembered_approval_rules": list(self.remembered_approval_rules),
+            "sandbox_type": self.sandbox_type,
         }
 
 
@@ -300,6 +312,8 @@ def _utc_now_iso() -> str:
 def _default_capability_sets(mode: str) -> tuple[set[str], set[str], set[str]]:
     if mode == AUTONOMY_EMERGENCY_STOP:
         return set(), set(), set(CAPABILITY_CLASSES)
+    if mode == AUTONOMY_YOLO:
+        return set(CAPABILITY_CLASSES), set(), set()
     if mode == AUTONOMY_READ_ONLY:
         return set(_SAFE_READ_CAPABILITIES), set(), set(CAPABILITY_CLASSES - _SAFE_READ_CAPABILITIES)
     if mode == AUTONOMY_ASK_EVERY_TIME:
@@ -370,18 +384,20 @@ def build_default_agent_computer_policy(
         filesystem_scope=_ordered_strings(filesystem_scope),
         blocked_filesystem_scope=tuple(),
         terminal_policy=(
-            "allowlist"
+            "allow"
+            if mode == AUTONOMY_YOLO
+            else "allowlist"
             if mode == AUTONOMY_TRUSTED_WORKSTATION
             else "blocked"
             if mode in {AUTONOMY_READ_ONLY, AUTONOMY_EMERGENCY_STOP}
             else "review_required"
         ),
-        external_message_policy="approved_contacts" if mode == AUTONOMY_TRUSTED_WORKSTATION else "draft_only",
-        screenshot_retention="session_only" if mode in {AUTONOMY_SAFE_AUTOPILOT, AUTONOMY_TRUSTED_WORKSTATION} else "off",
-        cloud_storage_policy="approval_required",
-        browser_access_policy="allow" if mode == AUTONOMY_TRUSTED_WORKSTATION else "approval_required",
-        app_access_policy="approval_required",
-        network_policy="allowlist" if domain_allowlist else "approval_required",
+        external_message_policy="approved_contacts" if mode in {AUTONOMY_YOLO, AUTONOMY_TRUSTED_WORKSTATION} else "draft_only",
+        screenshot_retention="session_only" if mode in {AUTONOMY_YOLO, AUTONOMY_SAFE_AUTOPILOT, AUTONOMY_TRUSTED_WORKSTATION} else "off",
+        cloud_storage_policy="allow" if mode == AUTONOMY_YOLO else "approval_required",
+        browser_access_policy="allow" if mode in {AUTONOMY_YOLO, AUTONOMY_TRUSTED_WORKSTATION} else "approval_required",
+        app_access_policy="allow" if mode == AUTONOMY_YOLO else "approval_required",
+        network_policy="allow" if mode == AUTONOMY_YOLO else ("allowlist" if domain_allowlist else "approval_required"),
         max_runtime_seconds=0,
         max_budget_cents=0,
         emergency_stop_enabled=True,
@@ -425,6 +441,7 @@ def normalize_agent_computer_policy(payload: Mapping[str, Any] | None) -> AgentC
         emergency_stop_enabled=bool(data.get("emergency_stop_enabled", base.emergency_stop_enabled)),
         approval_ttl_seconds=max(int(data.get("approval_ttl_seconds") or base.approval_ttl_seconds), 60),
         remembered_approval_rules=_ordered_dicts(data.get("remembered_approval_rules")),
+        sandbox_type=str(data.get("sandbox_type") or base.sandbox_type).strip() or base.sandbox_type,
     )
 
 

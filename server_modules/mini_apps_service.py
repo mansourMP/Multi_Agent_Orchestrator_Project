@@ -830,6 +830,50 @@ def upsert_mini_app_contract(
     return _normalized_contract_payload(normalized_workspace_id, entry)
 
 
+def publish_mini_app(
+    workspace_id: str,
+    *,
+    label: str,
+    destination_url: Optional[str] = None,
+    description: Optional[str] = None,
+    icon_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    clean_label = str(label or "").strip()
+    if not clean_label:
+        raise ValueError("Mini app label is required.")
+    app_id = _normalize_app_id(clean_label)
+    if not app_id:
+        raise ValueError("Could not generate app id from label.")
+    state = _safe_read_state(normalized_workspace_id)
+    existing = state.get("apps", {}).get(app_id)
+    if isinstance(existing, dict) and existing.get("install_status") != "removed":
+        suffix = str(int(time.time()))[-6:]
+        app_id = _normalize_app_id(f"{clean_label}_{suffix}")
+        if state.get("apps", {}).get(app_id):
+            raise ValueError(f"An app with id '{app_id}' already exists. Choose a different name.")
+    dest = str(destination_url or "").strip()
+    runtime_type = "community" if dest else "private"
+    contract = upsert_mini_app_contract(
+        normalized_workspace_id,
+        app_id,
+        label=clean_label,
+        description=str(description or "").strip(),
+        icon_url=icon_url,
+        destination_url=dest or None,
+        hosted_url=dest or None,
+        delivery_mode="hosted" if dest else "structured",
+        runtime_type=runtime_type,
+        runtime_mode=runtime_type,
+        visibility="workspace_private",
+        install_status="installed",
+        permissions=[],
+    )
+    contract["published_at"] = _utc_now_iso()
+    contract["app_url"] = f"/w/{normalized_workspace_id}/applications/{app_id}"
+    return contract
+
+
 def get_hosted_mini_app_manifest(workspace_id: str, app_id: str, *, user_id: str = "") -> Dict[str, Any]:
     contract = get_mini_app_contract(workspace_id, app_id)
     manifest = mini_app_host_service.build_hosted_mini_app_manifest(

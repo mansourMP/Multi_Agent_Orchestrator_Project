@@ -2,8 +2,9 @@
   box-sizing: border-box;
   min-height: 0;
   height: 100%;
-  padding: var(--app-space-6);
+  padding: var(--app-space-6) clamp(28px, 4vw, 56px);
   overflow: auto;
+  overflow-x: hidden;
   background: var(--app-bg-page);
   color: var(--app-text-primary);
 }
@@ -89,6 +90,9 @@
 .appsFeedShell {
   display: grid;
   gap: var(--app-space-5);
+  max-width: 1040px;
+  margin-left: clamp(28px, 3vw, 48px);
+  margin-right: auto;
 }
 
 .appsFeedHeader {
@@ -142,6 +146,9 @@
 
 .createAppPanel,
 .settingsPanel {
+  box-sizing: border-box;
+  width: min(100%, 980px);
+  min-width: 0;
   display: grid;
   gap: var(--app-space-4);
   max-width: 980px;
@@ -150,6 +157,7 @@
   border-radius: 8px;
   background: var(--app-bg-panel);
   box-shadow: var(--app-shadow-panel);
+  overflow: hidden;
 }
 
 .settingsHeader {
@@ -179,8 +187,9 @@
 }
 
 .settingsGrid {
+  min-width: 0;
   display: grid;
-  grid-template-columns: minmax(240px, 1.3fr) minmax(140px, 0.7fr) minmax(140px, 0.7fr);
+  grid-template-columns: minmax(0, 1.3fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr);
   gap: var(--app-space-3);
   align-items: end;
 }
@@ -237,12 +246,15 @@
 }
 
 .formGrid {
+  min-width: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--app-space-3);
 }
 
 .textArea {
+  box-sizing: border-box;
+  min-width: 0;
   width: 100%;
   min-height: 92px;
   resize: vertical;
@@ -737,11 +749,17 @@
 }
 
 .privateAppForm {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   display: grid;
   gap: var(--app-space-3);
 }
 
 .fieldLabel {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   display: grid;
   gap: var(--app-space-2);
   color: var(--app-text-primary);
@@ -750,6 +768,9 @@
 }
 
 .textInput {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   width: 100%;
   min-height: 46px;
   padding: 0 14px;
@@ -856,6 +877,14 @@
 }
 
 @media (max-width: 720px) {
+  .shell {
+    padding: var(--app-space-4);
+  }
+
+  .appsFeedShell {
+    margin-left: 0;
+  }
+
   .appsFeedHeader {
     align-items: flex-start;
     flex-direction: column;

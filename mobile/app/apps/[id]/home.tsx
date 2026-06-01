@@ -436,25 +436,26 @@ function HostedRegisteredAppScreen({ appId, onBack }: { appId: string; onBack: (
         creditSummary: "Usage will appear after this tool runs.",
       }}
     >
-      <View style={{ gap: 16, paddingTop: 12 }}>
+      <View style={{ gap: 16, paddingTop: 18 }}>
         <View
           style={{
-            padding: 18,
-            borderRadius: 24,
+            minHeight: 280,
+            padding: 22,
+            borderRadius: 30,
             borderWidth: 1,
             borderColor: theme.colors.border,
-            backgroundColor: theme.colors.surface,
-            gap: 10,
+            backgroundColor: theme.colors.card,
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 12,
           }}
         >
-          <Text style={{ fontSize: 20, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-            {loading ? "Loading tool..." : title}
+          <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={64} />
+          <Text style={{ fontSize: 24, fontFamily: "Fraunces_700Bold", color: theme.colors.text, textAlign: "center" }}>
+            {loading ? "Opening..." : title}
           </Text>
-          <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
-            {contract?.description || "This hosted tool is registered to your workspace."}
-          </Text>
-          <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
-            Memory is denied by default. Bridge, provider, and connector access stay explicit.
+          <Text style={{ maxWidth: 260, fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary, textAlign: "center" }}>
+            {contract?.description || "Blank workspace app."}
           </Text>
           {hostedUrl ? (
             <PrimaryButton
@@ -615,20 +616,41 @@ function AppFrame({
   }, [appId, contract, session, title]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: "#050505" }}>
       <View
         style={{
           paddingTop: insets.top + 12,
           paddingHorizontal: 20,
-          paddingBottom: 12,
+          paddingBottom: 26,
           flexDirection: "row",
           alignItems: "center",
           gap: 12,
+          backgroundColor: "#050505",
         }}
       >
-        <BackButton onPress={onBack} />
+        <TouchableOpacity
+          activeOpacity={0.86}
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: "rgba(255,255,255,0.10)",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name="chevron-back" size={21} color="#FFFFFF" />
+        </TouchableOpacity>
         <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={40} />
-        <Text style={{ flex: 1, fontSize: 18, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "rgba(255,255,255,0.56)", fontFamily: "DMSans_700Bold" }}>
+            Application
+          </Text>
+          <Text style={{ fontSize: 20, fontFamily: "Fraunces_700Bold", color: "#FFFFFF" }}>{title}</Text>
+        </View>
         <TouchableOpacity
           activeOpacity={0.86}
           onPress={() => setMenuOpen(true)}
@@ -638,20 +660,24 @@ function AppFrame({
             width: 40,
             height: 40,
             borderRadius: 20,
-            borderWidth: 1,
-            borderColor: theme.colors.border,
-            backgroundColor: theme.colors.surface,
+            backgroundColor: "rgba(255,255,255,0.10)",
             alignItems: "center",
             justifyContent: "center",
           }}
         >
-          <Ionicons name="ellipsis-horizontal" size={20} color={theme.colors.text} />
+          <Ionicons name="ellipsis-horizontal" size={20} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
 
       <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}
+        style={{
+          flex: 1,
+          backgroundColor: theme.colors.background,
+          borderTopLeftRadius: 30,
+          borderTopRightRadius: 30,
+          marginTop: -10,
+        }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 24 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >

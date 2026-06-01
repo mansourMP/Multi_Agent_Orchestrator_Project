@@ -8,8 +8,6 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Activity,
   BookOpen,
-  Copy,
-  ExternalLink,
   Globe2,
   LockKeyhole,
   MoreVertical,
@@ -155,27 +153,6 @@ async function updateAppSettings(
   return responsePayload as AppCard;
 }
 
-async function cloneApp(workspaceId: string, publicAppId: string): Promise<AppCard> {
-  const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/apps/clone`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: buildCookieAuthHeaders('POST', {
-      accept: 'application/json',
-      'content-type': 'application/json',
-    }),
-    body: JSON.stringify({ public_app_id: publicAppId }),
-  });
-  const responsePayload = (await response.json().catch(() => null)) as { detail?: unknown } | AppCard | null;
-  if (!response.ok) {
-    const detail = responsePayload && 'detail' in responsePayload ? responsePayload.detail : null;
-    throw new Error(typeof detail === 'string' ? detail : `Clone failed with status ${response.status}.`);
-  }
-  if (!responsePayload || !('app_id' in responsePayload)) {
-    throw new Error('Clone returned an invalid app.');
-  }
-  return responsePayload as AppCard;
-}
-
 function officialMiniAppFor(appId: string): OfficialMiniApp | null {
   return OFFICIAL_MINI_APPS.find((app) => app.app_id === appId) || null;
 }
@@ -194,10 +171,6 @@ function appInitials(label: string): string {
 function urlTargetsLocalDevelopment(url: URL): boolean {
   const host = url.hostname.toLowerCase();
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' || host.endsWith('.local');
-}
-
-function appVisibilityLabel(item: AppCard): string {
-  return item.visibility_label || (item.visibility === 'public' ? 'Public' : 'Private');
 }
 
 export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
@@ -225,7 +198,6 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
   const [settingsInvocationLimit, setSettingsInvocationLimit] = useState('50');
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
-  const [cloningPublicAppId, setCloningPublicAppId] = useState<string | null>(null);
 
   const refreshApps = useCallback(async () => {
     setLoading(true);
@@ -409,27 +381,7 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
     ],
   );
 
-  const handleCloneApp = useCallback(
-    async (publicAppId: string) => {
-      setCloningPublicAppId(publicAppId);
-      setError(null);
-      try {
-        const cloned = await cloneApp(workspaceId, publicAppId);
-        setItems((current) => [
-          cloned,
-          ...current.filter((item) => item.public_app_id !== publicAppId && item.app_id !== cloned.app_id),
-        ]);
-        void refreshApps();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not clone this app.');
-      } finally {
-        setCloningPublicAppId(null);
-      }
-    },
-    [refreshApps, workspaceId],
-  );
-
-  const renderedItems = useMemo(() => items, [items]);
+  const renderedItems = useMemo(() => items.filter((item) => item.installed !== false), [items]);
   const settingsApp = useMemo(
     () => renderedItems.find((item) => item.app_id === settingsAppId && item.installed !== false) || null,
     [renderedItems, settingsAppId],
@@ -439,28 +391,18 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
     <main className={styles.shell}>
       <section className={styles.appsFeedShell} aria-label="Apps">
         <header className={styles.appsFeedHeader}>
-          <div className={styles.appsFeedTitleBlock}>
-            <p className={styles.commandKicker}>Apps</p>
-            <h1 className={styles.appsFeedTitle}>Apps</h1>
-          </div>
-          <div className={styles.actionRow}>
-            <Link className={styles.secondaryAction} href={`/w/${encodeURIComponent(workspaceId)}/marketplace`}>
-              <Globe2 aria-hidden="true" />
-              Discover
-            </Link>
-            <button
-              type="button"
-              className={styles.primaryAction}
-              onClick={() => {
-                setCreateOpen((current) => !current);
-                setFormError(null);
-                setFormSuccess(null);
-              }}
-            >
-              <Plus aria-hidden="true" />
-              Create
-            </button>
-          </div>
+          <button
+            type="button"
+            className={styles.launcherCreateButton}
+            onClick={() => {
+              setCreateOpen((current) => !current);
+              setFormError(null);
+              setFormSuccess(null);
+            }}
+            aria-label="Create app"
+          >
+            <Plus aria-hidden="true" />
+          </button>
         </header>
 
         {createOpen ? (
@@ -720,77 +662,50 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
         ) : null}
 
         {!loading && !error && renderedItems.length ? (
-          <div className={styles.feedGrid}>
+          <div className={styles.grid}>
             {renderedItems.map((item) => {
               const name = item.name || item.app_id;
               const officialApp = officialMiniAppFor(item.app_id);
               const Icon = officialApp?.icon || PackageOpen;
               const accent = officialApp?.accent || 'neutral';
               const openUrl = item.open?.url || `/w/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(item.app_id)}`;
-              const byline = item.creator?.byline || `by ${item.creator?.label || 'this workspace'}`;
               const installed = item.installed !== false;
-              const publicAppId = item.public_app_id || '';
-              const cloning = publicAppId ? cloningPublicAppId === publicAppId : false;
-              const cardIcon = (
-                <span className={`${styles.appIcon} ${styles[`appIcon_${accent}`]}`}>
-                  {item.icon_url ? (
-                    <img src={item.icon_url} alt="" />
-                  ) : officialApp ? (
-                    <Icon aria-hidden="true" />
-                  ) : (
-                    <span>{appInitials(name)}</span>
-                  )}
-                </span>
+              const launcherContent = (
+                <>
+                  <span className={`${styles.appIcon} ${styles[`appIcon_${accent}`]}`}>
+                    {item.icon_url ? (
+                      <img src={item.icon_url} alt="" />
+                    ) : officialApp ? (
+                      <Icon aria-hidden="true" />
+                    ) : (
+                      <span>{appInitials(name)}</span>
+                    )}
+                  </span>
+                  <span className={styles.appName}>{name}</span>
+                </>
               );
               const openLabel = `Open ${name}`;
               return (
-                <article key={item.feed_id || item.app_id} className={styles.feedCard}>
-                  <div className={styles.feedCardHeader}>
-                    {cardIcon}
-                    <div className={styles.feedCardTitleBlock}>
-                      <h2 className={styles.feedCardTitle}>{name}</h2>
-                      <p className={styles.feedCardByline}>{byline}</p>
-                    </div>
-                    {installed ? (
-                      <button
-                        type="button"
-                        className={styles.appDetailAction}
-                        onClick={() => openSettings(item)}
-                        aria-label={`Settings for ${name}`}
-                      >
-                        <MoreVertical aria-hidden="true" />
-                      </button>
-                    ) : null}
-                  </div>
-                  <p className={styles.feedCardDescription}>{item.description || 'No description yet.'}</p>
-                  <div className={styles.feedCardMeta}>
-                    <span>{appVisibilityLabel(item)}</span>
-                    <span>{item.source?.label || 'App'}</span>
-                  </div>
-                  <div className={styles.feedCardActions}>
-                    {item.clone_available && publicAppId ? (
-                      <button
-                        type="button"
-                        className={styles.linkButton}
-                        onClick={() => {
-                          void handleCloneApp(publicAppId);
-                        }}
-                        disabled={cloning}
-                      >
-                        <Copy aria-hidden="true" />
-                        {cloning ? 'Cloning...' : 'Clone'}
-                      </button>
-                    ) : item.open?.kind === 'external' ? (
-                      <a className={styles.linkButton} href={openUrl} target="_blank" rel="noreferrer" aria-label={openLabel}>
-                        Open
-                        <ExternalLink aria-hidden="true" />
-                      </a>
-                    ) : (
-                      <Link className={styles.linkButton} href={openUrl} aria-label={openLabel}>
-                        Open
-                      </Link>
-                    )}
-                  </div>
+                <article key={item.feed_id || item.app_id} className={styles.appTile}>
+                  {item.open?.kind === 'external' ? (
+                    <a className={styles.appLauncher} href={openUrl} target="_blank" rel="noreferrer" aria-label={openLabel}>
+                      {launcherContent}
+                    </a>
+                  ) : (
+                    <Link className={styles.appLauncher} href={openUrl} aria-label={openLabel}>
+                      {launcherContent}
+                    </Link>
+                  )}
+                  {installed ? (
+                    <button
+                      type="button"
+                      className={styles.appDetailAction}
+                      onClick={() => openSettings(item)}
+                      aria-label={`Settings for ${name}`}
+                    >
+                      <MoreVertical aria-hidden="true" />
+                    </button>
+                  ) : null}
                 </article>
               );
             })}

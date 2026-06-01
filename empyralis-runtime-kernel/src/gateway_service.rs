@@ -4,13 +4,13 @@ const GATEWAY_BOUND_OPERATIONS: &[&str] = &[
     "websocket_connect",
     "protocol_route",
     "tool_execute",
+    "tool_interrupt",
     "browser_session",
     "browser_action",
     "approval_request",
     "approval_resolve",
     "approval_memory_consume",
     "quota_check",
-    "pairing_bootstrap",
     "diagnostics_export",
     "browser_fallback",
     "cloud_fallback",
@@ -28,6 +28,7 @@ const METERED_OPERATIONS: &[&str] = &[
 
 const TOOL_OR_BROWSER_OPERATIONS: &[&str] = &[
     "tool_execute",
+    "tool_interrupt",
     "browser_session",
     "browser_action",
     "browser_fallback",
@@ -36,6 +37,7 @@ const TOOL_OR_BROWSER_OPERATIONS: &[&str] = &[
 
 const PRIVILEGED_OPERATIONS: &[&str] = &[
     "tool_execute",
+    "tool_interrupt",
     "browser_action",
     "approval_request",
     "approval_resolve",

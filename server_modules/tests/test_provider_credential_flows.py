@@ -9,6 +9,16 @@ from server_modules.schemas import ConnectorCreate
 from server_modules.runtime_models import CredentialUpsertRequest, configure_runtime_model_context
 
 
+class _FakeUUID:
+    hex = "1234567890abcdef1234567890abcdef"
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __str__(self) -> str:
+        return self.value
+
+
 class ProviderValidationMessageTests(unittest.TestCase):
     def setUp(self):
         provider_profiles._init()
@@ -630,7 +640,7 @@ class TelegramWebhookRegistrationTests(unittest.IsolatedAsyncioTestCase):
             {"status": 200, "json": {"ok": True, "result": True}, "text": ""},
             {"status": 200, "json": {"ok": True, "result": {"url": "https://runtime.example/channels/telegram/webhook/tg-1"}}, "text": ""},
         ]
-        with patch("server_modules.connectors_actions.uuid.uuid4", return_value="tg-1"), patch.dict(
+        with patch("server_modules.connectors_actions.uuid.uuid4", return_value=_FakeUUID("tg-1")), patch.dict(
             runtime_models._CONNECTOR_CATALOG,
             {"telegram_bot": {"label": "Telegram Bot", "auth": ["bot_token"]}},
             clear=False,

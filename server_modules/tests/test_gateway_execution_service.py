@@ -32,6 +32,11 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         activity_mock = AsyncMock(return_value={"id": "activity-1"})
+        def rust_side_effect(command, payload):
+            if payload.get("operation") == "quota_check":
+                return {"ok": True, "decision": "allow", "next_action": "allow_gateway_service_operation"}
+            return {"ok": True, "decision": "allow", "next_action": "dispatch_gateway_operation"}
+
         with (
             patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
             patch("server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live", return_value=True),
@@ -48,7 +53,7 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
             patch("server_modules.gateway_execution_service.gateway_activity_service.append_gateway_activity", activity_mock),
             patch(
                 "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
-                return_value={"ok": True, "decision": "allow", "next_action": "dispatch_gateway_operation"},
+                side_effect=rust_side_effect,
             ) as rust_mock,
         ):
             response = await gateway_execution_service.execute_tool_via_gateway(
@@ -71,7 +76,7 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(activity_kwargs["status"], "completed")
         self.assertEqual(activity_kwargs["payload"]["request_id"], "req-1")
         self.assertEqual(activity_kwargs["payload"]["run_id"], "run-1")
-        rust_mock.assert_called_once()
+        self.assertEqual(rust_mock.call_count, 2)
         self.assertEqual(rust_mock.call_args.args[0], "gateway-service-decision")
         self.assertEqual(rust_mock.call_args.args[1]["operation"], "tool_execute")
 
@@ -94,11 +99,16 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
             command="gateway-service-decision",
         )
         dispatch_mock = AsyncMock()
+        def rust_side_effect(command, payload):
+            if payload.get("operation") == "quota_check":
+                return {"ok": True, "decision": "allow", "next_action": "allow_gateway_service_operation"}
+            raise denied
+
         with (
             patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
             patch(
                 "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
-                side_effect=denied,
+                side_effect=rust_side_effect,
             ) as rust_mock,
             patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
         ):
@@ -113,7 +123,7 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
                     request_id="req-1",
                 )
 
-        rust_mock.assert_called_once()
+        self.assertEqual(rust_mock.call_count, 2)
         dispatch_mock.assert_not_awaited()
 
     async def test_execute_tool_via_gateway_unexpected_next_action_blocks_dispatch(self) -> None:
@@ -127,15 +137,18 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
             "metadata": {"capability_readiness": {"ready": ["computer_control.click"]}},
         }
         dispatch_mock = AsyncMock()
+        def rust_side_effect(command, payload):
+            return {
+                "ok": True,
+                "decision": "allow",
+                "next_action": "allow_gateway_service_operation",
+            }
+
         with (
             patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
             patch(
                 "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
-                return_value={
-                    "ok": True,
-                    "decision": "allow",
-                    "next_action": "allow_gateway_service_operation",
-                },
+                side_effect=rust_side_effect,
             ) as rust_mock,
             patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
         ):
@@ -150,7 +163,7 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
                     request_id="req-1",
                 )
 
-        rust_mock.assert_called_once()
+        self.assertEqual(rust_mock.call_count, 2)
         dispatch_mock.assert_not_awaited()
 
     async def test_execute_tool_via_gateway_wrong_quota_action_blocks_dispatch(self) -> None:
@@ -218,8 +231,17 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         activity_mock = AsyncMock(return_value={"id": "activity-2"})
+        def rust_side_effect(command, payload):
+            if payload.get("operation") == "quota_check":
+                return {"ok": True, "decision": "allow", "next_action": "allow_gateway_service_operation"}
+            return {"ok": True, "decision": "allow", "next_action": "dispatch_gateway_operation"}
+
         with (
             patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                side_effect=rust_side_effect,
+            ),
             patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_interrupt", dispatch_mock),
             patch("server_modules.gateway_execution_service.gateway_activity_service.append_gateway_activity", activity_mock),
         ):
@@ -253,15 +275,18 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
             "device_trust_state": "trusted",
         }
         dispatch_mock = AsyncMock()
+        def rust_side_effect(command, payload):
+            return {
+                "ok": True,
+                "decision": "allow",
+                "next_action": "allow_gateway_service_operation",
+            }
+
         with (
             patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
             patch(
                 "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
-                return_value={
-                    "ok": True,
-                    "decision": "allow",
-                    "next_action": "allow_gateway_service_operation",
-                },
+                side_effect=rust_side_effect,
             ) as rust_mock,
             patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_interrupt", dispatch_mock),
         ):
@@ -276,7 +301,7 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
                     request_id="interrupt-1",
                 )
 
-        rust_mock.assert_called_once()
+        self.assertEqual(rust_mock.call_count, 2)
         dispatch_mock.assert_not_awaited()
 
     async def test_interrupt_tool_via_gateway_wrong_quota_action_blocks_dispatch(self) -> None:

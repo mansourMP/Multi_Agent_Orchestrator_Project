@@ -730,7 +730,14 @@ fn actor_role(payload: &Value) -> String {
 fn can_write(role: &str) -> bool {
     matches!(
         role,
-        "owner" | "admin" | "workspace_admin" | "operator" | "system" | "service" | "member"
+        "owner"
+            | "admin"
+            | "workspace_admin"
+            | "operator"
+            | "system"
+            | "service"
+            | "member"
+            | "user"
     )
 }
 

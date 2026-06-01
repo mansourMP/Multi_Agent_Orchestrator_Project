@@ -1119,7 +1119,7 @@ mod billing_usage_control_plane_tests {
             "workspace_id": "workspace-1",
             "actor_id": "system",
             "actor_role": "system",
-            "idempotency_key": "quota-consume-1",
+            "idempotency_key": "quota_consume_event_001",
             "workspace_access": true,
             "billing_entitled": true,
             "quota_ok": true

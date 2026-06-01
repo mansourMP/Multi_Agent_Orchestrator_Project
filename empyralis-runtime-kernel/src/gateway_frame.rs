@@ -31,7 +31,7 @@ pub fn gateway_frame_decision_command(payload: &Value) -> Value {
     if !matches!(kind.as_str(), "request" | "response" | "event") {
         return block("gateway_frame_kind_invalid", &kind, &message_type, 4408);
     }
-    if message_type.trim().is_empty() {
+    if kind != "response" && message_type.trim().is_empty() {
         return block("gateway_frame_type_missing", &kind, &message_type, 4408);
     }
 

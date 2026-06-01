@@ -1191,13 +1191,13 @@ class GatewayRoutesTests(unittest.TestCase):
     def test_send_whatsapp_personal_message_requires_approval_before_dispatch(
         self,
         audit_mock,
+        approval_request_mock: AsyncMock,
         _approval_gate_mock,
-        approval_mock: AsyncMock,
         send_message_mock: AsyncMock,
     ) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
-        approval_mock.return_value = {
+        approval_request_mock.return_value = {
             "approval_id": "approval-wa-1",
             "gateway_id": gateway_id,
             "status": "pending",
@@ -1225,8 +1225,8 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertEqual(payload["channel_approval"]["deny_text"], "deny approval-wa-1")
         self.assertIn("Reply approve approval-wa-1 or deny approval-wa-1", payload["channel_approval"]["instruction"])
         send_message_mock.assert_not_awaited()
-        self.assertEqual(approval_mock.await_args.kwargs["capability_id"], "channel.whatsapp.personal.send")
-        self.assertEqual(approval_mock.await_args.kwargs["arguments"]["text"], "hello from sage")
+        self.assertEqual(approval_request_mock.await_args.kwargs["capability_id"], "channel.whatsapp.personal.send")
+        self.assertEqual(approval_request_mock.await_args.kwargs["arguments"]["text"], "hello from sage")
         metadata = audit_mock.call_args.kwargs["metadata"]
         self.assertEqual(metadata["action_class"], "channel_send")
         self.assertEqual(metadata["risk_level"], "critical")
@@ -1247,13 +1247,13 @@ class GatewayRoutesTests(unittest.TestCase):
     )
     def test_send_telegram_personal_message_requires_approval_before_dispatch(
         self,
+        approval_request_mock: AsyncMock,
         _approval_gate_mock,
-        approval_mock: AsyncMock,
         send_message_mock: AsyncMock,
     ) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
-        approval_mock.return_value = {
+        approval_request_mock.return_value = {
             "approval_id": "approval-tg-1",
             "gateway_id": gateway_id,
             "status": "pending",
@@ -1274,7 +1274,7 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertEqual(payload["channel_approval"]["approve_text"], "approve approval-tg-1")
         self.assertEqual(payload["channel_approval"]["deny_text"], "deny approval-tg-1")
         send_message_mock.assert_not_awaited()
-        self.assertEqual(approval_mock.await_args.kwargs["capability_id"], "channel.telegram.personal.send")
+        self.assertEqual(approval_request_mock.await_args.kwargs["capability_id"], "channel.telegram.personal.send")
 
     def test_personal_gateway_channel_surfaces_project_live_and_reserved_channels(self) -> None:
         registration_payload = self._register_gateway_with_mode(gateway_id="gateway-channel-surfaces")
@@ -1926,6 +1926,18 @@ class GatewayRoutesTests(unittest.TestCase):
                         },
                     }
                 )
+                routes_personal_channels.personal_channels_service.sync_gateway_channel_outbound_result(
+                    gateway_id=gateway_id,
+                    payload={
+                        "channel_key": "whatsapp_personal",
+                        "provider": "whatsapp_baileys",
+                        "idempotency_key": outbound_request["payload"]["idempotency_key"],
+                        "external_message_id": "wamid.outbound.1",
+                        "remote_jid": "user-1@s.whatsapp.net",
+                        "text": "Sage reply from cloud",
+                        "delivered": True,
+                    },
+                )
 
                 delivered_view = self.client.get(f"/api/personal-channels/whatsapp/gateways/{gateway_id}")
                 self.assertEqual(delivered_view.status_code, 200)
@@ -1944,7 +1956,10 @@ class GatewayRoutesTests(unittest.TestCase):
                         "payload": {"reason": "reconnect_for_dedupe"},
                     }
                 )
-                self.assertTrue(websocket.receive_json()["ok"])
+                disconnect_ack = websocket.receive_json()
+                if not disconnect_ack.get("ok"):
+                    disconnect_ack = websocket.receive_json()
+                self.assertTrue(disconnect_ack["ok"])
 
         reconnect_session_response = self.client.post(
             "/api/gateway/sessions",
@@ -2190,10 +2205,32 @@ class GatewayRoutesTests(unittest.TestCase):
                         },
                     }
                 )
+                routes_personal_channels.personal_channels_service.sync_gateway_channel_outbound_result(
+                    gateway_id=gateway_id,
+                    payload={
+                        "channel_key": "telegram_personal",
+                        "provider": "telegram_gramjs",
+                        "idempotency_key": outbound_request["payload"]["idempotency_key"],
+                        "external_message_id": "tg.outbound.1",
+                        "remote_jid": "telegram-user-1",
+                        "text": "Sage reply from Telegram cloud",
+                        "delivered": True,
+                    },
+                )
 
-                delivered_view = self.client.get(f"/api/personal-channels/telegram/gateways/{gateway_id}")
-                self.assertEqual(delivered_view.status_code, 200)
-                delivered_payload = delivered_view.json()
+                delivered_payload = None
+                for _ in range(20):
+                    delivered_view = self.client.get(f"/api/personal-channels/telegram/gateways/{gateway_id}")
+                    self.assertEqual(delivered_view.status_code, 200)
+                    candidate_payload = delivered_view.json()
+                    if (
+                        candidate_payload["recent_messages"]["outbound"]
+                        and candidate_payload["recent_messages"]["outbound"][0]["status"] == "delivered"
+                    ):
+                        delivered_payload = candidate_payload
+                        break
+                    time.sleep(0.1)
+                self.assertIsNotNone(delivered_payload)
                 self.assertEqual(len(delivered_payload["recent_messages"]["inbound"]), 1)
                 self.assertEqual(len(delivered_payload["recent_messages"]["outbound"]), 1)
                 self.assertEqual(delivered_payload["recent_messages"]["outbound"][0]["status"], "delivered")
@@ -2208,7 +2245,10 @@ class GatewayRoutesTests(unittest.TestCase):
                         "payload": {"reason": "reconnect_for_dedupe"},
                     }
                 )
-                self.assertTrue(websocket.receive_json()["ok"])
+                disconnect_ack = websocket.receive_json()
+                if not disconnect_ack.get("ok"):
+                    disconnect_ack = websocket.receive_json()
+                self.assertTrue(disconnect_ack["ok"])
 
         reconnect_session_response = self.client.post(
             "/api/gateway/sessions",

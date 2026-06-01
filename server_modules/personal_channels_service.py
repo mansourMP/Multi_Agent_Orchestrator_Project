@@ -51,6 +51,8 @@ def _enforce_personal_gateway_config_decision(
         registration.get("active_session_id")
         or metadata.get("gateway_session_id")
         or metadata.get("session_id")
+        or metadata.get("auth_session_id")
+        or metadata.get("runtime_session_id")
         or ""
     ).strip()
     payload = {
@@ -109,6 +111,8 @@ def _enforce_personal_channel_dispatch_decision(
         registration.get("active_session_id")
         or metadata.get("gateway_session_id")
         or metadata.get("session_id")
+        or metadata.get("auth_session_id")
+        or metadata.get("runtime_session_id")
         or ""
     ).strip()
     payload = {

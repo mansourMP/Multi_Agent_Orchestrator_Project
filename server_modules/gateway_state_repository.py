@@ -1615,6 +1615,13 @@ def touch_gateway_session(
             session_metadata.update(dict(metadata or {}))
             if health_state:
                 session_metadata["health_state"] = str(health_state or "").strip()
+            decision_cursor_fields: Dict[str, int] = {}
+            if seq is not None:
+                decision_cursor_fields["seq"] = int(seq or 0)
+                decision_cursor_fields["previous_seq"] = int(session.get("last_seq") or 0)
+            if ack is not None:
+                decision_cursor_fields["ack"] = int(ack or 0)
+                decision_cursor_fields["previous_ack"] = int(session.get("last_ack") or 0)
             _enforce_gateway_state_decision(
                 "touch_session",
                 tenant_id=session.get("tenant_id"),
@@ -1625,10 +1632,7 @@ def touch_gateway_session(
                 session_id=session.get("session_id"),
                 actor_role="system",
                 session_status=session.get("status"),
-                seq=int(seq or 0),
-                ack=int(ack or 0),
-                previous_seq=int(session.get("last_seq") or 0),
-                previous_ack=int(session.get("last_ack") or 0),
+                **decision_cursor_fields,
             )
             conn.execute(
                 """

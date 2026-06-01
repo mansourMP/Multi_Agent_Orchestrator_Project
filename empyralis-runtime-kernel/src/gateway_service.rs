@@ -27,6 +27,7 @@ const METERED_OPERATIONS: &[&str] = &[
 ];
 
 const TOOL_OR_BROWSER_OPERATIONS: &[&str] = &[
+    "protocol_route",
     "tool_execute",
     "tool_interrupt",
     "browser_session",
@@ -198,7 +199,7 @@ pub fn gateway_service_decision_command(payload: &Value) -> Result<Value, String
     if safe_mode_enabled && privileged_operation {
         approval_reasons.push("safe_mode_privileged_gateway_operation".to_string());
     }
-    if privileged_operation && !approval_memory_hit {
+    if privileged_operation && operation != "approval_request" && !approval_memory_hit {
         approval_reasons.push("approval_memory_miss".to_string());
     }
     if operation == "browser_action" {
@@ -222,6 +223,8 @@ pub fn gateway_service_decision_command(payload: &Value) -> Result<Value, String
     };
     let next_action = if blocked {
         "do_not_dispatch_gateway_operation"
+    } else if operation == "approval_request" {
+        "request_gateway_owner_approval"
     } else if approval_required {
         "request_gateway_owner_approval"
     } else if operation == "health_check" {

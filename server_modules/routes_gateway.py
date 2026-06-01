@@ -187,7 +187,7 @@ def _enforce_gateway_service_decision(
     cloud_fallback_enabled: bool = False,
     cloud_fallback_approved: bool = False,
 ) -> Dict[str, Any]:
-    session_id = _latest_gateway_session_id(gateway_id)
+    session_id = _latest_gateway_session_id(gateway_id) or str(request_id or "").strip() or gateway_id
     payload = {
         "operation": operation,
         "tenant_id": tenant_id,
@@ -226,6 +226,7 @@ def _enforce_gateway_service_decision(
         raise HTTPException(status_code=409, detail=f"Rust gateway-service gate blocked {operation}: {detail}")
     expected_next_action = {
         "tool_execute": "dispatch_gateway_operation",
+        "tool_interrupt": "dispatch_gateway_operation",
         "browser_session": "dispatch_gateway_operation",
         "browser_action": "dispatch_gateway_operation",
         "browser_fallback": "dispatch_gateway_operation",
@@ -411,9 +412,11 @@ def _gateway_policy_from_registration(registration: Dict[str, Any]):
             return saved_policy
     gateway_token = str(registration.get("gateway_id") or "").strip() or "default"
     runtime_access_mode = str(metadata.get("runtime_access_mode") or "").strip().lower()
+    explicit_full_access = runtime_access_mode == "full_access"
     return build_default_agent_computer_policy(
-        autonomy_mode="trusted_workstation" if runtime_access_mode == "full_access" else "ask_every_time",
+        autonomy_mode="trusted_workstation" if explicit_full_access else "ask_every_time",
         policy_id=policy_id or f"gateway:{gateway_token}",
+        filesystem_scope=("/",) if explicit_full_access else (),
     )
 
 
@@ -1405,10 +1408,11 @@ async def execute_gateway_tool(
     registration_metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
     explicit_full_access = str(registration_metadata.get("runtime_access_mode") or "").strip().lower() == "full_access"
     requires_owner_approval = gateway_approval_service.capability_requires_owner_approval(body.capability_id)
-    if explicit_full_access and risk_decision.decision != DECISION_APPROVAL_REQUIRED:
+    if explicit_full_access:
         requires_owner_approval = False
+    risk_decision_requires_approval = risk_decision.decision == DECISION_APPROVAL_REQUIRED and not explicit_full_access
     remembered_approval_rule = None
-    if risk_decision.decision == DECISION_APPROVAL_REQUIRED or requires_owner_approval:
+    if risk_decision_requires_approval or requires_owner_approval:
         remembered_approval_rule = _consume_gateway_approval_memory(
             registration=registration,
             workspace_id=resolved_workspace_id,
@@ -1421,7 +1425,7 @@ async def execute_gateway_tool(
             trace_id=str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id,
             request_id=str(body.request_id or "").strip() or body.run_id,
         )
-    risk_requires_approval = risk_decision.decision == DECISION_APPROVAL_REQUIRED and remembered_approval_rule is None
+    risk_requires_approval = risk_decision_requires_approval and remembered_approval_rule is None
     requires_owner_approval = requires_owner_approval and remembered_approval_rule is None
     if not body.interactive_approvals and not (requires_owner_approval or risk_requires_approval):
         _audit_approval_bypass(

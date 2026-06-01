@@ -787,30 +787,19 @@ def test_authenticated_profile_update_persists_through_control_plane_authority(m
     assert logged_in["user"]["avatar_url"] == "https://example.com/avatar.png"
 
 
-def test_mobile_register_user_rejects_free_workspace_plan(monkeypatch: pytest.MonkeyPatch, tmp_path):
+def test_mobile_register_user_allows_default_workspace_plan(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
 
-    def _deny_mobile_access(*, workspace=None, install=None):
-        raise auth.entitlements_service.EntitlementDeniedError(
-            reason="mobile_app_unavailable",
-            message="Mobile app access is available on paid plans only. Use web or Telegram/WhatsApp on the free plan.",
-            entitlement_state={},
-        )
+    created = auth.register_user(
+        "mobile.default@example.com",
+        "password-123",
+        name="Mobile Default",
+        channel="mobile",
+        device_id="iphone-default",
+        workspace_id="default",
+    )
 
-    monkeypatch.setattr(auth.entitlements_service, "enforce_mobile_app_access", _deny_mobile_access)
-
-    with pytest.raises(HTTPException) as exc:
-        auth.register_user(
-            "mobile.free@example.com",
-            "password-123",
-            name="Mobile Free",
-            channel="mobile",
-            device_id="iphone-free",
-            workspace_id="default",
-        )
-
-    assert exc.value.status_code == 403
-    assert exc.value.detail == "Mobile app access is available on paid plans only. Use web or Telegram/WhatsApp on the free plan."
+    assert created["current_workspace_entitlements"]["capabilities"]["mobile_app_enabled"] is True
 
 
 def test_mobile_register_user_issues_device_bound_session(monkeypatch: pytest.MonkeyPatch, tmp_path):

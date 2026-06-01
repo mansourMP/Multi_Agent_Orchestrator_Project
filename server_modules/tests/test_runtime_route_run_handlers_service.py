@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from fastapi import HTTPException
 
@@ -30,18 +31,93 @@ class RuntimeRouteRunHandlersServiceTests(unittest.TestCase):
             return request_payload
 
         async def _run():
-            return await runtime_route_run_handlers_service.start_run_route_response(
-                None,
-                current_user={"user_id": "user-1"},
-                run_start_request_class=lambda: {"default": True},
-                start_run_response_fn=_start_response,
-                execute_run_start_request_via_turn_runtime=lambda *args, **kwargs: None,
-                stamp_request_owner_fn=lambda *args, **kwargs: None,
-                run_execution_services=lambda: object(),
-            )
+            with mock.patch.object(
+                runtime_route_run_handlers_service.rust_runtime_kernel_client,
+                "run_runtime_kernel_enforced",
+                return_value={"ok": True, "decision": "allow", "next_action": "create_or_route_run"},
+            ) as rust_mock:
+                payload = await runtime_route_run_handlers_service.start_run_route_response(
+                    None,
+                    current_user={"user_id": "user-1"},
+                    run_start_request_class=lambda: {"default": True},
+                    start_run_response_fn=_start_response,
+                    execute_run_start_request_via_turn_runtime=lambda *args, **kwargs: None,
+                    stamp_request_owner_fn=lambda *args, **kwargs: None,
+                    run_execution_services=lambda: object(),
+                )
+            return payload, rust_mock
 
-        payload = self._run_async(_run())
+        payload, rust_mock = self._run_async(_run())
         self.assertEqual(payload, {"default": True})
+        rust_mock.assert_called_once()
+        self.assertEqual(rust_mock.call_args.args[0], "platform-orchestration-decision")
+        self.assertEqual(rust_mock.call_args.args[1]["operation"], "run_create")
+
+    def test_start_run_route_response_rust_denial_blocks_start_response(self):
+        start_response = mock.AsyncMock(return_value={"run_id": "run-1"})
+        denied = runtime_route_run_handlers_service.rust_runtime_kernel_client.RustKernelDecisionError(
+            {
+                "ok": False,
+                "decision": "block",
+                "reason": "actor_id_missing_for_mutation",
+            },
+            command="platform-orchestration-decision",
+        )
+
+        async def _run():
+            with mock.patch.object(
+                runtime_route_run_handlers_service.rust_runtime_kernel_client,
+                "run_runtime_kernel_enforced",
+                side_effect=denied,
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    await runtime_route_run_handlers_service.start_run_route_response(
+                        {"workspace_id": "ws-1"},
+                        current_user={},
+                        run_start_request_class=lambda: {"default": True},
+                        start_run_response_fn=start_response,
+                        execute_run_start_request_via_turn_runtime=lambda *args, **kwargs: None,
+                        stamp_request_owner_fn=lambda *args, **kwargs: None,
+                        run_execution_services=lambda: object(),
+                    )
+            return raised.exception
+
+        exc = self._run_async(_run())
+        self.assertEqual(exc.status_code, 423)
+        self.assertEqual(exc.detail["reason"], "actor_id_missing_for_mutation")
+        start_response.assert_not_awaited()
+
+    def test_start_run_route_response_unexpected_next_action_blocks_start_response(self):
+        start_response = mock.AsyncMock(return_value={"run_id": "run-1"})
+
+        async def _run():
+            with mock.patch.object(
+                runtime_route_run_handlers_service.rust_runtime_kernel_client,
+                "run_runtime_kernel_enforced",
+                return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "reason": "platform_orchestration_policy_satisfied",
+                    "operation": "run_create",
+                    "next_action": "allow_platform_read",
+                },
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    await runtime_route_run_handlers_service.start_run_route_response(
+                        {"workspace_id": "ws-1"},
+                        current_user={"user_id": "user-1"},
+                        run_start_request_class=lambda: {"default": True},
+                        start_run_response_fn=start_response,
+                        execute_run_start_request_via_turn_runtime=lambda *args, **kwargs: None,
+                        stamp_request_owner_fn=lambda *args, **kwargs: None,
+                        run_execution_services=lambda: object(),
+                    )
+            return raised.exception
+
+        exc = self._run_async(_run())
+        self.assertEqual(exc.status_code, 423)
+        self.assertEqual(exc.detail["reason"], "unexpected_next_action:allow_platform_read")
+        start_response.assert_not_awaited()
 
     def test_submit_run_decision_route_response_validates_payload(self):
         payload = _Payload()

@@ -76,6 +76,13 @@ class AgentRegistryRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
         global agent_registry_repository
         agent_registry_repository = importlib.import_module("server_modules.agent_registry_repository")
+        self._rust_gate = patch.object(
+            agent_registry_repository.control_plane_repository.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={"decision": "allow"},
+        )
+        self._rust_gate.start()
+        self.addCleanup(self._rust_gate.stop)
 
     def test_create_compiled_workflow_artifact_binds_real_datetimes(self) -> None:
         connection = _FakeConnection()

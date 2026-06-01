@@ -9,6 +9,8 @@ import pytest
 from fastapi import FastAPI
 
 from server_modules import app_registry_api
+from server_modules import marketplace_distribution_service
+from server_modules import mini_apps_service
 from server_modules import routes_marketplace
 from server_modules import workspace_context
 
@@ -46,6 +48,20 @@ def _patch_app_registry(monkeypatch: pytest.MonkeyPatch, temp_root: Path) -> Non
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def _allow_marketplace_rust_gate(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        marketplace_distribution_service,
+        "_enforce_marketplace_distribution_state_decision",
+        lambda **_kwargs: {"decision": "allow"},
+    )
+    monkeypatch.setattr(
+        mini_apps_service,
+        "_enforce_mini_apps_state_decision",
+        lambda **_kwargs: {"decision": "allow"},
+    )
 
 
 @pytest.mark.anyio

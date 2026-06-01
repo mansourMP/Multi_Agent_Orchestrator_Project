@@ -60,7 +60,7 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         self.assertEqual(run["input_queue"].get_nowait(), "proceed")
 
     def test_resolve_run_approval_rejects_mismatched_pending_approval(self):
-        with self.assertRaises(HTTPException):
+        with self.assertRaises(HTTPException) as excinfo:
             runtime_run_approval_service.resolve_run_approval(
                 "run-1",
                 "approval-2",
@@ -83,6 +83,35 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
                 emit_log=lambda *args, **kwargs: None,
                 schedule_restored_run_resume=lambda run_id, run: True,
             )
+        self.assertEqual(excinfo.exception.status_code, 409)
+        self.assertIn("approval_id does not match pending confirmation", str(excinfo.exception.detail))
+
+    def test_resolve_run_approval_rejects_decision_submitted_status_via_rust_gate(self):
+        with self.assertRaises(HTTPException) as excinfo:
+            runtime_run_approval_service.resolve_run_approval(
+                "run-1",
+                "approval-1",
+                run={"input_queue": queue.Queue()},
+                payload=_Payload("approve"),
+                current_user={"user_id": "user-1"},
+                serialize_run_snapshot=lambda run_id, run: {"run_id": run_id},
+                enforce_run_owner_access=lambda current_user, snapshot: None,
+                get_pending_confirmation=lambda run: {"approval_id": "approval-1", "status": "decision_submitted"},
+                set_pending_confirmation=lambda run, pending: None,
+                clear_pending_confirmation=lambda run: None,
+                parse_utc_ts=lambda value: None,
+                utc_now=lambda: None,
+                utc_now_iso=lambda: "2026-04-05T00:00:00Z",
+                approval_correlation_id=lambda approval_id, run_id=None: "corr-1",
+                append_approval_audit=lambda **kwargs: None,
+                resolve_local_execution_start_approval=lambda *args, **kwargs: {},
+                resolve_local_worker_recovery_approval=lambda *args, **kwargs: {},
+                run_thread_is_alive=lambda run: False,
+                emit_log=lambda *args, **kwargs: None,
+                schedule_restored_run_resume=lambda run_id, run: True,
+            )
+        self.assertEqual(excinfo.exception.status_code, 409)
+        self.assertIn("already been processed", str(excinfo.exception.detail))
 
     def test_resolve_run_approval_marks_pending_and_schedules_resume_for_restored_run(self):
         run = {
@@ -543,16 +572,39 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
             },
         ]
 
-        payload = runtime_run_approval_service.list_pending_approvals_payload(
-            workspace_id="ws-1",
-            limit=10,
-            current_user={"user_id": "user-1"},
-            enforce_workspace_access_fn=lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
-            workspace_entitlement_payload_fn=lambda cache, workspace_id: {"capabilities": {"approvals_enabled": True}},
-            current_user_is_privileged_fn=lambda current_user: False,
-            extract_run_owner_user_id_fn=lambda run: str(run.get("context", {}).get("metadata", {}).get("owner_user_id") or ""),
-            list_pending_approvals_fn=lambda limit: approvals,
-        )
+        def fake_rust(_command, payload, **_kwargs):
+            operation = payload["operation"]
+            if operation == "list_pending":
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "reason": "run_approval_list_allowed",
+                    "operation": operation,
+                    "next_action": "list_pending_approvals",
+                }
+            return {
+                "ok": True,
+                "decision": "allow",
+                "reason": "run_approval_item_included" if payload.get("owner_user_id") == "user-1" and not payload.get("workspace_not_allowed") else "run_approval_item_filtered",
+                "operation": operation,
+                "next_action": "include_approval_item" if payload.get("owner_user_id") == "user-1" and not payload.get("workspace_not_allowed") else "skip_approval_item",
+            }
+
+        with patch.object(
+            runtime_run_approval_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=fake_rust,
+        ):
+            payload = runtime_run_approval_service.list_pending_approvals_payload(
+                workspace_id="ws-1",
+                limit=10,
+                current_user={"user_id": "user-1"},
+                enforce_workspace_access_fn=lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
+                workspace_entitlement_payload_fn=lambda cache, workspace_id: {"capabilities": {"approvals_enabled": True}},
+                current_user_is_privileged_fn=lambda current_user: False,
+                extract_run_owner_user_id_fn=lambda run: str(run.get("context", {}).get("metadata", {}).get("owner_user_id") or ""),
+                list_pending_approvals_fn=lambda limit: approvals,
+            )
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["items"][0]["approval_id"], "approval-1")
@@ -585,6 +637,17 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
                 runtime_run_approval_service.run_state_repository,
                 "sync_find_run_snapshot_for_approval_id",
                 return_value=None,
+            ),
+            patch.object(
+                runtime_run_approval_service.rust_runtime_kernel_client,
+                "run_runtime_kernel_enforced",
+                return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "reason": "run_approval_detail_allowed",
+                    "operation": "get_detail",
+                    "next_action": "build_approval_detail_response",
+                },
             ),
         ):
             payload = runtime_run_approval_service.build_approval_detail_response(

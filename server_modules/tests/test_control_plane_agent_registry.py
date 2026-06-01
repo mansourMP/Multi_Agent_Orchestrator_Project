@@ -179,6 +179,13 @@ class ControlPlaneInstallIsolationTests(unittest.IsolatedAsyncioTestCase):
         global control_plane_repository
 
         control_plane_repository = importlib.import_module("server_modules.control_plane_repository")
+        self._rust_gate = patch.object(
+            control_plane_repository.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={"decision": "allow"},
+        )
+        self._rust_gate.start()
+        self.addCleanup(self._rust_gate.stop)
 
     async def test_list_agent_turns_can_filter_by_active_install(self):
         connection = AsyncMock()

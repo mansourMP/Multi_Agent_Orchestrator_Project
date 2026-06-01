@@ -2,6 +2,7 @@ import sys
 import threading
 import types
 import unittest
+from datetime import datetime, timezone
 from fastapi import HTTPException
 from unittest.mock import patch
 
@@ -87,19 +88,203 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         }
 
     def test_normalize_thread_turn_record_parses_stringified_lists(self):
-        record = runtime_runs_api.normalize_thread_turn_record(
-            {
-                "id": "turn-1",
-                "thread_id": "thread-1",
-                "role": "assistant",
-                "content": "",
-                "approvals": "[]",
-                "interventions": '[{"kind":"system_error","detail":"boom"}]',
-            }
-        )
+        with patch.object(
+            runtime_runs_api.thread_service,
+            "_enforce_thread_record_decision",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "normalize_turn",
+                "next_action": "normalize_thread_turn_record",
+                "normalized_role": "assistant",
+                "normalized_status": "",
+            },
+        ), patch.object(
+            runtime_runs_api.thread_service,
+            "_require_thread_next_action",
+            return_value="normalize_thread_turn_record",
+        ):
+            record = runtime_runs_api.normalize_thread_turn_record(
+                {
+                    "id": "turn-1",
+                    "thread_id": "thread-1",
+                    "role": "assistant",
+                    "content": "",
+                    "approvals": "[]",
+                    "interventions": '[{"kind":"system_error","detail":"boom"}]',
+                }
+            )
 
         self.assertEqual(record["approvals"], [])
         self.assertEqual(record["interventions"], [{"kind": "system_error", "detail": "boom"}])
+
+    def test_normalize_thread_turn_record_uses_rust_normalized_fields(self):
+        with patch.object(
+            runtime_runs_api.thread_service,
+            "_enforce_thread_record_decision",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "normalize_turn",
+                "next_action": "normalize_thread_turn_record",
+                "normalized_role": "user",
+                "normalized_status": "completed",
+            },
+        ), patch.object(
+            runtime_runs_api.thread_service,
+            "_require_thread_next_action",
+            return_value="normalize_thread_turn_record",
+        ):
+            record = runtime_runs_api.normalize_thread_turn_record(
+                {
+                    "id": "turn-1",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "thread_id": "thread-1",
+                    "role": "assistant",
+                    "status": "",
+                    "content": "hello",
+                }
+            )
+
+        self.assertEqual(record["role"], "user")
+        self.assertEqual(record["status"], "completed")
+
+    def test_normalize_thread_record_uses_rust_normalized_fields(self):
+        with patch.object(
+            runtime_runs_api.thread_service,
+            "_enforce_thread_record_decision",
+            side_effect=[
+                {
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "normalize_thread",
+                    "next_action": "normalize_thread_record",
+                    "normalized_title": "Normalized Thread",
+                    "normalized_status": "active",
+                },
+                {
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "normalize_turn",
+                    "next_action": "normalize_thread_turn_record",
+                    "normalized_role": "assistant",
+                    "normalized_status": "completed",
+                },
+            ],
+        ), patch.object(
+            runtime_runs_api.thread_service,
+            "_require_thread_next_action",
+            side_effect=["normalize_thread_record", "normalize_thread_turn_record"],
+        ):
+            record = runtime_runs_api.normalize_thread_record(
+                {
+                    "id": "thread-1",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "title": "",
+                    "status": "",
+                    "turns": [
+                        {
+                            "id": "turn-1",
+                            "tenant_id": "tenant-1",
+                            "workspace_id": "ws-1",
+                            "thread_id": "thread-1",
+                            "role": "assistant",
+                            "status": "",
+                            "content": "hello",
+                        }
+                    ],
+                }
+            )
+
+        self.assertEqual(record["title"], "Normalized Thread")
+        self.assertEqual(record["status"], "active")
+        self.assertEqual(record["turns"][0]["status"], "completed")
+
+    def test_normalize_thread_record_wrong_rust_next_action_fails_closed(self):
+        with patch.object(
+            runtime_runs_api.thread_service,
+            "_enforce_thread_record_decision",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "normalize_thread",
+                "next_action": "create_thread_turn",
+            },
+        ), patch.object(
+            runtime_runs_api.thread_service,
+            "_require_thread_next_action",
+            side_effect=RuntimeError("unexpected_next_action:create_thread_turn"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected_next_action:create_thread_turn"):
+                runtime_runs_api.normalize_thread_record(
+                    {
+                        "id": "thread-1",
+                        "tenant_id": "tenant-1",
+                        "workspace_id": "ws-1",
+                        "title": "Thread",
+                        "status": "active",
+                        "turns": [],
+                    }
+                )
+
+    def test_history_filtered_thread_record_calls_rust_before_filtering(self):
+        with patch.object(
+            runtime_runs_api.thread_service,
+            "_enforce_thread_record_decision",
+            side_effect=[
+                {
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "normalize_thread",
+                    "next_action": "normalize_thread_record",
+                    "normalized_title": "Chat",
+                    "normalized_status": "active",
+                },
+                {
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "normalize_turn",
+                    "next_action": "normalize_thread_turn_record",
+                    "normalized_role": "assistant",
+                    "normalized_status": "",
+                },
+                {
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "history_filter",
+                    "next_action": "include_history_record",
+                },
+            ],
+        ) as rust_mock, patch.object(
+            runtime_runs_api.thread_service,
+            "_require_thread_next_action",
+            side_effect=["normalize_thread_record", "normalize_thread_turn_record", "include_history_record"],
+        ), patch.object(
+            runtime_runs_api.entitlements_service,
+            "workspace_entitlement_payload_for_workspace_id",
+            return_value={"capabilities": {"history_window_days": 30}},
+        ), patch.object(
+            runtime_runs_api,
+            "_utc_now",
+            return_value=datetime(2026, 1, 15, 0, 0, 0, tzinfo=timezone.utc),
+        ):
+            record = runtime_runs_api._history_filtered_thread_record(
+                {
+                    "id": "thread-1",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "title": "Chat",
+                    "last_turn_at": "2026-01-01T00:00:00Z",
+                    "turns": [{"id": "turn-1", "thread_id": "thread-1", "workspace_id": "ws-1", "created_at": "2026-01-01T00:00:00Z"}],
+                },
+                cache={},
+            )
+
+        self.assertIsNotNone(record)
+        self.assertEqual(rust_mock.call_args_list[2].kwargs["operation"], "history_filter")
+        self.assertEqual(rust_mock.call_args_list[2].kwargs["history_window_days"], 30)
 
     def test_assistant_turn_content_ignores_intervention_detail(self):
         content = runtime_runs_api._assistant_turn_content(

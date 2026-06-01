@@ -35,6 +35,16 @@ class _FakeEventSourceResponse:
 
 
 class RuntimeRuntimeApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._rust_runtime_session_patch = patch(
+            "server_modules.runtime_runtime_api.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+            return_value=self._rust_allow_decision(),
+        )
+        self.mock_rust_runtime_session = self._rust_runtime_session_patch.start()
+
+    def tearDown(self) -> None:
+        self._rust_runtime_session_patch.stop()
+
     @staticmethod
     def _current_user(**overrides):
         current_user = {
@@ -53,6 +63,44 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         }
         current_user.update(overrides)
         return current_user
+
+    @staticmethod
+    def _rust_allow_decision(operation: str = "runtime_api_test"):
+        next_action_map = {
+            "stt_request": "transcribe_audio",
+            "tts_request": "synthesize_tts",
+            "machine_control": "apply_machine_control",
+            "run_hard_kill": "hard_kill_runtime_run",
+            "runtime_register": "register_runtime",
+            "runtime_bootstrap": "bootstrap_runtime_companion",
+            "self_hosted_command_enqueue": "enqueue_self_hosted_command",
+            "self_hosted_command_claim": "claim_self_hosted_command",
+            "self_hosted_command_result": "record_self_hosted_command_result",
+            "hardware_action_execute": "execute_hardware_action",
+            "hardware_action_stop": "stop_hardware_action",
+            "runtime_start": "start_runtime_session",
+            "runtime_heartbeat": "touch_runtime_session",
+            "runtime_stop": "stop_runtime_session",
+            "runtime_revoke": "revoke_runtime_session",
+            "runtime_recover": "recover_runtime_session",
+            "runtime_control_stream": "stream_runtime_control",
+            "runtime_task_claim": "claim_runtime_task",
+            "runtime_task_heartbeat": "record_runtime_task_heartbeat",
+            "runtime_task_control_state": "read_runtime_task_control_state",
+            "runtime_task_complete": "complete_runtime_task",
+            "runtime_task_pause": "pause_runtime_task",
+            "runtime_task_fail": "fail_runtime_task",
+        }
+        return {
+            "ok": True,
+            "decision": "allow",
+            "reason": "runtime_session_api_policy_satisfied",
+            "operation": operation,
+            "next_action": next_action_map.get(operation, "review_runtime_api_request"),
+            "audit_visibility": "standard",
+            "approval_required": False,
+            "cacheable": False,
+        }
 
     @patch("server_modules.local_queue.recover_orphaned_local_runs_on_startup")
     @patch("server_modules.outbox_service.get_outbox_delivery_status")
@@ -321,21 +369,28 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         handler = app.routes[("POST", "/runtime/hardware/actions/execute")]
         mock_execute.return_value = {"status": "completed", "artifacts": ["artifact-1"]}
 
-        result = self._run_async(
-            handler(
-                runtime_runtime_api.RuntimeHardwareActionExecutePayload(
-                    workspace_id="default",
-                    action_id="screenshot.capture",
-                    runtime_target="empyralis_cloud_computer",
-                    runtime_access_mode="full_access",
-                    thread_id="thread-1",
-                    request_id="req-1",
-                ),
-                current_user=self._current_user(),
+        with patch.object(
+            runtime_runtime_api.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={"ok": True, "decision": "allow", "reason": "runtime_session_api_policy_satisfied"},
+        ) as mock_rust:
+            result = self._run_async(
+                handler(
+                    runtime_runtime_api.RuntimeHardwareActionExecutePayload(
+                        workspace_id="default",
+                        action_id="screenshot.capture",
+                        runtime_target="empyralis_cloud_computer",
+                        runtime_access_mode="full_access",
+                        thread_id="thread-1",
+                        request_id="req-1",
+                    ),
+                    current_user=self._current_user(),
+                )
             )
-        )
 
         self.assertEqual(result["status"], "completed")
+        self.assertEqual(mock_rust.call_args.args[0], "runtime-session-api-decision")
+        self.assertEqual(mock_rust.call_args.args[1]["operation"], "hardware_action_execute")
         mock_features_gate.assert_called_once_with("default")
         self.assertEqual(mock_execute.await_args.kwargs["tenant_id"], "default")
         self.assertEqual(mock_execute.await_args.kwargs["workspace_id"], "default")
@@ -354,23 +409,30 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         handler = app.routes[("POST", "/runtime/hardware/actions/stop")]
         mock_stop.return_value = {"status": "terminated", "runtime_session": {"session_id": "hrs-1"}}
 
-        result = self._run_async(
-            handler(
-                runtime_runtime_api.RuntimeHardwareActionStopPayload(
-                    workspace_id="default",
-                    run_id="run-1",
-                    runtime_target="empyralis_cloud_computer",
-                    thread_id="thread-1",
-                    request_id="req-1",
-                    target_request_id="req-tool-1",
-                    session_id="hrs-1",
-                    reason="certification_stop",
-                ),
-                current_user=self._current_user(),
+        with patch.object(
+            runtime_runtime_api.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={"ok": True, "decision": "allow", "reason": "runtime_session_api_policy_satisfied"},
+        ) as mock_rust:
+            result = self._run_async(
+                handler(
+                    runtime_runtime_api.RuntimeHardwareActionStopPayload(
+                        workspace_id="default",
+                        run_id="run-1",
+                        runtime_target="empyralis_cloud_computer",
+                        thread_id="thread-1",
+                        request_id="req-1",
+                        target_request_id="req-tool-1",
+                        session_id="hrs-1",
+                        reason="certification_stop",
+                    ),
+                    current_user=self._current_user(),
+                )
             )
-        )
 
         self.assertEqual(result["status"], "terminated")
+        self.assertEqual(mock_rust.call_args.args[0], "runtime-session-api-decision")
+        self.assertEqual(mock_rust.call_args.args[1]["operation"], "hardware_action_stop")
         mock_features_gate.assert_called_once_with("default")
         self.assertEqual(mock_stop.await_args.kwargs["tenant_id"], "default")
         self.assertEqual(mock_stop.await_args.kwargs["workspace_id"], "default")
@@ -636,19 +698,26 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         }
         handler = app.routes[("POST", "/runtime/tasks/claim")]
 
-        result = self._run_async(
-            handler(
-                runtime_runtime_api.RuntimeTaskClaimRequest(
-                    runtime_id="worker-1",
-                    session_token="sess",
-                    instance_id="inst",
-                    execution_target="local",
-                    required_capabilities=["shell.execute"],
+        with patch.object(
+            runtime_runtime_api.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value=self._rust_allow_decision(),
+        ) as mock_rust:
+            result = self._run_async(
+                handler(
+                    runtime_runtime_api.RuntimeTaskClaimRequest(
+                        runtime_id="worker-1",
+                        session_token="sess",
+                        instance_id="inst",
+                        execution_target="local",
+                        required_capabilities=["shell.execute"],
+                    )
                 )
             )
-        )
 
         self.assertEqual(result["task"]["task_id"], "run-1")
+        self.assertEqual(mock_rust.call_args.args[0], "runtime-session-api-decision")
+        self.assertEqual(mock_rust.call_args.args[1]["operation"], "runtime_task_claim")
         mock_run_in_threadpool.assert_called_once()
         mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
         claim_request = mock_claim.call_args.args[0]
@@ -680,7 +749,11 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
             },
         }
 
-        with TestClient(app) as client:
+        with patch.object(
+            runtime_runtime_api.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value=self._rust_allow_decision(),
+        ) as mock_rust, TestClient(app) as client:
             response = client.post(
                 "/runtime/tasks/claim",
                 json={
@@ -693,6 +766,8 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["task"]["task_id"], "run-1")
+        self.assertEqual(mock_rust.call_args.args[0], "runtime-session-api-decision")
+        self.assertEqual(mock_rust.call_args.args[1]["operation"], "runtime_task_claim")
         mock_run_in_threadpool.assert_called_once()
         mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
 
@@ -735,9 +810,16 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         }
         handler = app.routes[("DELETE", "/machines/{machine_id}")]
 
-        result = self._run_async(handler("machine-1", current_user=self._current_user()))
+        with patch.object(
+            runtime_runtime_api.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value=self._rust_allow_decision(),
+        ) as mock_rust:
+            result = self._run_async(handler("machine-1", current_user=self._current_user()))
 
         self.assertTrue(result["revoked"])
+        self.assertEqual(mock_rust.call_args.args[0], "runtime-session-api-decision")
+        self.assertEqual(mock_rust.call_args.args[1]["operation"], "machine_control")
         mock_delete.assert_called_once_with("machine-1")
         mock_revoke_trust.assert_called_once_with("default", "machine-1")
         mock_audit.assert_called_once()
@@ -755,15 +837,21 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         }
         handler = app.routes[("POST", "/machines/{machine_id}/suspend")]
 
-        result = self._run_async(
-            handler(
-                "machine-1",
-                runtime_runtime_api.MachineControlPayload(reason="Maintenance"),
-                current_user=self._current_user(),
+        with patch.object(
+            runtime_runtime_api.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value=self._rust_allow_decision(),
+        ) as mock_rust:
+            result = self._run_async(
+                handler(
+                    "machine-1",
+                    runtime_runtime_api.MachineControlPayload(reason="Maintenance"),
+                    current_user=self._current_user(),
+                )
             )
-        )
 
         self.assertEqual(result["action"], "suspend")
+        self.assertEqual(mock_rust.call_args.args[1]["operation"], "machine_control")
         mock_control.assert_called_once_with("machine-1", action="suspend", reason="Maintenance")
         mock_audit.assert_called_once()
 
@@ -780,15 +868,21 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         }
         handler = app.routes[("POST", "/machines/{machine_id}/resume")]
 
-        result = self._run_async(
-            handler(
-                "machine-1",
-                runtime_runtime_api.MachineControlPayload(reason="Recovered"),
-                current_user=self._current_user(),
+        with patch.object(
+            runtime_runtime_api.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value=self._rust_allow_decision(),
+        ) as mock_rust:
+            result = self._run_async(
+                handler(
+                    "machine-1",
+                    runtime_runtime_api.MachineControlPayload(reason="Recovered"),
+                    current_user=self._current_user(),
+                )
             )
-        )
 
         self.assertEqual(result["action"], "resume")
+        self.assertEqual(mock_rust.call_args.args[1]["operation"], "machine_control")
         mock_control.assert_called_once_with("machine-1", action="resume", reason="Recovered")
         mock_audit.assert_called_once()
 
@@ -805,15 +899,21 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         }
         handler = app.routes[("POST", "/machines/{machine_id}/hard-kill")]
 
-        result = self._run_async(
-            handler(
-                "machine-1",
-                runtime_runtime_api.MachineControlPayload(reason="Operator stop"),
-                current_user=self._current_user(),
+        with patch.object(
+            runtime_runtime_api.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value=self._rust_allow_decision(),
+        ) as mock_rust:
+            result = self._run_async(
+                handler(
+                    "machine-1",
+                    runtime_runtime_api.MachineControlPayload(reason="Operator stop"),
+                    current_user=self._current_user(),
+                )
             )
-        )
 
         self.assertEqual(result["machine_id"], "machine-1")
+        self.assertEqual(mock_rust.call_args.args[1]["operation"], "machine_control")
         mock_hard_kill.assert_called_once_with("machine-1", reason="Operator stop", requested_by="owner-1")
         mock_audit.assert_called_once()
 
@@ -849,6 +949,8 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
             runtime_runtime_api.local_queue._server = original_server
 
         self.assertEqual(result["run_id"], "00000000-0000-0000-0000-000000000001")
+        self.assertEqual(self.mock_rust_runtime_session.call_args.args[0], "runtime-session-api-decision")
+        self.assertEqual(self.mock_rust_runtime_session.call_args.args[1]["operation"], "run_hard_kill")
         mock_hard_kill.assert_called_once_with(
             "00000000-0000-0000-0000-000000000001",
             reason="Operator stop",

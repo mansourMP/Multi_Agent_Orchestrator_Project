@@ -1,3 +1,4 @@
+import uuid
 import types
 import unittest
 from unittest import mock
@@ -203,6 +204,297 @@ class RuntimeRouteRegistryServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(captured["workspace_id"], "ws-1")
+
+    def test_registered_run_api_unexpected_next_action_blocks(self):
+        with mock.patch.object(
+            runtime_route_registry_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "approve_run",
+                "next_action": "pause_run",
+            },
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                runtime_route_registry_service._enforce_registered_run_api_decision(
+                    operation="approve_run",
+                    run_id="run-1",
+                    current_user={"user_id": "user-1"},
+                    run={"workspace_id": "ws-1", "tenant_id": "tenant-1", "status": "waiting"},
+                    run_record=None,
+                    user_role="admin",
+                    body={"approval_payload_present": True},
+                )
+
+        self.assertEqual(raised.exception.status_code, 423)
+        self.assertIn("unexpected next_action", str(raised.exception.detail))
+
+    def test_registered_get_run_accepts_owner_approval_branch(self):
+        with mock.patch.object(
+            runtime_route_registry_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "require_approval",
+                "operation": "get_run",
+                "reason": "run_sensitive_payload_requires_approval",
+                "next_action": "request_owner_approval",
+            },
+        ):
+            decision = runtime_route_registry_service._enforce_registered_run_api_decision(
+                operation="get_run",
+                run_id="run-1",
+                current_user={"user_id": "user-1"},
+                run={"workspace_id": "ws-1", "tenant_id": "tenant-1", "status": "running"},
+                run_record=None,
+                user_role="viewer",
+            )
+
+        self.assertEqual(decision["next_action"], "request_owner_approval")
+
+    def test_registered_pause_run_accepts_canonical_action(self):
+        with mock.patch.object(
+            runtime_route_registry_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "pause_run",
+                "reason": "run_api_pause_allowed",
+                "next_action": "pause_run",
+            },
+        ):
+            decision = runtime_route_registry_service._enforce_registered_run_api_decision(
+                operation="pause_run",
+                run_id="run-1",
+                current_user={"user_id": "user-1"},
+                run={"workspace_id": "ws-1", "tenant_id": "tenant-1", "status": "running"},
+                run_record=None,
+                user_role="member",
+            )
+
+        self.assertEqual(decision["next_action"], "pause_run")
+
+    def test_registered_run_approval_unexpected_next_action_blocks(self):
+        with mock.patch.object(
+            runtime_route_registry_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "resolve_approval",
+                "next_action": "record_approval_resolution",
+            },
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                runtime_route_registry_service._enforce_registered_run_approval_decision(
+                    operation="resolve_approval",
+                    approval_id="approval-1",
+                    current_user={"user_id": "user-1"},
+                    payload={"decision": "approved"},
+                    run={"workspace_id": "ws-1", "tenant_id": "tenant-1", "run_id": "run-1"},
+                    run_record=None,
+                )
+
+        self.assertEqual(raised.exception.status_code, 423)
+        self.assertIn("unexpected next_action", str(raised.exception.detail))
+
+    def test_pause_run_route_unexpected_next_action_blocks_before_handler(self):
+        app = _FakeApp()
+        captured = {}
+        run_id = uuid.UUID("00000000-0000-0000-0000-000000000123")
+
+        runtime_route_registry_service.register_runtime_run_routes(
+            app,
+            **self._registry_kwargs(
+                runs={
+                    str(run_id): {
+                        "run_id": str(run_id),
+                        "workspace_id": "ws-1",
+                        "tenant_id": "tenant-1",
+                        "status": "running",
+                    }
+                },
+                runtime_route_run_handlers_service=types.SimpleNamespace(
+                    pause_run_route_response=lambda *args, **kwargs: captured.setdefault("handler_called", True) or {},
+                    **runtime_route_run_handlers_service.__dict__,
+                ),
+            ),
+        )
+
+        with mock.patch.object(
+            runtime_route_registry_service.run_state_repository,
+            "sync_get_live_run",
+            return_value={
+                "run_id": str(run_id),
+                "workspace_id": "ws-1",
+                "tenant_id": "tenant-1",
+                "status": "running",
+            },
+        ), mock.patch.object(
+            runtime_route_registry_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "pause_run",
+                "reason": "run_api_pause_allowed",
+                "next_action": "get_run",
+            },
+        ):
+            with self.assertRaises(runtime_route_registry_service.HTTPException) as raised:
+                self._run_async(
+                    app.routes[("POST", "/runs/{run_id}/pause")](
+                        run_id=run_id,
+                        current_user={"user_id": "user-1"},
+                    )
+                )
+
+        self.assertEqual(raised.exception.status_code, 423)
+        self.assertIn("unexpected next_action", str(raised.exception.detail))
+        self.assertEqual(captured, {})
+
+    def test_stream_run_route_request_owner_approval_blocks_before_handler(self):
+        app = _FakeApp()
+        captured = {}
+        run_id = uuid.UUID("00000000-0000-0000-0000-000000000123")
+
+        runtime_route_registry_service.register_runtime_run_routes(
+            app,
+            **self._registry_kwargs(
+                runs={
+                    str(run_id): {
+                        "run_id": str(run_id),
+                        "workspace_id": "ws-1",
+                        "tenant_id": "tenant-1",
+                        "status": "running",
+                    }
+                },
+                runtime_route_run_handlers_service=types.SimpleNamespace(
+                    stream_run_route_response=lambda *args, **kwargs: captured.setdefault("handler_called", True) or {},
+                    **runtime_route_run_handlers_service.__dict__,
+                ),
+            ),
+        )
+
+        with mock.patch.object(
+            runtime_route_registry_service.run_state_repository,
+            "sync_get_live_run",
+            return_value={
+                "run_id": str(run_id),
+                "workspace_id": "ws-1",
+                "tenant_id": "tenant-1",
+                "status": "running",
+            },
+        ), mock.patch.object(
+            runtime_route_registry_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "require_approval",
+                "operation": "get_run",
+                "reason": "run_sensitive_payload_requires_approval",
+                "next_action": "request_owner_approval",
+            },
+        ):
+            with self.assertRaises(runtime_route_registry_service.HTTPException) as raised:
+                self._run_async(
+                    app.routes[("GET", "/runs/{run_id}/stream")](
+                        run_id=run_id,
+                        current_user={"user_id": "user-1"},
+                    )
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("Rust run-api gate blocked get_run", str(raised.exception.detail))
+        self.assertEqual(captured, {})
+
+    def test_get_run_replay_route_request_owner_approval_blocks_before_handler(self):
+        app = _FakeApp()
+        captured = {}
+        run_id = uuid.UUID("00000000-0000-0000-0000-000000000123")
+
+        runtime_route_registry_service.register_runtime_run_routes(
+            app,
+            **self._registry_kwargs(
+                get_replay_payload=lambda replay_run_id: {
+                    "run_id": replay_run_id,
+                    "workspace_id": "ws-1",
+                    "tenant_id": "tenant-1",
+                    "status": "completed",
+                },
+                runtime_route_run_handlers_service=types.SimpleNamespace(
+                    get_run_replay_route_response=lambda *args, **kwargs: captured.setdefault("handler_called", True) or {},
+                    **runtime_route_run_handlers_service.__dict__,
+                ),
+            ),
+        )
+
+        with mock.patch.object(
+            runtime_route_registry_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "require_approval",
+                "operation": "get_run",
+                "reason": "run_sensitive_payload_requires_approval",
+                "next_action": "request_owner_approval",
+            },
+        ):
+            with self.assertRaises(runtime_route_registry_service.HTTPException) as raised:
+                self._run_async(
+                    app.routes[("GET", "/runs/{run_id}/replay")](
+                        run_id=run_id,
+                    )
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("Rust run-api gate blocked get_run", str(raised.exception.detail))
+        self.assertEqual(captured, {})
+
+    def test_replay_run_route_request_owner_approval_blocks_before_handler(self):
+        app = _FakeApp()
+        captured = {}
+        run_id = uuid.UUID("00000000-0000-0000-0000-000000000123")
+
+        runtime_route_registry_service.register_runtime_run_routes(
+            app,
+            **self._registry_kwargs(
+                get_replay_payload=lambda replay_run_id: {
+                    "run_id": replay_run_id,
+                    "workspace_id": "ws-1",
+                    "tenant_id": "tenant-1",
+                    "status": "completed",
+                },
+                runtime_route_run_handlers_service=types.SimpleNamespace(
+                    replay_run_route_response=lambda *args, **kwargs: captured.setdefault("handler_called", True) or {},
+                    **runtime_route_run_handlers_service.__dict__,
+                ),
+            ),
+        )
+
+        with mock.patch.object(
+            runtime_route_registry_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "require_approval",
+                "operation": "get_run",
+                "reason": "run_sensitive_payload_requires_approval",
+                "next_action": "request_owner_approval",
+            },
+        ):
+            with self.assertRaises(runtime_route_registry_service.HTTPException) as raised:
+                self._run_async(
+                    app.routes[("POST", "/runs/{run_id}/replay")](
+                        run_id=run_id,
+                    )
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("Rust run-api gate blocked get_run", str(raised.exception.detail))
+        self.assertEqual(captured, {})
 
     def _registry_kwargs(self, **overrides):
         kwargs = dict(

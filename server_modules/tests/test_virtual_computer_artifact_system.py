@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from unittest.mock import patch
 
 from server_modules.virtual_computer_runtime import InMemoryVirtualComputerRuntime
 
@@ -99,6 +100,20 @@ class VirtualComputerArtifactSystemTests(unittest.TestCase):
         for artifact_id in ["a_pdf", "a_csv", "a_download", "a_doc", "a_trace", "a_log"]:
             result = asyncio.run(runtime.collect_artifact({"session_id": session_id, "artifact_id": artifact_id}))
             self.assertEqual((result.get("artifact") or {}).get("artifact_id"), artifact_id)
+
+    def test_artifact_registration_wrong_rust_action_fails_closed(self):
+        runtime = InMemoryVirtualComputerRuntime()
+        created = asyncio.run(runtime.create_session({"runtime_choice": "virtual_browser"}))
+        session_id = created.get("session_id")
+
+        with patch(
+            "server_modules.virtual_computer_runtime.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+            return_value={"ok": True, "decision": "allow", "next_action": "read_artifact"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected_next_action:read_artifact"):
+                asyncio.run(runtime.stream_screenshot({"session_id": session_id}))
+
+        self.assertEqual(runtime._sessions[session_id].get("artifacts") or [], [])
 
 
 if __name__ == "__main__":

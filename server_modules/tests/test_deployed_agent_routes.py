@@ -18,6 +18,15 @@ def _build_app() -> FastAPI:
     return app
 
 
+@pytest.fixture(autouse=True)
+def _stub_deployed_agent_route_rust_gate(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        routes_deployed_agents,
+        "_enforce_deployed_agent_route_decision",
+        lambda **kwargs: {"next_action": "stub"},
+    )
+
+
 def _owner_user() -> dict[str, object]:
     return {
         "user_id": "user-owner",
@@ -629,6 +638,11 @@ async def test_management_routes_allow_owner_and_auth_admin(
             return payload
 
         monkeypatch.setattr(routes_deployed_agents.deployed_agent_service, "delete_deployed_agent_external_user_data", fake_service)
+        monkeypatch.setattr(
+            routes_deployed_agents,
+            "_enforce_deployed_agent_route_decision",
+            lambda **_kwargs: {"next_action": "delete_deployed_agent_external_user_data"},
+        )
     else:
         async def fake_service(**kwargs):
             _assert_management_service_kwargs(case, kwargs, expected_user_id=expected_user_id, expect_auth_admin=expect_auth_admin)
@@ -682,6 +696,12 @@ async def test_management_routes_forbid_member_access_consistently(
         "delete-user": "delete_deployed_agent_external_user_data",
     }[case]
     monkeypatch.setattr(routes_deployed_agents.deployed_agent_service, service_attr, fake_forbidden_service)
+    if case == "delete-user":
+        monkeypatch.setattr(
+            routes_deployed_agents,
+            "_enforce_deployed_agent_route_decision",
+            lambda **_kwargs: {"next_action": "delete_deployed_agent_external_user_data"},
+        )
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -1083,6 +1103,11 @@ async def test_workspace_emergency_stop_route_returns_stopped_agents(monkeypatch
 async def test_audit_export_route_returns_activity_log(monkeypatch: pytest.MonkeyPatch):
     app = _build_app()
     app.dependency_overrides[routes_deployed_agents.get_current_user] = lambda: {"user_id": "user-1"}
+    monkeypatch.setattr(
+        routes_deployed_agents,
+        "_enforce_deployed_agent_route_decision",
+        lambda **_kwargs: {"next_action": "export_deployed_agent_audit_logs"},
+    )
 
     async def fake_audit_export(**kwargs):
         assert kwargs["deployed_agent_id"] == "dagent_1"

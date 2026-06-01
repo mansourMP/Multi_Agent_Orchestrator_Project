@@ -218,27 +218,28 @@ class GatewayRoutesTests(unittest.TestCase):
         registration_payload = self._register_gateway_with_mode(gateway_id="gateway-policy-test")
         gateway_id = registration_payload["gateway"]["gateway_id"]
 
-        initial = self.client.get(
-            f"/api/agent-computers/{gateway_id}/policy",
-            params={"workspace_id": "default"},
-        )
-        self.assertEqual(initial.status_code, 200)
-        self.assertFalse(initial.json()["saved"])
-        self.assertEqual(initial.json()["policy"]["autonomy_mode"], "ask_every_time")
+        with patch.object(routes_gateway, "_enforce_gateway_service_decision", return_value={"next_action": "allow_gateway_service_operation"}):
+            initial = self.client.get(
+                f"/api/agent-computers/{gateway_id}/policy",
+                params={"workspace_id": "default"},
+            )
+            self.assertEqual(initial.status_code, 200)
+            self.assertFalse(initial.json()["saved"])
+            self.assertEqual(initial.json()["policy"]["autonomy_mode"], "ask_every_time")
 
-        saved = self.client.put(
-            f"/api/agent-computers/{gateway_id}/policy",
-            json={
-                "workspace_id": "default",
-                "policy": {
-                    "autonomy_mode": "trusted_workstation",
-                    "filesystem_scope": ["/Users/mansur/Work"],
-                    "blocked_filesystem_scope": ["/Users/mansur/Work/secrets"],
-                    "domain_allowlist": ["example.com"],
-                    "approval_ttl_seconds": 3600,
+            saved = self.client.put(
+                f"/api/agent-computers/{gateway_id}/policy",
+                json={
+                    "workspace_id": "default",
+                    "policy": {
+                        "autonomy_mode": "trusted_workstation",
+                        "filesystem_scope": ["/Users/mansur/Work"],
+                        "blocked_filesystem_scope": ["/Users/mansur/Work/secrets"],
+                        "domain_allowlist": ["example.com"],
+                        "approval_ttl_seconds": 3600,
+                    },
                 },
-            },
-        )
+            )
         self.assertEqual(saved.status_code, 200)
         payload = saved.json()
         self.assertTrue(payload["saved"])
@@ -1030,10 +1031,12 @@ class GatewayRoutesTests(unittest.TestCase):
         "server_modules.personal_channels_service.gateway_execution_service.execute_tool_via_gateway",
         new_callable=AsyncMock,
     )
+    @patch("server_modules.personal_channels_service._enforce_personal_gateway_config_decision")
     @patch("server_modules.routes_personal_channels.security_audit_service.emit_security_audit_event")
     def test_configure_telegram_personal_gateway_emits_credential_audit(
         self,
         audit_mock,
+        _gate_mock,
         execute_tool_mock: AsyncMock,
     ) -> None:
         registration_payload = self._register_gateway()
@@ -1076,7 +1079,8 @@ class GatewayRoutesTests(unittest.TestCase):
         "server_modules.personal_channels_service.gateway_execution_service.execute_tool_via_gateway",
         new_callable=AsyncMock,
     )
-    def test_configure_telegram_personal_gateway_dispatches_config_capability(self, execute_tool_mock: AsyncMock) -> None:
+    @patch("server_modules.personal_channels_service._enforce_personal_gateway_config_decision")
+    def test_configure_telegram_personal_gateway_dispatches_config_capability(self, _gate_mock, execute_tool_mock: AsyncMock) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
         execute_tool_mock.return_value = {
@@ -1130,7 +1134,8 @@ class GatewayRoutesTests(unittest.TestCase):
         "server_modules.personal_channels_service.gateway_execution_service.execute_tool_via_gateway",
         new_callable=AsyncMock,
     )
-    def test_configure_whatsapp_personal_gateway_dispatches_config_capability(self, execute_tool_mock: AsyncMock) -> None:
+    @patch("server_modules.personal_channels_service._enforce_personal_gateway_config_decision")
+    def test_configure_whatsapp_personal_gateway_dispatches_config_capability(self, _gate_mock, execute_tool_mock: AsyncMock) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
         execute_tool_mock.return_value = {
@@ -1177,6 +1182,7 @@ class GatewayRoutesTests(unittest.TestCase):
         "server_modules.personal_channels_service.send_whatsapp_personal_message",
         new_callable=AsyncMock,
     )
+    @patch("server_modules.routes_personal_channels._enforce_personal_channel_approval_request")
     @patch(
         "server_modules.routes_personal_channels.gateway_approval_service.request_gateway_tool_approval",
         new_callable=AsyncMock,
@@ -1185,6 +1191,7 @@ class GatewayRoutesTests(unittest.TestCase):
     def test_send_whatsapp_personal_message_requires_approval_before_dispatch(
         self,
         audit_mock,
+        _approval_gate_mock,
         approval_mock: AsyncMock,
         send_message_mock: AsyncMock,
     ) -> None:
@@ -1233,12 +1240,14 @@ class GatewayRoutesTests(unittest.TestCase):
         "server_modules.personal_channels_service.send_telegram_personal_message",
         new_callable=AsyncMock,
     )
+    @patch("server_modules.routes_personal_channels._enforce_personal_channel_approval_request")
     @patch(
         "server_modules.routes_personal_channels.gateway_approval_service.request_gateway_tool_approval",
         new_callable=AsyncMock,
     )
     def test_send_telegram_personal_message_requires_approval_before_dispatch(
         self,
+        _approval_gate_mock,
         approval_mock: AsyncMock,
         send_message_mock: AsyncMock,
     ) -> None:

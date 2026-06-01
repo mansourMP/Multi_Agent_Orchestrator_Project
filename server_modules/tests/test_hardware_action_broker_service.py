@@ -157,6 +157,26 @@ class _FakeCloudRuntimeRegistry:
 
 
 class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self._rust_runtime_action_patch = patch(
+            "server_modules.hardware_action_broker_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "reason": "runtime_action_cloud_allowed",
+                "operation": "execute_runtime_action",
+                "next_action": "execute_cloud_runtime_action",
+                "runtime_action": "open_url",
+                "approval_required": False,
+                "cacheable": False,
+                "audit_visibility": "security",
+            },
+        )
+        self.mock_rust_runtime_action = self._rust_runtime_action_patch.start()
+
+    async def asyncTearDown(self) -> None:
+        self._rust_runtime_action_patch.stop()
+
     def _session_patches(self):
         return (
             patch(
@@ -1375,6 +1395,19 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.hardware_action_broker_service.session_service.extend_session",
                 new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.hardware_runtime_adapters.cloud_computer_adapter.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "reason": "virtual_session_state_allowed",
+                    "operation": "session_state",
+                    "next_action": "assert_virtual_session_active",
+                    "approval_required": False,
+                    "cacheable": False,
+                    "audit_visibility": "standard",
+                },
             ),
             patch(
                 "server_modules.hardware_action_broker_service.get_cloud_computer_runtime_registry",

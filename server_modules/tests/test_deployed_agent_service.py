@@ -2845,6 +2845,15 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.deployed_agent_service.external_user_privacy_service.get_external_user_privacy_service",
             ) as privacy_service_mock,
+            patch.object(
+                deployed_agent_service.rust_runtime_kernel_client,
+                "run_runtime_kernel_enforced",
+                side_effect=lambda command, payload, **_kwargs: (
+                    {"next_action": "delete_deployed_agent_external_user_data"}
+                    if command == "deployed-agent-service-decision"
+                    else {"next_action": "purge_deployed_agent_external_user_data"}
+                ),
+            ),
             patch(
                 "server_modules.deployed_agent_service.session_service.terminate_session",
                 new=AsyncMock(),
@@ -3529,6 +3538,21 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=_deployed_agent_row()),
             ),
             patch(
+                "server_modules.deployed_agent_service._enforce_deployed_agent_service_decision",
+                return_value={
+                    "decision": "allow",
+                    "mutation_plan": {
+                        "terminate_cloud_session": True,
+                        "terminate_self_hosted_session": False,
+                        "terminate_session_record": True,
+                    },
+                },
+            ),
+            patch(
+                "server_modules.deployed_agent_service.session_service.get_session",
+                new=AsyncMock(return_value={"metadata": {"runtime_session_binding": "cloud_computer_agent"}}),
+            ),
+            patch(
                 "server_modules.deployed_agent_service.deployed_agent_virtual_runtime_service.terminate_bound_cloud_runtime_session",
                 new=AsyncMock(return_value={"status": "terminated"}),
             ) as terminate_runtime_mock,
@@ -3559,6 +3583,61 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             tenant_id="tenant-1",
             workspace_id="ws-1",
         )
+        terminate_self_hosted_runtime_mock.assert_not_awaited()
+        terminate_mock.assert_awaited_once_with("sess-1")
+
+    async def test_kill_deployed_agent_runtime_session_uses_self_hosted_plan(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=_deployed_agent_row()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service._enforce_deployed_agent_service_decision",
+                return_value={
+                    "decision": "allow",
+                    "mutation_plan": {
+                        "terminate_cloud_session": False,
+                        "terminate_self_hosted_session": True,
+                        "terminate_session_record": True,
+                    },
+                },
+            ),
+            patch(
+                "server_modules.deployed_agent_service.session_service.get_session",
+                new=AsyncMock(return_value={"metadata": {"runtime_session_binding": "self_hosted_agent"}}),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.deployed_agent_virtual_runtime_service.terminate_bound_cloud_runtime_session",
+                new=AsyncMock(return_value=None),
+            ) as terminate_runtime_mock,
+            patch(
+                "server_modules.deployed_agent_service.deployed_agent_virtual_runtime_service.terminate_bound_self_hosted_runtime_session",
+                new=AsyncMock(return_value={"status": "terminated"}),
+            ) as terminate_self_hosted_runtime_mock,
+            patch(
+                "server_modules.deployed_agent_service.session_service.terminate_session",
+                new=AsyncMock(),
+            ) as terminate_mock,
+            patch(
+                "server_modules.deployed_agent_service.activity_ledger_service.append_activity_event",
+                new=AsyncMock(),
+            ),
+        ):
+            payload = await deployed_agent_service.kill_deployed_agent_runtime_session(
+                deployed_agent_id="dagent_1",
+                session_id="sess-1",
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+            )
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "killed")
+        terminate_runtime_mock.assert_not_awaited()
         terminate_self_hosted_runtime_mock.assert_awaited_once_with(
             session_id="sess-1",
             tenant_id="tenant-1",

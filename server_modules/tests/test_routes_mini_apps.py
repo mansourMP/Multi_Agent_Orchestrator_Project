@@ -18,6 +18,15 @@ def _build_app() -> FastAPI:
     return app
 
 
+@pytest.fixture(autouse=True)
+def _allow_mini_apps_rust_gate(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        mini_apps_service,
+        "_enforce_mini_apps_state_decision",
+        lambda **_kwargs: {"decision": "allow"},
+    )
+
+
 def _seed_browser_session(client: httpx.AsyncClient, *, csrf: bool) -> None:
     client.cookies.set(routes_mini_apps.auth_module.AUTH_ACCESS_COOKIE_NAME, "access-cookie", path="/")
     if csrf:
@@ -160,6 +169,9 @@ def test_active_session_secret_keeps_local_dev_fallback_compatibility():
     ("method", "path", "json_body"),
     [
         ("PUT", "/api/workspaces/ws-1/mini-apps/writing", {"label": "Writing"}),
+        ("POST", "/api/workspaces/ws-1/apps", {"name": "Writing", "source_url": "https://apps.example.com/writing"}),
+        ("POST", "/api/workspaces/ws-1/apps/clone", {"public_app_id": "public-writing"}),
+        ("PUT", "/api/workspaces/ws-1/apps/writing/settings", {"ai_enabled": False}),
         ("POST", "/api/workspaces/ws-1/mini-apps/writing/share-link", None),
         ("POST", "/api/workspaces/ws-1/mini-apps/install-shared", {"token": "share-token"}),
         ("POST", "/api/workspaces/ws-1/mini-apps/writing/records/retrieve", {}),
@@ -238,6 +250,153 @@ async def test_mini_app_routes_upsert_list_and_retrieve(monkeypatch: pytest.Monk
             assert retrieve_response.status_code == 200
             assert retrieve_response.json()["total_matches"] == 1
             assert retrieve_response.json()["items"][0]["id"] == "meal-1"
+
+
+@pytest.mark.anyio
+async def test_apps_facade_publishes_clean_cards_and_settings(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {
+        "user_id": "user-1",
+        "email": "sarah@example.com",
+    }
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+
+    with tempfile.TemporaryDirectory(prefix="apps-routes-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create_response = await client.post(
+                "/api/workspaces/ws-1/apps",
+                json={
+                    "name": "Budget Tracker",
+                    "description": "Track daily spending.",
+                    "source_url": "https://apps.example.com/budget",
+                    "visibility": "public",
+                },
+            )
+            assert create_response.status_code == 200
+            created = create_response.json()
+            assert created["app_id"] == "budget_tracker"
+            assert created["name"] == "Budget Tracker"
+            assert created["creator"]["byline"] == "by @sarah"
+            assert created["visibility"] == "public"
+            assert created["source"] == {
+                "kind": "website",
+                "url": "https://apps.example.com/budget",
+                "label": "Website",
+            }
+            assert "runtime_type" not in created
+            assert "trust_tier" not in created
+            assert "bridge_contracts" not in created
+
+            raw_contract = mini_apps_service.get_mini_app_contract("ws-1", "budget_tracker")
+            assert raw_contract["visibility"] == "unlisted_link"
+            assert raw_contract["runtime_type"] == "private"
+            assert raw_contract["delivery_mode"] == "hosted"
+            assert raw_contract["hosted_app"]["allowed_origins"] == ["https://apps.example.com"]
+            assert "app.summary.read" in raw_contract["permissions"]
+            assert "app.records.write" in raw_contract["permissions"]
+            assert "app.ai.invoke" not in raw_contract["permissions"]
+            assert "app_to_sage" not in raw_contract["bridge_contracts"]
+
+            list_response = await client.get("/api/workspaces/ws-1/apps")
+            assert list_response.status_code == 200
+            assert list_response.json()["items"][0]["name"] == "Budget Tracker"
+
+            settings_response = await client.put(
+                "/api/workspaces/ws-1/apps/budget_tracker/settings",
+                json={
+                    "name": "Budget Board",
+                    "description": "Track monthly spending.",
+                    "source_url": "https://apps.example.com/budget-board",
+                    "ai_enabled": True,
+                    "sage_enabled": True,
+                    "records_enabled": False,
+                    "monthly_credit_limit": 125,
+                    "per_invocation_credit_limit": 10,
+                    "visibility": "private",
+                },
+            )
+            assert settings_response.status_code == 200
+            settings = settings_response.json()["settings"]
+            assert settings_response.json()["name"] == "Budget Board"
+            assert settings_response.json()["source"]["url"] == "https://apps.example.com/budget-board"
+            assert settings["ai_enabled"] is True
+            assert settings["sage_enabled"] is True
+            assert settings["records_enabled"] is False
+            assert settings["monthly_credit_limit"] == 125
+            assert settings_response.json()["visibility"] == "private"
+
+            updated_contract = mini_apps_service.get_mini_app_contract("ws-1", "budget_tracker")
+            assert updated_contract["label"] == "Budget Board"
+            assert updated_contract["hosted_url"] == "https://apps.example.com/budget-board"
+            assert updated_contract["visibility"] == "workspace_private"
+            assert "app.ai.invoke" in updated_contract["permissions"]
+            assert "app.records.write" not in updated_contract["permissions"]
+            assert updated_contract["bridge_contracts"]["app_to_sage"] == ["summary_request"]
+
+            empty_name_response = await client.post(
+                "/api/workspaces/ws-1/apps",
+                json={"name": "", "source_url": "https://apps.example.com/empty"},
+            )
+            assert empty_name_response.status_code == 400
+
+            invalid_url_response = await client.post(
+                "/api/workspaces/ws-1/apps",
+                json={"name": "Bad URL", "source_url": "http://127.0.0.1/bad"},
+            )
+            assert invalid_url_response.status_code == 400
+
+            invalid_cap_response = await client.put(
+                "/api/workspaces/ws-1/apps/budget_tracker/settings",
+                json={"monthly_credit_limit": -1},
+            )
+            assert invalid_cap_response.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_apps_facade_clones_public_apps(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {
+        "user_id": "user-2",
+        "email": "mike@example.com",
+    }
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+
+    with tempfile.TemporaryDirectory(prefix="apps-routes-clone-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        source_card = mini_apps_service.publish_app(
+            "source-ws",
+            name="Budget Tracker",
+            description="Track daily spending.",
+            source_url="https://apps.example.com/budget",
+            visibility="public",
+            creator_label="@sarah",
+        )
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            list_response = await client.get("/api/workspaces/target-ws/apps")
+            assert list_response.status_code == 200
+            public_cards = [item for item in list_response.json()["items"] if item.get("clone_available")]
+            assert public_cards[0]["public_app_id"] == source_card["public_app_id"]
+
+            clone_response = await client.post(
+                "/api/workspaces/target-ws/apps/clone",
+                json={"public_app_id": source_card["public_app_id"]},
+            )
+            assert clone_response.status_code == 200
+            cloned = clone_response.json()
+            assert cloned["visibility"] == "private"
+            assert cloned["creator"]["byline"] == "by @mike"
+            assert cloned["source"]["url"] == "https://apps.example.com/budget"
+
+            after_clone_response = await client.get("/api/workspaces/target-ws/apps")
+            assert after_clone_response.status_code == 200
+            items = after_clone_response.json()["items"]
+            assert [item["name"] for item in items] == ["Budget Tracker"]
+            assert items[0]["installed"] is True
 
 
 @pytest.mark.anyio

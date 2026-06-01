@@ -178,6 +178,30 @@ class AgentComputerProfileServiceTests(unittest.TestCase):
                         }
                     )
 
+    def test_create_profile_wrong_rust_action_blocks_state_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "ws-1"
+            with (
+                self._patch_workspace(root),
+                patch(
+                    "server_modules.agent_computer_profile_service.rust_runtime_kernel_client.runtime_state_store_decision",
+                    return_value={"ok": True, "decision": "allow", "next_action": "write_profile_api_file"},
+                ) as rust_mock,
+            ):
+                with self.assertRaises(profiles.AgentComputerProfileRustGateError) as raised:
+                    profiles.create_agent_computer_profile(
+                        {
+                            "workspace_id": "ws-1",
+                            "policy_id": "policy-1",
+                            "environment_kind": "personal_computer",
+                            "gateway_id": "gw-1",
+                        }
+                    )
+
+        self.assertEqual(str(raised.exception), "unexpected_next_action")
+        rust_mock.assert_called_once()
+        self.assertFalse((root / "agent_computer_profiles.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -54,6 +54,31 @@ def _parent_snapshot(agent_role: str = "orchestrator") -> dict:
 
 
 class RuntimeRunDelegationServiceTests(unittest.TestCase):
+    @staticmethod
+    def _rust_decision_side_effect(command, payload, allow_approval_required=False):
+        if payload["operation"] == "retry":
+            return {
+                "ok": True,
+                "decision": "allow",
+                "operation": "retry",
+                "next_action": "retry_run",
+            }
+        if payload["operation"] == "delegation_child":
+            return {
+                "ok": True,
+                "decision": "allow",
+                "operation": "delegation_child",
+                "next_action": "create_delegated_child_run",
+            }
+        if payload["operation"] == "delegation_merge":
+            return {
+                "ok": True,
+                "decision": "require_approval",
+                "operation": "delegation_merge",
+                "next_action": "retry_failed_children",
+            }
+        raise AssertionError(payload["operation"])
+
     def test_build_retry_failed_delegation_callbacks_includes_retry_specific_entries(self):
         callbacks = runtime_run_delegation_service.build_retry_failed_delegation_callbacks(
             lookup_run_snapshot=lambda run_id: _parent_snapshot(),
@@ -95,34 +120,39 @@ class RuntimeRunDelegationServiceTests(unittest.TestCase):
         routing_logs = []
         created_requests = []
 
-        payload = runtime_run_delegation_service.auto_delegate_run_children(
-            "parent-1",
-            request_payload=_AutoDelegationPayload(note=""),
-            current_user={"user_id": "user-1"},
-            lookup_run_snapshot=lambda run_id: _parent_snapshot(),
-            enforce_run_owner_access=lambda current_user, snapshot: None,
-            normalize_agent_role=lambda role: str(role or "").strip().lower(),
-            build_auto_delegation_plan=lambda snapshot, max_children=3: [
-                {
-                    "agent_role": "researcher",
-                    "user_goal": "Inspect logs",
-                    "metadata": {
-                        "auto_delegation_rule": "logs",
-                        "auto_delegation_source": "keyword",
-                        "auto_delegation_reason": "contains log triage",
-                    },
-                }
-            ],
-            emit_auto_delegation_routing_log=lambda parent_run_id, plan, strategy, reason: routing_logs.append(
-                (parent_run_id, strategy, reason, len(plan))
-            ),
-            build_delegated_run_request=lambda snapshot, child, note=None: {"child": child, "note": note},
-            execute_system_run_start_request_via_turn_runtime=lambda delegated_req, **kwargs: created_requests.append(delegated_req) or {"run_id": "child-1"},
-            stamp_request_owner_fn=lambda payload: payload,
-            run_execution_services=lambda: object(),
-            normalize_run_id_token=lambda value: str(value or "").strip() or None,
-            refresh_parent_delegation_state=lambda run_id: None,
-        )
+        with patch.object(
+            runtime_run_delegation_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=self._rust_decision_side_effect,
+        ):
+            payload = runtime_run_delegation_service.auto_delegate_run_children(
+                "parent-1",
+                request_payload=_AutoDelegationPayload(note=""),
+                current_user={"user_id": "user-1"},
+                lookup_run_snapshot=lambda run_id: _parent_snapshot(),
+                enforce_run_owner_access=lambda current_user, snapshot: None,
+                normalize_agent_role=lambda role: str(role or "").strip().lower(),
+                build_auto_delegation_plan=lambda snapshot, max_children=3: [
+                    {
+                        "agent_role": "researcher",
+                        "user_goal": "Inspect logs",
+                        "metadata": {
+                            "auto_delegation_rule": "logs",
+                            "auto_delegation_source": "keyword",
+                            "auto_delegation_reason": "contains log triage",
+                        },
+                    }
+                ],
+                emit_auto_delegation_routing_log=lambda parent_run_id, plan, strategy, reason: routing_logs.append(
+                    (parent_run_id, strategy, reason, len(plan))
+                ),
+                build_delegated_run_request=lambda snapshot, child, note=None: {"child": child, "note": note},
+                execute_system_run_start_request_via_turn_runtime=lambda delegated_req, **kwargs: created_requests.append(delegated_req) or {"run_id": "child-1"},
+                stamp_request_owner_fn=lambda payload: payload,
+                run_execution_services=lambda: object(),
+                normalize_run_id_token=lambda value: str(value or "").strip() or None,
+                refresh_parent_delegation_state=lambda run_id: None,
+            )
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["note"], "Auto-planned by orchestrator rules.")
@@ -146,7 +176,11 @@ class RuntimeRunDelegationServiceTests(unittest.TestCase):
             "context": {"workspace_id": "default", "tenant_id": "default", "metadata": {"agent_role": "orchestrator", "trace_id": "trace-1"}},
         }
 
-        with patch("server_modules.runtime_run_delegation_service.run_async_tool_call", side_effect=lambda coro: asyncio.run(coro)), patch(
+        with patch("server_modules.runtime_run_delegation_service.run_async_tool_call", side_effect=lambda coro: asyncio.run(coro)), patch.object(
+            runtime_run_delegation_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=self._rust_decision_side_effect,
+        ), patch(
             "server_modules.runtime_run_delegation_service.agent_trace_service.resume_trace",
             new=AsyncMock(return_value=trace_context),
         ), patch(
@@ -225,36 +259,174 @@ class RuntimeRunDelegationServiceTests(unittest.TestCase):
         ]
         built_payloads = []
 
-        payload = runtime_run_delegation_service.retry_failed_delegation_runs(
-            "parent-1",
-            request_payload=_RetryPayload(),
-            current_user={"user_id": "user-1"},
-            lookup_run_snapshot=lambda run_id: _parent_snapshot(),
-            enforce_run_owner_access=lambda current_user, snapshot: None,
-            normalize_agent_role=lambda role: str(role or "").strip().lower(),
-            find_run_relationships=lambda parent_run_id, snapshot: (snapshot, child_runs),
-            normalize_run_id_token=lambda value: str(value or "").strip() or None,
-            parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
-            build_retry_child_payload=lambda parent_snapshot, child, note=None: built_payloads.append((child["run_id"], note)) or {
-                "agent_role": "researcher",
-                "user_goal": f"Retry {child['run_id']}",
-                "metadata": {
-                    "retry_of_run_id": child["run_id"],
-                    "retry_root_run_id": child.get("retry_root_run_id") or child["run_id"],
-                    "retry_sequence": 1,
+        with patch.object(
+            runtime_run_delegation_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=self._rust_decision_side_effect,
+        ):
+            payload = runtime_run_delegation_service.retry_failed_delegation_runs(
+                "parent-1",
+                request_payload=_RetryPayload(),
+                current_user={"user_id": "user-1"},
+                lookup_run_snapshot=lambda run_id: _parent_snapshot(),
+                enforce_run_owner_access=lambda current_user, snapshot: None,
+                normalize_agent_role=lambda role: str(role or "").strip().lower(),
+                find_run_relationships=lambda parent_run_id, snapshot: (snapshot, child_runs),
+                normalize_run_id_token=lambda value: str(value or "").strip() or None,
+                parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
+                build_retry_child_payload=lambda parent_snapshot, child, note=None: built_payloads.append((child["run_id"], note)) or {
+                    "agent_role": "researcher",
+                    "user_goal": f"Retry {child['run_id']}",
+                    "metadata": {
+                        "retry_of_run_id": child["run_id"],
+                        "retry_root_run_id": child.get("retry_root_run_id") or child["run_id"],
+                        "retry_sequence": 1,
+                    },
                 },
-            },
-            build_delegated_run_request=lambda snapshot, child, note=None: {"child": child, "note": note},
-            execute_system_run_start_request_via_turn_runtime=lambda delegated_req, **kwargs: {"run_id": f"new-{delegated_req['child']['metadata']['retry_of_run_id']}"},
-            stamp_request_owner_fn=lambda payload: payload,
-            run_execution_services=lambda: object(),
-            refresh_parent_delegation_state=lambda run_id: None,
-        )
+                build_delegated_run_request=lambda snapshot, child, note=None: {"child": child, "note": note},
+                execute_system_run_start_request_via_turn_runtime=lambda delegated_req, **kwargs: {"run_id": f"new-{delegated_req['child']['metadata']['retry_of_run_id']}"},
+                stamp_request_owner_fn=lambda payload: payload,
+                run_execution_services=lambda: object(),
+                refresh_parent_delegation_state=lambda run_id: None,
+            )
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["items"][0]["retry_of_run_id"], "child-3")
         self.assertEqual(payload["items"][0]["run_id"], "new-child-3")
         self.assertEqual(built_payloads, [("child-3", "Retry requested from orchestration summary.")])
+
+    def test_retry_failed_delegation_wrong_retry_action_blocks_before_retry_build(self):
+        built = {"called": False}
+        child_runs = [
+            {
+                "run_id": "child-3",
+                "retry_root_run_id": "root-2",
+                "status": "timeout",
+                "updated_at": "2026-04-05T02:00:00Z",
+                "created_at": "2026-04-05T02:00:00Z",
+            },
+        ]
+
+        def side_effect(command, payload, allow_approval_required=False):
+            if payload["operation"] == "delegation_merge":
+                return {
+                    "ok": True,
+                    "decision": "require_approval",
+                    "operation": "delegation_merge",
+                    "next_action": "retry_failed_children",
+                }
+            if payload["operation"] == "retry":
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "retry",
+                    "next_action": "dispatch_run",
+                }
+            raise AssertionError(payload["operation"])
+
+        with patch.object(
+            runtime_run_delegation_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=side_effect,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                runtime_run_delegation_service.retry_failed_delegation_runs(
+                    "parent-1",
+                    request_payload=_RetryPayload(),
+                    current_user={"user_id": "user-1"},
+                    lookup_run_snapshot=lambda run_id: _parent_snapshot(),
+                    enforce_run_owner_access=lambda current_user, snapshot: None,
+                    normalize_agent_role=lambda role: str(role or "").strip().lower(),
+                    find_run_relationships=lambda parent_run_id, snapshot: (snapshot, child_runs),
+                    normalize_run_id_token=lambda value: str(value or "").strip() or None,
+                    parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
+                    build_retry_child_payload=lambda parent_snapshot, child, note=None: built.update({"called": True}) or {},
+                    build_delegated_run_request=lambda snapshot, child, note=None: {"child": child, "note": note},
+                    execute_system_run_start_request_via_turn_runtime=lambda delegated_req, **kwargs: {"run_id": "new-child-3"},
+                    stamp_request_owner_fn=lambda payload: payload,
+                    run_execution_services=lambda: object(),
+                    refresh_parent_delegation_state=lambda run_id: None,
+                )
+
+        self.assertEqual(raised.exception.status_code, 423)
+        self.assertIn("unexpected next_action", str(raised.exception.detail))
+        self.assertFalse(built["called"])
+
+    def test_delegate_run_children_wrong_rust_next_action_blocks_before_child_creation(self):
+        executed = {"called": False}
+        with patch.object(
+            runtime_run_delegation_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "delegation_child",
+                "next_action": "merge_child_results",
+            },
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                runtime_run_delegation_service.delegate_run_children(
+                    "parent-1",
+                    body=_DelegationPayload([_Child(agent_role="researcher", user_goal="good")]),
+                    current_user={"user_id": "user-1"},
+                    lookup_run_snapshot=lambda run_id: _parent_snapshot(),
+                    enforce_run_owner_access=lambda current_user, snapshot: None,
+                    normalize_agent_role=lambda role: str(role or "").strip().lower(),
+                    build_delegated_run_request=lambda *args, **kwargs: {},
+                    execute_system_run_start_request_via_turn_runtime=lambda *args, **kwargs: executed.update({"called": True}),
+                    stamp_request_owner_fn=lambda payload: payload,
+                    run_execution_services=lambda: object(),
+                    normalize_run_id_token=lambda value: str(value or "").strip() or None,
+                    refresh_parent_delegation_state=lambda run_id: None,
+                )
+
+        self.assertEqual(raised.exception.status_code, 423)
+        self.assertIn("unexpected next_action", str(raised.exception.detail))
+        self.assertFalse(executed["called"])
+
+    def test_retry_failed_delegation_wrong_merge_action_blocks_before_retry_build(self):
+        built = {"called": False}
+        child_runs = [
+            {
+                "run_id": "child-3",
+                "retry_root_run_id": "root-2",
+                "status": "timeout",
+                "updated_at": "2026-04-05T02:00:00Z",
+                "created_at": "2026-04-05T02:00:00Z",
+            },
+        ]
+        with patch.object(
+            runtime_run_delegation_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "delegation_merge",
+                "next_action": "merge_child_results",
+            },
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                runtime_run_delegation_service.retry_failed_delegation_runs(
+                    "parent-1",
+                    request_payload=_RetryPayload(),
+                    current_user={"user_id": "user-1"},
+                    lookup_run_snapshot=lambda run_id: _parent_snapshot(),
+                    enforce_run_owner_access=lambda current_user, snapshot: None,
+                    normalize_agent_role=lambda role: str(role or "").strip().lower(),
+                    find_run_relationships=lambda parent_run_id, snapshot: (snapshot, child_runs),
+                    normalize_run_id_token=lambda value: str(value or "").strip() or None,
+                    parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
+                    build_retry_child_payload=lambda parent_snapshot, child, note=None: built.update({"called": True}) or {},
+                    build_delegated_run_request=lambda snapshot, child, note=None: {"child": child, "note": note},
+                    execute_system_run_start_request_via_turn_runtime=lambda delegated_req, **kwargs: {"run_id": "new-child-3"},
+                    stamp_request_owner_fn=lambda payload: payload,
+                    run_execution_services=lambda: object(),
+                    refresh_parent_delegation_state=lambda run_id: None,
+                )
+
+        self.assertEqual(raised.exception.status_code, 423)
+        self.assertIn("unexpected next_action", str(raised.exception.detail))
+        self.assertFalse(built["called"])
 
 
 if __name__ == "__main__":

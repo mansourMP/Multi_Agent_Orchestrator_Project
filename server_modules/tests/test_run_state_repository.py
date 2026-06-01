@@ -43,6 +43,15 @@ class _FakePool:
 
 
 class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._rust_gate = patch.object(
+            run_state_repository.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={"decision": "allow"},
+        )
+        self._rust_gate.start()
+        self.addCleanup(self._rust_gate.stop)
+
     async def test_create_live_run_initial_returns_version_zero_registration(self):
         pool = _FakePool(fetchrow_result={"version": 0, "registered_at": "2026-04-12T00:00:00Z"})
         with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):

@@ -8,6 +8,34 @@ from server_modules import sage_heartbeat_service
 
 class SageHeartbeatServiceTests(unittest.TestCase):
     def test_build_snapshot_surfaces_quiet_hours_and_next_action(self) -> None:
+        def fake_heartbeat_snapshot(**payload):
+            return {
+                "ok": True,
+                "decision": "allow",
+                "reason": "heartbeat_snapshot_ready",
+                "operation": "heartbeat_snapshot",
+                "health": "quiet",
+                "next_action": "wait_for_quiet_hours",
+            }
+
+        def fake_runtime_health_decision(**payload):
+            operation = payload.get("operation")
+            return {
+                "ok": True,
+                "decision": "allow",
+                "reason": "runtime_health_snapshot_normalized",
+                "operation": operation,
+                "health": "quiet" if operation == "heartbeat_snapshot" else "healthy",
+                "next_action": "wait_for_quiet_hours" if operation == "heartbeat_snapshot" else "idle",
+                "readiness": {
+                    "ready": operation == "readiness_gate",
+                    "rust_kernel_available": True,
+                    "scheduler_enabled": True,
+                    "plugin_ok": True,
+                    "profile_complete": True,
+                },
+            }
+
         with (
             patch(
                 "server_modules.sage_heartbeat_service.list_sage_profile",
@@ -107,6 +135,14 @@ class SageHeartbeatServiceTests(unittest.TestCase):
                     "next_allowed_at": datetime(2026, 5, 6, 7, 0, tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
                 },
             ),
+            patch(
+                "server_modules.sage_heartbeat_service._heartbeat_snapshot_decision",
+                side_effect=fake_heartbeat_snapshot,
+            ),
+            patch(
+                "server_modules.sage_heartbeat_service._runtime_health_decision",
+                side_effect=fake_runtime_health_decision,
+            ) as rust_health_mock,
         ):
             payload = asyncio.run(
                 sage_heartbeat_service.build_sage_heartbeat_snapshot(
@@ -129,6 +165,14 @@ class SageHeartbeatServiceTests(unittest.TestCase):
         self.assertEqual(payload["queue_overview"]["lanes"]["scheduled"][0]["id"], "sched-2")
         self.assertEqual(payload["queue_overview"]["lanes"]["needs_ok"][0]["id"], "approval-1")
         self.assertEqual(payload["queue_overview"]["lanes"]["done"][0]["id"], "done-1")
+        self.assertEqual(payload["heartbeat_snapshot"]["operation"], "heartbeat_snapshot")
+        self.assertEqual(payload["runtime_health"]["operation"], "heartbeat_snapshot")
+        self.assertEqual(payload["readiness_gate"]["operation"], "readiness_gate")
+        self.assertTrue(payload["readiness"]["ready"])
+        self.assertEqual(
+            [call.kwargs["operation"] for call in rust_health_mock.call_args_list],
+            ["heartbeat_snapshot", "readiness_gate"],
+        )
 
 
 if __name__ == "__main__":

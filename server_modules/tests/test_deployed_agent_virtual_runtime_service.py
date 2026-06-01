@@ -156,6 +156,22 @@ def _local_gateway_attachment(**overrides):
 
 
 class DeployedAgentVirtualRuntimeServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._service_gate_patch = patch.object(
+            deployed_agent_virtual_runtime_service,
+            "_enforce_deployed_virtual_runtime_service_decision",
+            return_value={"next_action": "build_deployed_agent_virtual_runtime_payload"},
+        )
+        self._virtual_gate_patch = patch.object(
+            deployed_agent_virtual_runtime_service,
+            "_enforce_deployed_virtual_runtime_decision",
+            return_value={"next_action": "build_deployed_agent_virtual_runtime_payload"},
+        )
+        self._service_gate_patch.start()
+        self._virtual_gate_patch.start()
+        self.addCleanup(self._service_gate_patch.stop)
+        self.addCleanup(self._virtual_gate_patch.stop)
+
     def test_builds_cloud_computer_runtime_payload(self):
         payload = deployed_agent_virtual_runtime_service.build_deployed_agent_virtual_runtime_payload(
             _deployed_agent()

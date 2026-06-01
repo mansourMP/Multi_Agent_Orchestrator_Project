@@ -49,11 +49,69 @@ class SecretsBrokerTests(unittest.TestCase):
             clear=False,
         )
         self._env_patch.start()
+        self._kernel_patch = patch.object(
+            secrets_broker.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=self._fake_rust_secret_inspection,
+        )
+        self._kernel_patch.start()
 
     def tearDown(self) -> None:
+        self._kernel_patch.stop()
         self._env_patch.stop()
         safe_mode_service.reset_state_for_tests()
         secrets_broker.reset_secret_grant_revocations_for_tests()
+
+    def _fake_rust_secret_inspection(self, command: str, payload: dict, **kwargs):
+        self.assertEqual(command, "inspect-secret-reference")
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        risk_tags = " ".join(str(item or "").lower() for item in list(payload.get("risk_tags") or []))
+        joined = " ".join(
+            [
+                str(metadata).lower(),
+                risk_tags,
+                str(payload.get("provider_id") or "").lower(),
+                str(payload.get("connector_id") or "").lower(),
+            ]
+        )
+        high_risk = bool(payload.get("approval_required")) or any(
+            marker in joined
+            for marker in ("admin", "financial", "finance", "billing", "payment", "payout")
+        )
+        if high_risk and not str(payload.get("approval_id") or "").strip():
+            if kwargs.get("allow_approval_required"):
+                return {
+                    "ok": True,
+                    "decision": "require_approval",
+                    "reason": "secret_access_requires_approval",
+                    "approval_required": True,
+                    "next_action": "request_secret_access_approval",
+                    "high_risk_credential": True,
+                    "risk_level": "high",
+                    "decision_id": "rkd_secret_requires_approval",
+                }
+            raise secrets_broker.rust_runtime_kernel_client.RustKernelApprovalRequired(
+                {
+                    "ok": True,
+                    "decision": "require_approval",
+                    "reason": "secret_access_requires_approval",
+                    "approval_required": True,
+                    "high_risk_credential": True,
+                    "risk_level": "high",
+                    "decision_id": "rkd_secret_requires_approval",
+                },
+                command="inspect-secret-reference",
+            )
+        return {
+            "ok": True,
+            "decision": "allow",
+            "reason": "secret_access_approved" if high_risk else "secret_access_allowed_by_policy",
+            "approval_required": False,
+            "next_action": "allow_secret_resolution",
+            "high_risk_credential": high_risk,
+            "risk_level": "high" if high_risk else "medium",
+            "decision_id": "rkd_secret_allowed",
+        }
 
     def test_verify_secret_access_token_rejects_expired_grant(self):
         grant = secrets_broker.issue_connector_secret_grant(
@@ -307,6 +365,36 @@ class SecretsBrokerTests(unittest.TestCase):
             )
 
         self.assertEqual(secret.get("access_token"), "openai-secret")
+
+    def test_resolve_provider_secret_blocks_unexpected_rust_next_action(self):
+        with patch(
+            "server_modules.secrets_broker.control_plane_repository.append_agent_secret_access_event",
+            new=AsyncMock(return_value={"id": "sevt-wrong-action"}),
+        ), patch.object(
+            secrets_broker.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "reason": "secret_access_allowed_by_policy",
+                "approval_required": False,
+                "next_action": "request_secret_access_approval",
+                "high_risk_credential": False,
+                "risk_level": "medium",
+                "decision_id": "rkd_secret_wrong_action",
+            },
+        ):
+            with self.assertRaises(secrets_broker.SecretAccessDeniedError) as raised:
+                secrets_broker.resolve_provider_secret(
+                    _load_vault,
+                    lambda encrypted: encrypted,
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    provider_id="openai",
+                    tool_name="provider_inference",
+                )
+
+        self.assertEqual(raised.exception.code, "unexpected_next_action")
 
     def test_resolve_provider_secret_denies_revoked_session_scope(self):
         with patch(

@@ -7,6 +7,99 @@ from server_modules import agent_computer_policy_service as policy
 
 
 class AgentComputerPolicyServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._kernel_patch = patch.object(
+            policy.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=self._fake_rust_kernel,
+        )
+        self._kernel_patch.start()
+
+    def tearDown(self) -> None:
+        self._kernel_patch.stop()
+
+    def _fake_rust_kernel(self, command: str, payload: dict, **kwargs):
+        if command == "check-path-containment":
+            path = str(payload.get("path") or "").rstrip("/")
+            blocked_roots = [str(item or "").rstrip("/") for item in list(payload.get("blocked_roots") or [])]
+            if any(path == root or path.startswith(f"{root}/") for root in blocked_roots if root):
+                self._raise_rust_block("path_blocked_by_root", command=command)
+            allowed_roots = [str(item or "").rstrip("/") for item in list(payload.get("allowed_roots") or [])]
+            if any(path == root or path.startswith(f"{root}/") for root in allowed_roots if root):
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "reason": "path_within_allowed_root",
+                    "next_action": "allow_path_access",
+                    "approval_required": False,
+                }
+            self._raise_rust_block("path_outside_allowed_roots", command=command)
+        if command != "validate-policy":
+            raise AssertionError(f"unexpected Rust command {command}")
+        self.assertTrue(kwargs.get("allow_approval_required"))
+        contract = dict(payload.get("policy") or {})
+        capability = str(payload.get("capability") or "").strip()
+        requested_domain = str(payload.get("requested_domain") or "").strip().lower()
+        requested_path = str(payload.get("requested_path") or "").strip()
+        allowed_domains = [str(item or "").strip().lower() for item in list(contract.get("domain_allowlist") or [])]
+        if requested_domain and allowed_domains and not any(
+            requested_domain == domain or requested_domain.endswith(f".{domain}")
+            for domain in allowed_domains
+            if domain
+        ):
+            self._raise_policy_block("domain_outside_policy_scope")
+        blocked_scopes = [str(item or "").rstrip("/") for item in list(contract.get("blocked_filesystem_scope") or [])]
+        if requested_path and any(
+            requested_path == scope or requested_path.startswith(f"{scope}/")
+            for scope in blocked_scopes
+            if scope
+        ):
+            self._raise_policy_block("path_blocked_by_policy_scope")
+        allowed_scopes = [
+            str(item or "").rstrip("/")
+            for item in list(contract.get("filesystem_scope") or [])
+            if str(item or "").startswith(("/", "~"))
+        ]
+        if requested_path and allowed_scopes and not any(
+            requested_path == scope or requested_path.startswith(f"{scope}/")
+            for scope in allowed_scopes
+            if scope
+        ):
+            self._raise_policy_block("path_outside_policy_scope")
+        if capability in set(contract.get("blocked_capabilities") or []):
+            self._raise_policy_block("capability_blocked_by_policy")
+        if capability in set(contract.get("approval_required_capabilities") or []):
+            return {
+                "ok": True,
+                "decision": "require_approval",
+                "reason": "capability_requires_approval",
+                "next_action": "request_agent_computer_approval",
+                "approval_required": True,
+            }
+        if capability in set(contract.get("allowed_capabilities") or []):
+            return {
+                "ok": True,
+                "decision": "allow",
+                "reason": "capability_allowed_by_policy",
+                "next_action": "allow_agent_computer_request",
+                "approval_required": False,
+            }
+        self._raise_policy_block("default_deny")
+
+    def _raise_policy_block(self, reason: str) -> None:
+        self._raise_rust_block(reason, command="validate-policy")
+
+    def _raise_rust_block(self, reason: str, *, command: str) -> None:
+        raise policy.rust_runtime_kernel_client.RustKernelDecisionError(
+            {
+                "ok": False,
+                "decision": "block",
+                "reason": reason,
+                "approval_required": False,
+            },
+            command=command,
+        )
+
     def test_policy_owns_autonomy_mode_and_profile_should_reference_policy(self) -> None:
         contract = policy.build_default_agent_computer_policy(
             autonomy_mode="safe_autopilot",
@@ -55,6 +148,14 @@ class AgentComputerPolicyServiceTests(unittest.TestCase):
 
         for capability in ("browser.read", "screen.read", "memory.read", "notification.send"):
             self.assertEqual(policy.decision_for_capability(contract, capability), "block")
+
+    def test_decision_for_capability_uses_rust_validate_policy_path(self) -> None:
+        contract = policy.build_default_agent_computer_policy(autonomy_mode="safe_autopilot")
+
+        decision = policy.decision_for_capability(contract, "browser.click")
+
+        self.assertEqual(decision, "approval_required")
+        self.assertEqual(self._kernel_patch.mock.call_args.args[0], "validate-policy")
 
     def test_normalize_rejects_unknown_capability(self) -> None:
         with self.assertRaises(policy.AgentComputerPolicyError):
@@ -137,6 +238,53 @@ class AgentComputerPolicyServiceTests(unittest.TestCase):
         self.assertEqual(allowed.decision, "allow")
         self.assertEqual(blocked_nested.reason, "filesystem_scope_not_allowed")
         self.assertEqual(blocked_outside.reason, "filesystem_scope_not_allowed")
+
+    def test_evaluate_blocks_when_path_containment_returns_wrong_action(self) -> None:
+        contract = policy.normalize_agent_computer_policy(
+            {
+                "autonomy_mode": "trusted_workstation",
+                "filesystem_scope": ["/Users/mansur/Allowed"],
+            }
+        )
+        with patch.object(
+            policy.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "reason": "path_within_allowed_root",
+                "next_action": "request_agent_computer_approval",
+            },
+        ):
+            decision = policy.evaluate_agent_computer_request(
+                contract,
+                capability="file.write",
+                requested_path="/Users/mansur/Allowed/report.md",
+            )
+
+        self.assertEqual(decision.decision, "block")
+        self.assertEqual(decision.reason, "unexpected_next_action:allow_path_access")
+
+    def test_evaluate_blocks_when_validate_policy_returns_wrong_action(self) -> None:
+        contract = policy.build_default_agent_computer_policy(autonomy_mode="safe_autopilot")
+        with patch.object(
+            policy.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "reason": "capability_allowed_by_policy",
+                "next_action": "request_agent_computer_approval",
+                "approval_required": False,
+            },
+        ):
+            decision = policy.evaluate_agent_computer_request(
+                contract,
+                capability="communication.draft",
+            )
+
+        self.assertEqual(decision.decision, "block")
+        self.assertEqual(decision.reason, "unexpected_next_action:allow_agent_computer_request")
 
     def test_evaluate_returns_approval_scope_for_risky_action(self) -> None:
         contract = policy.build_default_agent_computer_policy(autonomy_mode="ask_every_time")

@@ -46,6 +46,10 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
             patch("server_modules.gateway_execution_service.gateway_activity_service.append_gateway_activity", activity_mock),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                return_value={"ok": True, "decision": "allow", "next_action": "dispatch_gateway_operation"},
+            ) as rust_mock,
         ):
             response = await gateway_execution_service.execute_tool_via_gateway(
                 gateway_id="gw-1",
@@ -67,6 +71,134 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(activity_kwargs["status"], "completed")
         self.assertEqual(activity_kwargs["payload"]["request_id"], "req-1")
         self.assertEqual(activity_kwargs["payload"]["run_id"], "run-1")
+        rust_mock.assert_called_once()
+        self.assertEqual(rust_mock.call_args.args[0], "gateway-service-decision")
+        self.assertEqual(rust_mock.call_args.args[1]["operation"], "tool_execute")
+
+    async def test_execute_tool_via_gateway_rust_denial_blocks_dispatch(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["computer_control.click"],
+            "metadata": {"capability_readiness": {"ready": ["computer_control.click"]}},
+        }
+        denied = gateway_execution_service.rust_runtime_kernel_client.RustKernelDecisionError(
+            {
+                "ok": False,
+                "decision": "block",
+                "reason": "gateway_kill_switch_enabled",
+            },
+            command="gateway-service-decision",
+        )
+        dispatch_mock = AsyncMock()
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                side_effect=denied,
+            ) as rust_mock,
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
+        ):
+            with self.assertRaisesRegex(ValueError, "Rust gateway-service blocked tool_execute"):
+                await gateway_execution_service.execute_tool_via_gateway(
+                    gateway_id="gw-1",
+                    capability_id="computer_control.click",
+                    arguments={"x": 12, "y": 34},
+                    run_id="run-1",
+                    trace_id="trace-1",
+                    workspace_id="ws-1",
+                    request_id="req-1",
+                )
+
+        rust_mock.assert_called_once()
+        dispatch_mock.assert_not_awaited()
+
+    async def test_execute_tool_via_gateway_unexpected_next_action_blocks_dispatch(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["computer_control.click"],
+            "metadata": {"capability_readiness": {"ready": ["computer_control.click"]}},
+        }
+        dispatch_mock = AsyncMock()
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "next_action": "allow_gateway_service_operation",
+                },
+            ) as rust_mock,
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
+        ):
+            with self.assertRaisesRegex(ValueError, "unexpected next_action"):
+                await gateway_execution_service.execute_tool_via_gateway(
+                    gateway_id="gw-1",
+                    capability_id="computer_control.click",
+                    arguments={"x": 12, "y": 34},
+                    run_id="run-1",
+                    trace_id="trace-1",
+                    workspace_id="ws-1",
+                    request_id="req-1",
+                )
+
+        rust_mock.assert_called_once()
+        dispatch_mock.assert_not_awaited()
+
+    async def test_execute_tool_via_gateway_wrong_quota_action_blocks_dispatch(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["computer_control.click"],
+            "metadata": {"capability_readiness": {"ready": ["computer_control.click"]}},
+        }
+        dispatch_mock = AsyncMock()
+
+        def rust_side_effect(command, payload):
+            if payload.get("operation") == "quota_check":
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "next_action": "dispatch_gateway_operation",
+                }
+            return {
+                "ok": True,
+                "decision": "allow",
+                "next_action": "dispatch_gateway_operation",
+            }
+
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                side_effect=rust_side_effect,
+            ) as rust_mock,
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
+        ):
+            with self.assertRaisesRegex(ValueError, "quota_check"):
+                await gateway_execution_service.execute_tool_via_gateway(
+                    gateway_id="gw-1",
+                    capability_id="computer_control.click",
+                    arguments={"x": 12, "y": 34},
+                    run_id="run-1",
+                    trace_id="trace-1",
+                    workspace_id="ws-1",
+                    request_id="req-1",
+                )
+
+        self.assertGreaterEqual(rust_mock.call_count, 1)
+        dispatch_mock.assert_not_awaited()
 
     async def test_interrupt_tool_via_gateway_dispatches_and_appends_activity(self) -> None:
         registration = {
@@ -111,6 +243,86 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(activity_kwargs["status"], "completed")
         self.assertEqual(activity_kwargs["payload"]["request_id"], "interrupt-1")
         self.assertEqual(activity_kwargs["payload"]["target_request_id"], "req-1")
+
+    async def test_interrupt_tool_via_gateway_unexpected_next_action_blocks_dispatch(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+        }
+        dispatch_mock = AsyncMock()
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "next_action": "allow_gateway_service_operation",
+                },
+            ) as rust_mock,
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_interrupt", dispatch_mock),
+        ):
+            with self.assertRaisesRegex(ValueError, "unexpected next_action"):
+                await gateway_execution_service.interrupt_tool_via_gateway(
+                    gateway_id="gw-1",
+                    run_id="run-1",
+                    trace_id="trace-1",
+                    workspace_id="ws-1",
+                    target_request_id="req-1",
+                    reason="operator_requested_stop",
+                    request_id="interrupt-1",
+                )
+
+        rust_mock.assert_called_once()
+        dispatch_mock.assert_not_awaited()
+
+    async def test_interrupt_tool_via_gateway_wrong_quota_action_blocks_dispatch(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+        }
+        dispatch_mock = AsyncMock()
+
+        def rust_side_effect(command, payload):
+            if payload.get("operation") == "quota_check":
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "next_action": "dispatch_gateway_operation",
+                }
+            return {
+                "ok": True,
+                "decision": "allow",
+                "next_action": "dispatch_gateway_operation",
+            }
+
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                side_effect=rust_side_effect,
+            ) as rust_mock,
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_interrupt", dispatch_mock),
+        ):
+            with self.assertRaisesRegex(ValueError, "quota_check"):
+                await gateway_execution_service.interrupt_tool_via_gateway(
+                    gateway_id="gw-1",
+                    run_id="run-1",
+                    trace_id="trace-1",
+                    workspace_id="ws-1",
+                    target_request_id="req-1",
+                    reason="operator_requested_stop",
+                    request_id="interrupt-1",
+                )
+
+        self.assertGreaterEqual(rust_mock.call_count, 1)
+        dispatch_mock.assert_not_awaited()
 
     def test_screenshot_retention_off_strips_inline_image_without_artifact(self) -> None:
         encoded = base64.b64encode(b"png-bytes").decode("ascii")

@@ -4,6 +4,8 @@ import importlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
+
 from server_modules import deployed_agent_admin_dashboard_service
 
 
@@ -102,6 +104,10 @@ class DeployedAgentAdminDashboardServiceTests(unittest.IsolatedAsyncioTestCase):
                 "server_modules.deployed_agent_admin_dashboard_service.deployed_agent_service.get_deployed_agent_telegram_readiness",
                 new=AsyncMock(return_value=readiness),
             ),
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.deployed_agent_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                return_value={"ok": True, "decision": "allow", "next_action": "read_deployed_agent_admin_dashboard"},
+            ) as rust_mock,
         ):
             payload = await deployed_agent_admin_dashboard_service.get_deployed_agent_admin_dashboard_service().get_dashboard(
                 agent_id="dagent_1",
@@ -114,6 +120,91 @@ class DeployedAgentAdminDashboardServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.customer_entry.bot_username, "bluebirdcafe_bot")
         self.assertIn("t.me/bluebirdcafe_bot", payload.customer_entry.telegram_deep_link or "")
         self.assertEqual(payload.specialist_profile["actions"]["order_capture_mode"], "spreadsheet_append")
+        rust_mock.assert_called_once()
+        self.assertEqual(rust_mock.call_args.args[0], "deployed-agent-service-decision")
+        self.assertEqual(rust_mock.call_args.args[1]["operation"], "admin_dashboard")
+
+    async def test_get_dashboard_rust_denial_blocks_dashboard_repository_read(self) -> None:
+        denied = deployed_agent_admin_dashboard_service.deployed_agent_service.rust_runtime_kernel_client.RustKernelDecisionError(
+            {
+                "ok": False,
+                "decision": "block",
+                "reason": "deployed_agent_admin_access_required",
+            },
+            command="deployed-agent-service-decision",
+        )
+        dashboard_read = AsyncMock()
+
+        with (
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.deployed_agent_service.require_deployed_agent_admin_access",
+                return_value="ws-1",
+            ),
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.control_plane_repository.get_deployed_agent_admin_dashboard",
+                new=dashboard_read,
+            ),
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value={"id": "dagent_1", "deployment_state": "live", "metadata": {}}),
+            ),
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.deployed_agent_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                side_effect=denied,
+            ) as rust_mock,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await deployed_agent_admin_dashboard_service.get_deployed_agent_admin_dashboard_service().get_dashboard(
+                    agent_id="dagent_1",
+                    workspace_id="ws-1",
+                    current_user=_owner_user(),
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("Rust deployed-agent service blocked admin_dashboard", str(raised.exception.detail))
+        rust_mock.assert_called_once()
+        dashboard_read.assert_not_awaited()
+
+    async def test_get_dashboard_wrong_rust_action_blocks_dashboard_repository_read(self) -> None:
+        dashboard_read = AsyncMock()
+
+        with (
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.deployed_agent_service.require_deployed_agent_admin_access",
+                return_value="ws-1",
+            ),
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.control_plane_repository.get_deployed_agent_admin_dashboard",
+                new=dashboard_read,
+            ),
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value={"id": "dagent_1", "deployment_state": "live", "metadata": {}}),
+            ),
+            patch(
+                "server_modules.deployed_agent_admin_dashboard_service.deployed_agent_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                return_value={"ok": True, "decision": "allow", "next_action": "read_deployed_agent_analytics"},
+            ) as rust_mock,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await deployed_agent_admin_dashboard_service.get_deployed_agent_admin_dashboard_service().get_dashboard(
+                    agent_id="dagent_1",
+                    workspace_id="ws-1",
+                    current_user=_owner_user(),
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("unexpected next_action", str(raised.exception.detail))
+        rust_mock.assert_called_once()
+        dashboard_read.assert_not_awaited()
 
 
 if __name__ == "__main__":

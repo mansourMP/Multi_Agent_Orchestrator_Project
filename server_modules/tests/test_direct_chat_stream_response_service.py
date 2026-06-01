@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from unittest import mock
 
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -18,6 +19,21 @@ class _Resolution:
 
 
 class DirectChatStreamResponseServiceTests(unittest.TestCase):
+    def setUp(self):
+        self._rust_patch = mock.patch(
+            "server_modules.direct_chat_stream_response_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "stream_chat",
+                "next_action": "start_chat_stream",
+            },
+        )
+        self.mock_rust = self._rust_patch.start()
+
+    def tearDown(self):
+        self._rust_patch.stop()
+
     def _services(self, **overrides):
         async def _execute_agent_turn_request(**kwargs):
             return {
@@ -152,6 +168,37 @@ class DirectChatStreamResponseServiceTests(unittest.TestCase):
         self.assertEqual(session["metadata"]["assistant_turn"]["workspace_id"], "default")
         self.assertEqual(session["metadata"]["assistant_turn"]["thread_id"], "thread-1")
         self.assertEqual(session["metadata"]["assistant_turn"]["request_id"], "req-1")
+
+    def test_blocks_when_rust_stream_chat_next_action_is_unexpected(self):
+        async def _execute_agent_turn_request(**kwargs):
+            return {
+                "workspace_id": "default",
+                "session_key": "session-1",
+                "thread_id": "thread-1",
+                "client_request_id": "req-1",
+                "producer": lambda: iter([{"type": "chunk", "delta": "Hello"}]),
+            }
+
+        services = self._services(
+            execute_agent_turn_request=_execute_agent_turn_request,
+            get_or_create_chat_stream_session=lambda *args, **kwargs: {"producer_started": False},
+        )
+        self.mock_rust.return_value = {
+            "ok": True,
+            "decision": "allow",
+            "operation": "stream_chat",
+            "next_action": "get_run",
+        }
+
+        with self.assertRaisesRegex(Exception, "unexpected next_action"):
+            asyncio.run(
+                build_direct_chat_stream_response(
+                    current_user={"user_id": "user-1"},
+                    body={"message": "hello"},
+                    last_event_id="0",
+                    services=services,
+                )
+            )
 
 
 if __name__ == "__main__":

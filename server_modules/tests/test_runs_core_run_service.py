@@ -1,8 +1,12 @@
+import asyncio
 import queue
 import unittest
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from server_modules import runs_core
+from server_modules.runtime_models import CronScheduleUpsertRequest, RunStartRequest
 
 
 class RunsCoreRunServiceTests(unittest.TestCase):
@@ -35,19 +39,119 @@ class RunsCoreRunServiceTests(unittest.TestCase):
         self.assertTrue(callable(kwargs["recover_delegation_retries_on_startup_fn"]))
 
     def test_trigger_pending_heartbeat_schedules_delegates_to_run_service(self) -> None:
-        with patch.object(
-            runs_core.run_service,
-            "trigger_pending_heartbeat_schedules",
-            return_value={"acted": False, "started": []},
-        ) as trigger_mock:
-            payload = runs_core.trigger_pending_heartbeat_schedules(workspace_id="ws-1")
+        previous_schedules = dict(runs_core.WEEKLY_SCHEDULES)
+        try:
+            runs_core.WEEKLY_SCHEDULES.clear()
+            runs_core.WEEKLY_SCHEDULES["sched-1"] = {
+                "id": "sched-1",
+                "workspace_id": "ws-1",
+                "enabled": True,
+                "pending_heartbeat": True,
+            }
+            with patch.object(
+                runs_core.rust_runtime_kernel_client,
+                "run_trigger_decision",
+                return_value={"ok": True, "decision": "allow", "next_action": "trigger_pending_schedules"},
+            ) as rust_mock, patch.object(
+                runs_core.run_service,
+                "trigger_pending_heartbeat_schedules",
+                return_value={"acted": False, "started": []},
+            ) as trigger_mock:
+                payload = runs_core.trigger_pending_heartbeat_schedules(workspace_id="ws-1")
 
-        self.assertEqual(payload, {"acted": False, "started": []})
-        trigger_mock.assert_called_once()
-        _, kwargs = trigger_mock.call_args
-        self.assertIs(kwargs["weekly_schedules"], runs_core.WEEKLY_SCHEDULES)
-        self.assertIs(kwargs["persist_schedules_fn"], runs_core._persist_schedules)
-        self.assertEqual(kwargs["workspace_id"], "ws-1")
+            self.assertEqual(payload, {"acted": False, "started": []})
+            rust_mock.assert_called_once()
+            self.assertEqual(rust_mock.call_args.kwargs["operation"], "trigger_pending_heartbeat")
+            self.assertEqual(rust_mock.call_args.kwargs["pending_count"], 1)
+            trigger_mock.assert_called_once()
+            _, kwargs = trigger_mock.call_args
+            self.assertIs(kwargs["weekly_schedules"], runs_core.WEEKLY_SCHEDULES)
+            self.assertIs(kwargs["persist_schedules_fn"], runs_core._persist_schedules)
+            self.assertEqual(kwargs["workspace_id"], "ws-1")
+        finally:
+            runs_core.WEEKLY_SCHEDULES.clear()
+            runs_core.WEEKLY_SCHEDULES.update(previous_schedules)
+
+    def test_trigger_pending_heartbeat_schedules_noop_skips_run_service(self) -> None:
+        previous_schedules = dict(runs_core.WEEKLY_SCHEDULES)
+        try:
+            runs_core.WEEKLY_SCHEDULES.clear()
+            with patch.object(
+                runs_core.rust_runtime_kernel_client,
+                "run_trigger_decision",
+                return_value={"ok": True, "decision": "allow", "next_action": "noop"},
+            ) as rust_mock, patch.object(
+                runs_core.run_service,
+                "trigger_pending_heartbeat_schedules",
+            ) as trigger_mock:
+                payload = runs_core.trigger_pending_heartbeat_schedules(workspace_id="ws-1")
+
+            self.assertEqual(payload, {"acted": False, "started": []})
+            rust_mock.assert_called_once()
+            trigger_mock.assert_not_called()
+        finally:
+            runs_core.WEEKLY_SCHEDULES.clear()
+            runs_core.WEEKLY_SCHEDULES.update(previous_schedules)
+
+    def test_create_schedule_wrong_next_action_blocks_persistence(self) -> None:
+        previous_schedules = dict(runs_core.WEEKLY_SCHEDULES)
+        try:
+            runs_core.WEEKLY_SCHEDULES.clear()
+            body = CronScheduleUpsertRequest(
+                name="Morning",
+                workspace_id="ws-1",
+                enabled=True,
+                cron="0 9 * * *",
+                timezone="utc",
+                wake_mode="now",
+                delivery="announce",
+                run_request=RunStartRequest(engine="orion", workspace_id="ws-1", user_goal="Check inbox"),
+            )
+            with patch.object(
+                runs_core.rust_runtime_kernel_client,
+                "run_trigger_decision",
+                return_value={"ok": True, "decision": "allow", "next_action": "execute_scheduled_run"},
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    asyncio.run(runs_core.create_schedule(body))
+
+            self.assertEqual(raised.exception.status_code, 423)
+            self.assertEqual(raised.exception.detail["reason"], "unexpected_next_action:execute_scheduled_run")
+            self.assertEqual(runs_core.WEEKLY_SCHEDULES, {})
+        finally:
+            runs_core.WEEKLY_SCHEDULES.clear()
+            runs_core.WEEKLY_SCHEDULES.update(previous_schedules)
+
+    def test_trigger_schedule_now_wrong_next_action_blocks_execution(self) -> None:
+        previous_schedules = dict(runs_core.WEEKLY_SCHEDULES)
+        try:
+            runs_core.WEEKLY_SCHEDULES.clear()
+            runs_core.WEEKLY_SCHEDULES["sched-1"] = {
+                "id": "sched-1",
+                "name": "Morning",
+                "workspace_id": "ws-1",
+                "enabled": True,
+                "cron": "0 9 * * *",
+                "timezone": "utc",
+                "run_request": {"engine": "orion", "workspace_id": "ws-1", "user_goal": "Check inbox"},
+            }
+            with patch.object(
+                runs_core.rust_runtime_kernel_client,
+                "run_trigger_decision",
+                return_value={"ok": True, "decision": "allow", "next_action": "create_schedule"},
+            ), patch.object(
+                runs_core,
+                "_execute_scheduled_run_request",
+            ) as execute_mock:
+                with self.assertRaises(HTTPException) as raised:
+                    asyncio.run(runs_core.trigger_schedule_now("sched-1"))
+
+            self.assertEqual(raised.exception.status_code, 423)
+            self.assertEqual(raised.exception.detail["reason"], "unexpected_next_action:create_schedule")
+            execute_mock.assert_not_called()
+        finally:
+            runs_core.WEEKLY_SCHEDULES.clear()
+            runs_core.WEEKLY_SCHEDULES.update(previous_schedules)
 
     def test_begin_run_pending_confirmation_delegates_to_run_service(self) -> None:
         run = {

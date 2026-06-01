@@ -12,8 +12,110 @@ from server_modules import agent_computer_profile_service as profiles
 
 
 class AgentComputerApprovalDecisionServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._rust_patch = patch.object(
+            decisions.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=self._fake_rust_kernel,
+        )
+        self._rust_patch.start()
+
+    def tearDown(self) -> None:
+        self._rust_patch.stop()
+
     def _state_patch(self, root: Path):
         return patch("server_modules.agent_approval_memory_service.workspace_context.workspace_scope_dir", return_value=root)
+
+    def _fake_rust_kernel(self, command: str, payload: dict, **kwargs):
+        if command == "validate-policy":
+            policy = dict(payload.get("policy") or {})
+            capability = str(payload.get("capability") or "").strip()
+            if capability in set(policy.get("blocked_capabilities") or []):
+                self._raise_rust_block("capability_blocked_by_policy", command=command)
+            if capability in set(policy.get("approval_required_capabilities") or []):
+                return {
+                    "ok": True,
+                    "decision": "require_approval",
+                    "reason": "capability_requires_approval",
+                    "next_action": "request_agent_computer_approval",
+                    "approval_required": True,
+                }
+            return {
+                "ok": True,
+                "decision": "allow",
+                "reason": "capability_allowed_by_policy",
+                "next_action": "allow_agent_computer_request",
+                "approval_required": False,
+            }
+        if command == "classify-risk":
+            capability = str(payload.get("capability") or "").strip()
+            action_class = str(payload.get("action_class") or "read").strip() or "read"
+            current_kill_state = str(payload.get("current_kill_state") or "").strip().lower()
+            if current_kill_state:
+                self._raise_rust_block("kill_state_active", command=command, extra={
+                    "risk_level": "critical",
+                    "risk_class": "critical",
+                    "capability": capability,
+                    "action_class": action_class,
+                    "blocked_reason": "kill_state_active",
+                })
+            if capability == "credential.access":
+                return self._risk_response("require_approval", "critical", capability, action_class)
+            if capability in {"file.write", "communication.send", "browser.click"}:
+                policy = dict(payload.get("policy") or {})
+                if capability == "file.write" and policy.get("autonomy_mode") == "trusted_workstation":
+                    return self._risk_response("allow", "low", capability, action_class)
+                return self._risk_response("require_approval", "high", capability, action_class)
+            return self._risk_response("allow", "low", capability, action_class)
+        if command == "approval-requirement":
+            capability = str(payload.get("capability") or "").strip()
+            action_class = str(payload.get("action_class") or "read").strip() or "read"
+            risk_level = str(payload.get("risk_level") or "medium").strip() or "medium"
+            target_summary = str(payload.get("target_summary") or "target").strip() or "target"
+            return {
+                "ok": True,
+                "decision": "require_approval",
+                "reason": "approval_required",
+                "approval_required": True,
+                "next_action": "request_owner_approval",
+                "approval": {
+                    "scope": f"{capability}:{action_class}:{risk_level}:{target_summary}",
+                    "ttl_seconds": 60 if risk_level == "critical" else 300,
+                    "single_use": risk_level in {"high", "critical"} or action_class in {"write", "execute"},
+                    "owner_visible": True,
+                },
+            }
+        raise AssertionError(f"unexpected Rust command {command}")
+
+    def _risk_response(self, decision: str, risk_class: str, capability: str, action_class: str) -> dict:
+        return {
+            "ok": decision != "block",
+            "decision": decision,
+            "reason": "risk_allowed" if decision == "allow" else "risk_requires_approval",
+            "approval_required": decision == "require_approval",
+            "decision_id": "crd_test",
+            "risk_level": risk_class,
+            "risk_class": risk_class,
+            "action_class": action_class,
+            "capability": capability,
+            "target_summary": "target",
+            "approval_scopes_required": [capability] if decision == "require_approval" else [],
+            "audit_visibility": "security" if risk_class in {"high", "critical"} else "standard",
+            "recording_required": risk_class in {"high", "critical"},
+            "retention_class": "extended" if risk_class == "critical" else "standard" if risk_class == "high" else "short",
+            "cacheable": False,
+        }
+
+    def _raise_rust_block(self, reason: str, *, command: str, extra: dict | None = None) -> None:
+        decision = {
+            "ok": False,
+            "decision": "block",
+            "reason": reason,
+            "approval_required": False,
+        }
+        if extra:
+            decision.update(extra)
+        raise decisions.rust_runtime_kernel_client.RustKernelDecisionError(decision, command=command)
 
     def _profile(self, *, profile_id: str = "profile-1", gateway_id: str = "gw-1", dedicated: bool = False):
         return profiles.normalize_agent_computer_profile(
@@ -104,6 +206,33 @@ class AgentComputerApprovalDecisionServiceTests(unittest.TestCase):
         self.assertTrue(decision.approval_required)
         self.assertEqual(payload["approval_card"]["action"], "communication.send")
         self.assertNotIn("+15555551212", str(payload))
+
+    def test_wrong_approval_next_action_blocks_approval_card_construction(self) -> None:
+        policy = policies.build_default_agent_computer_policy(autonomy_mode="ask_every_time", policy_id="policy-1")
+
+        def wrong_action_kernel(command: str, payload: dict, **kwargs):
+            response = self._fake_rust_kernel(command, payload, **kwargs)
+            if command == "approval-requirement":
+                response = dict(response)
+                response["next_action"] = "persist_approval_decision"
+            return response
+
+        with patch.object(
+            decisions.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=wrong_action_kernel,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected_next_action:persist_approval_decision"):
+                decisions.decide_agent_computer_action(
+                    workspace_id="ws-1",
+                    actor_user_id="user-1",
+                    agent_id="sage",
+                    policy=policy,
+                    computer_profile=self._profile(),
+                    capability="file.write",
+                    action_class="write",
+                    target_path="/Users/mansur/Agent/outbox.md",
+                )
 
     def test_remembered_approval_applies_only_to_same_scope_and_agent(self) -> None:
         policy = policies.build_default_agent_computer_policy(autonomy_mode="safe_autopilot", policy_id="policy-1")

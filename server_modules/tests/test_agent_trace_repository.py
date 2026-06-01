@@ -20,6 +20,13 @@ class AgentTraceRepositorySchemaTests(unittest.TestCase):
     def setUp(self) -> None:
         global control_plane_repository
         control_plane_repository = importlib.import_module("server_modules.control_plane_repository")
+        self._rust_gate = patch.object(
+            control_plane_repository.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={"decision": "allow"},
+        )
+        self._rust_gate.start()
+        self.addCleanup(self._rust_gate.stop)
 
     def test_schema_sql_includes_trace_tables_and_indexes(self) -> None:
         schema = control_plane_repository.CONTROL_PLANE_SCHEMA_SQL

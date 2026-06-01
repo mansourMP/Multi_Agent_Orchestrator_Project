@@ -11,6 +11,107 @@ from server_modules import runtime_events
 
 
 class OutboxServiceTests(unittest.TestCase):
+    def test_emit_run_transition_event_calls_run_record_kernel_first(self) -> None:
+        persisted = []
+        calls = []
+
+        def fake_rust(command, payload, **kwargs):
+            calls.append((command, payload, kwargs))
+            if command == "run-record-decision":
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "reason": "run_record_transition_outbox_allowed",
+                    "operation": payload["operation"],
+                    "next_action": "emit_run_transition_event",
+                }
+            return {
+                "ok": True,
+                "decision": "allow",
+                "reason": "outbox_persist_allowed",
+                "operation": payload["operation"],
+                "next_action": "persist_outbox_event",
+            }
+
+        with patch.object(
+            outbox_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=fake_rust,
+        ):
+            event = outbox_service.emit_run_transition_event(
+                run_id="run-1",
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                from_state="queued",
+                to_state="running",
+                actor="runtime",
+                trace_id="trace-1",
+                persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
+            )
+
+        self.assertEqual(event.event_type, "run_transition")
+        self.assertEqual(calls[0][0], "run-record-decision")
+        self.assertEqual(calls[0][1]["operation"], "emit_transition_outbox")
+        self.assertEqual(calls[0][1]["from_state"], "queued")
+        self.assertEqual(calls[0][1]["to_state"], "running")
+        self.assertEqual(persisted[0]["payload"]["to_state"], "running")
+
+    def test_emit_run_transition_event_wrong_run_record_action_blocks_persist(self) -> None:
+        persisted = []
+
+        with patch.object(
+            outbox_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "reason": "run_record_transition_outbox_allowed",
+                "operation": "emit_transition_outbox",
+                "next_action": "emit_artifact_created_events",
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected next_action"):
+                outbox_service.emit_run_transition_event(
+                    run_id="run-1",
+                    tenant_id="tenant-1",
+                    workspace_id="ws-1",
+                    from_state="queued",
+                    to_state="running",
+                    actor="runtime",
+                    trace_id="trace-1",
+                    persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
+                )
+
+        self.assertEqual(persisted, [])
+
+    def test_emit_run_transition_event_noop_skips_persist(self) -> None:
+        persisted = []
+
+        with patch.object(
+            outbox_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "reason": "run_record_transition_outbox_allowed",
+                "operation": "emit_transition_outbox",
+                "next_action": "noop",
+            },
+        ):
+            event = outbox_service.emit_run_transition_event(
+                run_id="run-1",
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                from_state="running",
+                to_state="running",
+                actor="runtime",
+                trace_id="trace-1",
+                persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
+            )
+
+        self.assertIsNone(event)
+        self.assertEqual(persisted, [])
+
     def test_emit_approval_requested_event_persists_browser_payload(self) -> None:
         persisted = []
 
@@ -43,6 +144,31 @@ class OutboxServiceTests(unittest.TestCase):
         )
         self.assertTrue(persisted[0]["payload"]["browser"]["reviewed_approval_required"])
 
+    def test_emit_runtime_event_wrong_outbox_next_action_blocks_persist(self) -> None:
+        persisted = []
+
+        with patch.object(
+            outbox_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "reason": "outbox_persist_allowed",
+                "operation": "persist_event",
+                "next_action": "claim_due_outbox_events",
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected next_action"):
+                outbox_service.emit_runtime_event(
+                    event_type="runtime_event",
+                    tenant_id="tenant-1",
+                    workspace_id="ws-1",
+                    payload={"ok": True},
+                    persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
+                )
+
+        self.assertEqual(persisted, [])
+
     def test_emit_approval_resolved_event_persists_outbox_payload(self) -> None:
         persisted = []
 
@@ -73,19 +199,75 @@ class OutboxServiceTests(unittest.TestCase):
 
     def test_emit_artifact_created_event_persists_outbox_payload(self) -> None:
         persisted = []
+        calls = []
 
-        event = outbox_service.emit_artifact_created_event(
-            run_id="run-1",
-            tenant_id="tenant-1",
-            workspace_id="ws-1",
-            artifact={"kind": "screenshot", "file_path": "/tmp/shot.png"},
-            trace_id="trace-1",
-            index=0,
-            persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
-        )
+        def fake_rust(command, payload, **kwargs):
+            calls.append((command, payload, kwargs))
+            if command == "run-record-decision":
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "reason": "run_record_artifact_outbox_allowed",
+                    "operation": payload["operation"],
+                    "next_action": "emit_artifact_created_events",
+                    "artifact_count": 1,
+                }
+            return {
+                "ok": True,
+                "decision": "allow",
+                "reason": "outbox_persist_allowed",
+                "operation": payload["operation"],
+                "next_action": "persist_outbox_event",
+            }
+
+        with patch.object(
+            outbox_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=fake_rust,
+        ):
+            event = outbox_service.emit_artifact_created_event(
+                run_id="run-1",
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                artifact={"kind": "screenshot", "file_path": "/tmp/shot.png"},
+                trace_id="trace-1",
+                index=0,
+                persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
+            )
 
         self.assertEqual(event.event_type, "artifact_created")
+        self.assertEqual(calls[0][0], "run-record-decision")
+        self.assertEqual(calls[0][1]["operation"], "emit_artifact_outbox")
+        self.assertEqual(calls[0][1]["artifact_count"], 1)
         self.assertEqual(persisted[0]["payload"]["artifact_path"], "/tmp/shot.png")
+
+    def test_emit_artifact_created_event_wrong_run_record_action_blocks_persist(self) -> None:
+        persisted = []
+
+        with patch.object(
+            outbox_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "reason": "run_record_artifact_outbox_allowed",
+                "operation": "emit_artifact_outbox",
+                "next_action": "emit_run_transition_event",
+                "artifact_count": 1,
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected next_action"):
+                outbox_service.emit_artifact_created_event(
+                    run_id="run-1",
+                    tenant_id="tenant-1",
+                    workspace_id="ws-1",
+                    artifact={"kind": "screenshot", "file_path": "/tmp/shot.png"},
+                    trace_id="trace-1",
+                    index=0,
+                    persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
+                )
+
+        self.assertEqual(persisted, [])
 
     def test_emit_channel_run_delivery_event_persists_outbox_payload(self) -> None:
         persisted = []
@@ -131,6 +313,35 @@ class OutboxServiceTests(unittest.TestCase):
         self.assertEqual(captured["pending_run_ids"], ["run-1"])
         self.assertEqual(captured["claimed_runs"], {"run-1": {"worker_id": "worker-1"}})
         self.assertEqual(captured["runtime_registrations"], {"worker-1": {"status": "idle"}})
+
+    def test_deliver_pending_outbox_events_wrong_claim_action_blocks_claim(self) -> None:
+        claim_calls = []
+
+        def _claim_due(**kwargs):
+            claim_calls.append(kwargs)
+            return []
+
+        with patch.object(
+            outbox_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "reason": "outbox_claim_due_allowed",
+                "operation": "claim_due",
+                "next_action": "persist_outbox_event",
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected next action"):
+                outbox_service.deliver_pending_outbox_events(
+                    claim_due_outbox_events_fn=_claim_due,
+                    mark_outbox_event_delivered_fn=lambda *args, **kwargs: True,
+                    record_outbox_delivery_failure_fn=lambda *args, **kwargs: True,
+                    deliver_event_fn=lambda event: True,
+                    get_outbox_delivery_status_fn=lambda: {"pending": 0},
+                )
+
+        self.assertEqual(claim_calls, [])
 
     def test_enqueue_local_companion_run_updates_queue_persists_and_logs(self) -> None:
         events = []

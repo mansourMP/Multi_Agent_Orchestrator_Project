@@ -24,6 +24,21 @@ worker = _load_module()
 
 
 class LocalWorkerChatFallbackTests(TestCase):
+    @patch.object(worker.rust_runtime_kernel_client, "capability_manifest", return_value={
+        "ok": True,
+        "decision": "allow",
+        "next_action": "return_capability_manifest",
+        "capabilities": ["browser_control", "read_files", "write_files", "shell_command"],
+    })
+    def test_runtime_capabilities_follow_rust_capability_manifest(self, _mock_manifest):
+        capabilities = worker.build_runtime_capabilities()
+
+        self.assertIn("browser_automation.interactive", capabilities)
+        self.assertIn("filesystem.read_write", capabilities)
+        self.assertIn("shell.execute", capabilities)
+        self.assertIn("screenshot.capture", capabilities)
+        self.assertIn("local.worker", capabilities)
+
     def test_enrollment_token_bootstraps_as_local_companion_gateway(self):
         runtime_type, execution_targets = worker.runtime_bootstrap_shape("enroll-token")
 

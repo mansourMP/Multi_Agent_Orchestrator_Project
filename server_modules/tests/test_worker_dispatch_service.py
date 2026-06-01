@@ -2,6 +2,8 @@ import queue
 import threading
 import unittest
 
+from fastapi import HTTPException
+
 from server_modules import worker_dispatch_service
 
 
@@ -353,6 +355,178 @@ class WorkerDispatchServiceTests(unittest.TestCase):
         self.assertEqual(runtime_state_persisted, [True])
         self.assertEqual(seen, [("worker-1", None, "idle", "failed_run")])
         self.assertEqual(events[0][2]["event"], "run_interrupted")
+
+    def test_complete_local_run_treats_terminal_state_as_rust_owned_idempotent(self) -> None:
+        run = {
+            "status": "completed",
+            "logs": queue.Queue(),
+            "context": {"metadata": {}},
+        }
+
+        result = worker_dispatch_service.complete_local_run(
+            "run-1",
+            worker_id="worker-1",
+            result_text="ignored",
+            result_data=None,
+            usage_masked=None,
+            runs_by_id={"run-1": run},
+            local_queue_lock=threading.Lock(),
+            claimed_runs={},
+            emit_log_fn=lambda *args, **kwargs: self.fail("terminal complete should not mutate logs"),
+            mark_local_worker_seen_fn=lambda *args, **kwargs: self.fail("terminal complete should not mutate worker state"),
+            set_run_status_fn=lambda *args, **kwargs: self.fail("terminal complete should not change status"),
+            persist_run_memory_fn=lambda *args, **kwargs: self.fail("terminal complete should not persist memory"),
+            persist_local_runtime_state_fn=lambda: self.fail("terminal complete should not persist runtime state"),
+        )
+
+        self.assertEqual(result, {"status": "ok", "run_id": "run-1", "already_terminal": True})
+
+    def test_fail_local_run_treats_terminal_state_as_rust_owned_idempotent(self) -> None:
+        run = {
+            "status": "failed",
+            "logs": queue.Queue(),
+            "context": {"metadata": {}},
+        }
+
+        result = worker_dispatch_service.fail_local_run(
+            "run-1",
+            worker_id="worker-1",
+            error="ignored",
+            runs_by_id={"run-1": run},
+            local_queue_lock=threading.Lock(),
+            claimed_runs={},
+            emit_log_fn=lambda *args, **kwargs: self.fail("terminal fail should not mutate logs"),
+            mark_local_worker_seen_fn=lambda *args, **kwargs: self.fail("terminal fail should not mutate worker state"),
+            set_run_status_fn=lambda *args, **kwargs: self.fail("terminal fail should not change status"),
+            persist_local_runtime_state_fn=lambda: self.fail("terminal fail should not persist runtime state"),
+        )
+
+        self.assertEqual(result, {"status": "ok", "run_id": "run-1", "already_terminal": True})
+
+    def test_pause_local_run_maps_rust_worker_ownership_denial_to_compatibility_403(self) -> None:
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "context": {"metadata": {}},
+        }
+        with self.assertRaises(HTTPException) as excinfo:
+            worker_dispatch_service.pause_local_run(
+                "run-1",
+                worker_id="worker-2",
+                result_text="Need approval",
+                result_data={"summary": "Need approval"},
+                browser_checkpoint=None,
+                wait_reason="human_required",
+                runs_by_id={"run-1": run},
+                local_queue_lock=threading.Lock(),
+                claimed_runs={"run-1": {"worker_id": "worker-1", "machine_id": "machine-1", "lease_id": "lease-1"}},
+                emit_log_fn=lambda *args, **kwargs: self.fail("ownership denial should happen before pause mutation"),
+                mark_local_worker_seen_fn=lambda *args, **kwargs: self.fail("ownership denial should happen before worker mutation"),
+                set_run_status_fn=lambda *args, **kwargs: self.fail("ownership denial should happen before status mutation"),
+                persist_local_runtime_state_fn=lambda: self.fail("ownership denial should happen before persistence"),
+            )
+
+        self.assertEqual(excinfo.exception.status_code, 403)
+        self.assertEqual(excinfo.exception.detail, "Worker does not own this local run.")
+
+    def test_heartbeat_local_run_maps_rust_claim_missing_to_compatibility_409(self) -> None:
+        run = {"status": "running_local"}
+
+        with self.assertRaises(HTTPException) as excinfo:
+            worker_dispatch_service.heartbeat_local_run(
+                "run-1",
+                worker_id="worker-1",
+                note="still going",
+                runs_by_id={"run-1": run},
+                local_queue_lock=threading.Lock(),
+                claimed_runs={},
+                maybe_emit_local_still_working_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before heartbeat mutation"),
+                mark_local_worker_seen_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before worker mutation"),
+                utc_now_iso_fn=lambda: "2026-04-06T00:00:10Z",
+                touch_claim_heartbeat_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before durable touch"),
+                progress_event=True,
+            )
+
+        self.assertEqual(excinfo.exception.status_code, 409)
+        self.assertEqual(excinfo.exception.detail, "Run is not claimed by Gateway.")
+
+    def test_pause_local_run_maps_rust_claim_missing_to_compatibility_409(self) -> None:
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "context": {"metadata": {}},
+        }
+
+        with self.assertRaises(HTTPException) as excinfo:
+            worker_dispatch_service.pause_local_run(
+                "run-1",
+                worker_id="worker-1",
+                result_text="Need approval",
+                result_data={"summary": "Need approval"},
+                browser_checkpoint=None,
+                wait_reason="human_required",
+                runs_by_id={"run-1": run},
+                local_queue_lock=threading.Lock(),
+                claimed_runs={},
+                emit_log_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before pause mutation"),
+                mark_local_worker_seen_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before worker mutation"),
+                set_run_status_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before status mutation"),
+                persist_local_runtime_state_fn=lambda: self.fail("claim-missing denial should happen before persistence"),
+            )
+
+        self.assertEqual(excinfo.exception.status_code, 409)
+        self.assertEqual(excinfo.exception.detail, "Run is not claimed by Gateway.")
+
+    def test_complete_local_run_maps_rust_claim_missing_to_compatibility_409(self) -> None:
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "context": {"metadata": {}},
+        }
+
+        with self.assertRaises(HTTPException) as excinfo:
+            worker_dispatch_service.complete_local_run(
+                "run-1",
+                worker_id="worker-1",
+                result_text="done",
+                result_data=None,
+                usage_masked=None,
+                runs_by_id={"run-1": run},
+                local_queue_lock=threading.Lock(),
+                claimed_runs={},
+                emit_log_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before complete mutation"),
+                mark_local_worker_seen_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before worker mutation"),
+                set_run_status_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before status mutation"),
+                persist_run_memory_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before memory persistence"),
+                persist_local_runtime_state_fn=lambda: self.fail("claim-missing denial should happen before runtime persistence"),
+            )
+
+        self.assertEqual(excinfo.exception.status_code, 409)
+        self.assertEqual(excinfo.exception.detail, "Run is not claimed by Gateway.")
+
+    def test_fail_local_run_maps_rust_claim_missing_to_compatibility_409(self) -> None:
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "context": {"metadata": {}},
+        }
+
+        with self.assertRaises(HTTPException) as excinfo:
+            worker_dispatch_service.fail_local_run(
+                "run-1",
+                worker_id="worker-1",
+                error="boom",
+                runs_by_id={"run-1": run},
+                local_queue_lock=threading.Lock(),
+                claimed_runs={},
+                emit_log_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before fail mutation"),
+                mark_local_worker_seen_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before worker mutation"),
+                set_run_status_fn=lambda *args, **kwargs: self.fail("claim-missing denial should happen before status mutation"),
+                persist_local_runtime_state_fn=lambda: self.fail("claim-missing denial should happen before runtime persistence"),
+            )
+
+        self.assertEqual(excinfo.exception.status_code, 409)
+        self.assertEqual(excinfo.exception.detail, "Run is not claimed by Gateway.")
 
 
 if __name__ == "__main__":

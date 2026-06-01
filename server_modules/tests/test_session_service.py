@@ -36,12 +36,45 @@ class _FakePool:
 
 
 class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_create_session_wrong_rust_next_action_blocks_before_storage(self):
+        pool = _FakePool()
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "runtime.db"
+            with (
+                patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False),
+                patch("server_modules.session_service.runtime_db.get_pool", return_value=pool),
+                patch("server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced", return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "create",
+                    "next_action": "close",
+                }),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "unexpected_next_action:close"):
+                    await session_service.create_session(
+                        workspace_id="workspace-1",
+                        tenant_id="tenant-1",
+                        actor={"type": "user", "id": "user-1"},
+                        channel="web",
+                        metadata={"source": "test"},
+                    )
+
+        self.assertEqual(pool.execute_calls, [])
+
     async def test_create_session_writes_to_postgres_and_preserves_preferred_id(self):
         pool = _FakePool()
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "runtime.db"
             with patch("server_modules.session_service.runtime_db.get_pool", return_value=pool):
-                with patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False):
+                with patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False), patch(
+                    "server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                    return_value={
+                        "ok": True,
+                        "decision": "allow",
+                        "operation": "create",
+                        "next_action": "create",
+                    },
+                ):
                     session_id = await session_service.create_session(
                         workspace_id="workspace-1",
                         tenant_id="tenant-1",
@@ -106,7 +139,15 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_session_does_not_silently_fall_back_to_sqlite_when_authoritative_store_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "runtime.db"
-            with patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False):
+            with patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False), patch(
+                "server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "create",
+                    "next_action": "create",
+                },
+            ):
                 created = await session_service.create_session(
                     workspace_id="workspace-1",
                     tenant_id="tenant-1",
@@ -128,7 +169,15 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_session_does_not_silently_fall_back_to_sqlite_when_postgres_row_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "runtime.db"
-            with patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False):
+            with patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False), patch(
+                "server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "create",
+                    "next_action": "create",
+                },
+            ):
                 created = await session_service.create_session(
                     workspace_id="workspace-1",
                     tenant_id="tenant-1",
@@ -155,6 +204,14 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
                     "ORION_ALLOW_SERVER_SESSION_SQLITE_FALLBACK": "1",
                 },
                 clear=False,
+            ), patch(
+                "server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "create",
+                    "next_action": "create",
+                },
             ):
                 created = await session_service.create_session(
                     workspace_id="workspace-1",
@@ -330,7 +387,15 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
                 },
                 clear=False,
             ):
-                with patch("server_modules.session_service.runtime_db.get_pool", return_value=None):
+                with patch("server_modules.session_service.runtime_db.get_pool", return_value=None), patch(
+                    "server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                    return_value={
+                        "ok": True,
+                        "decision": "allow",
+                        "operation": "create",
+                        "next_action": "create",
+                    },
+                ):
                     await session_service.create_session(
                         workspace_id="workspace-1",
                         tenant_id="tenant-1",
@@ -338,7 +403,13 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
                         channel="web",
                         session_id="session-1",
                     )
-                with patch("server_modules.session_service.runtime_db.get_pool", return_value=pool):
+                with patch("server_modules.session_service.runtime_db.get_pool", return_value=pool), patch(
+                    "server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                    side_effect=[
+                        {"ok": True, "decision": "allow", "operation": "create", "next_action": "create"},
+                        {"ok": True, "decision": "allow", "operation": "close", "next_action": "close"},
+                    ],
+                ):
                     extended = await session_service.extend_session("session-1")
                     await session_service.terminate_session("session-1")
                 with patch("server_modules.session_service.runtime_db.get_pool", return_value=None):
@@ -347,6 +418,42 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(extended)
         self.assertIsNone(missing)
 
+    async def test_terminate_session_wrong_rust_next_action_blocks_before_delete(self):
+        pool = _FakePool()
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "runtime.db"
+            with (
+                patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False),
+                patch("server_modules.session_service.runtime_db.get_pool", return_value=None),
+                patch("server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced", return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "create",
+                    "next_action": "create",
+                }),
+            ):
+                await session_service.create_session(
+                    workspace_id="workspace-1",
+                    tenant_id="tenant-1",
+                    actor={"type": "user", "id": "user-1"},
+                    channel="web",
+                    session_id="session-1",
+                )
+            with (
+                patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False),
+                patch("server_modules.session_service.runtime_db.get_pool", return_value=pool),
+                patch("server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced", return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "close",
+                    "next_action": "continue",
+                }),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "unexpected_next_action:continue"):
+                    await session_service.terminate_session("session-1")
+
+        self.assertEqual(pool.execute_calls, [])
+
     async def test_create_session_mirrors_master_agent_and_runtime_profile_bindings(self):
         upsert_mock = AsyncMock(return_value={"id": "session-1"})
         with tempfile.TemporaryDirectory() as tmp:
@@ -354,6 +461,15 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False),
                 patch("server_modules.session_service.runtime_db.get_pool", return_value=None),
+                patch(
+                    "server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                    return_value={
+                        "ok": True,
+                        "decision": "allow",
+                        "operation": "create",
+                        "next_action": "create",
+                    },
+                ),
                 patch("server_modules.session_service.control_plane_repository.upsert_agent_session", new=upsert_mock),
             ):
                 await session_service.create_session(
@@ -375,7 +491,15 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_session_preserves_thread_binding_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "runtime.db"
-            with patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False):
+            with patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False), patch(
+                "server_modules.session_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                return_value={
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": "create",
+                    "next_action": "create",
+                },
+            ):
                 created = await session_service.create_session(
                     workspace_id="workspace-1",
                     tenant_id="tenant-1",

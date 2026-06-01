@@ -14,8 +14,15 @@ class MiniAppsServiceTests(unittest.TestCase):
         self._workspace_root = Path(self._tmpdir.name) / "workspace"
         self._workspace_patch = patch.object(workspace_context, "_WORKSPACE_DIR", self._workspace_root)
         self._workspace_patch.start()
+        self._rust_gate_patch = patch.object(
+            mini_apps_service,
+            "_enforce_mini_apps_state_decision",
+            return_value={"decision": "allow"},
+        )
+        self._rust_gate_patch.start()
 
     def tearDown(self) -> None:
+        self._rust_gate_patch.stop()
         self._workspace_patch.stop()
         self._tmpdir.cleanup()
 
@@ -64,6 +71,169 @@ class MiniAppsServiceTests(unittest.TestCase):
         self.assertEqual(contract["trust_tier"], "user_private")
         self.assertFalse(contract["background_ai_allowed"])
         self.assertEqual(contract["runtime_access"], "none")
+
+    def test_publish_app_returns_clean_app_card_with_safe_defaults(self) -> None:
+        card = mini_apps_service.publish_app(
+            "ws-1",
+            name="Budget Tracker",
+            description="Track expenses.",
+            source_url="https://apps.example.com/budget",
+            visibility="private",
+            creator_label="@sarah",
+            creator_id="user-1",
+        )
+
+        self.assertEqual(card["app_id"], "budget_tracker")
+        self.assertEqual(card["name"], "Budget Tracker")
+        self.assertEqual(card["creator"]["byline"], "by @sarah")
+        self.assertEqual(card["visibility"], "private")
+        self.assertEqual(card["source"]["kind"], "website")
+        self.assertNotIn("runtime_type", card)
+        self.assertNotIn("trust_tier", card)
+        self.assertNotIn("bridge_contracts", card)
+
+        contract = mini_apps_service.get_mini_app_contract("ws-1", "budget_tracker")
+        self.assertEqual(contract["runtime_type"], "private")
+        self.assertEqual(contract["delivery_mode"], "hosted")
+        self.assertEqual(contract["visibility"], "workspace_private")
+        self.assertEqual(contract["hosted_app"]["allowed_origins"], ["https://apps.example.com"])
+        self.assertIn("app.summary.read", contract["permissions"])
+        self.assertIn("app.records.write", contract["permissions"])
+        self.assertNotIn("app.ai.invoke", contract["permissions"])
+        self.assertEqual(contract["bridge_contracts"], {})
+        self.assertEqual(contract["ai_invoke_policy"]["monthly_credit_cap"], mini_apps_service.DEFAULT_AI_MONTHLY_CREDIT_CAP)
+        self.assertEqual(contract["ai_invoke_policy"]["per_invocation_credit_cap"], mini_apps_service.DEFAULT_AI_INVOCATION_CREDIT_CAP)
+
+    def test_update_app_settings_maps_plain_toggles_to_contract(self) -> None:
+        mini_apps_service.publish_app(
+            "ws-1",
+            name="Budget Tracker",
+            description="Track expenses.",
+            source_url="https://apps.example.com/budget",
+        )
+
+        card = mini_apps_service.update_app_settings(
+            "ws-1",
+            "budget_tracker",
+            ai_enabled=True,
+            records_enabled=False,
+            sage_enabled=True,
+            monthly_credit_limit=250,
+            per_invocation_credit_limit=25,
+            visibility="public",
+        )
+
+        self.assertTrue(card["settings"]["ai_enabled"])
+        self.assertFalse(card["settings"]["records_enabled"])
+        self.assertTrue(card["settings"]["sage_enabled"])
+        self.assertEqual(card["settings"]["monthly_credit_limit"], 250)
+        self.assertEqual(card["visibility"], "public")
+
+        contract = mini_apps_service.get_mini_app_contract("ws-1", "budget_tracker")
+        self.assertEqual(contract["visibility"], "unlisted_link")
+        self.assertIn("app.ai.invoke", contract["permissions"])
+        self.assertNotIn("app.records.write", contract["permissions"])
+        self.assertIn("app.bridge.sage.request", contract["permissions"])
+        self.assertEqual(contract["bridge_contracts"]["app_to_sage"], ["summary_request"])
+        self.assertEqual(contract["ai_invoke_policy"]["consent_status"], "granted")
+
+    def test_public_app_index_follows_visibility(self) -> None:
+        private_card = mini_apps_service.publish_app(
+            "ws-1",
+            name="Budget Tracker",
+            description="Track expenses.",
+            source_url="https://apps.example.com/budget",
+            visibility="private",
+            creator_label="@sarah",
+        )
+
+        self.assertIsNone(private_card["public_app_id"])
+        self.assertEqual(mini_apps_service._safe_read_public_apps_index()["items"], {})
+
+        public_card = mini_apps_service.update_app_settings("ws-1", "budget_tracker", visibility="public")
+        public_app_id = public_card["public_app_id"]
+        self.assertTrue(public_app_id)
+        self.assertIn(public_app_id, mini_apps_service._safe_read_public_apps_index()["items"])
+
+        mini_apps_service.update_app_settings("ws-1", "budget_tracker", visibility="private")
+        self.assertNotIn(public_app_id, mini_apps_service._safe_read_public_apps_index()["items"])
+
+    def test_clone_public_app_creates_private_copy_with_attribution(self) -> None:
+        source_card = mini_apps_service.publish_app(
+            "source-ws",
+            name="Budget Tracker",
+            description="Track expenses.",
+            source_url="https://apps.example.com/budget",
+            visibility="public",
+            creator_label="@sarah",
+        )
+
+        cloned = mini_apps_service.clone_public_app(
+            "target-ws",
+            public_app_id=source_card["public_app_id"],
+            creator_label="@mike",
+            creator_id="user-2",
+        )
+
+        self.assertEqual(cloned["visibility"], "private")
+        self.assertEqual(cloned["creator"]["byline"], "by @mike")
+        self.assertFalse(cloned["clone_available"])
+        contract = mini_apps_service.get_mini_app_contract("target-ws", cloned["app_id"])
+        self.assertEqual(contract["visibility"], "workspace_private")
+        self.assertEqual(contract["hosted_url"], "https://apps.example.com/budget")
+        raw_state = mini_apps_service._safe_read_state("target-ws")
+        raw_entry = raw_state["apps"][cloned["app_id"]]
+        self.assertEqual(raw_entry["cloned_from_public_app_id"], source_card["public_app_id"])
+        self.assertEqual(raw_entry["cloned_from_workspace_id"], "source-ws")
+
+        target_feed = mini_apps_service.list_apps("target-ws")
+        self.assertEqual([item["name"] for item in target_feed["items"]], ["Budget Tracker"])
+
+    def test_clone_private_or_missing_public_app_is_rejected(self) -> None:
+        mini_apps_service.publish_app(
+            "source-ws",
+            name="Private Tracker",
+            description="Track expenses.",
+            source_url="https://apps.example.com/private",
+            visibility="private",
+        )
+
+        with self.assertRaises(KeyError):
+            mini_apps_service.clone_public_app("target-ws", public_app_id="missing")
+
+        public_card = mini_apps_service.publish_app(
+            "source-ws",
+            name="Public Tracker",
+            description="Track expenses.",
+            source_url="https://apps.example.com/public",
+            visibility="public",
+        )
+        mini_apps_service.update_app_settings("source-ws", "public_tracker", visibility="private")
+        with self.assertRaises(KeyError):
+            mini_apps_service.clone_public_app("target-ws", public_app_id=public_card["public_app_id"])
+
+    def test_update_app_settings_preserves_explicit_zero_ai_caps(self) -> None:
+        mini_apps_service.publish_app(
+            "ws-1",
+            name="Budget Tracker",
+            description="Track expenses.",
+            source_url="https://apps.example.com/budget",
+        )
+
+        card = mini_apps_service.update_app_settings(
+            "ws-1",
+            "budget_tracker",
+            ai_enabled=False,
+            monthly_credit_limit=0,
+            per_invocation_credit_limit=0,
+        )
+
+        self.assertFalse(card["settings"]["ai_enabled"])
+        self.assertEqual(card["settings"]["monthly_credit_limit"], 0)
+        self.assertEqual(card["settings"]["per_invocation_credit_limit"], 0)
+        contract = mini_apps_service.get_mini_app_contract("ws-1", "budget_tracker")
+        self.assertEqual(contract["ai_invoke_policy"]["monthly_credit_cap"], 0)
+        self.assertEqual(contract["ai_invoke_policy"]["per_invocation_credit_cap"], 0)
 
     def test_state_persistence_uses_atomic_replace(self) -> None:
         original_replace = mini_apps_service.os.replace

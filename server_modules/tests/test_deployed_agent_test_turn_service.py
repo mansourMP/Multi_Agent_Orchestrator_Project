@@ -12,6 +12,7 @@ from server_modules.deployed_agent_test_turn_service import (
     _evaluate_tool_policy,
     _load_memory_context_for_test,
     execute_test_turn,
+    rust_runtime_kernel_client,
 )
 from server_modules.schemas import DeployedAgentTestTurnRequest
 
@@ -109,12 +110,33 @@ class TestTurnValidationTests(unittest.TestCase):
 
     def test_rejects_live_state(self):
         req = _make_request()
+        denied = rust_runtime_kernel_client.RustKernelDecisionError(
+            {
+                "ok": False,
+                "decision": "block",
+                "reason": "deployed_agent_test_turn_state_invalid",
+            },
+            command="deployed-readiness-decision",
+        )
+
+        def _fake_kernel(command, payload):
+            if command == "deployed-agent-service-decision":
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "next_action": "execute_deployed_agent_test_turn",
+                }
+            raise denied
+
         with patch(
             "server_modules.deployed_agent_test_turn_service.deployed_agent_service.get_deployed_agent_detail",
             new=AsyncMock(return_value={"deployed_agent": {"deployment_state": "live", "id": "a1"}}),
         ), patch(
             "server_modules.deployed_agent_test_turn_service.deployed_agent_config_schema.deployed_agent_config_from_record",
             return_value=DummyConfig(deployment_state="live"),
+        ), patch(
+            "server_modules.deployed_agent_test_turn_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+            side_effect=_fake_kernel,
         ):
             with self.assertRaises(ValueError) as ctx:
                 import asyncio

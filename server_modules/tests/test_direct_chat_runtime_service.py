@@ -998,6 +998,108 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertLess(identity_index, workspace_index)
         self.assertLess(stable_index, retrieved_index)
 
+    def test_build_direct_operator_reply_calls_rust_stream_chat_gate_before_preview(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="hello",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="openai",
+            normalized_requested_model="gpt-5.4",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=["next"],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": False},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.plan_direct_chat_route = lambda **kwargs: SimpleNamespace(
+            allow_direct_tool_calls=False,
+            preview={"reply": "preview", "actions": [], "mode": "answer", "error": ""},
+            should_auto_start_run=False,
+        )
+
+        with mock.patch.object(
+            direct_chat_runtime_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={"next_action": "start_chat_stream"},
+        ) as rust_mock:
+            events = list(
+                direct_chat_runtime_service.build_direct_operator_reply(
+                    services=services,
+                    message="hello",
+                    workspace_id="default",
+                    requested_model="gpt-5.4",
+                    requested_provider="openai",
+                )
+            )
+
+        self.assertEqual(events[-1]["payload"]["reply"], "preview")
+        self.assertEqual(rust_mock.call_args.args[0], "run-api-decision")
+        self.assertEqual(rust_mock.call_args.args[1]["operation"], "stream_chat")
+        self.assertEqual(rust_mock.call_args.args[1]["workspace_id"], "default")
+
+    def test_build_direct_operator_reply_wrong_rust_action_blocks_before_route_planning(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="hello",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="openai",
+            normalized_requested_model="gpt-5.4",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=["next"],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": False},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        route_called = {"value": False}
+
+        def _plan_direct_chat_route(**kwargs):
+            route_called["value"] = True
+            return SimpleNamespace(
+                allow_direct_tool_calls=False,
+                preview={"reply": "preview", "actions": [], "mode": "answer", "error": ""},
+                should_auto_start_run=False,
+            )
+
+        services.plan_direct_chat_route = _plan_direct_chat_route
+
+        with mock.patch.object(
+            direct_chat_runtime_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={"next_action": "start_run"},
+        ):
+            events = list(
+                direct_chat_runtime_service.build_direct_operator_reply(
+                    services=services,
+                    message="hello",
+                    workspace_id="default",
+                    requested_model="gpt-5.4",
+                    requested_provider="openai",
+                )
+            )
+
+        self.assertFalse(route_called["value"])
+        self.assertEqual(events[-1]["payload"]["error"], "unexpected_next_action:start_run")
+
 
 if __name__ == "__main__":
     unittest.main()

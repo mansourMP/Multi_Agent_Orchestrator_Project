@@ -1,5 +1,6 @@
 import threading
 import unittest
+from unittest import mock
 
 from fastapi import HTTPException
 
@@ -60,6 +61,70 @@ class RuntimeUsageServiceTests(unittest.TestCase):
                 current_user_is_privileged=lambda current_user: False,
                 extract_run_owner_user_id=lambda payload: "",
             )
+
+    def test_usage_snapshots_for_user_workspace_scoped_rust_gate_runs_before_snapshot_scan(self):
+        called = {}
+        with mock.patch.object(
+            runtime_usage_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "list_runs",
+                "next_action": "list_runs",
+            },
+        ) as rust_mock:
+            snapshots = runtime_usage_service.usage_snapshots_for_user(
+                {"user_id": "user-1"},
+                refresh_server_exports=lambda: None,
+                run_history_lock=threading.Lock(),
+                run_history=[{"run_id": "archived-1", "owner_user_id": "user-1"}],
+                runs={
+                    "live-1": {"usage_masked": {"tokens": 1}, "owner_user_id": "user-1"},
+                },
+                serialize_snapshot=lambda run_id, run: called.setdefault("serialized", []).append(run_id) or {"run_id": run_id, "owner_user_id": run.get("owner_user_id")},
+                current_user_is_privileged=lambda current_user: False,
+                extract_run_owner_user_id=lambda payload: str(payload.get("owner_user_id") or ""),
+                allowed_workspace_ids_fn=lambda current_user: {"ws-1"},
+                resolve_workspace_tenant_id=lambda current_user, workspace_id: f"tenant-for-{workspace_id}",
+            )
+
+        self.assertEqual({item["run_id"] for item in snapshots}, {"archived-1", "live-1"})
+        self.assertEqual(rust_mock.call_args.args[0], "run-api-decision")
+        self.assertEqual(rust_mock.call_args.args[1]["operation"], "list_runs")
+        self.assertEqual(rust_mock.call_args.args[1]["workspace_id"], "ws-1")
+
+    def test_usage_snapshots_for_user_wrong_rust_next_action_blocks_before_snapshot_scan(self):
+        scanned = {"serialized": False}
+        with mock.patch.object(
+            runtime_usage_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "operation": "list_runs",
+                "next_action": "get_run",
+            },
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                runtime_usage_service.usage_snapshots_for_user(
+                    {"user_id": "user-1"},
+                    refresh_server_exports=lambda: None,
+                    run_history_lock=threading.Lock(),
+                    run_history=[],
+                    runs={
+                        "live-1": {"usage_masked": {"tokens": 1}, "owner_user_id": "user-1"},
+                    },
+                    serialize_snapshot=lambda run_id, run: scanned.update({"serialized": True}) or {"run_id": run_id, "owner_user_id": run.get("owner_user_id")},
+                    current_user_is_privileged=lambda current_user: False,
+                    extract_run_owner_user_id=lambda payload: str(payload.get("owner_user_id") or ""),
+                    allowed_workspace_ids_fn=lambda current_user: {"ws-1"},
+                    resolve_workspace_tenant_id=lambda current_user, workspace_id: f"tenant-for-{workspace_id}",
+                )
+
+        self.assertEqual(raised.exception.status_code, 423)
+        self.assertIn("unexpected next_action", str(raised.exception.detail))
+        self.assertFalse(scanned["serialized"])
 
     def test_usage_summary_payload_normalizes_period(self):
         payload = runtime_usage_service.usage_summary_payload(

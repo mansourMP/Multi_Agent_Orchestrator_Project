@@ -1,7 +1,6 @@
 .shell {
   min-height: 100%;
   display: grid;
-  grid-template-columns: minmax(220px, 268px) minmax(0, 1fr);
   align-content: start;
   align-items: start;
   gap: var(--app-space-5);
@@ -138,6 +137,37 @@
   color: var(--app-text-secondary);
   font-size: var(--app-font-13);
   line-height: 1.45;
+}
+
+.filterBar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.filterButton,
+.filterButtonActive {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 999px;
+  background: var(--app-bg-panel);
+  color: var(--app-text-secondary);
+  font: inherit;
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+  cursor: pointer;
+}
+
+.filterButtonActive {
+  border-color: var(--app-border-strong);
+  background: var(--app-bg-panel-elevated);
+  color: var(--app-text-primary);
+  box-shadow: var(--app-shadow-soft);
 }
 
 .content {
@@ -384,20 +414,16 @@
 
 @media (max-width: 760px) {
   .shell {
-    grid-template-columns: 1fr;
     padding: var(--app-space-4);
   }
 
-  .discoveryPanel {
-    position: static;
-    padding-right: 0;
-    padding-bottom: var(--app-space-4);
-    border-right: 0;
-    border-bottom: 1px solid var(--app-border-subtle);
+  .header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
-  .panelNav {
-    grid-template-columns: 1fr;
+  .filterBar {
+    justify-content: flex-start;
   }
 
   .feedGrid {

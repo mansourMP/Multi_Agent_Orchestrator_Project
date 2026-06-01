@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Bot,
   Boxes,
@@ -24,7 +24,6 @@ import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-prim
 import styles from './discovery-pane.module.css';
 
 type DiscoveryFilter = 'all' | 'apps' | 'agents' | 'tools' | 'mcp' | 'skills' | 'bundles';
-type DiscoveryPanelId = 'all' | 'agent_templates' | 'tools';
 
 type DiscoveryFeedItem = {
   id: string;
@@ -56,33 +55,45 @@ type DiscoveryAdoptPayload = {
 
 const DISCOVERY_FILTERS: readonly DiscoveryFilter[] = ['all', 'apps', 'agents', 'tools', 'mcp', 'skills', 'bundles'];
 
-const DISCOVERY_PANEL_ITEMS: readonly {
-  id: DiscoveryPanelId;
+const DISCOVERY_FILTER_ITEMS: readonly {
+  id: DiscoveryFilter;
   label: string;
   description: string;
-  filter: DiscoveryFilter;
-  icon: LucideIcon;
 }[] = [
   {
     id: 'all',
     label: 'All',
     description: 'Templates and tools',
-    filter: 'all',
-    icon: Compass,
   },
   {
-    id: 'agent_templates',
+    id: 'agents',
     label: 'Agent Templates',
     description: 'Copy into Studio',
-    filter: 'agents',
-    icon: Bot,
   },
   {
     id: 'tools',
     label: 'Tools',
     description: 'Apps, MCP, skills, bundles',
-    filter: 'tools',
-    icon: Wrench,
+  },
+  {
+    id: 'apps',
+    label: 'Apps',
+    description: 'Workspace apps',
+  },
+  {
+    id: 'mcp',
+    label: 'MCP',
+    description: 'Servers and tools',
+  },
+  {
+    id: 'skills',
+    label: 'Skills',
+    description: 'Reusable abilities',
+  },
+  {
+    id: 'bundles',
+    label: 'Bundles',
+    description: 'Packaged setups',
   },
 ];
 
@@ -171,14 +182,18 @@ function sectionKeyForItem(item: DiscoveryFeedItem): 'agent_templates' | 'tools'
   return item.type === 'agent_template' ? 'agent_templates' : 'tools';
 }
 
-function panelForFilter(filter: DiscoveryFilter): DiscoveryPanelId {
+function labelForFilter(filter: DiscoveryFilter): string {
+  return DISCOVERY_FILTER_ITEMS.find((item) => item.id === filter)?.label || 'All';
+}
+
+function visibleSectionForFilter(filter: DiscoveryFilter): 'all' | 'agent_templates' | 'tools' {
   if (filter === 'agents') {
     return 'agent_templates';
   }
-  if (filter === 'tools' || filter === 'apps' || filter === 'mcp' || filter === 'skills' || filter === 'bundles') {
-    return 'tools';
+  if (filter === 'all') {
+    return 'all';
   }
-  return 'all';
+  return 'tools';
 }
 
 function DiscoverySkeleton() {
@@ -197,7 +212,6 @@ function DiscoverySkeleton() {
 
 export function DiscoveryPane() {
   const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
   const services = useWorkspaceServices();
   const requestedFilter = normalizeDiscoveryFilter(searchParams.get('filter') || searchParams.get('category'));
@@ -267,26 +281,22 @@ export function DiscoveryPane() {
     }
   }, [filter, loadFeed, router, services.client]);
 
-  const handlePanelChange = useCallback((panelId: DiscoveryPanelId) => {
-    const panel = DISCOVERY_PANEL_ITEMS.find((item) => item.id === panelId);
-    if (!panel) {
-      return;
-    }
+  const handleFilterChange = useCallback((nextFilter: DiscoveryFilter) => {
     const params = new URLSearchParams(searchParams.toString());
-    if (panel.filter === 'all') {
+    if (nextFilter === 'all') {
       params.delete('filter');
       params.delete('category');
     } else {
-      params.set('filter', panel.filter);
+      params.set('filter', nextFilter);
       params.delete('category');
     }
     const query = params.toString();
+    const pathname = window.location.pathname;
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
-    setFilter(panel.filter);
-  }, [pathname, router, searchParams]);
+    setFilter(nextFilter);
+  }, [router, searchParams]);
 
   const renderedItems = useMemo(() => items, [items]);
-  const activePanelId = panelForFilter(filter);
   const renderedSections = useMemo(() => {
     const agentTemplates: DiscoveryFeedItem[] = [];
     const tools: DiscoveryFeedItem[] = [];
@@ -300,48 +310,39 @@ export function DiscoveryPane() {
     return [
       { id: 'agent_templates', title: 'Agent Templates', items: agentTemplates },
       { id: 'tools', title: 'Tools', items: tools },
-    ].filter((section) => section.items.length > 0 && (activePanelId === 'all' || section.id === activePanelId));
-  }, [activePanelId, renderedItems]);
+    ].filter((section) => {
+      const visibleSection = visibleSectionForFilter(filter);
+      return section.items.length > 0 && (visibleSection === 'all' || section.id === visibleSection);
+    });
+  }, [filter, renderedItems]);
 
   return (
     <WorkstationSurfaceRoot surface="marketplace">
       <main className={styles.shell} aria-label="Discover">
-        <aside className={styles.discoveryPanel} aria-label="Discovery sections">
-          <div className={styles.panelHeader}>
-            <p className={styles.kicker}>Discover</p>
-            <h1 className={styles.title}>Discovery</h1>
-          </div>
-          <nav className={styles.panelNav}>
-            {DISCOVERY_PANEL_ITEMS.map((panelItem) => {
-              const PanelIcon = panelItem.icon;
-              const active = activePanelId === panelItem.id;
-              return (
-                <button
-                  key={panelItem.id}
-                  type="button"
-                  aria-current={active ? 'page' : undefined}
-                  className={joinClassNames(styles.panelButton, active && styles.panelButtonActive)}
-                  onClick={() => handlePanelChange(panelItem.id)}
-                >
-                  <PanelIcon aria-hidden="true" />
-                  <span>
-                    <strong>{panelItem.label}</strong>
-                    <small>{panelItem.description}</small>
-                  </span>
-                </button>
-              );
-            })}
-          </nav>
-        </aside>
-
         <div className={styles.content}>
           <header className={styles.header}>
+            <p className={styles.kicker}>Discover</p>
             <div className={styles.titleBlock}>
-              <h2 className={styles.contentTitle}>
-                {DISCOVERY_PANEL_ITEMS.find((item) => item.id === activePanelId)?.label || 'All'}
-              </h2>
+              <h1 className={styles.contentTitle}>{labelForFilter(filter)}</h1>
               <p className={styles.subtitle}>Copy agent templates into Studio or add tools to this workspace.</p>
             </div>
+            <nav className={styles.filterBar} aria-label="Discovery filters">
+              {DISCOVERY_FILTER_ITEMS.map((filterItem) => {
+                const active = filter === filterItem.id;
+                return (
+                  <button
+                    key={filterItem.id}
+                    type="button"
+                    aria-pressed={active}
+                    className={joinClassNames(styles.filterButton, active && styles.filterButtonActive)}
+                    title={filterItem.description}
+                    onClick={() => handleFilterChange(filterItem.id)}
+                  >
+                    {filterItem.label}
+                  </button>
+                );
+              })}
+            </nav>
           </header>
 
           {error ? (

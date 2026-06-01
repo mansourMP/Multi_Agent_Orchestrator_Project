@@ -73,9 +73,12 @@ const DISCOVER_FILTERS: readonly {
   label: string;
   filter: MarketplaceTitlebarFilter;
 }[] = [
+  { id: 'marketplace', label: 'All', filter: 'all' },
   { id: 'marketplace', label: 'Agent templates', filter: 'agent_template' },
-  { id: 'marketplace', label: 'Skills', filter: 'skill' },
+  { id: 'marketplace', label: 'Tools', filter: 'tools' },
+  { id: 'marketplace', label: 'Apps', filter: 'apps' },
   { id: 'marketplace', label: 'MCP', filter: 'connector' },
+  { id: 'marketplace', label: 'Skills', filter: 'skill' },
   { id: 'marketplace', label: 'Bundles', filter: 'bundle' },
 ];
 
@@ -113,7 +116,10 @@ const SAGE_SETUP_NAV_ITEMS: readonly {
 ];
 
 const MARKETPLACE_TITLEBAR_FILTERS = [
+  { id: 'all', label: 'All' },
   { id: 'agent_template', label: 'Agent templates' },
+  { id: 'tools', label: 'Tools' },
+  { id: 'apps', label: 'Apps' },
   { id: 'skill', label: 'Skills' },
   { id: 'connector', label: 'MCP' },
   { id: 'bundle', label: 'Bundles' },
@@ -124,11 +130,14 @@ type MarketplaceTitlebarFilter = typeof MARKETPLACE_TITLEBAR_FILTERS[number]['id
 function normalizeMarketplaceTitlebarFilter(value: string | null): MarketplaceTitlebarFilter {
   return MARKETPLACE_TITLEBAR_FILTERS.some((filter) => filter.id === value)
     ? value as MarketplaceTitlebarFilter
-    : 'agent_template';
+    : 'all';
 }
 
 function buildMarketplaceCategoryHref(workspaceId: string, filter: MarketplaceTitlebarFilter): string {
   const baseHref = buildWorkspaceRouteHref(workspaceId, 'marketplace');
+  if (filter === 'all') {
+    return baseHref;
+  }
   return `${baseHref}?category=${encodeURIComponent(filter)}`;
 }
 
@@ -1488,7 +1497,7 @@ export function WorkstationKernelShell({
     }
     return false;
   };
-  const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('category'));
+  const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('filter') ?? searchParams.get('category'));
   const activeDiscoverFilter = marketplaceFilter;
   const activePanelDestinationId: WorkspaceNavDestinationId = activeDestinationId;
   const activePrimaryTabId: PrimaryShellTabId | null = SHELL_PRIMARY_TABS.some((tab) => tab.id === activePanelDestinationId)

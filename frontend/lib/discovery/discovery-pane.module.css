@@ -10,91 +10,10 @@
   color: var(--app-text-primary);
 }
 
-.discoveryPanel {
-  position: sticky;
-  top: var(--app-space-6);
-  min-width: 0;
-  display: grid;
-  gap: var(--app-space-4);
-  align-self: start;
-  padding-right: var(--app-space-5);
-  border-right: 1px solid var(--app-border-subtle);
-}
-
-.panelHeader {
-  min-width: 0;
-  display: grid;
-  gap: 5px;
-}
-
-.panelNav {
-  display: grid;
-  gap: 8px;
-}
-
-.panelButton,
-.panelButtonActive {
-  min-width: 0;
-  width: 100%;
-  min-height: 58px;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--app-text-secondary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.panelButton svg {
-  width: 18px;
-  height: 18px;
-  stroke-width: 2;
-}
-
-.panelButton span {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.panelButton strong,
-.panelButton small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.panelButton strong {
-  color: inherit;
-  font-size: var(--app-font-12);
-  font-weight: var(--app-weight-bold);
-}
-
-.panelButton small {
-  color: var(--app-text-tertiary);
-  font-size: var(--app-font-11);
-}
-
-.panelButtonActive {
-  border-color: var(--app-border-strong);
-  background: var(--app-bg-panel-elevated);
-  color: var(--app-text-primary);
-  box-shadow: var(--app-shadow-soft);
-}
-
 .header {
   min-width: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--app-space-4);
+  display: grid;
+  gap: var(--app-space-2);
 }
 
 .titleBlock {
@@ -137,37 +56,6 @@
   color: var(--app-text-secondary);
   font-size: var(--app-font-13);
   line-height: 1.45;
-}
-
-.filterBar {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.filterButton,
-.filterButtonActive {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 12px;
-  border: 1px solid var(--app-border-subtle);
-  border-radius: 999px;
-  background: var(--app-bg-panel);
-  color: var(--app-text-secondary);
-  font: inherit;
-  font-size: var(--app-font-12);
-  font-weight: var(--app-weight-semibold);
-  cursor: pointer;
-}
-
-.filterButtonActive {
-  border-color: var(--app-border-strong);
-  background: var(--app-bg-panel-elevated);
-  color: var(--app-text-primary);
-  box-shadow: var(--app-shadow-soft);
 }
 
 .content {
@@ -415,15 +303,6 @@
 @media (max-width: 760px) {
   .shell {
     padding: var(--app-space-4);
-  }
-
-  .header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .filterBar {
-    justify-content: flex-start;
   }
 
   .feedGrid {

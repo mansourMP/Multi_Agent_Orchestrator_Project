@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Mapping, Optional
 from urllib.parse import urlparse
 
-from server_modules import secret_redaction_service
+from server_modules import rust_runtime_kernel_client, secret_redaction_service
 from server_modules.agent_computer_policy_service import (
     AgentComputerPolicy,
     AUTONOMY_YOLO,
@@ -28,6 +27,11 @@ RISK_LEVELS = {
     RISK_CLASS_MEDIUM: 2,
     RISK_CLASS_HIGH: 3,
     RISK_CLASS_CRITICAL: 4,
+}
+_RISK_DECISION_NEXT_ACTIONS = {
+    DECISION_ALLOW: "allow_capability_execution",
+    DECISION_APPROVAL_REQUIRED: "request_capability_risk_approval",
+    DECISION_BLOCK: "block_capability_execution",
 }
 
 ACTION_READ = "read"
@@ -77,32 +81,6 @@ CAPABILITY_ALIASES = {
     "message.send": "communication.send",
 }
 
-CRITICAL_CAPABILITIES = {
-    "credential.access",
-    "install.software",
-    "install.extension",
-    "system.change_setting",
-    "system.change_permission",
-    "commerce.payment",
-    "production.deploy",
-}
-HIGH_CAPABILITIES = {
-    "browser.form_submit",
-    "file.delete",
-    "terminal.command",
-    "communication.send",
-    "cloud_storage.access",
-    "app.control",
-}
-MEDIUM_CAPABILITIES = {
-    "browser.click",
-    "file.read",
-    "file.write",
-    "terminal.approved_script",
-    "memory.write",
-    "scheduler.create",
-}
-
 RISKY_BROWSER_ACTIONS = {
     "click",
     "fill",
@@ -112,23 +90,6 @@ RISKY_BROWSER_ACTIONS = {
     "download_file",
     "new_tab",
     "close_tab",
-}
-CRITICAL_PAYLOAD_TERMS = {
-    "password",
-    "secret",
-    "credential",
-    "token",
-    "api_key",
-    "private_key",
-}
-DESTRUCTIVE_PAYLOAD_TERMS = {
-    "delete",
-    "remove",
-    "destroy",
-    "drop table",
-    "chmod",
-    "chown",
-    "rm -rf",
 }
 
 
@@ -195,14 +156,6 @@ def normalize_capability_for_risk(capability: Any) -> str:
     return normalized
 
 
-def _payload_text(payload: Any) -> str:
-    try:
-        sanitized = secret_redaction_service.sanitize_value(payload)
-        return json.dumps(sanitized, sort_keys=True, ensure_ascii=True)
-    except Exception:
-        return secret_redaction_service.redact_text(payload)
-
-
 def _target_domain(target_url: Any = None, target: Any = None, payload: Any = None) -> str:
     candidates = [target_url, target]
     if isinstance(payload, Mapping):
@@ -232,17 +185,6 @@ def _target_summary(*, target_url: Any = None, target_path: Any = None, target_c
                 parts.append(f"{key}={payload.get(key)}")
     summary = "; ".join(str(part) for part in parts if str(part or "").strip()) or "unspecified"
     return secret_redaction_service.redact_text(summary)[:500]
-
-
-def _risk_for_capability(capability: str, action_class: str, payload: Any) -> str:
-    text = _payload_text(payload).lower()
-    if capability in CRITICAL_CAPABILITIES or any(term in text for term in CRITICAL_PAYLOAD_TERMS):
-        return RISK_CLASS_CRITICAL
-    if capability in HIGH_CAPABILITIES or any(term in text for term in DESTRUCTIVE_PAYLOAD_TERMS):
-        return RISK_CLASS_HIGH
-    if capability in MEDIUM_CAPABILITIES or action_class in {ACTION_WRITE, ACTION_EXECUTE}:
-        return RISK_CLASS_MEDIUM
-    return RISK_CLASS_LOW
 
 
 def _policy(policy: AgentComputerPolicy | Mapping[str, Any] | None) -> AgentComputerPolicy:
@@ -277,6 +219,128 @@ def _recording_required(capability: str, risk_class: str) -> bool:
     return capability.startswith("browser.") or capability in {"screen.read", "app.control"}
 
 
+def _risk_class_from_rust(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    return token if token in RISK_LEVELS else RISK_CLASS_CRITICAL
+
+
+def _risk_decision_from_rust(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"allow", DECISION_ALLOW}:
+        return DECISION_ALLOW
+    if token in {"require_approval", "approval_required", DECISION_APPROVAL_REQUIRED}:
+        return DECISION_APPROVAL_REQUIRED
+    return DECISION_BLOCK
+
+
+def _audit_visibility_from_rust(value: Any, risk_class: str, decision: str) -> str:
+    token = str(value or "").strip().lower()
+    if decision == DECISION_BLOCK or token == AUDIT_VISIBILITY_SECURITY_EVENT:
+        return AUDIT_VISIBILITY_SECURITY_EVENT
+    if token == "security":
+        return AUDIT_VISIBILITY_SECURITY_EVENT if risk_class == RISK_CLASS_CRITICAL else _audit_visibility(risk_class)
+    if token in {"payload_redacted", AUDIT_VISIBILITY_PAYLOAD_REDACTED}:
+        return AUDIT_VISIBILITY_PAYLOAD_REDACTED
+    return AUDIT_VISIBILITY_SECURITY_EVENT
+
+
+def _retention_class_from_rust(value: Any, risk_class: str) -> str:
+    token = str(value or "").strip().lower()
+    if token in {RETENTION_SHORT, RETENTION_STANDARD, RETENTION_SECURITY}:
+        return token
+    if token in {"extended", "security_event"}:
+        return RETENTION_SECURITY
+    return RETENTION_SECURITY
+
+
+def _profile_payload(computer_profile: AgentComputerProfile | Mapping[str, Any] | None) -> Dict[str, Any] | None:
+    profile = _profile(computer_profile)
+    if profile is None:
+        return None
+    if hasattr(profile, "as_dict"):
+        try:
+            payload = profile.as_dict()
+            return dict(payload) if isinstance(payload, Mapping) else None
+        except Exception:
+            return None
+    if isinstance(profile, Mapping):
+        return dict(profile)
+    return {
+        "health_state": str(getattr(profile, "health_state", "") or "").strip(),
+    }
+
+
+def _rust_blocked_reason(
+    *,
+    reason: str,
+    current_kill_state: Any = None,
+    computer_profile: AgentComputerProfile | Mapping[str, Any] | None = None,
+) -> str:
+    token = str(reason or "").strip()
+    if token.startswith("kill_state:") or token.startswith("profile_"):
+        return token
+    kill_state = str(current_kill_state or "").strip().lower()
+    if token == "kill_state_active" and kill_state:
+        return f"kill_state:{kill_state}"
+    profile = _profile(computer_profile)
+    health_state = str(getattr(profile, "health_state", "") or "").strip().lower() if profile else ""
+    if token == "computer_profile_unhealthy" and health_state:
+        return f"profile_{health_state}"
+    if token == "domain_outside_policy_scope":
+        return "domain_not_allowed"
+    if token in {"path_outside_policy_scope", "path_blocked_by_policy_scope"}:
+        return "filesystem_scope_not_allowed"
+    return token or "rust_risk_classifier_blocked"
+
+
+def _decision_from_rust_classifier(
+    *,
+    rust_decision: Mapping[str, Any],
+    contract: AgentComputerPolicy,
+    normalized_capability: str,
+    normalized_action: str,
+    target_summary: str,
+    current_kill_state: Any = None,
+    computer_profile: AgentComputerProfile | Mapping[str, Any] | None = None,
+) -> CapabilityRiskDecision:
+    risk_class = _risk_class_from_rust(rust_decision.get("risk_class") or rust_decision.get("risk_level"))
+    decision = _risk_decision_from_rust(rust_decision.get("decision"))
+    next_action = str(rust_decision.get("next_action") or "").strip()
+    expected_next_action = _RISK_DECISION_NEXT_ACTIONS.get(decision, "")
+    if next_action != expected_next_action:
+        raise CapabilityRiskClassifierError(f"unexpected_next_action:{next_action or 'missing'}")
+    scopes = tuple(
+        str(item or "").strip()
+        for item in list(rust_decision.get("approval_scopes_required") or [])
+        if str(item or "").strip()
+    )
+    if decision == DECISION_APPROVAL_REQUIRED and not scopes:
+        scopes = (normalized_capability,)
+    blocked_reason = ""
+    if decision == DECISION_BLOCK:
+        blocked_reason = _rust_blocked_reason(
+            reason=str(rust_decision.get("blocked_reason") or rust_decision.get("reason") or ""),
+            current_kill_state=current_kill_state,
+            computer_profile=computer_profile,
+        )
+    return CapabilityRiskDecision(
+        decision_id=str(rust_decision.get("decision_id") or _decision_id()),
+        policy_version=contract.policy_version,
+        risk_level=RISK_LEVELS[risk_class],
+        risk_class=risk_class,
+        action_class=normalized_action,
+        capability=normalized_capability,
+        target_summary=target_summary,
+        decision=decision,
+        approval_scopes_required=scopes,
+        blocked_reason=blocked_reason,
+        audit_visibility=_audit_visibility_from_rust(rust_decision.get("audit_visibility"), risk_class, decision),
+        recording_required=bool(rust_decision.get("recording_required", True)),
+        retention_class=_retention_class_from_rust(rust_decision.get("retention_class"), risk_class),
+        cacheable=bool(rust_decision.get("cacheable")) and contract.autonomy_mode == AUTONOMY_YOLO,
+    )
+
+
 def classify_capability_risk(
     *,
     policy: AgentComputerPolicy | Mapping[str, Any] | None,
@@ -300,107 +364,33 @@ def classify_capability_risk(
         payload=payload,
     )
 
-    if contract.autonomy_mode == AUTONOMY_YOLO:
-        return CapabilityRiskDecision(
-            decision_id=_decision_id(),
-            policy_version=contract.policy_version,
-            risk_level=RISK_LEVELS[RISK_CLASS_LOW],
-            risk_class=RISK_CLASS_LOW,
-            action_class=normalized_action,
-            capability=normalized_capability,
-            target_summary=summary,
-            decision=DECISION_ALLOW,
-            approval_scopes_required=tuple(),
-            audit_visibility=AUDIT_VISIBILITY_SUMMARY,
-            recording_required=False,
-            retention_class=RETENTION_SHORT,
-            cacheable=True,
+    rust_payload = {
+        "policy": contract.as_dict(),
+        "capability": normalized_capability,
+        "action_class": normalized_action,
+        "target_summary": summary,
+        "requested_domain": _target_domain(target_url=target_url, payload=payload),
+        "requested_path": str(target_path or "").strip() or None,
+        "payload": payload if isinstance(payload, Mapping) else {"value": payload} if payload is not None else {},
+        "computer_profile": _profile_payload(profile),
+        "current_kill_state": str(current_kill_state or "").strip() or None,
+    }
+    try:
+        rust_decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "classify-risk",
+            rust_payload,
+            allow_approval_required=True,
         )
-
-    kill_state = str(current_kill_state or "").strip().lower()
-    risk_class = _risk_for_capability(normalized_capability, normalized_action, payload)
-    if kill_state in KILL_STATES:
-        return CapabilityRiskDecision(
-            decision_id=_decision_id(),
-            policy_version=contract.policy_version,
-            risk_level=RISK_LEVELS[risk_class],
-            risk_class=risk_class,
-            action_class=normalized_action,
-            capability=normalized_capability,
-            target_summary=summary,
-            decision=DECISION_BLOCK,
-            blocked_reason=f"kill_state:{kill_state}",
-            audit_visibility=AUDIT_VISIBILITY_SECURITY_EVENT,
-            recording_required=True,
-            retention_class=RETENTION_SECURITY,
-        )
-
-    if profile and profile.health_state in UNHEALTHY_PROFILE_STATES:
-        return CapabilityRiskDecision(
-            decision_id=_decision_id(),
-            policy_version=contract.policy_version,
-            risk_level=RISK_LEVELS[risk_class],
-            risk_class=risk_class,
-            action_class=normalized_action,
-            capability=normalized_capability,
-            target_summary=summary,
-            decision=DECISION_BLOCK,
-            blocked_reason=f"profile_{profile.health_state}",
-            audit_visibility=AUDIT_VISIBILITY_SECURITY_EVENT,
-            recording_required=True,
-            retention_class=RETENTION_SECURITY,
-        )
-
-    policy_decision = evaluate_agent_computer_request(
-        contract,
-        capability=normalized_capability,
-        requested_domain=_target_domain(target_url=target_url, payload=payload),
-        requested_path=target_path,
-    )
-    if policy_decision.blocked:
-        return CapabilityRiskDecision(
-            decision_id=_decision_id(),
-            policy_version=contract.policy_version,
-            risk_level=RISK_LEVELS[risk_class],
-            risk_class=risk_class,
-            action_class=normalized_action,
-            capability=normalized_capability,
-            target_summary=summary,
-            decision=DECISION_BLOCK,
-            blocked_reason=policy_decision.reason,
-            audit_visibility=_audit_visibility(risk_class),
-            recording_required=_recording_required(normalized_capability, risk_class),
-            retention_class=_retention_class(risk_class),
-        )
-
-    if policy_decision.approval_required:
-        return CapabilityRiskDecision(
-            decision_id=_decision_id(),
-            policy_version=contract.policy_version,
-            risk_level=RISK_LEVELS[risk_class],
-            risk_class=risk_class,
-            action_class=normalized_action,
-            capability=normalized_capability,
-            target_summary=summary,
-            decision=DECISION_APPROVAL_REQUIRED,
-            approval_scopes_required=(policy_decision.approval_scope or normalized_capability,),
-            audit_visibility=_audit_visibility(risk_class),
-            recording_required=_recording_required(normalized_capability, risk_class),
-            retention_class=_retention_class(risk_class),
-        )
-
-    return CapabilityRiskDecision(
-        decision_id=_decision_id(),
-        policy_version=contract.policy_version,
-        risk_level=RISK_LEVELS[risk_class],
-        risk_class=risk_class,
-        action_class=normalized_action,
-        capability=normalized_capability,
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        rust_decision = exc.decision
+    return _decision_from_rust_classifier(
+        rust_decision=rust_decision,
+        contract=contract,
+        normalized_capability=normalized_capability,
+        normalized_action=normalized_action,
         target_summary=summary,
-        decision=DECISION_ALLOW,
-        audit_visibility=_audit_visibility(risk_class),
-        recording_required=_recording_required(normalized_capability, risk_class),
-        retention_class=_retention_class(risk_class),
+        current_kill_state=current_kill_state,
+        computer_profile=profile,
     )
 
 

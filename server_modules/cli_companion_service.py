@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from server_modules import rust_runtime_kernel_client
+
 _DEFAULT_API_URL = "http://localhost:8000"
 _CONFIG_DIR = Path.home() / ".empyralis"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
@@ -28,8 +30,46 @@ def _read_json(path: Path, fallback: Dict[str, Any] = None) -> Dict[str, Any]:
 
 
 def _write_json(path: Path, data: Dict[str, Any]) -> None:
+    _enforce_cli_companion_state_decision(path=path, data=data)
     _ensure_config_dir()
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class CliCompanionRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_cli_companion_state_decision(*, path: Path, data: Dict[str, Any]) -> None:
+    safe_payload = {
+        "path": str(path),
+        "keys": sorted(str(key) for key in dict(data or {}).keys()),
+        "workspace_id": str(dict(data or {}).get("workspace_id") or "").strip(),
+        "api_url": str(dict(data or {}).get("api_url") or "").strip(),
+        "channel": str(dict(data or {}).get("channel") or "").strip(),
+        "has_api_key": bool(str(dict(data or {}).get("api_key") or "").strip()),
+        "has_session_id": bool(str(dict(data or {}).get("session_id") or "").strip()),
+        "has_thread_id": bool(str(dict(data or {}).get("thread_id") or "").strip()),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="save_cli_companion_state",
+            state_class="cli_companion_state",
+            actor_id="system",
+            status="active",
+            payload=safe_payload,
+            payload_bytes=len(json.dumps(safe_payload, sort_keys=True).encode("utf-8")),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "save_cli_companion_state":
+            raise CliCompanionRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise CliCompanionRustGateError(exc.reason) from exc
 
 
 def load_config() -> Dict[str, Any]:

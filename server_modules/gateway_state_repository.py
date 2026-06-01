@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from server_modules import execution_mode_policy, secret_redaction_service
+from server_modules import execution_mode_policy, rust_runtime_kernel_client, secret_redaction_service
 
 
 EMPYRALIS_STATE_HOME = Path(
@@ -267,6 +267,69 @@ def _json_loads(value: Any, *, default: Any) -> Any:
         return default
 
 
+def _gateway_state_payload_size_bytes(payload: Optional[Dict[str, Any]]) -> int:
+    try:
+        return len(json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
+    except Exception:
+        return 0
+
+
+def _enforce_gateway_state_decision(
+    operation: str,
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    device_id: Optional[str] = None,
+    gateway_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    actor_role: str = "system",
+    payload: Optional[Dict[str, Any]] = None,
+    **fields: Any,
+) -> Dict[str, Any]:
+    role = str(actor_role or "system").strip() or "system"
+    request = {
+        "operation": operation,
+        "tenant_id": str(tenant_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip(),
+        "user_id": str(user_id or "").strip(),
+        "device_id": str(device_id or "").strip(),
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "actor_role": role,
+        "is_service": role in {"system", "service"},
+        "payload_size_bytes": _gateway_state_payload_size_bytes(payload),
+    }
+    request.update(fields)
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "gateway-state-decision",
+        request,
+    )
+    expected_next_actions = {
+        "create_pairing_intent": {"create_pairing_intent"},
+        "expire_pairing_intent": {"mark_pairing_intent_expired"},
+        "register_gateway": {"consume_pairing_and_register_gateway"},
+        "issue_session": {"issue_gateway_session"},
+        "validate_session": {"validate_gateway_session"},
+        "mark_session_connected": {"mark_gateway_session_connected"},
+        "mark_session_disconnected": {"mark_gateway_session_disconnected"},
+        "touch_session": {"touch_gateway_session"},
+        "rotate_token": {"rotate_gateway_token"},
+        "revoke_registration": {"revoke_gateway_registration"},
+        "update_registration_state": {"update_gateway_registration_state"},
+        "record_event": {"record_gateway_event"},
+        "create_approval": {"create_gateway_action_approval"},
+        "resolve_approval": {"resolve_gateway_action_approval_atomic"},
+        "update_browser_session": {"upsert_gateway_browser_session"},
+        "summarize_outbox": {"summarize_gateway_outbox"},
+        "sweep_stale_sessions": {"sweep_stale_gateway_sessions", "noop"},
+    }
+    expected = expected_next_actions.get(operation)
+    if expected:
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action not in expected:
+            raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
 def _runtime_access_metadata_from_pairing(
     *,
     pairing_metadata: Dict[str, Any],
@@ -585,10 +648,30 @@ def create_pairing_intent(
         "consumed_at": None,
         "consumed_gateway_id": None,
     }
+    _enforce_gateway_state_decision(
+        "create_pairing_intent",
+        tenant_id=record["tenant_id"],
+        workspace_id=record["workspace_id"],
+        user_id=record["user_id"],
+        actor_role="user",
+        payload=record,
+        ttl_seconds=max(1, int(ttl_seconds or 0)),
+        max_pending_intents=max_pending_intents,
+    )
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
             now_iso = _utc_now_iso()
+            _enforce_gateway_state_decision(
+                "expire_pairing_intent",
+                tenant_id=record["tenant_id"],
+                workspace_id=record["workspace_id"],
+                user_id=record["user_id"],
+                actor_role="system",
+                payload={"expires_at_lte": now_iso},
+                pairing_status="pending",
+                bulk_expire=True,
+            )
             conn.execute(
                 """
                 UPDATE gateway_pairing_intents
@@ -704,6 +787,17 @@ def register_gateway_from_pairing(
             if pairing["status"] != "pending":
                 raise ValueError("Pairing token is no longer active.")
             if _pairing_expired(pairing):
+                _enforce_gateway_state_decision(
+                    "expire_pairing_intent",
+                    tenant_id=pairing["tenant_id"],
+                    workspace_id=pairing["workspace_id"],
+                    user_id=pairing["user_id"],
+                    actor_role="gateway",
+                    payload={"pairing_id": pairing["pairing_id"]},
+                    pairing_id=pairing["pairing_id"],
+                    pairing_status=pairing["status"],
+                    pairing_expired=True,
+                )
                 conn.execute(
                     "UPDATE gateway_pairing_intents SET status = ?, consumed_at = ? WHERE pairing_id = ?",
                     ("expired", now_iso, pairing["pairing_id"]),
@@ -742,6 +836,25 @@ def register_gateway_from_pairing(
                     "device_id": device_token,
                     "gateway_id": resolved_gateway_id,
                 }
+            )
+            _enforce_gateway_state_decision(
+                "register_gateway",
+                tenant_id=pairing["tenant_id"],
+                workspace_id=pairing["workspace_id"],
+                user_id=pairing["user_id"],
+                device_id=device_token,
+                gateway_id=resolved_gateway_id,
+                actor_role="gateway",
+                payload={
+                    "pairing_id": pairing["pairing_id"],
+                    "metadata": merged_metadata,
+                    "capabilities": list(capabilities or existing.get("capabilities") or []) if existing else list(capabilities or []),
+                },
+                token_valid=True,
+                pairing_status=pairing["status"],
+                pairing_expired=False,
+                existing_gateway=bool(existing),
+                capability_count=len(list(capabilities or existing.get("capabilities") or [])) if existing else len(list(capabilities or [])),
             )
             if existing:
                 conn.execute(
@@ -988,6 +1101,11 @@ def sync_gateway_registration_identity(
             resolved_workspace_id = str(workspace_id or registration.get("workspace_id") or "").strip()
             resolved_user_id = str(user_id or registration.get("user_id") or "").strip()
             resolved_device_id = str(device_id or registration.get("device_id") or "").strip()
+            next_status = str(status or registration.get("status") or "active").strip() or "active"
+            next_device_trust_state = (
+                str(device_trust_state or registration.get("device_trust_state") or "verified").strip()
+                or "verified"
+            )
             merged_metadata.update(
                 {
                     "tenant_id": resolved_tenant_id,
@@ -996,6 +1114,24 @@ def sync_gateway_registration_identity(
                     "device_id": resolved_device_id,
                     "gateway_id": str(gateway_id or "").strip(),
                 }
+            )
+            _enforce_gateway_state_decision(
+                "update_registration_state",
+                tenant_id=registration.get("tenant_id"),
+                workspace_id=registration.get("workspace_id"),
+                user_id=registration.get("user_id"),
+                device_id=registration.get("device_id"),
+                gateway_id=registration.get("gateway_id"),
+                actor_role="system",
+                payload=merged_metadata,
+                registration_status=registration.get("status"),
+                next_status=next_status,
+                next_tenant_id=resolved_tenant_id,
+                next_workspace_id=resolved_workspace_id,
+                next_user_id=resolved_user_id,
+                next_device_id=resolved_device_id,
+                next_device_trust_state=next_device_trust_state,
+                reason=merged_metadata.get("reason") or merged_metadata.get("revoked_reason") or merged_metadata.get("note"),
             )
             conn.execute(
                 """
@@ -1009,8 +1145,8 @@ def sync_gateway_registration_identity(
                     resolved_workspace_id,
                     resolved_user_id,
                     resolved_device_id,
-                    str(status or registration.get("status") or "active").strip() or "active",
-                    str(device_trust_state or registration.get("device_trust_state") or "verified").strip() or "verified",
+                    next_status,
+                    next_device_trust_state,
                     _json_dumps(merged_metadata),
                     now_iso,
                     str(gateway_id or "").strip(),
@@ -1055,6 +1191,16 @@ def rotate_gateway_token(
                 raise ValueError("Gateway registration scope mismatch.")
             if str(registration.get("status") or "").strip() == "revoked":
                 raise ValueError("Gateway registration has been revoked.")
+            _enforce_gateway_state_decision(
+                "rotate_token",
+                tenant_id=registration.get("tenant_id"),
+                workspace_id=registration.get("workspace_id"),
+                user_id=registration.get("user_id"),
+                device_id=registration.get("device_id"),
+                gateway_id=registration.get("gateway_id"),
+                actor_role="system",
+                registration_status=registration.get("status"),
+            )
             conn.execute(
                 """
                 UPDATE gateway_registrations
@@ -1127,6 +1273,19 @@ def issue_gateway_session(
                 raise ValueError("Gateway credentials are invalid.")
             if str(registration.get("device_trust_state") or "").strip() == "revoked":
                 raise ValueError("Gateway device trust was revoked.")
+            _enforce_gateway_state_decision(
+                "issue_session",
+                tenant_id=registration.get("tenant_id"),
+                workspace_id=registration.get("workspace_id"),
+                user_id=registration.get("user_id"),
+                device_id=registration.get("device_id"),
+                gateway_id=registration.get("gateway_id"),
+                actor_role="system",
+                token_valid=True,
+                registration_status=registration.get("status"),
+                device_trust_state=registration.get("device_trust_state"),
+                ttl_seconds=ttl_seconds,
+            )
             session_metadata = dict(metadata or {})
             session_metadata.update(
                 {
@@ -1253,6 +1412,17 @@ def revoke_gateway_registration(
                 user_id=user_id,
             ):
                 raise ValueError("Gateway registration scope mismatch.")
+            _enforce_gateway_state_decision(
+                "revoke_registration",
+                tenant_id=registration.get("tenant_id"),
+                workspace_id=registration.get("workspace_id"),
+                user_id=registration.get("user_id"),
+                device_id=registration.get("device_id"),
+                gateway_id=registration.get("gateway_id"),
+                actor_role="system",
+                registration_status=registration.get("status"),
+                reason=clean_reason,
+            )
             metadata = dict(registration.get("metadata") or {})
             metadata["revoked_reason"] = clean_reason
             conn.execute(
@@ -1330,6 +1500,24 @@ def mark_gateway_session_connected(
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
+            row = conn.execute(
+                "SELECT * FROM gateway_sessions WHERE session_id = ?",
+                (str(session_id or "").strip(),),
+            ).fetchone()
+            session = _session_from_row(row)
+            if session is None:
+                return None
+            _enforce_gateway_state_decision(
+                "mark_session_connected",
+                tenant_id=session.get("tenant_id"),
+                workspace_id=session.get("workspace_id"),
+                user_id=session.get("user_id"),
+                device_id=session.get("device_id"),
+                gateway_id=session.get("gateway_id"),
+                session_id=session.get("session_id"),
+                actor_role="system",
+                session_status=session.get("status"),
+            )
             conn.execute(
                 """
                 UPDATE gateway_sessions
@@ -1369,6 +1557,18 @@ def mark_gateway_session_disconnected(
             metadata = dict(session.get("metadata") or {})
             if reason:
                 metadata["disconnect_reason"] = str(reason or "").strip()
+            _enforce_gateway_state_decision(
+                "mark_session_disconnected",
+                tenant_id=session.get("tenant_id"),
+                workspace_id=session.get("workspace_id"),
+                user_id=session.get("user_id"),
+                device_id=session.get("device_id"),
+                gateway_id=session.get("gateway_id"),
+                session_id=session.get("session_id"),
+                actor_role="system",
+                session_status=session.get("status"),
+                reason=str(reason or "").strip(),
+            )
             conn.execute(
                 """
                 UPDATE gateway_sessions
@@ -1415,6 +1615,21 @@ def touch_gateway_session(
             session_metadata.update(dict(metadata or {}))
             if health_state:
                 session_metadata["health_state"] = str(health_state or "").strip()
+            _enforce_gateway_state_decision(
+                "touch_session",
+                tenant_id=session.get("tenant_id"),
+                workspace_id=session.get("workspace_id"),
+                user_id=session.get("user_id"),
+                device_id=session.get("device_id"),
+                gateway_id=session.get("gateway_id"),
+                session_id=session.get("session_id"),
+                actor_role="system",
+                session_status=session.get("status"),
+                seq=int(seq or 0),
+                ack=int(ack or 0),
+                previous_seq=int(session.get("last_seq") or 0),
+                previous_ack=int(session.get("last_ack") or 0),
+            )
             conn.execute(
                 """
                 UPDATE gateway_sessions
@@ -1485,6 +1700,19 @@ def update_gateway_registration_state(
                 return None
             merged_metadata = dict(registration.get("metadata") or {})
             merged_metadata.update(dict(metadata or {}))
+            next_status = str(status or registration.get("status") or "active").strip() or "active"
+            _enforce_gateway_state_decision(
+                "update_registration_state",
+                tenant_id=registration.get("tenant_id"),
+                workspace_id=registration.get("workspace_id"),
+                user_id=registration.get("user_id"),
+                device_id=registration.get("device_id"),
+                gateway_id=registration.get("gateway_id"),
+                actor_role="system",
+                registration_status=registration.get("status"),
+                next_status=next_status,
+                reason=merged_metadata.get("reason") or merged_metadata.get("revoked_reason") or merged_metadata.get("note"),
+            )
             conn.execute(
                 """
                 UPDATE gateway_registrations
@@ -1499,7 +1727,7 @@ def update_gateway_registration_state(
                     int(journal_cursor if journal_cursor is not None else registration.get("journal_cursor") or 0),
                     int(checkpoint_cursor if checkpoint_cursor is not None else registration.get("checkpoint_cursor") or 0),
                     str(device_trust_state or registration.get("device_trust_state") or "verified").strip() or "verified",
-                    str(status or registration.get("status") or "active").strip() or "active",
+                    next_status,
                     str(gateway_id or "").strip(),
                 ),
             )
@@ -1526,9 +1754,38 @@ def record_gateway_event(
     db_path: Optional[Path | str] = None,
 ) -> None:
     sanitized_payload = sanitize_gateway_event_payload(payload, message_type=message_type)
+    gateway_token = str(gateway_id or "").strip()
+    session_token = str(session_id or "").strip()
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
+            registration_row = conn.execute(
+                "SELECT * FROM gateway_registrations WHERE gateway_id = ?",
+                (gateway_token,),
+            ).fetchone()
+            registration = _registration_from_row(registration_row) or {}
+            session: Dict[str, Any] = {}
+            if session_token:
+                session_row = conn.execute(
+                    "SELECT * FROM gateway_sessions WHERE session_id = ?",
+                    (session_token,),
+                ).fetchone()
+                session = _session_from_row(session_row) or {}
+            scope = session or registration
+            _enforce_gateway_state_decision(
+                "record_event",
+                tenant_id=scope.get("tenant_id"),
+                workspace_id=scope.get("workspace_id"),
+                user_id=scope.get("user_id"),
+                device_id=scope.get("device_id"),
+                gateway_id=gateway_token or scope.get("gateway_id"),
+                session_id=session_token,
+                actor_role="system",
+                direction=str(direction or "").strip() or "unknown",
+                frame_kind=str(frame_kind or "").strip() or "unknown",
+                message_type=str(message_type or "").strip() or "unknown",
+                payload=sanitized_payload,
+            )
             conn.execute(
                 """
                 INSERT INTO gateway_events (
@@ -1536,8 +1793,8 @@ def record_gateway_event(
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    str(gateway_id or "").strip(),
-                    str(session_id or "").strip() or None,
+                    gateway_token,
+                    session_token or None,
                     str(direction or "").strip() or "unknown",
                     str(frame_kind or "").strip() or "unknown",
                     str(message_type or "").strip() or "unknown",
@@ -1613,6 +1870,20 @@ def create_gateway_action_approval(
 ) -> Dict[str, Any]:
     now_iso = _utc_now_iso()
     resolved_approval_id = str(approval_id or f"gapproval_{uuid.uuid4().hex}").strip()
+    _enforce_gateway_state_decision(
+        "create_approval",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        device_id=device_id,
+        gateway_id=gateway_id,
+        actor_role="system",
+        run_id=str(run_id or "").strip(),
+        capability_id=str(capability_id or "").strip(),
+        request_id=str(request_id or "").strip(),
+        approval_id=resolved_approval_id,
+        payload=request_payload,
+    )
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
@@ -1731,6 +2002,25 @@ def resolve_gateway_action_approval_atomic(
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
+            row = conn.execute(
+                "SELECT * FROM gateway_action_approvals WHERE approval_id = ? AND gateway_id = ?",
+                (str(approval_id or "").strip(), str(gateway_id or "").strip()),
+            ).fetchone()
+            approval = _approval_from_row(row)
+            if approval is None:
+                return None
+            _enforce_gateway_state_decision(
+                "resolve_approval",
+                tenant_id=approval.get("tenant_id"),
+                workspace_id=approval.get("workspace_id"),
+                user_id=approval.get("user_id"),
+                device_id=approval.get("device_id"),
+                gateway_id=approval.get("gateway_id"),
+                actor_role="system",
+                approval_id=approval.get("approval_id"),
+                approval_status=approval.get("status"),
+                decision=str(decision or "").strip(),
+            )
             cursor = conn.execute(
                 """
                 UPDATE gateway_action_approvals
@@ -1774,6 +2064,26 @@ def update_gateway_action_approval_decision(
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
+            row = conn.execute(
+                "SELECT * FROM gateway_action_approvals WHERE approval_id = ? AND gateway_id = ?",
+                (str(approval_id or "").strip(), str(gateway_id or "").strip()),
+            ).fetchone()
+            approval = _approval_from_row(row)
+            if approval is None:
+                return None
+            _enforce_gateway_state_decision(
+                "resolve_approval",
+                tenant_id=approval.get("tenant_id"),
+                workspace_id=approval.get("workspace_id"),
+                user_id=approval.get("user_id"),
+                device_id=approval.get("device_id"),
+                gateway_id=approval.get("gateway_id"),
+                actor_role="system",
+                approval_id=approval.get("approval_id"),
+                approval_status=approval.get("status"),
+                status=str(status or "").strip(),
+                decision=str(decision or "").strip(),
+            )
             conn.execute(
                 """
                 UPDATE gateway_action_approvals
@@ -1957,6 +2267,25 @@ def upsert_gateway_browser_session(
 ) -> Dict[str, Any]:
     resolved_browser_session_id = str(browser_session_id or f"gbsess_{uuid.uuid4().hex}").strip()
     now_iso = _utc_now_iso()
+    _enforce_gateway_state_decision(
+        "update_browser_session",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        device_id=device_id,
+        gateway_id=gateway_id,
+        actor_role="system",
+        browser_session_id=resolved_browser_session_id,
+        run_id=str(run_id or "").strip(),
+        status=str(status or "active").strip() or "active",
+        manual_takeover=bool(manual_takeover),
+        takeover_confirmed=not bool(manual_takeover) or bool(reviewed_approved),
+        payload={
+            "checkpoint": checkpoint_payload or {},
+            "snapshot": snapshot_payload or {},
+            "metadata": metadata or {},
+        },
+    )
     with _DB_LOCK:
         conn = _connect(db_path)
         try:
@@ -2140,18 +2469,37 @@ def sweep_stale_gateway_sessions(
         conn = _connect(db_path)
         try:
             rows = conn.execute(
-                """SELECT session_id, status, updated_at FROM gateway_sessions
+                """SELECT session_id, status, updated_at, tenant_id, workspace_id, user_id, device_id
+                   FROM gateway_sessions
                    WHERE gateway_id = ? AND status IN ('connected', 'disconnected')""",
                 (gateway_token,),
             ).fetchall()
+            stale_session_ids: list[str] = []
             for row in rows:
                 updated_at = str(row[2] or "")
                 if updated_at < cutoff:
-                    conn.execute(
-                        "UPDATE gateway_sessions SET status = 'expired', metadata = json_set(coalesce(metadata, '{}'), '$.swept_at', ?) WHERE session_id = ?",
-                        (_utc_now_iso(), str(row[0] or "").strip()),
-                    )
-                    swept += 1
+                    stale_session_ids.append(str(row[0] or "").strip())
+            scope_row = rows[0] if rows else None
+            decision = _enforce_gateway_state_decision(
+                "sweep_stale_sessions",
+                tenant_id=scope_row[3] if scope_row is not None else None,
+                workspace_id=scope_row[4] if scope_row is not None else None,
+                user_id=scope_row[5] if scope_row is not None else None,
+                device_id=scope_row[6] if scope_row is not None else None,
+                gateway_id=gateway_token,
+                actor_role="system",
+                stale_count=len(stale_session_ids),
+                candidate_count=len(rows),
+            )
+            if str(decision.get("next_action") or "").strip() == "noop":
+                return 0
+            swept_at = _utc_now_iso()
+            for session_id in stale_session_ids:
+                conn.execute(
+                    "UPDATE gateway_sessions SET status = 'expired', metadata = json_set(coalesce(metadata, '{}'), '$.swept_at', ?) WHERE session_id = ?",
+                    (swept_at, session_id),
+                )
+                swept += 1
             if swept > 0:
                 conn.commit()
         finally:

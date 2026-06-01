@@ -52,7 +52,52 @@ def count_definitions_in_file(
         return None
     if len(counts) == 1:
         return f"{target} defines {counts[0]}."
-    return f"{target} defines {counts[0]} and {counts[1]}."
+        return f"{target} defines {counts[0]} and {counts[1]}."
+
+
+class NoProviderRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_no_provider_summary_write(
+    *,
+    source_dir: Path,
+    output_path: Path,
+    python_file_count: int,
+    total_functions: int,
+    parse_failure_count: int,
+    summary_bytes: int,
+) -> None:
+    from server_modules import rust_runtime_kernel_client
+
+    payload = {
+        "source_dir": str(source_dir),
+        "output_path": str(output_path),
+        "python_file_count": max(0, int(python_file_count or 0)),
+        "total_functions": max(0, int(total_functions or 0)),
+        "parse_failure_count": max(0, int(parse_failure_count or 0)),
+        "summary_bytes": max(0, int(summary_bytes or 0)),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_no_provider_summary",
+            state_class="no_provider_summaries",
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=int(payload["summary_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_no_provider_summary":
+            raise NoProviderRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise NoProviderRustGateError(exc.reason) from exc
 
 
 def count_functions_and_write_summary(
@@ -107,6 +152,14 @@ def count_functions_and_write_summary(
         for relative_path in parse_failures:
             summary_lines.append(f"- {relative_path}")
     summary_text = "\n".join(summary_lines).strip()
+    _enforce_no_provider_summary_write(
+        source_dir=source_dir,
+        output_path=output_path,
+        python_file_count=len(python_files),
+        total_functions=total_functions,
+        parse_failure_count=len(parse_failures),
+        summary_bytes=len((summary_text + "\n").encode("utf-8")),
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(summary_text + "\n", encoding="utf-8")
     return (

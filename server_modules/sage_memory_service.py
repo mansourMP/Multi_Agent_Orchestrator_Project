@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from server_modules import rust_runtime_kernel_client
 from server_modules import workspace_context
 
 
@@ -50,6 +51,13 @@ SAGE_MEMORY_CATEGORY_ALIASES: dict[str, str] = {
     "orange": "private",
     "yellow": "sensitive",
     "green": "safe_general",
+}
+
+_SAGE_MEMORY_EXPECTED_NEXT_ACTIONS: dict[str, str] = {
+    "upsert_sage_memory_entry": "write_sage_memory_entry",
+    "update_sage_memory_entry": "update_sage_memory_entry",
+    "delete_sage_memory_entry": "delete_sage_memory_entry",
+    "wipe_sage_memory": "wipe_sage_memory",
 }
 
 
@@ -96,6 +104,65 @@ def _save_state(workspace_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _coerce_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _enforce_sage_memory_state_decision(
+    *,
+    operation: str,
+    workspace_id: str,
+    actor_user_id: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    status: str = "active",
+) -> Dict[str, Any]:
+    record = dict(payload or {})
+    expected_next_action = _SAGE_MEMORY_EXPECTED_NEXT_ACTIONS.get(
+        str(operation or "").strip(),
+        str(operation or "").strip(),
+    )
+    try:
+        payload_bytes = len(json.dumps(record, sort_keys=True).encode("utf-8"))
+    except Exception:
+        payload_bytes = 0
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "runtime-state-store-decision",
+            {
+                "operation": operation,
+                "state_class": "sage_memory",
+                "storage_engine": "durable_postgres",
+                "tenant_id": _coerce_text(workspace_id) or "default",
+                "workspace_id": _coerce_text(workspace_id) or "default",
+                "actor_id": _coerce_text(actor_user_id) or "sage_memory_service",
+                "status": status,
+                "payload": record,
+                "payload_bytes": payload_bytes,
+                "workspace_access": True,
+                "owner_access": True,
+                "destructive_approval": True,
+            },
+        )
+        if str(decision.get("next_action") or "").strip() != expected_next_action:
+            raise HTTPException(
+                status_code=423,
+                detail={
+                    "error": "rust_runtime_state_store_denied",
+                    "operation": operation,
+                    "reason": f"unexpected_next_action:{decision.get('next_action')}",
+                },
+            )
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        result = getattr(exc, "result", None)
+        if not isinstance(result, dict):
+            result = {}
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_runtime_state_store_denied",
+                "operation": result.get("operation") or operation,
+                "reason": result.get("reason") or str(exc),
+            },
+        ) from exc
 
 
 def _clip_text(value: Any, *, limit: int = 180) -> str:
@@ -350,6 +417,13 @@ def wipe_sage_memory(
             "deleted_count": deleted_count,
         },
     }
+    _enforce_sage_memory_state_decision(
+        operation="wipe_sage_memory",
+        workspace_id=workspace_id,
+        actor_user_id=actor_user_id,
+        payload=wiped_state,
+        status="archived",
+    )
     _save_state(workspace_id, wiped_state)
     return {
         "deleted_count": deleted_count,
@@ -417,6 +491,13 @@ def upsert_memory_entry(
         entries.insert(0, normalized)
 
     state["entries"] = entries
+    _enforce_sage_memory_state_decision(
+        operation="upsert_sage_memory_entry",
+        workspace_id=workspace_id,
+        actor_user_id=actor_user_id,
+        payload=normalized,
+        status="active",
+    )
     _save_state(workspace_id, state)
     return {
         "entry": normalized,
@@ -455,6 +536,13 @@ def set_memory_entry_pinned(
         )
         entries[index] = updated
         state["entries"] = entries
+        _enforce_sage_memory_state_decision(
+            operation="update_sage_memory_entry",
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            payload=updated,
+            status="active",
+        )
         _save_state(workspace_id, state)
         return {
             "entry": updated,
@@ -486,6 +574,13 @@ def delete_memory_entry(
     if deleted is None:
         raise HTTPException(status_code=404, detail="Sage memory entry not found.")
     state["entries"] = remaining
+    _enforce_sage_memory_state_decision(
+        operation="delete_sage_memory_entry",
+        workspace_id=workspace_id,
+        actor_user_id=actor_user_id,
+        payload=deleted,
+        status="archived",
+    )
     _save_state(workspace_id, state)
     return {
         "deleted": deleted,

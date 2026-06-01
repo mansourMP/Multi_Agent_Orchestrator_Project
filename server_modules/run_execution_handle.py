@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 import queue
 from typing import Any, Dict, Iterable, Iterator, MutableMapping, Optional, Tuple
 
+from server_modules import rust_runtime_kernel_client
+
 
 TRANSIENT_RUNTIME_KEYS = {
     "logs",
@@ -40,6 +42,46 @@ ACTIVE_EXECUTION_HANDLE_STATUSES = {
     "blocked",
     "waiting_for_input",
 }
+
+
+def _enforce_run_record_decision(operation: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "run-record-decision",
+            {
+                **payload,
+                "operation": operation,
+            },
+        )
+        expected_next_actions = {
+            "register_live_run": "create_live_run_initial",
+            "persist_snapshot": "update_live_run_if_version_matches",
+        }
+        expected_next_action = expected_next_actions.get(operation)
+        if expected_next_action:
+            next_action = str(decision.get("next_action") or "").strip()
+            if next_action != expected_next_action:
+                raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "run_record_denied").strip()
+        raise RuntimeError(f"Rust run-record kernel blocked {operation}: {reason}") from exc
+
+
+def _apply_run_record_patch(payload: Dict[str, Any], decision: Dict[str, Any]) -> Dict[str, Any]:
+    record_patch = decision.get("record_patch") if isinstance(decision, dict) else None
+    if not isinstance(record_patch, dict):
+        return payload
+    for key, value in record_patch.items():
+        payload[key] = value
+    return payload
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
 
 
 @dataclass(slots=True)
@@ -282,6 +324,19 @@ def build_run_record(
     active_model: Optional[str],
 ) -> RunRecord:
     actor = context.get("actor") if isinstance(context.get("actor"), dict) else {}
+    tenant_id = str(context.get("tenant_id") or "default").strip() or "default"
+    workspace_id = str(context.get("workspace_id") or "default").strip() or "default"
+    decision = _enforce_run_record_decision(
+        "register_live_run",
+        {
+            "run_id": run_id,
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id,
+            "status": "starting",
+            "initial_state": "starting",
+            "duplicate_run_id": False,
+        },
+    )
     payload = {
         "run_id": run_id,
         "status": "starting",
@@ -312,6 +367,7 @@ def build_run_record(
         "active_adapter": None,
         "_hitl_wait_total_ms": 0.0,
     }
+    _apply_run_record_patch(payload, decision)
     return RunRecord.from_payload(
         {
             **payload,
@@ -358,7 +414,21 @@ def durable_run_payload(run_id: str, run: Dict[str, Any] | RunExecutionHandle, *
             payload[key] = value
     payload["run_id"] = str(run_id or payload.get("run_id") or "").strip()
     payload["status"] = str(payload.get("status") or payload.get("state") or "queued").strip() or "queued"
-    payload["state"] = payload["status"]
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    decision = _enforce_run_record_decision(
+        "persist_snapshot",
+        {
+            "run_id": payload["run_id"],
+            "tenant_id": str(context.get("tenant_id") or payload.get("tenant_id") or "default").strip() or "default",
+            "workspace_id": str(context.get("workspace_id") or payload.get("workspace_id") or "default").strip() or "default",
+            "status": payload["status"],
+            "state": str(payload.get("state") or payload["status"]).strip() or payload["status"],
+            "version": _safe_int(payload.get("_event_seq") or payload.get("version"), 0),
+        },
+    )
+    _apply_run_record_patch(payload, decision)
+    payload["status"] = str(payload.get("status") or payload.get("state") or "queued").strip() or "queued"
+    payload["state"] = str(payload.get("state") or payload["status"]).strip() or payload["status"]
     if "thread_id" not in payload:
         payload["thread_id"] = None
     if "_archived" not in payload:

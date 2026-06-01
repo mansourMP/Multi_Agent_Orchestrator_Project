@@ -6,12 +6,22 @@ from pathlib import Path
 
 from scripts.platform_execution import capability_metadata
 from server_modules.capability_registry import canonical_capability_id, resolve_capability
+from server_modules import rust_runtime_kernel_client
 
 _server = None
+_server_import_error: Optional[ModuleNotFoundError] = None
+LOCAL_WORKER_REGISTRY: Dict[str, Any] = {}
+
 def _init():
-    global _server
+    global _server, _server_import_error
     if _server is not None: return
-    import server as _s
+    if _server_import_error is not None:
+        return
+    try:
+        import server as _s
+    except ModuleNotFoundError as exc:
+        _server_import_error = exc
+        return
     _server = _s
     for k, v in vars(_s).items():
         if not k.startswith("__") and k not in globals():
@@ -25,6 +35,39 @@ TOOL_STATE: Dict[str, Any] = {
     "updated_at": None,
 }
 _TOOL_STATE_LOADED = False
+
+
+class RuntimePolicyRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_runtime_tool_policy_state_decision(*, tool_id: str, enabled: bool) -> Dict[str, Any]:
+    normalized_tool_id = str(tool_id or "").strip()
+    payload = {
+        "tool_id": normalized_tool_id,
+        "enabled": bool(enabled),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="set_runtime_tool_enabled",
+            state_class="runtime_tool_policy",
+            actor_id="system",
+            status="enabled" if enabled else "disabled",
+            payload=payload,
+            payload_bytes=len(json.dumps(payload, sort_keys=True).encode("utf-8")),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "set_runtime_tool_enabled":
+            raise RuntimePolicyRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise RuntimePolicyRustGateError(exc.reason) from exc
 
 
 def _load_tool_state() -> None:
@@ -89,6 +132,7 @@ def set_tool_enabled(tool_id: str, enabled: bool) -> bool:
     normalized = normalize_action_id(tool_id) or str(tool_id or "").strip().lower()
     if not normalized:
         return False
+    _enforce_runtime_tool_policy_state_decision(tool_id=normalized, enabled=enabled)
     with TOOL_STATE_LOCK:
         enabled_map = TOOL_STATE.get("enabled") if isinstance(TOOL_STATE.get("enabled"), dict) else {}
         enabled_map = dict(enabled_map)

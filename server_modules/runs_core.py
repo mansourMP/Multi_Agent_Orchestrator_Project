@@ -2,6 +2,7 @@ from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules import outbox_service
+from server_modules import rust_runtime_kernel_client
 from datetime import datetime, timedelta, timezone as dt_timezone
 import sys
 import re
@@ -360,6 +361,24 @@ def _run_weekly_scheduler_forever():
 
 
 def trigger_pending_heartbeat_schedules(*, workspace_id: Optional[str] = None) -> Dict[str, Any]:
+    with SCHEDULES_LOCK:
+        pending_count = 0
+        for item in WEEKLY_SCHEDULES.values():
+            if not isinstance(item, dict) or not item.get("enabled") or not item.get("pending_heartbeat"):
+                continue
+            if workspace_id and str(item.get("workspace_id") or "").strip() != workspace_id:
+                continue
+            pending_count += 1
+    decision = _enforce_run_trigger_decision(
+        operation="trigger_pending_heartbeat",
+        expected_next_actions={"trigger_pending_schedules", "noop"},
+        workspace_id=_normalize_workspace_id(workspace_id),
+        actor_role="system",
+        scheduler_enabled=ORION_SCHEDULER_ENABLED,
+        pending_count=pending_count,
+    )
+    if str(decision.get("next_action") or "").strip() == "noop":
+        return {"acted": False, "started": []}
     return run_service.trigger_pending_heartbeat_schedules(
         schedules_lock=SCHEDULES_LOCK,
         weekly_schedules=WEEKLY_SCHEDULES,
@@ -999,6 +1018,14 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
     )
 
 async def list_weekly_schedules(workspace_id: Optional[str] = None):
+    _enforce_run_trigger_decision(
+        operation="list_schedules",
+        expected_next_actions={"list_schedules"},
+        workspace_id=_normalize_workspace_id(workspace_id),
+        actor_role="system",
+        schedule_kind="weekly",
+        timezone="local",
+    )
     with SCHEDULES_LOCK:
         items = list(WEEKLY_SCHEDULES.values())
     if workspace_id:
@@ -1009,6 +1036,14 @@ async def list_weekly_schedules(workspace_id: Optional[str] = None):
 
 
 async def list_schedules(workspace_id: Optional[str] = None):
+    _enforce_run_trigger_decision(
+        operation="list_schedules",
+        expected_next_actions={"list_schedules"},
+        workspace_id=_normalize_workspace_id(workspace_id),
+        actor_role="system",
+        schedule_kind="cron",
+        timezone="local",
+    )
     with SCHEDULES_LOCK:
         items = list(WEEKLY_SCHEDULES.values())
     if workspace_id:
@@ -1022,6 +1057,15 @@ async def get_schedule_logs(schedule_id: str):
         schedule = WEEKLY_SCHEDULES.get(schedule_id)
         if schedule is None:
             raise HTTPException(status_code=404, detail="Schedule not found")
+        _enforce_run_trigger_decision(
+            operation="read_schedule",
+            expected_next_actions={"read_schedule"},
+            workspace_id=_normalize_workspace_id(schedule.get("workspace_id")),
+            schedule_id=schedule_id,
+            actor_role="system",
+            schedule_kind=_schedule_kind_for_item(schedule),
+            timezone=str(schedule.get("timezone") or "local").strip() or "local",
+        )
         return {
             "id": schedule_id,
             "name": str(schedule.get("name") or "").strip() or schedule_id,
@@ -1072,8 +1116,88 @@ def _build_schedule_item(
     return item
 
 
+def _schedule_kind_for_item(item: Dict[str, Any]) -> str:
+    if item.get("day_of_week") and item.get("time_hhmm"):
+        return "weekly"
+    return "cron"
+
+
+def _enforce_run_trigger_decision(
+    *,
+    operation: str,
+    expected_next_actions: Set[str],
+    **payload: Any,
+) -> Dict[str, Any]:
+    try:
+        decision = rust_runtime_kernel_client.run_trigger_decision(
+            operation=operation,
+            **payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raw = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else {}
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_run_trigger_denied",
+                "operation": operation,
+                "reason": raw.get("reason") or str(exc),
+                "decision": raw.get("decision") or "block",
+            },
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "rust_run_trigger_unavailable",
+                "operation": operation,
+                "reason": str(exc),
+            },
+        ) from exc
+    if not isinstance(decision, dict):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "rust_run_trigger_invalid_response",
+                "operation": operation,
+            },
+        )
+    normalized_decision = str(decision.get("decision") or "").strip().lower()
+    if bool(decision.get("ok")) is False or normalized_decision in {"block", "require_approval", "requires_approval"}:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_run_trigger_denied",
+                "operation": operation,
+                "reason": decision.get("reason") or "run_trigger_denied",
+                "decision": normalized_decision or "block",
+            },
+        )
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action not in expected_next_actions:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_run_trigger_denied",
+                "operation": operation,
+                "reason": f"unexpected_next_action:{next_action or 'missing'}",
+                "decision": normalized_decision or "allow",
+            },
+        )
+    return decision
+
+
 async def create_schedule(body: CronScheduleUpsertRequest):
     body.validate_fields()
+    _enforce_run_trigger_decision(
+        operation="create_schedule",
+        expected_next_actions={"create_schedule"},
+        workspace_id=_normalize_workspace_id(body.workspace_id),
+        actor_role="system",
+        schedule_kind="cron",
+        timezone=str(body.timezone or "local").strip() or "local",
+        cron=str(body.cron or "").strip(),
+        run_request_present=body.run_request is not None,
+    )
     schedule_id = str(uuid.uuid4())
     item = _build_schedule_item(
         schedule_id=schedule_id,
@@ -1093,6 +1217,17 @@ async def create_schedule(body: CronScheduleUpsertRequest):
 
 async def create_weekly_schedule(body: WeeklyScheduleUpsertRequest):
     body.validate_fields()
+    _enforce_run_trigger_decision(
+        operation="create_weekly_schedule",
+        expected_next_actions={"create_schedule"},
+        workspace_id=_normalize_workspace_id(body.workspace_id),
+        actor_role="system",
+        schedule_kind="weekly",
+        timezone=str(body.timezone or "local").strip() or "local",
+        day_of_week=str(body.day_of_week or "").strip(),
+        time_hhmm=str(body.time_hhmm or "").strip(),
+        run_request_present=body.run_request is not None,
+    )
     schedule_id = str(uuid.uuid4())
     item = _build_schedule_item(
         schedule_id=schedule_id,
@@ -1119,6 +1254,21 @@ async def update_schedule(schedule_id: str, body: CronSchedulePatchRequest):
         current = WEEKLY_SCHEDULES.get(schedule_id)
         if current is None:
             raise HTTPException(status_code=404, detail="Schedule not found")
+        effective_cron = str(body.cron if body.cron is not None else current.get("cron") or "").strip()
+        effective_timezone = str(body.timezone if body.timezone is not None else current.get("timezone") or "local").strip() or "local"
+        effective_run_request = body.run_request.model_dump() if body.run_request is not None else dict(current.get("run_request") or {})
+        _enforce_run_trigger_decision(
+            operation="update_schedule",
+            expected_next_actions={"update_schedule"},
+            workspace_id=_normalize_workspace_id(current.get("workspace_id")),
+            schedule_id=schedule_id,
+            actor_role="system",
+            schedule_exists=True,
+            schedule_kind="cron",
+            timezone=effective_timezone,
+            cron=effective_cron,
+            run_request_present=bool(effective_run_request),
+        )
         if body.name is not None:
             current["name"] = body.name.strip()
         if body.enabled is not None:
@@ -1148,6 +1298,23 @@ async def update_weekly_schedule(schedule_id: str, body: WeeklySchedulePatchRequ
         current = WEEKLY_SCHEDULES.get(schedule_id)
         if current is None:
             raise HTTPException(status_code=404, detail="Schedule not found")
+        effective_day_of_week = str(body.day_of_week if body.day_of_week is not None else current.get("day_of_week") or "").strip()
+        effective_time_hhmm = str(body.time_hhmm if body.time_hhmm is not None else current.get("time_hhmm") or "").strip()
+        effective_timezone = str(body.timezone if body.timezone is not None else current.get("timezone") or "local").strip() or "local"
+        effective_run_request = body.run_request.model_dump() if body.run_request is not None else dict(current.get("run_request") or {})
+        _enforce_run_trigger_decision(
+            operation="update_weekly_schedule",
+            expected_next_actions={"update_schedule"},
+            workspace_id=_normalize_workspace_id(current.get("workspace_id")),
+            schedule_id=schedule_id,
+            actor_role="system",
+            schedule_exists=True,
+            schedule_kind="weekly",
+            timezone=effective_timezone,
+            day_of_week=effective_day_of_week,
+            time_hhmm=effective_time_hhmm,
+            run_request_present=bool(effective_run_request),
+        )
         if body.name is not None:
             current["name"] = body.name.strip()
         if body.enabled is not None:
@@ -1178,8 +1345,19 @@ async def update_weekly_schedule(schedule_id: str, body: WeeklySchedulePatchRequ
 
 async def delete_schedule(schedule_id: str):
     with SCHEDULES_LOCK:
-        if schedule_id not in WEEKLY_SCHEDULES:
+        deleted = WEEKLY_SCHEDULES.get(schedule_id)
+        if deleted is None:
             raise HTTPException(status_code=404, detail="Schedule not found")
+        _enforce_run_trigger_decision(
+            operation="delete_schedule",
+            expected_next_actions={"delete_schedule"},
+            workspace_id=_normalize_workspace_id(deleted.get("workspace_id")),
+            schedule_id=schedule_id,
+            actor_role="system",
+            schedule_exists=True,
+            schedule_kind=_schedule_kind_for_item(deleted),
+            timezone=str(deleted.get("timezone") or "local").strip() or "local",
+        )
         deleted = WEEKLY_SCHEDULES.pop(schedule_id)
     _persist_schedules()
     return {"status": "ok", "deleted": {"id": deleted.get("id"), "name": deleted.get("name")}}
@@ -1195,6 +1373,17 @@ async def trigger_schedule_now(schedule_id: str):
         if schedule is None:
             raise HTTPException(status_code=404, detail="Schedule not found")
         req_payload = dict(schedule.get("run_request") or {})
+        _enforce_run_trigger_decision(
+            operation="trigger_schedule_now",
+            expected_next_actions={"execute_scheduled_run"},
+            workspace_id=_normalize_workspace_id(schedule.get("workspace_id")),
+            schedule_id=schedule_id,
+            actor_role="system",
+            schedule_exists=True,
+            schedule_kind=_schedule_kind_for_item(schedule),
+            timezone=str(schedule.get("timezone") or "local").strip() or "local",
+            run_request_present=bool(req_payload),
+        )
     try:
         req = RunStartRequest(**req_payload)
         result = _execute_scheduled_run_request(req, schedule_id=schedule_id)

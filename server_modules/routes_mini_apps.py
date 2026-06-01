@@ -133,6 +133,29 @@ class MiniAppPublishRequest(BaseModel):
     icon_url: Optional[str] = Field(default=None, max_length=2_048)
 
 
+class AppPublishRequest(BaseModel):
+    name: str = Field(max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2_000)
+    source_url: Optional[str] = Field(default=None, max_length=2_048)
+    visibility: str = Field(default="private", max_length=40)
+
+
+class AppSettingsRequest(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2_000)
+    source_url: Optional[str] = Field(default=None, max_length=2_048)
+    ai_enabled: Optional[bool] = None
+    records_enabled: Optional[bool] = None
+    sage_enabled: Optional[bool] = None
+    visibility: Optional[str] = Field(default=None, max_length=40)
+    monthly_credit_limit: Optional[int] = None
+    per_invocation_credit_limit: Optional[int] = None
+
+
+class AppCloneRequest(BaseModel):
+    public_app_id: str = Field(min_length=1, max_length=160)
+
+
 class MiniAppRetrieveRecordsRequest(BaseModel):
     ids: Optional[List[str]] = None
     kind: Optional[str] = None
@@ -257,6 +280,19 @@ class MiniAppInstallSharedRequest(BaseModel):
 
 def _current_user_id(current_user: Dict[str, Any]) -> str:
     return str((current_user or {}).get("user_id") or "").strip()
+
+
+def _current_user_creator_label(current_user: Dict[str, Any]) -> str:
+    user = current_user or {}
+    for key in ("display_name", "name", "username"):
+        value = str(user.get(key) or "").strip()
+        if value:
+            return value
+    email = str(user.get("email") or "").strip()
+    if email and "@" in email:
+        return f"@{email.split('@', 1)[0]}"
+    user_id = str(user.get("user_id") or user.get("id") or "").strip()
+    return f"@{user_id}" if user_id else "this workspace"
 
 
 def _workspace_tenant_id(current_user: Dict[str, Any], workspace_id: str) -> str:
@@ -928,6 +964,99 @@ async def preview_shared_mini_app(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/workspaces/{workspace_id}/apps")
+async def list_apps(
+    workspace_id: str,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+    return mini_apps_service.list_apps(resolved_workspace_id)
+
+
+@router.post("/workspaces/{workspace_id}/apps")
+async def publish_app(
+    workspace_id: str,
+    body: AppPublishRequest,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
+    try:
+        return mini_apps_service.publish_app(
+            resolved_workspace_id,
+            name=body.name,
+            description=body.description,
+            source_url=body.source_url,
+            visibility=body.visibility,
+            creator_label=_current_user_creator_label(current_user),
+            creator_id=_current_user_id(current_user),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workspaces/{workspace_id}/apps/clone")
+async def clone_public_app(
+    workspace_id: str,
+    body: AppCloneRequest,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
+    try:
+        return mini_apps_service.clone_public_app(
+            resolved_workspace_id,
+            public_app_id=body.public_app_id,
+            creator_label=_current_user_creator_label(current_user),
+            creator_id=_current_user_id(current_user),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/workspaces/{workspace_id}/apps/{app_id}")
+async def get_app(
+    workspace_id: str,
+    app_id: str,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+    try:
+        return mini_apps_service.get_app(resolved_workspace_id, app_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/workspaces/{workspace_id}/apps/{app_id}/settings")
+async def update_app_settings(
+    workspace_id: str,
+    app_id: str,
+    body: AppSettingsRequest,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
+    try:
+        return mini_apps_service.update_app_settings(
+            resolved_workspace_id,
+            app_id,
+            name=body.name,
+            description=body.description,
+            source_url=body.source_url,
+            ai_enabled=body.ai_enabled,
+            records_enabled=body.records_enabled,
+            sage_enabled=body.sage_enabled,
+            visibility=body.visibility,
+            monthly_credit_limit=body.monthly_credit_limit,
+            per_invocation_credit_limit=body.per_invocation_credit_limit,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

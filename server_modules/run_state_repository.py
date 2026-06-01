@@ -9,6 +9,7 @@ import threading
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, TypeVar
 
 from server_modules import db as runtime_db
+from server_modules import rust_runtime_kernel_client
 
 
 LOGGER = logging.getLogger(__name__)
@@ -18,6 +19,17 @@ _SYNC_DISPATCH_READY = threading.Event()
 _SYNC_DISPATCH_THREAD: Optional[threading.Thread] = None
 _SYNC_DISPATCH_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _SYNC_DISPATCH_THREAD_ID: Optional[int] = None
+
+_RUNTIME_STATE_STORE_NEXT_ACTIONS = {
+    "upsert_live_run": {"write_live_run_state"},
+    "delete_live_run": {"delete_live_run_state"},
+    "archive_run": {"write_run_archive"},
+    "create_or_update_approval_request": {"write_run_approval_request"},
+    "resolve_approval_if_pending": {"resolve_run_approval"},
+    "record_approval_resolution": {"record_run_approval_resolution"},
+    "upsert_runtime_registration": {"write_runtime_registration"},
+    "upsert_fleet_queue_partition": {"write_fleet_queue_partition"},
+}
 
 
 class RunStateRepositoryError(RuntimeError):
@@ -38,6 +50,13 @@ class RunClaimConflictError(RunStatePersistenceError):
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def dispatch_repository_call(awaitable: Awaitable[Any], *, operation: str) -> None:
@@ -159,6 +178,264 @@ async def _read_pool(*, operation: str) -> Any:
 
 def _sync_raise_on_read_failure() -> bool:
     return runtime_db.durable_runtime_required()
+
+
+def _enforce_runtime_state_store_decision(
+    *,
+    operation: str,
+    run_id: Optional[str] = None,
+    runtime_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    status: Optional[str] = None,
+    previous_status: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    expected_version: Optional[int] = None,
+    current_version: Optional[int] = None,
+    state_class: Optional[str] = None,
+    force: bool = False,
+) -> Dict[str, Any]:
+    payload_text = _json_payload(payload or {})
+    if state_class is None:
+        if operation in {
+            "create_or_update_approval_request",
+            "resolve_approval_if_pending",
+            "record_approval_resolution",
+        }:
+            state_class = "run_approvals"
+        elif operation == "archive_run":
+            state_class = "run_archive"
+        elif operation == "upsert_runtime_registration":
+            state_class = "runtime_registrations"
+        else:
+            state_class = "live_runs"
+    request = {
+        "operation": operation,
+        "state_class": state_class,
+        "storage_engine": "durable_postgres",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "run_id": str(run_id or "").strip(),
+        "runtime_id": str(runtime_id or "").strip(),
+        "status": str(status or "").strip() or "unknown",
+        "previous_status": str(previous_status or "").strip() or "unknown",
+        "trace_id": str(trace_id or "").strip(),
+        "payload": bool(payload is not None),
+        "payload_bytes": len(payload_text.encode("utf-8")),
+        "expected_version": expected_version,
+        "current_version": current_version,
+        "durable_runtime_required": True,
+        "durable_pool_available": True,
+        "workspace_access": True,
+        "owner_access": True,
+        "force": bool(force),
+    }
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "runtime-state-store-decision",
+        request,
+    )
+    expected_actions = _RUNTIME_STATE_STORE_NEXT_ACTIONS.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_actions is None:
+        raise RuntimeError(f"unexpected runtime_state_store operation: {operation}")
+    if next_action not in expected_actions:
+        expected_list = ", ".join(sorted(expected_actions))
+        raise RuntimeError(
+            f"unexpected next_action for runtime-state-store-decision: {next_action or '<missing>'} "
+            f"(expected {expected_list})"
+        )
+    return decision
+
+
+def _enforce_run_record_decision(
+    *,
+    operation: str,
+    run_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    status: Optional[str] = None,
+    final_state: Optional[str] = None,
+    from_state: Optional[str] = None,
+    to_state: Optional[str] = None,
+    version: Optional[int] = None,
+) -> Dict[str, Any]:
+    request: Dict[str, Any] = {
+        "operation": operation,
+        "run_id": str(run_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+    }
+    if status is not None:
+        request["status"] = str(status or "").strip()
+    if final_state is not None:
+        request["final_state"] = str(final_state or "").strip()
+    if from_state is not None:
+        request["from_state"] = str(from_state or "").strip()
+    if to_state is not None:
+        request["to_state"] = str(to_state or "").strip()
+    if version is not None:
+        request["version"] = int(version)
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "run-record-decision",
+            request,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "run_record_denied").strip()
+        raise RunStatePersistenceError(f"Rust run-record kernel blocked {operation}: {reason}") from exc
+    expected_actions = _RUN_RECORD_NEXT_ACTIONS.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_actions is None:
+        raise RuntimeError(f"unexpected run_record operation: {operation}")
+    if next_action not in expected_actions:
+        expected_list = ", ".join(sorted(expected_actions))
+        raise RuntimeError(
+            f"unexpected next_action for run-record-decision: {next_action or '<missing>'} "
+            f"(expected {expected_list})"
+        )
+    return decision
+
+
+_RUN_RECORD_NEXT_ACTIONS = {
+    "register_live_run": {"create_live_run_initial"},
+    "persist_snapshot": {"update_live_run_if_version_matches"},
+    "record_transition": {"record_transition", "noop"},
+    "archive_payload": {"archive_run"},
+    "emit_transition_outbox": {"emit_run_transition_event", "noop"},
+    "emit_artifact_outbox": {"emit_artifact_created_events", "noop"},
+    "activate_live_run": {
+        "enqueue_local_companion_run",
+        "hydrate_local_memory_context",
+        "start_background_run",
+    },
+}
+
+
+def _apply_run_record_patch(payload: Dict[str, Any], decision: Dict[str, Any]) -> Dict[str, Any]:
+    record_patch = decision.get("record_patch") if isinstance(decision, dict) else None
+    if not isinstance(record_patch, dict):
+        return payload
+    for key, value in record_patch.items():
+        payload[key] = value
+    return payload
+
+
+_OUTBOX_DELIVERY_NEXT_ACTIONS = {
+    "persist_event": {"persist_outbox_event"},
+    "list_undelivered": {"list_undelivered_outbox_events"},
+    "claim_due": {"claim_due_outbox_events"},
+    "patch_payload": {"patch_outbox_event_payload"},
+    "mark_delivered": {"mark_outbox_event_delivered"},
+    "record_failure": {"record_outbox_delivery_failure"},
+    "list_poisoned": {"list_poisoned_outbox_events"},
+    "delivery_status": {"get_outbox_delivery_status"},
+}
+
+
+def _enforce_outbox_delivery_decision(
+    *,
+    operation: str,
+    event_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    machine_id: Optional[str] = None,
+    claim_token: Optional[str] = None,
+    claimed_by: Optional[str] = None,
+    limit: Optional[int] = None,
+    claim_ttl_seconds: Optional[int] = None,
+    retry_count: Optional[int] = None,
+    retry_delay_seconds: Optional[int] = None,
+    poison: bool = False,
+    error_text: Optional[str] = None,
+    payload_patch_present: bool = False,
+) -> Dict[str, Any]:
+    request = {
+        "operation": operation,
+        "event_id": str(event_id or "").strip(),
+        "event_type": str(event_type or "").strip(),
+        "tenant_id": str(tenant_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip(),
+        "run_id": str(run_id or "").strip(),
+        "machine_id": str(machine_id or "").strip(),
+        "claim_token": str(claim_token or "").strip(),
+        "claimed_by": str(claimed_by or "").strip(),
+        "limit": int(limit or 200),
+        "claim_ttl_seconds": int(claim_ttl_seconds or 30),
+        "retry_count": int(retry_count or 0),
+        "max_retries": 5,
+        "retry_delay_seconds": retry_delay_seconds,
+        "poison": bool(poison),
+        "error_text": str(error_text or "").strip(),
+        "payload_patch_present": bool(payload_patch_present),
+        "repository_read_only": False,
+    }
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "outbox-delivery-decision",
+        request,
+    )
+    expected_actions = _OUTBOX_DELIVERY_NEXT_ACTIONS.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_actions is None:
+        raise RuntimeError(f"unexpected outbox_delivery operation: {operation}")
+    if next_action not in expected_actions:
+        expected_list = ", ".join(sorted(expected_actions))
+        raise RuntimeError(
+            f"unexpected next_action for outbox-delivery-decision: {next_action or '<missing>'} "
+            f"(expected {expected_list})"
+        )
+    return decision
+
+
+_QUEUE_CLAIM_TRANSITION_NEXT_ACTIONS = {
+    "claim": {"claim_queue_item"},
+    "release": {"release_queue_item"},
+    "dead_letter": {"dead_letter_queue_item"},
+}
+
+
+def _enforce_queue_claim_transition_decision(
+    *,
+    operation: str,
+    run_id: str,
+    worker_id: Optional[str] = None,
+    lease_id: Optional[str] = None,
+    status: str = "claimed",
+    stale: bool = False,
+    reason: Optional[str] = None,
+    attempts: Optional[int] = None,
+) -> Dict[str, Any]:
+    request = {
+        "operation": operation,
+        "run_id": str(run_id or "").strip(),
+        "item_id": str(run_id or "").strip(),
+        "requester_id": str(worker_id or "").strip(),
+        "worker_id": str(worker_id or "").strip(),
+        "lease_holder_id": str(worker_id or lease_id or "").strip(),
+        "current_status": str(status or "claimed").strip() or "claimed",
+        "status": str(status or "claimed").strip() or "claimed",
+        "lease_stale": bool(stale),
+        "reason": str(reason or "").strip(),
+    }
+    if attempts is not None:
+        request["attempts"] = max(0, int(attempts))
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "queue-transition-decision",
+        request,
+    )
+    expected_actions = _QUEUE_CLAIM_TRANSITION_NEXT_ACTIONS.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_actions is None:
+        raise RuntimeError(f"unexpected queue_claim_transition operation: {operation}")
+    if next_action not in expected_actions:
+        expected_list = ", ".join(sorted(expected_actions))
+        raise RuntimeError(
+            f"unexpected next_action for queue-transition-decision: {next_action or '<missing>'} "
+            f"(expected {expected_list})"
+        )
+    return decision
 
 
 def _json_payload(value: Any) -> str:
@@ -437,6 +714,16 @@ async def upsert_live_run(
         expected_version = int(expected_version_raw) if expected_version_raw is not None else None
     except Exception:
         expected_version = None
+    _enforce_runtime_state_store_decision(
+        operation="upsert_live_run",
+        run_id=token,
+        workspace_id=normalized_workspace,
+        tenant_id=normalized_tenant,
+        status=normalized_state,
+        trace_id=normalized_trace,
+        payload=payload,
+        expected_version=expected_version,
+    )
     try:
         await _ensure_live_run_tables(pool)
         if expected_version is not None:
@@ -505,6 +792,16 @@ async def create_live_run_initial(
     normalized_tenant = str(tenant_id or "").strip() or "default"
     normalized_state = str(state or "").strip() or "queued"
     normalized_trace = str(trace_id or "").strip()
+    _enforce_runtime_state_store_decision(
+        operation="upsert_live_run",
+        run_id=token,
+        workspace_id=normalized_workspace,
+        tenant_id=normalized_tenant,
+        status=normalized_state,
+        trace_id=normalized_trace,
+        payload=payload,
+        current_version=0,
+    )
     pool = await _require_pool(operation="create_live_run_initial")
     try:
         await _ensure_live_run_tables(pool)
@@ -563,6 +860,17 @@ async def update_live_run_if_version_matches(
     normalized_trace = str(trace_id or "").strip()
     current_version = max(0, int(expected_version or 0))
     next_version = current_version + 1
+    _enforce_runtime_state_store_decision(
+        operation="upsert_live_run",
+        run_id=token,
+        workspace_id=normalized_workspace,
+        tenant_id=normalized_tenant,
+        status=normalized_state,
+        trace_id=normalized_trace,
+        payload=payload,
+        expected_version=current_version,
+        current_version=current_version,
+    )
     desired_payload = _normalize_live_run_payload(
         token,
         normalized_workspace,
@@ -686,6 +994,18 @@ async def delete_live_run(run_id: str) -> None:
     token = str(run_id or "").strip()
     if not token:
         return None
+    live_run = await get_live_run(token)
+    if not isinstance(live_run, dict):
+        return None
+    _enforce_runtime_state_store_decision(
+        operation="delete_live_run",
+        run_id=token,
+        workspace_id=_payload_workspace_id(live_run),
+        tenant_id=_payload_tenant_id(live_run),
+        status=str(live_run.get("status") or live_run.get("state") or "archived").strip() or "archived",
+        trace_id=str(live_run.get("trace_id") or "").strip(),
+        state_class="live_runs",
+    )
     pool = await _require_pool(operation="delete_live_run")
     try:
         await _ensure_live_run_tables(pool)
@@ -928,6 +1248,19 @@ async def record_transition(
     token = str(run_id or "").strip()
     if not token:
         return None
+    live_run = await get_live_run(token)
+    live_payload = dict(live_run or {})
+    decision = _enforce_run_record_decision(
+        operation="record_transition",
+        run_id=token,
+        workspace_id=_payload_workspace_id(live_payload),
+        tenant_id=_payload_tenant_id(live_payload),
+        from_state=str(from_state or "").strip() or "unknown",
+        to_state=str(to_state or "").strip() or "unknown",
+        version=_safe_int(live_payload.get("_event_seq") or live_payload.get("version"), 0),
+    )
+    if str(decision.get("next_action") or "").strip() == "noop":
+        return None
     pool = await _require_pool(operation="record_transition")
     try:
         await _ensure_live_run_tables(pool)
@@ -965,6 +1298,28 @@ async def archive_run(
     token = str(run_id or "").strip()
     if not token:
         return None
+    normalized_final_state = str(final_state or "").strip() or "completed"
+    archive_payload = dict(payload or {})
+    run_record_decision = _enforce_run_record_decision(
+        operation="archive_payload",
+        run_id=token,
+        workspace_id=_payload_workspace_id(archive_payload),
+        tenant_id=_payload_tenant_id(archive_payload),
+        status=normalized_final_state,
+        final_state=normalized_final_state,
+        version=_safe_int(archive_payload.get("_event_seq") or archive_payload.get("version"), 0),
+    )
+    _apply_run_record_patch(archive_payload, run_record_decision)
+    archive_state = str(archive_payload.get("status") or archive_payload.get("state") or normalized_final_state).strip() or normalized_final_state
+    _enforce_runtime_state_store_decision(
+        operation="archive_run",
+        run_id=token,
+        workspace_id=_payload_workspace_id(archive_payload),
+        tenant_id=_payload_tenant_id(archive_payload),
+        status=archive_state,
+        trace_id=trace_id,
+        payload=archive_payload,
+    )
     pool = await _require_pool(operation="archive_run")
     try:
         await _ensure_run_archive_table(pool)
@@ -981,10 +1336,10 @@ async def archive_run(
                 completed_at = NOW()
             """,
             token,
-            _payload_workspace_id(payload),
-            _payload_tenant_id(payload),
-            str(final_state or "").strip() or "completed",
-            _json_payload(payload),
+            _payload_workspace_id(archive_payload),
+            _payload_tenant_id(archive_payload),
+            archive_state,
+            _json_payload(archive_payload),
             str(trace_id or "").strip() or None,
         )
     except Exception as exc:
@@ -998,6 +1353,13 @@ async def claim_run(run_id: str, worker_id: str, ttl: int, trace_id: str, *, lea
     lease = str(lease_id or "").strip() or None
     if not token or not worker:
         return None
+    _enforce_queue_claim_transition_decision(
+        operation="claim",
+        run_id=token,
+        worker_id=worker,
+        lease_id=lease,
+        status="queued",
+    )
     pool = await _require_pool(operation="claim_run")
     try:
         await _ensure_local_queue_tables(pool)
@@ -1058,6 +1420,13 @@ async def release_claim(run_id: str, *, lease_id: Optional[str] = None) -> bool:
     lease = str(lease_id or "").strip() or None
     if not token:
         return False
+    _enforce_queue_claim_transition_decision(
+        operation="release",
+        run_id=token,
+        lease_id=lease,
+        status="claimed",
+        stale=lease is None,
+    )
     pool = await _require_pool(operation="release_claim")
     try:
         await _ensure_local_queue_tables(pool)
@@ -1092,6 +1461,13 @@ async def touch_claim_heartbeat(
     lease = str(lease_id or "").strip() or None
     if not token or not worker:
         return False
+    _enforce_queue_claim_transition_decision(
+        operation="claim",
+        run_id=token,
+        worker_id=worker,
+        lease_id=lease,
+        status="claimed",
+    )
     pool = await _require_pool(operation="touch_claim_heartbeat")
     try:
         await _ensure_local_queue_tables(pool)
@@ -1139,6 +1515,14 @@ async def append_local_queue_dead_letter(
     token = str(run_id or "").strip()
     if not token:
         return None
+    normalized_reason = str(reason or "").strip() or "worker_failure"
+    _enforce_queue_claim_transition_decision(
+        operation="dead_letter",
+        run_id=token,
+        status="failed",
+        reason=normalized_reason,
+        attempts=max(0, int(failure_count or 0)),
+    )
     pool = await _require_pool(operation="append_local_queue_dead_letter")
     try:
         await _ensure_local_queue_tables(pool)
@@ -1171,7 +1555,7 @@ async def append_local_queue_dead_letter(
             str(tenant_id or "").strip() or "default",
             str(workspace_id or "").strip() or "default",
             str(specialist_key or "").strip() or None,
-            str(reason or "").strip() or "worker_failure",
+            normalized_reason,
             str(trace_id or "").strip() or None,
             max(0, int(failure_count or 0)),
             _json_payload(payload),
@@ -1264,6 +1648,17 @@ async def upsert_fleet_worker(record: Dict[str, Any], *, heartbeat_seen: bool = 
     first_target = str(execution_targets[0] if execution_targets else "").strip().lower() or "local"
     shard_key = str(payload.get("queue_shard") or "").strip() or (
         f"{payload['tenant_id']}:{payload['workspace_id']}:{str(payload.get('runtime_type') or 'local').strip() or 'local'}:{first_target}"
+    )
+    payload["queue_shard"] = shard_key
+    _enforce_runtime_state_store_decision(
+        operation="upsert_runtime_registration",
+        runtime_id=worker_id,
+        workspace_id=payload["workspace_id"],
+        tenant_id=payload["tenant_id"],
+        status=str(payload.get("status") or "idle").strip() or "idle",
+        trace_id=str(payload.get("trace_id") or "").strip(),
+        payload=payload,
+        state_class="runtime_registrations",
     )
     pool = await _require_pool(operation="upsert_fleet_worker")
     try:
@@ -1463,6 +1858,14 @@ async def upsert_fleet_queue_partition(
     token = str(partition_id or "").strip()
     if not token:
         return None
+    _enforce_runtime_state_store_decision(
+        operation="upsert_fleet_queue_partition",
+        workspace_id=str(workspace_id or "").strip() or "default",
+        tenant_id=str(tenant_id or "").strip() or "default",
+        status=str(state or "").strip().lower() or "healthy",
+        payload=payload,
+        state_class="fleet_queue_partitions",
+    )
     pool = await _require_pool(operation="upsert_fleet_queue_partition")
     try:
         await _ensure_fleet_runtime_tables(pool)
@@ -1812,7 +2215,6 @@ async def create_or_update_approval_request(
     approval_token = str(approval_id or "").strip()
     if not run_token or not approval_token:
         raise RunStatePersistenceError("Postgres create_or_update_approval_request requires run_id and approval_id")
-    pool = await _require_pool(operation="create_or_update_approval_request")
     request_item = _json_object(request_payload)
     request_item["approval_id"] = approval_token
     request_metadata = _json_object(metadata)
@@ -1820,6 +2222,16 @@ async def create_or_update_approval_request(
         request_metadata = _json_object(request_item.get("metadata"))
     requested_at = _approval_request_timestamp(request_item)
     expires_at_token = _coerce_postgres_timestamptz(expires_at or request_item.get("expires_at"))
+    _enforce_runtime_state_store_decision(
+        operation="create_or_update_approval_request",
+        run_id=run_token,
+        workspace_id=str(request_item.get("workspace_id") or request_metadata.get("workspace_id") or "").strip() or "default",
+        tenant_id=str(request_item.get("tenant_id") or request_metadata.get("tenant_id") or "").strip() or "default",
+        status="requested",
+        trace_id=str(trace_id or "").strip(),
+        payload=request_item,
+    )
+    pool = await _require_pool(operation="create_or_update_approval_request")
     try:
         await _ensure_run_approval_table(pool)
         row = await pool.fetchrow(
@@ -2022,6 +2434,16 @@ async def resolve_approval_if_pending(
         decision_item["note"] = str(note or "")
     decision_item.setdefault("resolution", resolution_token)
     decision_item.setdefault("decision", resolution_token)
+    _enforce_runtime_state_store_decision(
+        operation="resolve_approval_if_pending",
+        run_id=run_token,
+        workspace_id=str(decision_item.get("workspace_id") or "").strip() or "default",
+        tenant_id=str(decision_item.get("tenant_id") or "").strip() or "default",
+        status=final_status,
+        previous_status="requested",
+        trace_id=str(trace_id or "").strip(),
+        payload=decision_item,
+    )
     pool = await _require_pool(operation="resolve_approval_if_pending")
     try:
         await _ensure_run_approval_table(pool)
@@ -2093,6 +2515,15 @@ async def record_approval_resolution(
     decision_item = {"resolution": resolution_token, "decision": resolution_token}
     if note is not None:
         decision_item["note"] = str(note or "")
+    _enforce_runtime_state_store_decision(
+        operation="record_approval_resolution",
+        run_id=run_token,
+        workspace_id=str(decision_item.get("workspace_id") or "").strip() or "default",
+        tenant_id=str(decision_item.get("tenant_id") or "").strip() or "default",
+        status=final_status,
+        trace_id=str(trace_id or "").strip(),
+        payload=decision_item,
+    )
     pool = await _require_pool(operation="record_approval_resolution")
     try:
         await _ensure_run_approval_table(pool)
@@ -2304,6 +2735,15 @@ async def persist_outbox_event(
     token = str(event_id or "").strip()
     if not token:
         return None
+    _enforce_outbox_delivery_decision(
+        operation="persist_event",
+        event_id=token,
+        event_type=event_type,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        machine_id=machine_id,
+    )
     pool = await _require_pool(operation="persist_outbox_event")
     try:
         await _ensure_runtime_outbox_table(pool)
@@ -2428,6 +2868,16 @@ async def claim_due_outbox_events(
     event_type: Optional[str] = None,
 ) -> list[Dict[str, Any]]:
     claimed_by_token = str(claimed_by or "").strip() or "outbox-delivery"
+    _enforce_outbox_delivery_decision(
+        operation="claim_due",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        event_type=event_type,
+        claimed_by=claimed_by_token,
+        limit=limit,
+        claim_ttl_seconds=claim_ttl_seconds,
+    )
     pool = await _read_pool(operation="claim_due_outbox_events")
     if pool is None:
         return []
@@ -2507,6 +2957,11 @@ async def patch_outbox_event_payload(event_id: str, payload_patch: Dict[str, Any
     patch = dict(payload_patch or {}) if isinstance(payload_patch, dict) else {}
     if not token or not patch:
         return None
+    _enforce_outbox_delivery_decision(
+        operation="patch_payload",
+        event_id=token,
+        payload_patch_present=True,
+    )
     pool = await _require_pool(operation="patch_outbox_event_payload")
     try:
         await _ensure_runtime_outbox_table(pool)
@@ -2530,6 +2985,11 @@ async def mark_outbox_event_delivered(event_id: str, *, claim_token: str) -> boo
     claim = str(claim_token or "").strip()
     if not token or not claim:
         return False
+    _enforce_outbox_delivery_decision(
+        operation="mark_delivered",
+        event_id=token,
+        claim_token=claim,
+    )
     pool = await _require_pool(operation="mark_outbox_event_delivered")
     try:
         await _ensure_runtime_outbox_table(pool)
@@ -2572,6 +3032,14 @@ async def record_outbox_delivery_failure(
     claim = str(claim_token or "").strip()
     if not token or not claim:
         return False
+    _enforce_outbox_delivery_decision(
+        operation="record_failure",
+        event_id=token,
+        claim_token=claim,
+        error_text=error_text,
+        retry_delay_seconds=retry_delay_seconds,
+        poison=poison,
+    )
     pool = await _require_pool(operation="record_outbox_delivery_failure")
     try:
         await _ensure_runtime_outbox_table(pool)

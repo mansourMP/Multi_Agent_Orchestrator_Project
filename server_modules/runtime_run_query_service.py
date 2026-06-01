@@ -4,7 +4,7 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
-from server_modules import run_state_repository
+from server_modules import run_state_repository, rust_runtime_kernel_client
 
 
 def build_run_detail_response_callbacks(
@@ -100,6 +100,86 @@ def build_default_run_detail_response_callbacks(
     )
 
 
+def _run_query_user_role(current_user: Any) -> str:
+    if isinstance(current_user, dict):
+        if str(current_user.get("auth_type") or "").strip().lower() == "api_key":
+            return "system"
+        role = str(current_user.get("workspace_role") or current_user.get("role") or "viewer").strip()
+        return role or "viewer"
+    return "viewer"
+
+
+def _run_query_scope(payload: dict[str, Any], metadata: dict[str, Any]) -> tuple[str, str, str]:
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    workspace_id = str(
+        payload.get("workspace_id")
+        or context.get("workspace_id")
+        or metadata.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+    tenant_id = str(
+        payload.get("tenant_id")
+        or context.get("tenant_id")
+        or metadata.get("tenant_id")
+        or "default"
+    ).strip() or "default"
+    run_status = str(
+        payload.get("status")
+        or payload.get("state")
+        or context.get("status")
+        or metadata.get("status")
+        or ""
+    ).strip()
+    return workspace_id, tenant_id, run_status
+
+
+def _enforce_run_query_get_run_decision(
+    *,
+    run_id: str,
+    current_user: Any,
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+    sensitive_payload_requested: bool = False,
+) -> dict[str, Any]:
+    workspace_id, tenant_id, run_status = _run_query_scope(payload, metadata)
+    rust_payload = {
+        "operation": "get_run",
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "run_id": str(run_id or "").strip(),
+        "run_status": run_status,
+        "user_role": _run_query_user_role(current_user),
+        "workspace_access_denied": False,
+        "owner_access_denied": False,
+        "kill_switch_active": False,
+        "history_window_allowed": True,
+        "body": {
+            "user_id": str((current_user or {}).get("user_id") or "").strip() or "user",
+            "sensitive_payload_requested": bool(sensitive_payload_requested),
+        },
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "run-api-decision",
+            rust_payload,
+            allow_approval_required=True,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HTTPException(status_code=409, detail=f"Rust run-api gate blocked get_run: {exc.reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if sensitive_payload_requested and next_action == "request_owner_approval":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Rust run-api gate blocked get_run: {decision.get('reason') or 'owner_approval_required'}",
+        )
+    if next_action != "get_run":
+        raise HTTPException(
+            status_code=423,
+            detail=f"Rust run-api gate returned unexpected next_action for get_run: {next_action or 'missing'}",
+        )
+    return dict(decision)
+
+
 def _resolve_run_detail_source(
     run_id: str,
     *,
@@ -110,6 +190,7 @@ def _resolve_run_detail_source(
     serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
     enforce_run_owner_access: Callable[[Any, Any], None],
     can_view_sensitive_run_payload: Callable[[Any], bool],
+    sensitive_payload_requested: bool = False,
 ) -> dict[str, Any]:
     include_sensitive = can_view_sensitive_run_payload(current_user)
     run = runs.get(run_id) if isinstance(runs, dict) else None
@@ -124,6 +205,13 @@ def _resolve_run_detail_source(
         enforce_run_owner_access(current_user, snapshot)
         context = snapshot.get("context") if isinstance(snapshot.get("context"), dict) else {}
         metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        _enforce_run_query_get_run_decision(
+            run_id=run_id,
+            current_user=current_user,
+            payload=snapshot,
+            metadata=metadata,
+            sensitive_payload_requested=sensitive_payload_requested,
+        )
         return {
             "archived": True,
             "include_sensitive": include_sensitive,
@@ -137,6 +225,13 @@ def _resolve_run_detail_source(
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     snapshot = serialize_run_snapshot(run_id, run)
     enforce_run_owner_access(current_user, snapshot)
+    _enforce_run_query_get_run_decision(
+        run_id=run_id,
+        current_user=current_user,
+        payload=run,
+        metadata=metadata,
+        sensitive_payload_requested=sensitive_payload_requested,
+    )
     return {
         "archived": False,
         "include_sensitive": include_sensitive,
@@ -180,6 +275,7 @@ def build_run_detail_response(
         serialize_run_snapshot=serialize_run_snapshot,
         enforce_run_owner_access=enforce_run_owner_access,
         can_view_sensitive_run_payload=can_view_sensitive_run_payload,
+        sensitive_payload_requested=False,
     )
     include_sensitive = bool(resolved.get("include_sensitive"))
 
@@ -250,6 +346,7 @@ def build_run_browser_checkpoint_response(
         serialize_run_snapshot=serialize_run_snapshot,
         enforce_run_owner_access=enforce_run_owner_access,
         can_view_sensitive_run_payload=can_view_sensitive_run_payload,
+        sensitive_payload_requested=True,
     )
     source = resolved["snapshot"] if bool(resolved.get("archived")) else resolved["run"]
     return build_run_browser_checkpoint_payload(
@@ -282,6 +379,7 @@ def build_run_browser_session_response(
         serialize_run_snapshot=serialize_run_snapshot,
         enforce_run_owner_access=enforce_run_owner_access,
         can_view_sensitive_run_payload=can_view_sensitive_run_payload,
+        sensitive_payload_requested=True,
     )
     source = resolved["snapshot"] if bool(resolved.get("archived")) else resolved["run"]
     return build_run_browser_session_payload(

@@ -25,6 +25,7 @@ from server_modules import (
     deployed_agent_rate_limit_service,
     deployed_agent_service,
     healthguide_safety_service,
+    rust_runtime_kernel_client,
     safe_mode_service,
 )
 from server_modules.channel_activity_service import record_result as record_channel_activity
@@ -86,6 +87,38 @@ async def resolve_public_channel_owner(**kwargs):
     channel_owner_resolution_service.deployed_agent_service = deployed_agent_service
     channel_owner_resolution_service.agent_registry_repository = agent_registry_repository
     return await channel_owner_resolution_service.resolve_public_channel_owner(**kwargs)
+
+
+def _enforce_public_deployed_agent_route_decision(
+    *,
+    context: ChannelRoutingContext,
+) -> dict[str, Any]:
+    deployed_agent_id = str(context.deployed_agent_id or "").strip()
+    if not deployed_agent_id:
+        return {"next_action": "skip_public_deployed_agent_gate"}
+    payload = {
+        "operation": "public_route",
+        "tenant_id": str(context.tenant_id or "").strip() or "default",
+        "workspace_id": str(context.workspace_id or "").strip() or "default",
+        "deployed_agent_id": deployed_agent_id,
+        "deployment_state": str(context.deployed_agent_state or "").strip() or "draft",
+        "channel_key": str(context.channel_key or "").strip() or None,
+        "public_endpoint_matches": True,
+        "actor_id": str(context.actor_id or "").strip() or "public_channel",
+        "actor_role": "system",
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "deployed-agent-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "deployed_agent_public_route_denied").strip()
+        raise ChannelSecurityDeniedError(f"Rust deployed-agent public-route gate blocked ingress: {reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "route_public_deployed_agent":
+        raise ChannelSecurityDeniedError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
 
 
 def _merge_degraded_notice(
@@ -339,6 +372,7 @@ async def route_inbound_channel_message(
         privileged_runtime_approved=privileged_runtime_approved,
         seed_demo_if_empty=seed_demo_if_empty,
     )
+    _enforce_public_deployed_agent_route_decision(context=context)
     inbound_event = await record_inbound_message(
         context=context,
         message_id=message_id,

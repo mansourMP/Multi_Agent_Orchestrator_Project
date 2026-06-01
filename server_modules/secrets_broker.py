@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from server_modules import control_plane_repository, safe_mode_service
+from server_modules import control_plane_repository, rust_runtime_kernel_client, safe_mode_service
 from server_modules.vault_helpers import (
     DecryptFn,
     LoadVaultFn,
@@ -61,6 +61,11 @@ _REVOCATION_LOCK = threading.Lock()
 _REVOKED_GRANT_IDS: set[str] = set()
 _REVOKED_SESSION_IDS: set[str] = set()
 _REVOKED_RUN_IDS: set[str] = set()
+_SECRET_REFERENCE_NEXT_ACTIONS = {
+    "allow": "allow_secret_resolution",
+    "require_approval": "request_secret_access_approval",
+    "approval_required": "request_secret_access_approval",
+}
 
 
 @dataclass(frozen=True)
@@ -276,6 +281,57 @@ def _requires_high_risk_approval(
     )
     joined = " ".join(all_tokens)
     return any(marker in joined for marker in _HIGH_RISK_CREDENTIAL_TOKENS)
+
+
+def _inspect_secret_reference_with_rust(
+    *,
+    name: str,
+    action_class: str,
+    provider_id: Optional[str] = None,
+    connector_id: Optional[str] = None,
+    credential_id: Optional[str] = None,
+    connector_class: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    risk_tags: Optional[List[str]] = None,
+    require_approval: Optional[bool] = None,
+    approval_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "name": str(name or "").strip() or "secret_reference",
+        "action_class": str(action_class or "read").strip().lower() or "read",
+        "provider_id": str(provider_id or "").strip().lower() or None,
+        "connector_id": str(connector_id or "").strip().lower() or None,
+        "credential_id": str(credential_id or "").strip() or None,
+        "connector_class": str(connector_class or "").strip().lower() or None,
+        "metadata": dict(metadata or {}) if isinstance(metadata, dict) else {},
+        "risk_tags": list(risk_tags or []),
+        "approval_id": str(approval_id or "").strip() or None,
+    }
+    if require_approval is not None:
+        payload["approval_required"] = bool(require_approval)
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "inspect-secret-reference",
+            payload,
+            allow_approval_required=bool(str(approval_id or "").strip()),
+        )
+    except rust_runtime_kernel_client.RustKernelApprovalRequired as exc:
+        raise SecretAccessDeniedError(
+            "approval_required",
+            "High-risk credential access requires explicit approval before injection.",
+        ) from exc
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(exc.reason or "secret_access_denied").strip()
+        raise SecretAccessDeniedError(reason, "Secret access was denied by the Rust kernel.") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    rust_decision = str(decision.get("decision") or "").strip().lower()
+    expected_next_action = _SECRET_REFERENCE_NEXT_ACTIONS.get(rust_decision)
+    if expected_next_action and next_action != expected_next_action:
+        raise SecretAccessDeniedError(
+            "unexpected_next_action",
+            f"Rust secret inspection returned unexpected next_action:{next_action or 'missing'}",
+        )
+    return dict(decision)
 
 
 def issue_connector_secret_grant(
@@ -942,21 +998,19 @@ def resolve_connector_secret(
         if expected_connector_id and resolved_provider and resolved_provider != expected_connector_id:
             raise SecretAccessDeniedError("connector_mismatch", "Resolved credential does not match the requested connector.")
         metadata = secret.get("_metadata") if isinstance(secret.get("_metadata"), dict) else {}
-        requires_approval = (
-            bool(require_approval)
-            if require_approval is not None
-            else _requires_high_risk_approval(
-                provider_id=resolved_provider or None,
-                connector_id=expected_connector_id or None,
-                metadata=metadata,
-                explicit_tags=credential_risk_tags,
-            )
+        secret_decision = _inspect_secret_reference_with_rust(
+            name=credential_id or expected_connector_id or "connector_credential",
+            action_class="read",
+            provider_id=resolved_provider or None,
+            connector_id=expected_connector_id or None,
+            credential_id=credential_id,
+            connector_class=claims.get("connector_class"),
+            metadata=metadata,
+            risk_tags=credential_risk_tags,
+            require_approval=require_approval,
+            approval_id=approval_id,
         )
-        if requires_approval and not str(approval_id or "").strip():
-            raise SecretAccessDeniedError(
-                "approval_required",
-                "High-risk credential access requires explicit approval before injection.",
-            )
+        requires_approval = bool(secret_decision.get("approval_required") or secret_decision.get("high_risk_credential"))
         projected = _project_secret_payload(secret, _normalize_allowed_fields(list(claims.get("allowed_fields") or [])))
         _append_secret_access_audit(
             claims,
@@ -969,6 +1023,13 @@ def resolve_connector_secret(
                 "allowed_domains": _normalize_allowed_domains(list(claims.get("allowed_domains") or [])),
                 "allowed_tools": _normalize_allowed_tools(list(claims.get("allowed_tools") or [])),
                 "requires_approval": requires_approval,
+                "rust_secret_decision": {
+                    "decision_id": secret_decision.get("decision_id"),
+                    "decision": secret_decision.get("decision"),
+                    "reason": secret_decision.get("reason"),
+                    "risk_level": secret_decision.get("risk_level"),
+                    "high_risk_credential": bool(secret_decision.get("high_risk_credential")),
+                },
                 "approval_id": str(approval_id or "").strip() or None,
                 "approval_actor_id": str(approval_actor_id or "").strip() or None,
                 "approval_reason": str(approval_reason or "").strip() or None,
@@ -1058,21 +1119,17 @@ def resolve_provider_secret(
         if resolved_provider and resolved_provider != normalized_provider_id:
             raise SecretAccessDeniedError("provider_mismatch", "Resolved credential does not match the requested provider.")
         metadata = secret.get("_metadata") if isinstance(secret.get("_metadata"), dict) else {}
-        requires_approval = (
-            bool(require_approval)
-            if require_approval is not None
-            else _requires_high_risk_approval(
-                provider_id=resolved_provider or normalized_provider_id,
-                connector_id=None,
-                metadata=metadata,
-                explicit_tags=credential_risk_tags,
-            )
+        secret_decision = _inspect_secret_reference_with_rust(
+            name=credential_id or resolved_provider or normalized_provider_id or "provider_credential",
+            action_class="read",
+            provider_id=resolved_provider or normalized_provider_id,
+            credential_id=credential_id,
+            metadata=metadata,
+            risk_tags=credential_risk_tags,
+            require_approval=require_approval,
+            approval_id=approval_id,
         )
-        if requires_approval and not str(approval_id or "").strip():
-            raise SecretAccessDeniedError(
-                "approval_required",
-                "High-risk credential access requires explicit approval before injection.",
-            )
+        requires_approval = bool(secret_decision.get("approval_required") or secret_decision.get("high_risk_credential"))
         projected = _project_secret_payload(secret, _normalize_allowed_fields(list(claims.get("allowed_fields") or [])))
         _append_secret_access_audit(
             claims,
@@ -1085,6 +1142,13 @@ def resolve_provider_secret(
                 "allowed_domains": _normalize_allowed_domains(list(claims.get("allowed_domains") or [])),
                 "allowed_tools": _normalize_allowed_tools(list(claims.get("allowed_tools") or [])),
                 "requires_approval": requires_approval,
+                "rust_secret_decision": {
+                    "decision_id": secret_decision.get("decision_id"),
+                    "decision": secret_decision.get("decision"),
+                    "reason": secret_decision.get("reason"),
+                    "risk_level": secret_decision.get("risk_level"),
+                    "high_risk_credential": bool(secret_decision.get("high_risk_credential")),
+                },
                 "approval_id": str(approval_id or "").strip() or None,
                 "approval_actor_id": str(approval_actor_id or "").strip() or None,
                 "approval_reason": str(approval_reason or "").strip() or None,

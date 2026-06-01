@@ -11,6 +11,7 @@ from server_modules import (
     hardware_runtime_session_service,
     hardware_runtime_target_resolver,
     runtime_attachment_service,
+    rust_runtime_kernel_client,
     secret_redaction_service,
     session_service,
 )
@@ -70,6 +71,87 @@ def self_hosted_capability_available(attachment: Dict[str, Any], capability_id: 
     if not available:
         return False
     return bool(aliases & available)
+
+
+def self_hosted_runtime_action_connector_and_action(action_id: str) -> tuple[str, str]:
+    token = text(action_id).lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "browser.open": ("browser", "navigate"),
+        "browser.open_url": ("browser", "navigate"),
+        "browser.navigate": ("browser", "navigate"),
+        "browser.new_tab": ("browser", "new_tab"),
+        "browser.download_file": ("browser", "download_file"),
+        "screenshot.capture": ("browser", "screenshot"),
+        "browser.screenshot": ("browser", "screenshot"),
+        "computer.click": ("computer", "click"),
+        "computer.type": ("computer", "type"),
+        "shell.exec": ("shell", "exec"),
+        "shell.execute": ("shell", "exec"),
+    }
+    if token in aliases:
+        return aliases[token]
+    if "." in token:
+        connector_id, action = token.split(".", 1)
+        return connector_id, action
+    return "hardware", token
+
+
+def self_hosted_runtime_action_argument_projection(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    projected: Dict[str, Any] = {}
+    for key in ("url", "selector", "text", "input", "command", "x", "y"):
+        if key in arguments:
+            projected[key] = arguments.get(key)
+    return projected
+
+
+def self_hosted_concurrency_exceeded(attachment: Dict[str, Any]) -> bool:
+    active = attachment.get("active_session_count", attachment.get("active_sessions"))
+    limit = attachment.get("max_concurrent_sessions")
+    try:
+        active_count = int(active or 0)
+        max_count = int(limit or 0)
+    except (TypeError, ValueError):
+        return False
+    return max_count > 0 and active_count >= max_count
+
+
+def enforce_self_hosted_runtime_action_decision(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    user_id: Optional[str],
+    action_id: str,
+    arguments: Dict[str, Any],
+    runtime_session: Dict[str, Any],
+    run_id: str,
+    thread_id: Optional[str],
+    attachment: Dict[str, Any],
+) -> Dict[str, Any]:
+    connector_id, connector_action = self_hosted_runtime_action_connector_and_action(action_id)
+    payload = {
+        "operation": "execute_runtime_action",
+        "runtime_session_binding": "self_hosted_agent",
+        "studio_agent_mode": "self_hosted",
+        "connector_id": connector_id,
+        "action_id": connector_action,
+        "agent_id": text(user_id) or "sage",
+        "tenant_id": text(tenant_id) or "default",
+        "workspace_id": text(workspace_id) or "default",
+        "runtime_session_id": text(runtime_session.get("session_id")),
+        "run_id": text(run_id),
+        "thread_id": text(thread_id),
+        "self_hosted_node_gate_passed": True,
+        "self_hosted_node_concurrency_exceeded": self_hosted_concurrency_exceeded(attachment),
+        **self_hosted_runtime_action_argument_projection(arguments),
+    }
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "runtime-action-decision",
+        payload,
+    )
+    next_action = text(decision.get("next_action"))
+    if next_action != "execute_self_hosted_runtime_action":
+        raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
 
 
 async def select_self_hosted_attachment(
@@ -185,6 +267,17 @@ async def execute_self_hosted_node_action(
         return {"status": state, "reason": unavailable_reason, "runtime_session": runtime_session, "trace_id": trace_id}
 
     attachment = dict(attachment or {})
+    enforce_self_hosted_runtime_action_decision(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        action_id=action_id,
+        arguments=arguments,
+        runtime_session=runtime_session,
+        run_id=run_id,
+        thread_id=thread_id,
+        attachment=attachment,
+    )
     runtime_node_id = text(attachment.get("runtime_node_id") or attachment.get("runtime_id"))
     runtime_profile_id = text(attachment.get("runtime_profile_id"))
     runtime_attachment_id = text(attachment.get("attachment_id"))

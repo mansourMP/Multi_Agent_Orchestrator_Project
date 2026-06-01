@@ -14,6 +14,8 @@ import secrets
 from pathlib import Path
 from typing import Any, Dict
 
+from server_modules import rust_runtime_kernel_client
+
 _server = None  # populated by _init()
 _LOCAL_ENV_TOKENS = {"", "dev", "development", "local", "test", "testing"}
 LOGGER = logging.getLogger(__name__)
@@ -41,6 +43,40 @@ def _vault_requires_explicit_env_key() -> bool:
     return _resolved_environment() not in _LOCAL_ENV_TOKENS
 
 
+class VaultStoreRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_vault_key_state_decision(*, path: Path, action: str, passphrase: str) -> Dict[str, Any]:
+    payload = {
+        "path": str(path),
+        "action": str(action or "").strip(),
+        "secret_length": len(str(passphrase or "")),
+        "environment": _resolved_environment(),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_vault_key_file",
+            state_class="secret_material",
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=len(json.dumps(payload, sort_keys=True).encode("utf-8")),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_vault_key_file":
+            raise VaultStoreRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise VaultStoreRustGateError(exc.reason) from exc
+
+
 def _vault_passphrase() -> str:
     _init()
     vault_key_env = _server.VAULT_KEY_ENV
@@ -53,7 +89,9 @@ def _vault_passphrase() -> str:
     if not vault_key_file.exists():
         key_parent = vault_key_file.parent if vault_key_file.parent != Path("") else Path(".")
         key_parent.mkdir(parents=True, exist_ok=True)
-        vault_key_file.write_text(secrets.token_urlsafe(64), encoding="utf-8")
+        generated = secrets.token_urlsafe(64)
+        _enforce_vault_key_state_decision(path=vault_key_file, action="generate", passphrase=generated)
+        vault_key_file.write_text(generated, encoding="utf-8")
         try:
             os.chmod(vault_key_file, 0o600)
         except Exception:
@@ -69,7 +107,9 @@ def _set_vault_passphrase(passphrase: str):
         raise RuntimeError("Cannot rotate vault key while CREDENTIAL_VAULT_KEY env var is set.")
     key_parent = vault_key_file.parent if vault_key_file.parent != Path("") else Path(".")
     key_parent.mkdir(parents=True, exist_ok=True)
-    vault_key_file.write_text(passphrase.strip(), encoding="utf-8")
+    normalized = passphrase.strip()
+    _enforce_vault_key_state_decision(path=vault_key_file, action="rotate", passphrase=normalized)
+    vault_key_file.write_text(normalized, encoding="utf-8")
     try:
         os.chmod(vault_key_file, 0o600)
     except Exception:

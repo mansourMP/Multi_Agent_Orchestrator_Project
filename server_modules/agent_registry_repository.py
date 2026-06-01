@@ -927,6 +927,16 @@ async def create_self_hosted_runtime_profile_enrollment_intent(
         "node_session_token_hash": None,
         "node_session_issued_at": None,
     }
+    control_plane_repository._enforce_control_plane_service_decision(
+        operation="self_hosted_enrollment_intent_create",
+        tenant_id=tenant_token,
+        workspace_id=workspace_token,
+        actor_id=owner_token,
+        actor_role="owner",
+        record_type="runtime_profile",
+        idempotency_key=runtime_profile_id,
+        source="self_hosted_runtime",
+    )
     await pool.execute(
         """
         INSERT INTO runtime_profiles (
@@ -1034,6 +1044,16 @@ async def enroll_self_hosted_runtime_profile(
             "runtime_node_id": str(profile.get("runtime_id") or metadata.get("runtime_node_id") or "").strip() or None,
         }
     )
+    control_plane_repository._enforce_control_plane_service_decision(
+        operation="self_hosted_runtime_enroll",
+        tenant_id=str(profile.get("tenant_id") or "default").strip() or "default",
+        workspace_id=workspace_id,
+        actor_id=str(profile.get("runtime_id") or metadata.get("runtime_node_id") or runtime_profile_id).strip(),
+        actor_role="system",
+        record_type="runtime_profile",
+        idempotency_key=str(profile.get("id") or runtime_profile_id).strip(),
+        source="self_hosted_runtime",
+    )
     pool = await control_plane_repository.ensure_control_plane_schema()
     if pool is None:
         raise RuntimeError("Control-plane storage is unavailable.")
@@ -1096,6 +1116,16 @@ async def approve_self_hosted_runtime_profile(
     if enrollment:
         enrollment["state"] = "approved"
         metadata["enrollment"] = enrollment
+    control_plane_repository._enforce_control_plane_service_decision(
+        operation="self_hosted_runtime_approve",
+        tenant_id=str(tenant_id or "").strip() or "default",
+        workspace_id=str(workspace_id or "").strip() or "default",
+        actor_id=str(approved_by_user_id or "").strip(),
+        actor_role="owner",
+        record_type="runtime_profile",
+        idempotency_key=str(runtime_profile_id or "").strip(),
+        source="self_hosted_runtime",
+    )
     pool = await control_plane_repository.ensure_control_plane_schema()
     if pool is None:
         raise RuntimeError("Control-plane storage is unavailable.")
@@ -1144,6 +1174,16 @@ async def resolve_self_hosted_runtime_heartbeat(
         raise ValueError("Self-hosted runtime profile is missing runtime_id.")
     now_iso = _utc_now_iso()
     metadata["heartbeat_at"] = now_iso
+    control_plane_repository._enforce_control_plane_service_decision(
+        operation="self_hosted_runtime_heartbeat",
+        tenant_id=str(profile.get("tenant_id") or "default").strip() or "default",
+        workspace_id=str(profile.get("workspace_id") or "default").strip() or "default",
+        actor_id=runtime_id,
+        actor_role="system",
+        record_type="runtime_profile",
+        idempotency_key=f"{str(profile.get('id') or runtime_profile_id).strip()}:{now_iso}",
+        source="self_hosted_runtime",
+    )
     pool = await control_plane_repository.ensure_control_plane_schema()
     if pool is None:
         raise RuntimeError("Control-plane storage is unavailable.")
@@ -1273,10 +1313,6 @@ async def enqueue_self_hosted_runtime_command(
     if scoped_workspace_id != str(workspace_id or "").strip():
         raise ValueError("workspace_id scope mismatch for self-hosted command enqueue.")
 
-    pool = await control_plane_repository.ensure_control_plane_schema()
-    if pool is None:
-        raise RuntimeError("Control-plane storage is unavailable.")
-
     normalized_payload = _dict_json(command_payload)
     normalized_agent_id = str(agent_id or "").strip()
     normalized_type = str(command_type or "").strip().lower() or "runtime_action"
@@ -1311,6 +1347,21 @@ async def enqueue_self_hosted_runtime_command(
     while len(active_items) + len(terminal_items) > SELF_HOSTED_NODE_COMMAND_QUEUE_LIMIT:
         terminal_items.pop(0)
     metadata["node_command_queue"] = active_items + terminal_items
+    control_plane_repository._enforce_control_plane_service_decision(
+        operation="self_hosted_command_enqueue",
+        tenant_id=str(profile.get("tenant_id") or "default").strip() or "default",
+        workspace_id=scoped_workspace_id,
+        actor_id=_normalize_token(requested_by_user_id) or normalized_agent_id,
+        actor_role="system",
+        record_type="self_hosted_runtime_command",
+        idempotency_key=command_id,
+        agent_id=normalized_agent_id,
+        source="self_hosted_runtime",
+    )
+
+    pool = await control_plane_repository.ensure_control_plane_schema()
+    if pool is None:
+        raise RuntimeError("Control-plane storage is unavailable.")
 
     await pool.execute(
         """
@@ -1406,6 +1457,16 @@ async def claim_self_hosted_runtime_commands(
         mutated = True
 
     if mutated:
+        control_plane_repository._enforce_control_plane_service_decision(
+            operation="self_hosted_command_claim",
+            tenant_id=str(profile.get("tenant_id") or "default").strip() or "default",
+            workspace_id=workspace_id,
+            actor_id=runtime_id,
+            actor_role="system",
+            record_type="self_hosted_runtime_command",
+            idempotency_key=f"{runtime_profile_id}:{now_iso}:{len(claimed_commands)}",
+            source="self_hosted_runtime",
+        )
         metadata["node_command_queue"] = queue
         metadata["heartbeat_at"] = now_iso
         pool = await control_plane_repository.ensure_control_plane_schema()
@@ -1482,6 +1543,17 @@ async def complete_self_hosted_runtime_command(
     resolved["audit_references"] = [dict(item) for item in list(audit_references or []) if isinstance(item, dict)]
     resolved["error"] = str(error or "").strip() or None
     resolved["claim_expires_at"] = None
+    control_plane_repository._enforce_control_plane_service_decision(
+        operation="self_hosted_command_complete",
+        tenant_id=str(profile.get("tenant_id") or "default").strip() or "default",
+        workspace_id=workspace_id,
+        actor_id=runtime_id,
+        actor_role="system",
+        record_type="self_hosted_runtime_command",
+        idempotency_key=target_id,
+        source="self_hosted_runtime",
+        target_status=normalized_status,
+    )
 
     metadata["node_command_queue"] = queue
     metadata["heartbeat_at"] = now_iso
@@ -2130,11 +2202,21 @@ async def create_compiled_workflow_artifact(
     metadata: Optional[Dict[str, Any]] = None,
     created_by_user_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    workflow_id = f"wf_{uuid.uuid4().hex[:12]}"
+    version_id = f"wfver_{uuid.uuid4().hex[:16]}"
+    control_plane_repository._enforce_control_plane_service_decision(
+        operation="compiled_workflow_artifact_create",
+        tenant_id=str(tenant_id or "").strip(),
+        workspace_id=str(workspace_id or "").strip(),
+        actor_id=_normalize_token(created_by_user_id) or "workflow-compiler",
+        actor_role="system",
+        record_type="compiled_workflow_artifact",
+        idempotency_key=f"{workflow_id}:{version_id}",
+        source="template_compiler",
+    )
     pool = await control_plane_repository.ensure_control_plane_schema()
     if pool is None:
         return None
-    workflow_id = f"wf_{uuid.uuid4().hex[:12]}"
-    version_id = f"wfver_{uuid.uuid4().hex[:16]}"
     now = datetime.now(timezone.utc)
     async with pool.acquire() as connection:
         async with connection.transaction():
@@ -2191,6 +2273,16 @@ async def update_workspace_agent_install_compiled_artifact(
     compiled_workflow_version_id: Optional[str],
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
+    control_plane_repository._enforce_control_plane_service_decision(
+        operation="workspace_agent_install_compiled_artifact_update",
+        tenant_id=str(tenant_id or "").strip(),
+        workspace_id=str(workspace_id or "").strip(),
+        actor_id=str(install_id or "").strip() or "workspace-agent-install",
+        actor_role="system",
+        record_type="workspace_agent_install",
+        idempotency_key=f"{str(install_id or '').strip()}:{_normalize_token(compiled_workflow_version_id) or 'none'}",
+        source="template_compiler",
+    )
     pool = await control_plane_repository.ensure_control_plane_schema()
     if pool is None:
         return None

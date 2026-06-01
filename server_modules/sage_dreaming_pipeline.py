@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from server_modules import sage_memory_service, workspace_context
+from server_modules import rust_runtime_kernel_client, sage_memory_service, workspace_context
 
 
 DREAMING_STAGING_DIR = ".dreams"
@@ -21,6 +21,63 @@ def _utc_now_iso() -> str:
 def _staging_dir(workspace_id: str) -> Path:
     memory_dir = workspace_context.workspace_memory_dir(workspace_id)
     return memory_dir / DREAMING_STAGING_DIR
+
+
+class SageDreamingRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_sage_dreaming_state_decision(
+    *,
+    operation: str,
+    workspace_id: str,
+    path: Path,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    decision_payload = {
+        "path": str(path),
+        "stage": str(normalized_payload.get("stage") or "").strip(),
+        "payload": normalized_payload,
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class="sage_dreaming",
+            workspace_id=str(workspace_id or "").strip(),
+            actor_id="system",
+            status=str(normalized_payload.get("stage") or "active").strip() or "active",
+            payload=decision_payload,
+            payload_bytes=len(json.dumps(decision_payload, sort_keys=True, default=str).encode("utf-8")),
+            workspace_access=True,
+            owner_access=True,
+        )
+        decision = rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        if str(decision.get("next_action") or "").strip() != str(operation or "").strip():
+            raise SageDreamingRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise SageDreamingRustGateError(exc.reason) from exc
+
+
+def _write_dreaming_json(
+    *,
+    operation: str,
+    workspace_id: str,
+    path: Path,
+    payload: Dict[str, Any],
+) -> None:
+    _enforce_sage_dreaming_state_decision(
+        operation=operation,
+        workspace_id=workspace_id,
+        path=path,
+        payload=payload,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _jaccard_similarity(a: str, b: str) -> float:
@@ -89,13 +146,21 @@ def light_sleep(workspace_id: str) -> Dict[str, Any]:
         state["entries"] = deduped
         state["updated_at"] = _utc_now_iso()
         target = sage_memory_service._state_file(workspace_id)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+        _write_dreaming_json(
+            operation="write_sage_dreaming_memory_state",
+            workspace_id=workspace_id,
+            path=target,
+            payload=state,
+        )
 
     _prune_staging(workspace_id)
     staging_file = _staging_dir(workspace_id) / f"light_sleep_{_utc_now_iso().replace(':', '-')}.json"
-    staging_file.parent.mkdir(parents=True, exist_ok=True)
-    staging_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_dreaming_json(
+        operation="write_sage_dreaming_staging_file",
+        workspace_id=workspace_id,
+        path=staging_file,
+        payload=result,
+    )
 
     return result
 
@@ -150,12 +215,20 @@ def rem_sleep(workspace_id: str) -> Dict[str, Any]:
         state["entries"] = entries
         state["updated_at"] = _utc_now_iso()
         target = sage_memory_service._state_file(workspace_id)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+        _write_dreaming_json(
+            operation="write_sage_dreaming_memory_state",
+            workspace_id=workspace_id,
+            path=target,
+            payload=state,
+        )
 
     staging_file = _staging_dir(workspace_id) / f"rem_sleep_{_utc_now_iso().replace(':', '-')}.json"
-    staging_file.parent.mkdir(parents=True, exist_ok=True)
-    staging_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_dreaming_json(
+        operation="write_sage_dreaming_staging_file",
+        workspace_id=workspace_id,
+        path=staging_file,
+        payload=result,
+    )
 
     return result
 
@@ -227,12 +300,20 @@ def deep_sleep(
         state["entries"] = kept
         state["updated_at"] = _utc_now_iso()
         target = sage_memory_service._state_file(workspace_id)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+        _write_dreaming_json(
+            operation="write_sage_dreaming_memory_state",
+            workspace_id=workspace_id,
+            path=target,
+            payload=state,
+        )
 
     staging_file = _staging_dir(workspace_id) / f"deep_sleep_{_utc_now_iso().replace(':', '-')}.json"
-    staging_file.parent.mkdir(parents=True, exist_ok=True)
-    staging_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_dreaming_json(
+        operation="write_sage_dreaming_staging_file",
+        workspace_id=workspace_id,
+        path=staging_file,
+        payload=result,
+    )
 
     return result
 

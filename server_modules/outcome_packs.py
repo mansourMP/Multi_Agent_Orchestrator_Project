@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from server_modules.connector_metadata import _connector_identity_signature
 from server_modules.customer_ops_pack import execute_customer_ops_pack
 from server_modules.external_write_safety import execute_external_write_once, stable_value_fingerprint
+from server_modules import rust_runtime_kernel_client
 from server_modules.microsoft_365_graph import (
     microsoft_365_download_drive_file,
     microsoft_365_normalize_drive_path,
@@ -84,6 +85,56 @@ def _connector_account_identity(
     if signature:
         return f"signature:{stable_value_fingerprint(signature)}"
     return None
+
+
+class OutcomePacksRustGateError(RuntimeError):
+    pass
+
+
+def _json_payload_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value or "").encode("utf-8"))
+
+
+def _enforce_outcome_pack_file_write(
+    *,
+    operation: str,
+    pack_id: str,
+    file_path: Path,
+    action: str,
+    storage: str,
+    payload_bytes: int,
+    remote_path: str = "",
+) -> None:
+    payload = {
+        "pack_id": str(pack_id or "").strip(),
+        "file_path": str(file_path),
+        "action": str(action or "").strip(),
+        "storage": str(storage or "local").strip().lower() or "local",
+        "remote_path": str(remote_path or "").strip(),
+        "payload_bytes": max(0, int(payload_bytes or 0)),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class="outcome_pack_files",
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=int(payload["payload_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        decision = rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        if str(decision.get("next_action") or "").strip() != str(operation or "").strip():
+            raise OutcomePacksRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise OutcomePacksRustGateError(exc.reason) from exc
 
 
 def normalize_channel_name(raw: Any) -> str:
@@ -541,7 +592,17 @@ def execute_spreadsheet_ops_pack(context: Dict[str, Any], run_id: Optional[str] 
         target_path = sync_dir / f"{uuid.uuid4().hex}-{file_name}"
         root_path = sync_dir
         try:
-            target_path.write_bytes(microsoft_365_download_drive_file(connector_credentials, remote_drive_path))
+            downloaded_bytes = microsoft_365_download_drive_file(connector_credentials, remote_drive_path)
+            _enforce_outcome_pack_file_write(
+                operation="write_outcome_pack_remote_sync_file",
+                pack_id=SPREADSHEET_OPS_PACK_ID,
+                file_path=target_path,
+                action="spreadsheet_onedrive_download",
+                storage="onedrive",
+                remote_path=remote_drive_path,
+                payload_bytes=len(downloaded_bytes),
+            )
+            target_path.write_bytes(downloaded_bytes)
             remote_exists = True
         except Exception as exc:
             detail = str(exc).lower()
@@ -580,6 +641,15 @@ def execute_spreadsheet_ops_pack(context: Dict[str, Any], run_id: Optional[str] 
                     raise RuntimeError(f"File already exists: {display_file_path} (set overwrite=true).")
                 rows_to_write = list(rows)
                 columns = sorted({key for row in rows_to_write for key in row.keys()}) if rows_to_write else ["value"]
+                _enforce_outcome_pack_file_write(
+                    operation="write_outcome_pack_spreadsheet_file",
+                    pack_id=SPREADSHEET_OPS_PACK_ID,
+                    file_path=local_target_path,
+                    action="spreadsheet_create",
+                    storage="onedrive" if remote_storage else "local",
+                    remote_path=remote_drive_path if remote_storage else "",
+                    payload_bytes=_json_payload_bytes({"columns": columns, "rows": rows_to_write[:20]}),
+                )
                 with local_target_path.open("w", newline="", encoding="utf-8") as handle:
                     writer = csv.DictWriter(handle, fieldnames=columns)
                     writer.writeheader()
@@ -609,6 +679,15 @@ def execute_spreadsheet_ops_pack(context: Dict[str, Any], run_id: Optional[str] 
                     extra = [key for key in row.keys() if key not in existing_columns]
                     if extra:
                         raise RuntimeError(f"Append payload has unknown columns: {', '.join(extra)}.")
+                _enforce_outcome_pack_file_write(
+                    operation="write_outcome_pack_spreadsheet_file",
+                    pack_id=SPREADSHEET_OPS_PACK_ID,
+                    file_path=local_target_path,
+                    action="spreadsheet_append",
+                    storage="onedrive" if remote_storage else "local",
+                    remote_path=remote_drive_path if remote_storage else "",
+                    payload_bytes=_json_payload_bytes({"columns": existing_columns, "rows": rows[:20]}),
+                )
                 with local_target_path.open("w", newline="", encoding="utf-8") as handle:
                     writer = csv.DictWriter(handle, fieldnames=existing_columns)
                     writer.writeheader()
@@ -637,6 +716,15 @@ def execute_spreadsheet_ops_pack(context: Dict[str, Any], run_id: Optional[str] 
                 target = data_rows[row_index]
                 for key, value in update_values.items():
                     target[str(key)] = value
+                _enforce_outcome_pack_file_write(
+                    operation="write_outcome_pack_spreadsheet_file",
+                    pack_id=SPREADSHEET_OPS_PACK_ID,
+                    file_path=local_target_path,
+                    action="spreadsheet_update",
+                    storage="onedrive" if remote_storage else "local",
+                    remote_path=remote_drive_path if remote_storage else "",
+                    payload_bytes=_json_payload_bytes({"row_index": row_index, "values": update_values}),
+                )
                 with local_target_path.open("w", newline="", encoding="utf-8") as handle:
                     writer = csv.DictWriter(handle, fieldnames=existing_columns)
                     writer.writeheader()
@@ -679,6 +767,15 @@ def execute_spreadsheet_ops_pack(context: Dict[str, Any], run_id: Optional[str] 
                     ws.append(write_columns)
                     for row in rows_to_write:
                         ws.append([row.get(column) for column in write_columns])
+                    _enforce_outcome_pack_file_write(
+                        operation="write_outcome_pack_spreadsheet_file",
+                        pack_id=SPREADSHEET_OPS_PACK_ID,
+                        file_path=local_target_path,
+                        action="spreadsheet_create",
+                        storage="onedrive" if remote_storage else "local",
+                        remote_path=remote_drive_path if remote_storage else "",
+                        payload_bytes=_json_payload_bytes({"columns": write_columns, "rows": rows_to_write[:20]}),
+                    )
                     wb.save(local_target_path)
                     rows_written = len(rows_to_write)
                     columns, preview, rows_read = _read_xlsx_preview(local_target_path, sheet_name, row_limit)
@@ -701,6 +798,15 @@ def execute_spreadsheet_ops_pack(context: Dict[str, Any], run_id: Optional[str] 
                             header.append(key)
                             ws.cell(row=1, column=len(header), value=key)
                         ws.append([row.get(col) for col in header])
+                    _enforce_outcome_pack_file_write(
+                        operation="write_outcome_pack_spreadsheet_file",
+                        pack_id=SPREADSHEET_OPS_PACK_ID,
+                        file_path=local_target_path,
+                        action="spreadsheet_append",
+                        storage="onedrive" if remote_storage else "local",
+                        remote_path=remote_drive_path if remote_storage else "",
+                        payload_bytes=_json_payload_bytes({"columns": header, "rows": rows[:20]}),
+                    )
                     wb.save(local_target_path)
                     rows_written = len(rows)
                     columns, preview, rows_read = _read_xlsx_preview(local_target_path, sheet_name, row_limit)
@@ -725,6 +831,15 @@ def execute_spreadsheet_ops_pack(context: Dict[str, Any], run_id: Optional[str] 
                             ws.cell(row=1, column=len(header), value=key_text)
                         col_idx = header.index(key_text) + 1
                         ws.cell(row=excel_row, column=col_idx, value=value)
+                    _enforce_outcome_pack_file_write(
+                        operation="write_outcome_pack_spreadsheet_file",
+                        pack_id=SPREADSHEET_OPS_PACK_ID,
+                        file_path=local_target_path,
+                        action="spreadsheet_update",
+                        storage="onedrive" if remote_storage else "local",
+                        remote_path=remote_drive_path if remote_storage else "",
+                        payload_bytes=_json_payload_bytes({"row_index": row_index, "values": update_values}),
+                    )
                     wb.save(local_target_path)
                     rows_written = 1
                     columns, preview, rows_read = _read_xlsx_preview(local_target_path, sheet_name, row_limit)
@@ -921,6 +1036,15 @@ def execute_document_studio_pack(context: Dict[str, Any], run_id: Optional[str] 
         root_path = sync_dir
         try:
             existing_blob = microsoft_365_download_drive_file(connector_credentials, remote_drive_path)
+            _enforce_outcome_pack_file_write(
+                operation="write_outcome_pack_remote_sync_file",
+                pack_id=DOCUMENT_STUDIO_PACK_ID,
+                file_path=target_path,
+                action="document_onedrive_download",
+                storage="onedrive",
+                remote_path=remote_drive_path,
+                payload_bytes=len(existing_blob),
+            )
             target_path.write_bytes(existing_blob)
             remote_exists = True
         except Exception as exc:
@@ -984,6 +1108,15 @@ def execute_document_studio_pack(context: Dict[str, Any], run_id: Optional[str] 
     else:
         raise RuntimeError("Document Studio supports only .docx and .pptx targets.")
 
+    _enforce_outcome_pack_file_write(
+        operation="write_outcome_pack_document_file",
+        pack_id=DOCUMENT_STUDIO_PACK_ID,
+        file_path=target_path,
+        action=str(action_payload.get("action") or "document_write"),
+        storage="onedrive" if remote_storage else "local",
+        remote_path=remote_drive_path if remote_storage else "",
+        payload_bytes=len(output_bytes),
+    )
     target_path.write_bytes(output_bytes)
     if remote_storage:
         content_type = DOCX_MIME if ext == ".docx" else PPTX_MIME

@@ -20,6 +20,7 @@ from server_modules.docker_execution_sandbox import (
     run_docker_worker,
     docker_sandbox_result,
 )
+from server_modules import rust_runtime_kernel_client
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -90,8 +91,309 @@ class HostedSecureSandboxError(RuntimeError):
     pass
 
 
+_SANDBOX_EXECUTION_NEXT_ACTIONS = {
+    "prepare_sandbox": {"prepare_isolated_workspace"},
+    "launch_worker": {"launch_hosted_worker"},
+    "sandbox_profile": {"build_restricted_sandbox_profile"},
+    "environment": {"scrub_environment"},
+    "cleanup_policy": {"cleanup_ephemeral_workspace"},
+}
+
+
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _require_sandbox_next_action(decision: Dict[str, Any], *, operation: str) -> Dict[str, Any]:
+    allowed_next_actions = _SANDBOX_EXECUTION_NEXT_ACTIONS.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if allowed_next_actions is None:
+        raise HostedSecureSandboxError(f"unexpected sandbox operation: {operation}")
+    if next_action not in allowed_next_actions:
+        expected = ", ".join(sorted(allowed_next_actions))
+        raise HostedSecureSandboxError(
+            f"unexpected next_action for sandbox-execution-decision: {next_action or '<missing>'} "
+            f"(expected {expected})"
+        )
+    return decision
+
+
+def _enforce_hosted_sandbox_preparation(*, sandbox_root: Path, scope: Dict[str, Any]) -> Dict[str, Any]:
+    limits = _coerce_dict(scope.get("limits"))
+    network_policy = _coerce_dict(scope.get("network_policy"))
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "sandbox-execution-decision",
+            {
+                "operation": "prepare_sandbox",
+                "runtime_mode": str(scope.get("mode") or "hosted_secure"),
+                "driver": str(scope.get("driver") or ""),
+                "sandbox_root": str(sandbox_root),
+                "image": str(scope.get("base_image_id") or DEFAULT_DOCKER_IMAGE),
+                "image_approved": True,
+                "base_image_approved": True,
+                "network_policy": network_policy,
+                "read_only": bool(scope.get("read_only_base_image", True)),
+                "host_mounts_allowed": bool(scope.get("host_mounts_allowed")),
+                "docker_socket_exposed": bool(scope.get("docker_socket_exposed")),
+                "privileged": False,
+                "cap_drop_all": True,
+                "no_new_privileges": True,
+                "approval_provided": False,
+                "timeout_seconds": int(limits.get("timeout_seconds") or DEFAULT_HOSTED_LIMITS["timeout_seconds"]),
+                "max_timeout_seconds": int(limits.get("timeout_seconds") or DEFAULT_HOSTED_LIMITS["timeout_seconds"]),
+                "cpu_seconds": int(limits.get("cpu_seconds") or DEFAULT_HOSTED_LIMITS["cpu_seconds"]),
+                "memory_mb": int(limits.get("memory_mb") or DEFAULT_HOSTED_LIMITS["memory_mb"]),
+                "max_open_files": int(limits.get("max_open_files") or DEFAULT_HOSTED_LIMITS["max_open_files"]),
+                "max_file_bytes": int(limits.get("max_file_bytes") or DEFAULT_HOSTED_LIMITS["max_file_bytes"]),
+                "output_file": str(sandbox_root / "workspace" / "outputs" / "turn-result.json"),
+            },
+        )
+        return _require_sandbox_next_action(decision, operation="prepare_sandbox")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HostedSecureSandboxError(
+            f"Rust sandbox preparation blocked hosted worker: {exc.reason}"
+        ) from exc
+
+
+def _enforce_hosted_worker_launch(
+    *,
+    sandbox_root: Path,
+    scope: Dict[str, Any],
+    output_file: Path,
+) -> Dict[str, Any]:
+    limits = _coerce_dict(scope.get("limits"))
+    network_policy = _coerce_dict(scope.get("network_policy"))
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "sandbox-execution-decision",
+            {
+                "operation": "launch_worker",
+                "runtime_mode": str(scope.get("mode") or "hosted_secure"),
+                "driver": str(scope.get("driver") or ""),
+                "sandbox_root": str(sandbox_root),
+                "image": str(scope.get("base_image_id") or DEFAULT_DOCKER_IMAGE),
+                "image_approved": True,
+                "base_image_approved": True,
+                "network_policy": network_policy,
+                "read_only": bool(scope.get("read_only_base_image", True)),
+                "host_mounts_allowed": bool(scope.get("host_mounts_allowed")),
+                "docker_socket_exposed": bool(scope.get("docker_socket_exposed")),
+                "privileged": False,
+                "cap_drop_all": True,
+                "no_new_privileges": True,
+                "approval_provided": False,
+                "timeout_seconds": int(limits.get("timeout_seconds") or DEFAULT_HOSTED_LIMITS["timeout_seconds"]),
+                "max_timeout_seconds": int(limits.get("timeout_seconds") or DEFAULT_HOSTED_LIMITS["timeout_seconds"]),
+                "cpu_seconds": int(limits.get("cpu_seconds") or DEFAULT_HOSTED_LIMITS["cpu_seconds"]),
+                "memory_mb": int(limits.get("memory_mb") or DEFAULT_HOSTED_LIMITS["memory_mb"]),
+                "max_open_files": int(limits.get("max_open_files") or DEFAULT_HOSTED_LIMITS["max_open_files"]),
+                "max_file_bytes": int(limits.get("max_file_bytes") or DEFAULT_HOSTED_LIMITS["max_file_bytes"]),
+                "output_file": str(output_file),
+            },
+        )
+        return _require_sandbox_next_action(decision, operation="launch_worker")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HostedSecureSandboxError(
+            f"Rust sandbox launch blocked hosted worker: {exc.reason}"
+        ) from exc
+
+
+def _enforce_hosted_sandbox_profile_policy(
+    *,
+    sandbox_root: Path,
+    scope: Dict[str, Any],
+) -> Dict[str, Any]:
+    limits = _coerce_dict(scope.get("limits"))
+    network_policy = _coerce_dict(scope.get("network_policy"))
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "sandbox-execution-decision",
+            {
+                "operation": "sandbox_profile",
+                "runtime_mode": str(scope.get("mode") or "hosted_secure"),
+                "driver": str(scope.get("driver") or ""),
+                "sandbox_root": str(sandbox_root),
+                "image": str(scope.get("base_image_id") or DEFAULT_DOCKER_IMAGE),
+                "image_approved": True,
+                "base_image_approved": True,
+                "network_policy": network_policy,
+                "read_only": bool(scope.get("read_only_base_image", True)),
+                "host_mounts_allowed": bool(scope.get("host_mounts_allowed")),
+                "docker_socket_exposed": bool(scope.get("docker_socket_exposed")),
+                "privileged": False,
+                "cap_drop_all": True,
+                "no_new_privileges": True,
+                "approval_provided": False,
+                "timeout_seconds": int(limits.get("timeout_seconds") or DEFAULT_HOSTED_LIMITS["timeout_seconds"]),
+                "max_timeout_seconds": int(limits.get("timeout_seconds") or DEFAULT_HOSTED_LIMITS["timeout_seconds"]),
+                "cpu_seconds": int(limits.get("cpu_seconds") or DEFAULT_HOSTED_LIMITS["cpu_seconds"]),
+                "memory_mb": int(limits.get("memory_mb") or DEFAULT_HOSTED_LIMITS["memory_mb"]),
+                "max_open_files": int(limits.get("max_open_files") or DEFAULT_HOSTED_LIMITS["max_open_files"]),
+                "max_file_bytes": int(limits.get("max_file_bytes") or DEFAULT_HOSTED_LIMITS["max_file_bytes"]),
+            },
+        )
+        return _require_sandbox_next_action(decision, operation="sandbox_profile")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HostedSecureSandboxError(
+            f"Rust sandbox profile policy blocked hosted worker: {exc.reason}"
+        ) from exc
+
+
+def _enforce_hosted_sandbox_environment_policy(
+    *,
+    sandbox_root: Path,
+    output_path: Path,
+    scope: Dict[str, Any],
+    env: Dict[str, str],
+) -> Dict[str, Any]:
+    limits = _coerce_dict(scope.get("limits"))
+    network_policy = _coerce_dict(scope.get("network_policy"))
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "sandbox-execution-decision",
+            {
+                "operation": "environment",
+                "runtime_mode": str(scope.get("mode") or "hosted_secure"),
+                "driver": str(scope.get("driver") or ""),
+                "sandbox_root": str(sandbox_root),
+                "image": str(scope.get("base_image_id") or DEFAULT_DOCKER_IMAGE),
+                "image_approved": True,
+                "base_image_approved": True,
+                "network_policy": network_policy,
+                "read_only": bool(scope.get("read_only_base_image", True)),
+                "host_mounts_allowed": bool(scope.get("host_mounts_allowed")),
+                "docker_socket_exposed": bool(scope.get("docker_socket_exposed")),
+                "privileged": False,
+                "cap_drop_all": True,
+                "no_new_privileges": True,
+                "approval_provided": False,
+                "timeout_seconds": int(limits.get("timeout_seconds") or DEFAULT_HOSTED_LIMITS["timeout_seconds"]),
+                "max_timeout_seconds": int(limits.get("timeout_seconds") or DEFAULT_HOSTED_LIMITS["timeout_seconds"]),
+                "cpu_seconds": int(limits.get("cpu_seconds") or DEFAULT_HOSTED_LIMITS["cpu_seconds"]),
+                "memory_mb": int(limits.get("memory_mb") or DEFAULT_HOSTED_LIMITS["memory_mb"]),
+                "max_open_files": int(limits.get("max_open_files") or DEFAULT_HOSTED_LIMITS["max_open_files"]),
+                "max_file_bytes": int(limits.get("max_file_bytes") or DEFAULT_HOSTED_LIMITS["max_file_bytes"]),
+                "output_file": str(output_path),
+                "env_names": sorted(env.keys()),
+            },
+        )
+        decision = _require_sandbox_next_action(decision, operation="environment")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HostedSecureSandboxError(
+            f"Rust sandbox environment policy blocked hosted worker: {exc.reason}"
+        ) from exc
+
+    env_policy = _coerce_dict(decision.get("env_policy"))
+    for name in _list_strings(env_policy.get("scrubbed_env_names")):
+        env.pop(name, None)
+    return decision
+
+
+def _enforce_hosted_sandbox_cleanup_policy(
+    *,
+    sandbox_root: Path,
+    scope: Dict[str, Any],
+) -> Dict[str, Any]:
+    limits = _coerce_dict(scope.get("limits"))
+    network_policy = _coerce_dict(scope.get("network_policy"))
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "sandbox-execution-decision",
+            {
+                "operation": "cleanup_policy",
+                "runtime_mode": str(scope.get("mode") or "hosted_secure"),
+                "driver": str(scope.get("driver") or ""),
+                "sandbox_root": str(sandbox_root),
+                "image": str(scope.get("base_image_id") or DEFAULT_DOCKER_IMAGE),
+                "image_approved": True,
+                "base_image_approved": True,
+                "network_policy": network_policy,
+                "read_only": bool(scope.get("read_only_base_image", True)),
+                "host_mounts_allowed": bool(scope.get("host_mounts_allowed")),
+                "docker_socket_exposed": bool(scope.get("docker_socket_exposed")),
+                "privileged": False,
+                "cap_drop_all": True,
+                "no_new_privileges": True,
+                "approval_provided": False,
+                "timeout_seconds": int(limits.get("timeout_seconds") or DEFAULT_HOSTED_LIMITS["timeout_seconds"]),
+                "max_timeout_seconds": int(limits.get("timeout_seconds") or DEFAULT_HOSTED_LIMITS["timeout_seconds"]),
+                "cpu_seconds": int(limits.get("cpu_seconds") or DEFAULT_HOSTED_LIMITS["cpu_seconds"]),
+                "memory_mb": int(limits.get("memory_mb") or DEFAULT_HOSTED_LIMITS["memory_mb"]),
+                "max_open_files": int(limits.get("max_open_files") or DEFAULT_HOSTED_LIMITS["max_open_files"]),
+                "max_file_bytes": int(limits.get("max_file_bytes") or DEFAULT_HOSTED_LIMITS["max_file_bytes"]),
+            },
+        )
+        return _require_sandbox_next_action(decision, operation="cleanup_policy")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HostedSecureSandboxError(
+            f"Rust sandbox cleanup policy blocked hosted worker: {exc.reason}"
+        ) from exc
+
+
+def _classify_hosted_worker_outcome(
+    completed: subprocess.CompletedProcess,
+    *,
+    parsed_result: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    artifacts: list[Any] = []
+    if isinstance(parsed_result, dict) and isinstance(parsed_result.get("artifacts"), list):
+        artifacts = list(parsed_result.get("artifacts") or [])
+    return rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "execution-outcome",
+        {
+            "exit_code": int(getattr(completed, "returncode", 0)),
+            "stdout": str(getattr(completed, "stdout", "") or ""),
+            "stderr": str(getattr(completed, "stderr", "") or ""),
+            "stdout_bytes": len(str(getattr(completed, "stdout", "") or "").encode("utf-8")),
+            "stderr_bytes": len(str(getattr(completed, "stderr", "") or "").encode("utf-8")),
+            "artifacts": artifacts,
+            "max_preview_bytes": 2_000,
+        },
+    )
+
+
+def _enforce_hosted_base_image_state_decision(
+    *,
+    image_root: Path,
+    payload: Dict[str, Any],
+    scope: Dict[str, Any],
+) -> Dict[str, Any]:
+    decision_payload = {
+        "image_root": str(image_root),
+        "manifest_present": isinstance(payload.get("manifest"), dict),
+        "base_image_id": str(scope.get("base_image_id") or HOSTED_SECURE_BASE_IMAGE),
+        "driver": str(scope.get("driver") or ""),
+        "read_only": bool(scope.get("read_only_base_image", True)),
+        "network_policy": _coerce_dict(scope.get("network_policy")),
+        "limits": _coerce_dict(scope.get("limits")),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_hosted_sandbox_base_image",
+            state_class="execution_sandbox_image",
+            actor_id="system",
+            status="active",
+            payload=decision_payload,
+            payload_bytes=len(json.dumps(decision_payload, sort_keys=True, default=str).encode("utf-8")),
+            workspace_access=True,
+            owner_access=True,
+        )
+        enforced = rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(enforced.get("next_action") or "").strip()
+        if next_action != "write_hosted_sandbox_base_image":
+            raise HostedSecureSandboxError(
+                "Rust hosted base-image write returned unexpected next_action: "
+                f"{next_action or 'missing'}"
+            )
+        return enforced
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HostedSecureSandboxError(
+            f"Rust hosted base-image write blocked: {exc.reason}"
+        ) from exc
 
 
 def _list_strings(value: Any) -> list[str]:
@@ -335,6 +637,7 @@ def _sb_literal_expr(path: Path) -> str:
 
 
 def _sandbox_profile(*, root: Path, scope: Dict[str, Any]) -> str:
+    _enforce_hosted_sandbox_profile_policy(sandbox_root=root, scope=scope)
     read_paths = _python_read_paths()
     metadata_paths = _python_metadata_paths()
     write_paths = [root]
@@ -391,10 +694,17 @@ def _minimal_env(*, sandbox_root: Path, output_path: Path, scope: Dict[str, Any]
     env["EMPYRALIS_SANDBOX_MAX_FILE_BYTES"] = str(_coerce_dict(scope.get("limits")).get("max_file_bytes") or DEFAULT_HOSTED_LIMITS["max_file_bytes"])
     env["EMPYRALIS_SANDBOX_NETWORK_MODE"] = str(_coerce_dict(scope.get("network_policy")).get("mode") or DEFAULT_NETWORK_POLICY["mode"])
     env["EMPYRALIS_SANDBOX_ALLOW_OUTBOUND"] = "1" if bool(_coerce_dict(scope.get("network_policy")).get("allow_outbound", True)) else "0"
+    _enforce_hosted_sandbox_environment_policy(
+        sandbox_root=sandbox_root,
+        output_path=output_path,
+        scope=scope,
+        env=env,
+    )
     return env
 
 
 def _write_read_only_base_image(*, image_root: Path, payload: Dict[str, Any], scope: Dict[str, Any]) -> None:
+    _enforce_hosted_base_image_state_decision(image_root=image_root, payload=payload, scope=scope)
     image_root.mkdir(parents=True, exist_ok=True)
     files = {
         "manifest.json": payload.get("manifest"),
@@ -417,7 +727,10 @@ def _worker_command(scope: Dict[str, Any]) -> list[str]:
     sandbox_exec = shutil.which("sandbox-exec")
     if not sandbox_exec:
         return command
-    return [sandbox_exec, "-p", _sandbox_profile(root=Path(os.environ.get("EMPYRALIS_SANDBOX_ROOT", "/tmp")), scope=scope), *command]
+    sandbox_root_value = os.environ.get("EMPYRALIS_SANDBOX_ROOT")
+    if not sandbox_root_value:
+        raise HostedSecureSandboxError("EMPYRALIS_SANDBOX_ROOT is required for sandbox-exec worker commands.")
+    return [sandbox_exec, "-p", _sandbox_profile(root=Path(sandbox_root_value).resolve(), scope=scope), *command]
 
 
 def _run_hosted_worker(
@@ -437,6 +750,7 @@ def _run_hosted_worker(
         tmp_root = sandbox_root / "tmp"
         home_root = sandbox_root / "home"
         outputs_root = workspace_root / "outputs"
+        _enforce_hosted_sandbox_preparation(sandbox_root=sandbox_root, scope=scope)
         for path in (workspace_root, tmp_root, home_root, outputs_root):
             path.mkdir(parents=True, exist_ok=True)
 
@@ -460,9 +774,7 @@ def _run_hosted_worker(
                 memory_mb=int(limits.get("memory_mb", DEFAULT_HOSTED_LIMITS["memory_mb"])),
                 cpu_shares=1024,
                 timeout_seconds=int(limits.get("timeout_seconds", DEFAULT_HOSTED_LIMITS["timeout_seconds"])),
-                network_enabled=bool(
-                    _coerce_dict(scope.get("network_policy", {})).get("allow_outbound", False)
-                ),
+                network_enabled=False,
             )
             return docker_sandbox_result(completed, sandbox_root=str(sandbox_root))
 
@@ -472,6 +784,11 @@ def _run_hosted_worker(
             sandbox_exec = shutil.which("sandbox-exec")
             if sandbox_exec:
                 command = [sandbox_exec, "-p", _sandbox_profile(root=sandbox_root, scope=scope), *command]
+        _enforce_hosted_worker_launch(
+            sandbox_root=sandbox_root,
+            scope=scope,
+            output_file=output_file,
+        )
         completed = subprocess.run(
             command,
             input=json.dumps(payload),
@@ -483,6 +800,7 @@ def _run_hosted_worker(
             check=False,
         )
         if completed.returncode != 0:
+            _classify_hosted_worker_outcome(completed)
             detail = (completed.stderr or completed.stdout or "Hosted Secure worker failed.").strip()
             raise HostedSecureSandboxError(detail)
         try:
@@ -491,6 +809,8 @@ def _run_hosted_worker(
             raise HostedSecureSandboxError("Hosted Secure worker returned invalid JSON.") from error
         if not isinstance(result, dict):
             raise HostedSecureSandboxError("Hosted Secure worker returned an invalid payload.")
+        result["execution_outcome"] = _classify_hosted_worker_outcome(completed, parsed_result=result)
+        _enforce_hosted_sandbox_cleanup_policy(sandbox_root=sandbox_root, scope=scope)
         result["sandbox"] = {
             "mode": "hosted_secure",
             "driver": scope.get("driver"),

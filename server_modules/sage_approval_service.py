@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from server_modules import approval_contracts
+from server_modules import rust_runtime_kernel_client
 from server_modules import workspace_context
 
 APPROVAL_TOKEN_PREFIX = "sap_"
@@ -33,6 +34,53 @@ def _utc_now_iso() -> str:
 
 def _coerce_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+class SageApprovalRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_sage_approval_state_decision(
+    *,
+    operation: str,
+    workspace_id: str,
+    payload: dict,
+    status: str = "pending",
+    actor_id: str = "",
+    trace_id: str = "",
+) -> dict:
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    try:
+        payload_bytes = len(
+            json.dumps(
+                normalized_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        )
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class="sage_approvals",
+            workspace_id=_coerce_text(workspace_id),
+            actor_id=_coerce_text(actor_id),
+            trace_id=_coerce_text(trace_id),
+            status=_coerce_text(status) or "pending",
+            payload=normalized_payload,
+            payload_bytes=payload_bytes,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = _coerce_text(decision.get("next_action"))
+        if next_action != _coerce_text(operation):
+            raise SageApprovalRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise SageApprovalRustGateError(exc.reason) from exc
 
 
 @dataclass(frozen=False, slots=True)
@@ -104,10 +152,7 @@ def _default_state() -> dict:
 def _read_state(workspace_id: str) -> dict:
     path = _state_file(workspace_id)
     if not path.exists():
-        payload = _default_state()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return payload
+        return _default_state()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -180,8 +225,19 @@ def create_approval(
 
     try:
         state = _read_state(normalized_workspace_id)
-        state["records"][token] = record.as_dict()
+        record_payload = record.as_dict()
+        state["records"][token] = record_payload
+        _enforce_sage_approval_state_decision(
+            operation="create_sage_approval",
+            workspace_id=normalized_workspace_id,
+            payload=record_payload,
+            status=record.status,
+            actor_id=record.requester_actor,
+            trace_id=record.trace_id,
+        )
         _write_state(normalized_workspace_id, state)
+    except SageApprovalRustGateError:
+        raise
     except Exception:
         raise RuntimeError("Failed to persist approval record.")
 
@@ -218,11 +274,22 @@ def get_approval(*, approval_token: str, workspace_id: str) -> SageApprovalRecor
     return record
 
 
-def _update_record(workspace_id: str, record: SageApprovalRecord) -> SageApprovalRecord:
+def _update_record(*, workspace_id: str, record: SageApprovalRecord, operation: str) -> SageApprovalRecord:
     try:
         state = _read_state(workspace_id)
-        state["records"][record.approval_token] = record.as_dict()
+        record_payload = record.as_dict()
+        state["records"][record.approval_token] = record_payload
+        _enforce_sage_approval_state_decision(
+            operation=operation,
+            workspace_id=workspace_id,
+            payload=record_payload,
+            status=record.status,
+            actor_id=record.resolution_actor or record.requester_actor,
+            trace_id=record.trace_id,
+        )
         _write_state(workspace_id, state)
+    except SageApprovalRustGateError:
+        raise
     except Exception:
         raise RuntimeError("Failed to update approval record.")
     return record
@@ -249,7 +316,7 @@ def resolve_approval(
     if record.is_expired():
         record.status = "expired"
         record.resolved_at = _utc_now_iso()
-        _update_record(workspace_id, record)
+        _update_record(workspace_id=workspace_id, record=record, operation="expire_sage_approvals")
         raise ValueError("Approval token has expired.")
 
     if _coerce_text(record.workspace_id) != _coerce_text(workspace_id):
@@ -262,7 +329,7 @@ def resolve_approval(
     record.resolved_at = _utc_now_iso()
     record.resolution_actor = _coerce_text(resolution_actor)
     record.resolution_reason = _coerce_text(resolution_reason)
-    return _update_record(workspace_id, record)
+    return _update_record(workspace_id=workspace_id, record=record, operation="resolve_sage_approval")
 
 
 def consume_approval(
@@ -279,13 +346,13 @@ def consume_approval(
     if record.is_expired():
         record.status = "expired"
         record.resolved_at = _utc_now_iso()
-        _update_record(workspace_id, record)
+        _update_record(workspace_id=workspace_id, record=record, operation="expire_sage_approvals")
         raise ValueError("Approval token has expired.")
     if record.resolution_actor and record.requester_actor and record.resolution_actor != record.requester_actor:
         raise ValueError("Approval token actor binding is invalid.")
     record.status = "consumed"
     record.resolved_at = _utc_now_iso()
-    return _update_record(workspace_id, record)
+    return _update_record(workspace_id=workspace_id, record=record, operation="consume_sage_approval")
 
 
 def expire_stale_approvals(*, workspace_id: str) -> int:
@@ -308,6 +375,12 @@ def expire_stale_approvals(*, workspace_id: str) -> int:
         except (ValueError, TypeError):
             pass
     if expired_count:
+        _enforce_sage_approval_state_decision(
+            operation="expire_sage_approvals",
+            workspace_id=workspace_id,
+            payload={"expired_count": expired_count, "records": state.get("records", {})},
+            status="expired",
+        )
         _write_state(_coerce_text(workspace_id), state)
     return expired_count
 

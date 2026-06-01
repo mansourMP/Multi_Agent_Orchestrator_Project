@@ -8,9 +8,218 @@ import uuid
 from fastapi import HTTPException
 from server_modules import agent_trace_service
 from server_modules.direct_tool_config_service import run_async_tool_call
+from server_modules import rust_runtime_kernel_client
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _parent_scope(parent_snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    parent_context, parent_metadata = _parent_run_context(parent_snapshot)
+    workspace_id = str(
+        parent_snapshot.get("workspace_id")
+        or parent_context.get("workspace_id")
+        or parent_metadata.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+    tenant_id = str(
+        parent_snapshot.get("tenant_id")
+        or parent_context.get("tenant_id")
+        or parent_metadata.get("tenant_id")
+        or "default"
+    ).strip() or "default"
+    return parent_context, parent_metadata, workspace_id, tenant_id
+
+
+def _enforce_delegation_child_decision(
+    *,
+    parent_run_id: str,
+    parent_snapshot: dict[str, Any],
+    child_payload: dict[str, Any],
+) -> dict[str, Any]:
+    parent_context, parent_metadata, workspace_id, _tenant_id = _parent_scope(parent_snapshot)
+    rust_payload = {
+        "operation": "delegation_child",
+        "workspace_id": workspace_id,
+        "run_id": str(parent_snapshot.get("run_id") or "").strip() or None,
+        "parent_run_id": str(parent_run_id or "").strip(),
+        "execution_target": str(
+            child_payload.get("execution_target")
+            or parent_snapshot.get("execution_target")
+            or parent_context.get("execution_target")
+            or parent_metadata.get("execution_target")
+            or "auto"
+        ).strip() or "auto",
+        "runtime_mode": str(
+            child_payload.get("runtime_mode")
+            or parent_snapshot.get("runtime_mode")
+            or parent_context.get("runtime_mode")
+            or parent_metadata.get("runtime_mode")
+            or ""
+        ).strip(),
+        "agent_role": str(child_payload.get("agent_role") or "").strip(),
+        "user_goal": str(child_payload.get("user_goal") or "").strip(),
+        "workflow_turn_depth": int(
+            child_payload.get("workflow_turn_depth")
+            or parent_metadata.get("workflow_turn_depth")
+            or 0
+        ),
+        "max_workflow_turn_depth": int(
+            child_payload.get("max_workflow_turn_depth")
+            or parent_metadata.get("max_workflow_turn_depth")
+            or 999999
+        ),
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "run-routing-decision",
+            rust_payload,
+            allow_approval_required=True,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HTTPException(status_code=409, detail=f"Rust run-routing gate blocked delegation_child: {exc.reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "create_delegated_child_run":
+        raise HTTPException(
+            status_code=423,
+            detail=(
+                "Rust run-routing gate returned unexpected next_action for delegation_child: "
+                f"{next_action or 'missing'}"
+            ),
+        )
+    return dict(decision)
+
+
+def _enforce_delegation_merge_retry_decision(
+    *,
+    parent_run_id: str,
+    parent_snapshot: dict[str, Any],
+    child_runs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    parent_context, parent_metadata, workspace_id, _tenant_id = _parent_scope(parent_snapshot)
+    active_children = sum(
+        1
+        for child in child_runs
+        if str(child.get("status") or "").strip().lower() in {"running", "queued", "approved", "retry_scheduled"}
+    )
+    waiting_children = sum(
+        1
+        for child in child_runs
+        if str(child.get("status") or "").strip().lower() in {"waiting_for_input", "awaiting_approval"}
+    )
+    failed_children = sum(
+        1
+        for child in child_runs
+        if str(child.get("status") or "").strip().lower() in {"failed", "error", "timeout", "cancelled", "stopped"}
+    )
+    rust_payload = {
+        "operation": "delegation_merge",
+        "workspace_id": workspace_id,
+        "run_id": str(parent_snapshot.get("run_id") or "").strip() or None,
+        "parent_run_id": str(parent_run_id or "").strip(),
+        "execution_target": str(
+            parent_snapshot.get("execution_target")
+            or parent_context.get("execution_target")
+            or parent_metadata.get("execution_target")
+            or "auto"
+        ).strip() or "auto",
+        "runtime_mode": str(
+            parent_snapshot.get("runtime_mode")
+            or parent_context.get("runtime_mode")
+            or parent_metadata.get("runtime_mode")
+            or ""
+        ).strip(),
+        "active_children": active_children,
+        "waiting_children": waiting_children,
+        "failed_children": failed_children,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "run-routing-decision",
+            rust_payload,
+            allow_approval_required=True,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HTTPException(status_code=409, detail=f"Rust run-routing gate blocked delegation_merge: {exc.reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "retry_failed_children":
+        raise HTTPException(
+            status_code=423,
+            detail=(
+                "Rust run-routing gate returned unexpected next_action for delegation_merge: "
+                f"{next_action or 'missing'}"
+            ),
+        )
+    return dict(decision)
+
+
+def _enforce_retry_run_orchestration_decision(
+    *,
+    parent_snapshot: dict[str, Any],
+    child_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    parent_context, parent_metadata, workspace_id, _tenant_id = _parent_scope(parent_snapshot)
+    child_context = child_snapshot.get("context") if isinstance(child_snapshot.get("context"), dict) else {}
+    child_metadata = child_context.get("metadata") if isinstance(child_context.get("metadata"), dict) else {}
+    if not isinstance(child_metadata, dict):
+        child_metadata = {}
+    retry_policy = child_metadata.get("retry_policy") if isinstance(child_metadata.get("retry_policy"), dict) else {}
+    attempts = int(
+        child_metadata.get("retry_count")
+        or child_metadata.get("retry_sequence")
+        or child_snapshot.get("retry_count")
+        or child_snapshot.get("retry_sequence")
+        or 0
+    )
+    max_attempts = int(
+        retry_policy.get("max_attempts")
+        or child_metadata.get("max_attempts")
+        or child_metadata.get("max_retry_attempts")
+        or child_snapshot.get("max_attempts")
+        or 3
+    )
+    rust_payload = {
+        "operation": "retry",
+        "workspace_id": workspace_id,
+        "run_id": str(child_snapshot.get("run_id") or "").strip() or None,
+        "status": str(child_snapshot.get("status") or "").strip().lower(),
+        "mode": str(
+            child_snapshot.get("mode")
+            or child_context.get("mode")
+            or parent_snapshot.get("mode")
+            or parent_context.get("mode")
+            or parent_metadata.get("mode")
+            or "background"
+        ).strip(),
+        "priority": str(
+            child_snapshot.get("priority")
+            or child_context.get("priority")
+            or parent_snapshot.get("priority")
+            or parent_context.get("priority")
+            or parent_metadata.get("priority")
+            or "normal"
+        ).strip(),
+        "attempts": max(0, attempts),
+        "max_attempts": max(1, max_attempts),
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "run-orchestration-decision",
+            rust_payload,
+            allow_approval_required=True,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HTTPException(status_code=409, detail=f"Rust run-orchestration gate blocked retry: {exc.reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "retry_run":
+        raise HTTPException(
+            status_code=423,
+            detail=(
+                "Rust run-orchestration gate returned unexpected next_action for retry: "
+                f"{next_action or 'missing'}"
+            ),
+        )
+    return dict(decision)
 
 
 def _parent_run_context(parent_snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -245,6 +454,11 @@ def delegate_run_children(
             "business_plan": child.business_plan,
             "metadata": child.metadata if isinstance(child.metadata, dict) else {},
         }
+        _enforce_delegation_child_decision(
+            parent_run_id=parent_run_id,
+            parent_snapshot=parent_snapshot,
+            child_payload=child_payload,
+        )
         delegated_req = build_delegated_run_request(parent_snapshot, child_payload, note=note)
         result = execute_system_run_start_request_via_turn_runtime(
             delegated_req,
@@ -363,6 +577,11 @@ def auto_delegate_run_children(
                 ),
                 operation=f"plan.item.created:{parent_run_id}:{index}",
             )
+        _enforce_delegation_child_decision(
+            parent_run_id=parent_run_id,
+            parent_snapshot=parent_snapshot,
+            child_payload=child,
+        )
         delegated_req = build_delegated_run_request(parent_snapshot, child, note=note)
         try:
             result = execute_system_run_start_request_via_turn_runtime(
@@ -466,6 +685,11 @@ def retry_failed_delegation_runs(
     _, child_runs = find_run_relationships(parent_run_id, parent_snapshot)
     if not child_runs:
         raise HTTPException(status_code=400, detail="This orchestrator run does not have delegated child runs.")
+    _enforce_delegation_merge_retry_decision(
+        parent_run_id=parent_run_id,
+        parent_snapshot=parent_snapshot,
+        child_runs=child_runs,
+    )
     latest_by_lineage: dict[str, dict[str, Any]] = {}
     for child in child_runs:
         lineage_key = (
@@ -500,8 +724,17 @@ def retry_failed_delegation_runs(
     created = []
     trace_context = _resume_parent_trace_context(parent_snapshot)
     for child in failed_effective_children:
+        _enforce_retry_run_orchestration_decision(
+            parent_snapshot=parent_snapshot,
+            child_snapshot=child,
+        )
         item_id = str(uuid.uuid4())
         child_payload = build_retry_child_payload(parent_snapshot, child, note=note)
+        _enforce_delegation_child_decision(
+            parent_run_id=parent_run_id,
+            parent_snapshot=parent_snapshot,
+            child_payload=child_payload,
+        )
         delegated_req = build_delegated_run_request(parent_snapshot, child_payload, note=note)
         result = execute_system_run_start_request_via_turn_runtime(
             delegated_req,

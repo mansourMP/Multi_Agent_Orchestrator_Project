@@ -7,12 +7,13 @@ import json
 import os
 import re
 import time
+import ipaddress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from server_modules import mini_app_host_service, workspace_context
+from server_modules import mini_app_host_service, rust_runtime_kernel_client, workspace_context
 
 
 MINI_APP_CONTRACT_VERSION = 1
@@ -21,6 +22,8 @@ DEFAULT_RETRIEVE_LIMIT = 25
 UNLISTED_SHARE_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60
 DEFAULT_AI_MONTHLY_CREDIT_CAP = 500
 DEFAULT_AI_INVOCATION_CREDIT_CAP = 50
+PUBLIC_APPS_INDEX_VERSION = 1
+PUBLIC_APPS_INDEX_FILENAME = "apps_public_index.json"
 MINI_APP_TRUST_TIERS = (
     "user_private",
     "first_party",
@@ -30,6 +33,10 @@ MINI_APP_TRUST_TIERS = (
 FIRST_PARTY_MINI_APP_IDS = {
     "calorie_tracking",
     "flashcards",
+}
+FIRST_PARTY_APP_OPEN_PATHS = {
+    "calorie_tracking": "/mini-apps/official/calorie-tracking",
+    "flashcards": "/mini-apps/official/flashcards",
 }
 APP_RUNTIME_TYPES = {"link", "platform", "community", "private"}
 APP_RUNTIME_TYPE_ALIASES = {
@@ -95,6 +102,10 @@ def _mini_apps_state_path(workspace_id: str) -> Path:
     return workspace_context.workspace_scope_dir(workspace_id) / "mini_apps.json"
 
 
+def _public_apps_index_path() -> Path:
+    return workspace_context.workspace_scope_dir() / PUBLIC_APPS_INDEX_FILENAME
+
+
 def _normalize_workspace_id(workspace_id: Any) -> str:
     return str(workspace_id or "default").strip() or "default"
 
@@ -107,6 +118,42 @@ def _normalize_app_id(app_id: Any) -> str:
 def _normalize_url(value: Any) -> Optional[str]:
     token = str(value or "").strip()
     return token or None
+
+
+def _is_private_or_local_host(hostname: str) -> bool:
+    host = str(hostname or "").strip().lower().strip(".")
+    if not host:
+        return True
+    if host in {"localhost", "0.0.0.0"} or host.endswith(".local"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(
+        (
+            address.is_private,
+            address.is_loopback,
+            address.is_link_local,
+            address.is_multicast,
+            address.is_reserved,
+            address.is_unspecified,
+        )
+    )
+
+
+def _validate_simple_app_source_url(value: Any, *, required: bool = False) -> Optional[str]:
+    source = str(value or "").strip()
+    if not source:
+        if required:
+            raise ValueError("App website URL is required.")
+        return None
+    parsed = urlparse(source)
+    if parsed.scheme.lower() != "https" or not parsed.netloc or not parsed.hostname:
+        raise ValueError("Apps require a public HTTPS website URL.")
+    if _is_private_or_local_host(parsed.hostname):
+        raise ValueError("Apps require a public website URL.")
+    return source
 
 
 def _normalize_domain(value: Any) -> Optional[str]:
@@ -322,12 +369,13 @@ def _safe_read_state(workspace_id: str) -> Dict[str, Any]:
 
 def _save_state(workspace_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     path = _mini_apps_state_path(workspace_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
     normalized = {
         "version": MINI_APP_CONTRACT_VERSION,
         "updated_at": _utc_now_iso(),
         "apps": dict(payload.get("apps") or {}),
     }
+    _enforce_mini_apps_state_decision(workspace_id=workspace_id, payload=normalized)
+    path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(normalized, indent=2, sort_keys=True)
     tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     with tmp_path.open("w", encoding="utf-8") as handle:
@@ -345,6 +393,133 @@ def _save_state(workspace_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         finally:
             os.close(dir_fd)
     return normalized
+
+
+def _public_app_id(workspace_id: Any, app_id: Any) -> str:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_app_id = _normalize_app_id(app_id)
+    digest = hashlib.sha256(f"{normalized_workspace_id}:{normalized_app_id}".encode("utf-8")).hexdigest()[:10]
+    workspace_token = _normalize_app_id(normalized_workspace_id) or "workspace"
+    return f"{workspace_token}_{normalized_app_id}_{digest}"
+
+
+def _default_public_apps_index() -> Dict[str, Any]:
+    return {
+        "version": PUBLIC_APPS_INDEX_VERSION,
+        "updated_at": _utc_now_iso(),
+        "items": {},
+    }
+
+
+def _safe_read_public_apps_index() -> Dict[str, Any]:
+    path = _public_apps_index_path()
+    if not path.exists():
+        return _default_public_apps_index()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    items = raw.get("items")
+    if not isinstance(items, dict):
+        items = {}
+    normalized_items: Dict[str, Dict[str, Any]] = {}
+    for raw_public_app_id, raw_entry in items.items():
+        entry = dict(raw_entry or {}) if isinstance(raw_entry, dict) else {}
+        public_app_id = _normalize_app_id(entry.get("public_app_id") or raw_public_app_id)
+        source_workspace_id = _normalize_workspace_id(entry.get("source_workspace_id"))
+        source_app_id = _normalize_app_id(entry.get("source_app_id"))
+        if not public_app_id or not source_workspace_id or not source_app_id:
+            continue
+        source = dict(entry.get("source") or {}) if isinstance(entry.get("source"), dict) else {}
+        normalized_items[public_app_id] = {
+            "public_app_id": public_app_id,
+            "source_workspace_id": source_workspace_id,
+            "source_app_id": source_app_id,
+            "name": str(entry.get("name") or source_app_id).strip() or source_app_id,
+            "description": str(entry.get("description") or "").strip(),
+            "icon_url": _normalize_url(entry.get("icon_url")),
+            "creator_label": str(entry.get("creator_label") or "this workspace").strip() or "this workspace",
+            "source": {
+                "kind": str(source.get("kind") or "website").strip() or "website",
+                "url": _normalize_url(source.get("url")),
+                "label": str(source.get("label") or "Website").strip() or "Website",
+            },
+            "created_at": str(entry.get("created_at") or "").strip() or None,
+            "updated_at": str(entry.get("updated_at") or "").strip() or None,
+        }
+    return {
+        "version": int(raw.get("version") or PUBLIC_APPS_INDEX_VERSION),
+        "updated_at": str(raw.get("updated_at") or _utc_now_iso()).strip() or _utc_now_iso(),
+        "items": normalized_items,
+    }
+
+
+def _save_public_apps_index(payload: Dict[str, Any]) -> Dict[str, Any]:
+    path = _public_apps_index_path()
+    normalized = {
+        "version": PUBLIC_APPS_INDEX_VERSION,
+        "updated_at": _utc_now_iso(),
+        "items": dict(payload.get("items") or {}),
+    }
+    _enforce_mini_apps_state_decision(workspace_id="public_apps", payload=normalized)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(normalized, indent=2, sort_keys=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        handle.write(serialized)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, path)
+    try:
+        dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+    except Exception:
+        dir_fd = None
+    if dir_fd is not None:
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    return normalized
+
+
+class MiniAppsRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_mini_apps_state_decision(*, workspace_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    try:
+        payload_bytes = len(
+            json.dumps(
+                normalized_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        )
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="save_mini_apps_state",
+            state_class="mini_apps",
+            workspace_id=str(workspace_id or "").strip(),
+            actor_id="system",
+            status="active",
+            payload=normalized_payload,
+            payload_bytes=payload_bytes,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "save_mini_apps_state":
+            raise MiniAppsRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise MiniAppsRustGateError(exc.reason) from exc
 
 
 def _compact_scalar(value: Any, *, limit: int = 160) -> str:
@@ -872,6 +1047,460 @@ def publish_mini_app(
     contract["published_at"] = _utc_now_iso()
     contract["app_url"] = f"/w/{normalized_workspace_id}/applications/{app_id}"
     return contract
+
+
+def _normalize_simple_app_visibility(value: Any) -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    if token in {"public", "marketplace_public", "unlisted", "unlisted_link"}:
+        return "public"
+    return "private"
+
+
+def _contract_visibility_for_simple_app(value: Any) -> str:
+    return "unlisted_link" if _normalize_simple_app_visibility(value) == "public" else "workspace_private"
+
+
+def _unique_simple_app_id(state: Dict[str, Any], name: str) -> str:
+    base_app_id = _normalize_app_id(name)
+    if not base_app_id:
+        raise ValueError("Could not generate app id from name.")
+    existing = state.get("apps", {}).get(base_app_id)
+    if not isinstance(existing, dict) or existing.get("install_status") == "removed":
+        return base_app_id
+    suffix = str(int(time.time()))[-6:]
+    app_id = _normalize_app_id(f"{name}_{suffix}")
+    if state.get("apps", {}).get(app_id):
+        raise ValueError(f"An app with id '{app_id}' already exists. Choose a different name.")
+    return app_id
+
+
+def _simple_app_creator_label(contract: Dict[str, Any]) -> str:
+    app_id = _normalize_app_id(contract.get("app_id"))
+    trust_tier = str(contract.get("trust_tier") or "").strip().lower()
+    if app_id in FIRST_PARTY_MINI_APP_IDS or trust_tier == "first_party":
+        return "Empyralis"
+    publisher_name = str(contract.get("publisher_name") or "").strip()
+    if publisher_name:
+        return publisher_name
+    return "this workspace"
+
+
+def _simple_app_open_target(workspace_id: str, contract: Dict[str, Any]) -> Dict[str, Any]:
+    app_id = _normalize_app_id(contract.get("app_id"))
+    destination_url = _normalize_url(contract.get("destination_url"))
+    hosted_url = _normalize_url(contract.get("hosted_url"))
+    runtime_type = _normalize_runtime_type(contract.get("runtime_type") or contract.get("runtime_mode"), app_id=app_id)
+    if app_id in FIRST_PARTY_APP_OPEN_PATHS:
+        return {
+            "kind": "internal",
+            "url": FIRST_PARTY_APP_OPEN_PATHS[app_id],
+        }
+    if runtime_type == "link" and destination_url:
+        return {
+            "kind": "external",
+            "url": destination_url,
+        }
+    if hosted_url or destination_url or str(contract.get("platform_route") or "").strip():
+        return {
+            "kind": "internal",
+            "url": f"/w/{_normalize_workspace_id(workspace_id)}/applications/{app_id}",
+        }
+    return {
+        "kind": "internal",
+        "url": f"/w/{_normalize_workspace_id(workspace_id)}/applications/{app_id}",
+    }
+
+
+def _simple_app_source(contract: Dict[str, Any]) -> Dict[str, Any]:
+    hosted_url = _normalize_url(contract.get("hosted_url"))
+    destination_url = _normalize_url(contract.get("destination_url"))
+    if hosted_url:
+        return {
+            "kind": "website",
+            "url": hosted_url,
+            "label": "Website",
+        }
+    if destination_url:
+        return {
+            "kind": "link",
+            "url": destination_url,
+            "label": "Link",
+        }
+    return {
+        "kind": "workspace",
+        "url": None,
+        "label": "Workspace app",
+    }
+
+
+def _simple_app_card(workspace_id: str, contract: Dict[str, Any]) -> Dict[str, Any]:
+    app_id = _normalize_app_id(contract.get("app_id"))
+    permissions = {
+        str(item or "").strip().lower()
+        for item in list(contract.get("permissions") or [])
+        if str(item or "").strip()
+    }
+    bridge_contracts = dict(contract.get("bridge_contracts") or {}) if isinstance(contract.get("bridge_contracts"), dict) else {}
+    ai_policy = dict(contract.get("ai_invoke_policy") or {}) if isinstance(contract.get("ai_invoke_policy"), dict) else {}
+    open_target = _simple_app_open_target(workspace_id, contract)
+    product_visibility = _normalize_simple_app_visibility(contract.get("visibility"))
+    can_use_ai = (
+        mini_app_host_service.APP_PERMISSION_AI_INVOKE in permissions
+        and str(ai_policy.get("consent_status") or "").strip().lower() == "granted"
+        and int(ai_policy.get("monthly_credit_cap") or 0) > 0
+        and int(ai_policy.get("per_invocation_credit_cap") or 0) > 0
+    )
+    details_url = FIRST_PARTY_APP_OPEN_PATHS.get(app_id) or f"/w/{_normalize_workspace_id(workspace_id)}/applications/{app_id}?details=1"
+    public_app_id = _public_app_id(workspace_id, app_id)
+    return {
+        "feed_id": f"local:{app_id}",
+        "public_app_id": public_app_id if product_visibility == "public" else None,
+        "app_id": app_id,
+        "name": str(contract.get("label") or app_id).strip() or app_id,
+        "description": str(contract.get("description") or "").strip(),
+        "icon_url": _normalize_url(contract.get("icon_url")),
+        "creator": {
+            "label": _simple_app_creator_label(contract),
+            "byline": f"by {_simple_app_creator_label(contract)}",
+        },
+        "visibility": product_visibility,
+        "visibility_label": "Public" if product_visibility == "public" else "Private",
+        "source": _simple_app_source(contract),
+        "open": open_target,
+        "details_url": details_url,
+        "installed": True,
+        "clone_available": False,
+        "settings": {
+            "ai_enabled": can_use_ai,
+            "records_enabled": mini_app_host_service.APP_PERMISSION_RECORDS_WRITE in permissions,
+            "sage_enabled": (
+                mini_app_host_service.APP_PERMISSION_BRIDGE_SAGE_REQUEST in permissions
+                and bool(list(bridge_contracts.get("app_to_sage") or []))
+            ),
+            "monthly_credit_limit": int(ai_policy.get("monthly_credit_cap") or 0),
+            "per_invocation_credit_limit": int(ai_policy.get("per_invocation_credit_cap") or 0),
+        },
+        "updated_at": str(contract.get("updated_at") or "").strip() or None,
+    }
+
+
+def _public_app_record_from_contract(workspace_id: str, contract: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    app_id = _normalize_app_id(contract.get("app_id"))
+    public_app_id = _public_app_id(normalized_workspace_id, app_id)
+    return {
+        "public_app_id": public_app_id,
+        "source_workspace_id": normalized_workspace_id,
+        "source_app_id": app_id,
+        "name": str(contract.get("label") or app_id).strip() or app_id,
+        "description": str(contract.get("description") or "").strip(),
+        "icon_url": _normalize_url(contract.get("icon_url")),
+        "creator_label": _simple_app_creator_label(contract),
+        "source": _simple_app_source(contract),
+        "created_at": str(contract.get("created_at") or contract.get("updated_at") or "").strip() or _utc_now_iso(),
+        "updated_at": str(contract.get("updated_at") or "").strip() or _utc_now_iso(),
+    }
+
+
+def _sync_public_app_index_for_contract(workspace_id: str, contract: Dict[str, Any]) -> None:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    app_id = _normalize_app_id(contract.get("app_id"))
+    public_app_id = _public_app_id(normalized_workspace_id, app_id)
+    index = _safe_read_public_apps_index()
+    items = dict(index.get("items") or {})
+    is_public = (
+        _normalize_simple_app_visibility(contract.get("visibility")) == "public"
+        and str(contract.get("install_status") or "").strip().lower() != "removed"
+    )
+    if is_public:
+        items[public_app_id] = _public_app_record_from_contract(normalized_workspace_id, contract)
+    else:
+        items.pop(public_app_id, None)
+    index["items"] = items
+    _save_public_apps_index(index)
+
+
+def _public_app_feed_card(record: Dict[str, Any]) -> Dict[str, Any]:
+    public_app_id = _normalize_app_id(record.get("public_app_id"))
+    app_id = _normalize_app_id(record.get("source_app_id"))
+    creator_label = str(record.get("creator_label") or "this workspace").strip() or "this workspace"
+    source = dict(record.get("source") or {}) if isinstance(record.get("source"), dict) else {}
+    return {
+        "feed_id": f"public:{public_app_id}",
+        "public_app_id": public_app_id,
+        "app_id": app_id,
+        "name": str(record.get("name") or app_id).strip() or app_id,
+        "description": str(record.get("description") or "").strip(),
+        "icon_url": _normalize_url(record.get("icon_url")),
+        "creator": {
+            "label": creator_label,
+            "byline": f"by {creator_label}",
+        },
+        "visibility": "public",
+        "visibility_label": "Public",
+        "source": {
+            "kind": str(source.get("kind") or "website").strip() or "website",
+            "url": _normalize_url(source.get("url")),
+            "label": str(source.get("label") or "Website").strip() or "Website",
+        },
+        "open": None,
+        "details_url": None,
+        "installed": False,
+        "clone_available": True,
+        "settings": None,
+        "updated_at": str(record.get("updated_at") or "").strip() or None,
+    }
+
+
+def list_apps(workspace_id: str) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    state = _safe_read_state(normalized_workspace_id)
+    contracts = list_mini_app_contracts(normalized_workspace_id)
+    local_items = [
+        _simple_app_card(normalized_workspace_id, contract)
+        for contract in list(contracts.get("items") or [])
+        if isinstance(contract, dict) and str(contract.get("install_status") or "").strip().lower() != "removed"
+    ]
+    local_app_ids = {
+        str(item.get("app_id") or "").strip()
+        for item in local_items
+        if str(item.get("app_id") or "").strip()
+    }
+    cloned_public_ids = {
+        str(entry.get("cloned_from_public_app_id") or "").strip()
+        for entry in list((state.get("apps") or {}).values())
+        if isinstance(entry, dict) and str(entry.get("cloned_from_public_app_id") or "").strip()
+    }
+    public_records = list((_safe_read_public_apps_index().get("items") or {}).values())
+    public_items = []
+    for record in sorted(public_records, key=lambda item: str(item.get("updated_at") or ""), reverse=True):
+        source_workspace_id = _normalize_workspace_id(record.get("source_workspace_id"))
+        source_app_id = _normalize_app_id(record.get("source_app_id"))
+        public_app_id = _normalize_app_id(record.get("public_app_id"))
+        if not source_app_id or not public_app_id:
+            continue
+        if source_workspace_id == normalized_workspace_id and source_app_id in local_app_ids:
+            continue
+        if public_app_id in cloned_public_ids:
+            continue
+        public_items.append(_public_app_feed_card(record))
+    items = local_items + public_items
+    return {
+        "workspace_id": normalized_workspace_id,
+        "items": items,
+        "count": len(items),
+        "updated_at": contracts.get("updated_at"),
+    }
+
+
+def get_app(workspace_id: str, app_id: str) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    contract = get_mini_app_contract(normalized_workspace_id, app_id)
+    if str(contract.get("install_status") or "").strip().lower() == "removed":
+        raise KeyError(f"App '{_normalize_app_id(app_id)}' was not found.")
+    return _simple_app_card(normalized_workspace_id, contract)
+
+
+def publish_app(
+    workspace_id: str,
+    *,
+    name: str,
+    description: Optional[str] = None,
+    source_url: Optional[str] = None,
+    visibility: str = "private",
+    creator_label: Optional[str] = None,
+    creator_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise ValueError("App name is required.")
+    state = _safe_read_state(normalized_workspace_id)
+    app_id = _unique_simple_app_id(state, clean_name)
+    source = _validate_simple_app_source_url(source_url, required=True)
+    contract = upsert_mini_app_contract(
+        normalized_workspace_id,
+        app_id,
+        label=clean_name,
+        description=str(description or "").strip(),
+        publisher_id=str(creator_id or "").strip() or None,
+        publisher_name=str(creator_label or "").strip() or None,
+        destination_url=source,
+        hosted_url=source,
+        delivery_mode="hosted" if source else "structured",
+        runtime_type="private",
+        runtime_mode="private",
+        visibility=_contract_visibility_for_simple_app(visibility),
+        install_status="installed",
+        permissions=[
+            mini_app_host_service.APP_PERMISSION_SUMMARY_READ,
+            mini_app_host_service.APP_PERMISSION_RECORDS_WRITE,
+        ],
+        bridge_contracts={},
+        ai_invoke_policy={
+            "consent_required": True,
+            "consent_status": "not_granted",
+            "payer": "platform_credits",
+            "monthly_credit_cap": DEFAULT_AI_MONTHLY_CREDIT_CAP,
+            "per_invocation_credit_cap": DEFAULT_AI_INVOCATION_CREDIT_CAP,
+        },
+    )
+    _sync_public_app_index_for_contract(normalized_workspace_id, contract)
+    return _simple_app_card(normalized_workspace_id, contract)
+
+
+def update_app_settings(
+    workspace_id: str,
+    app_id: str,
+    *,
+    name: Any = None,
+    description: Any = None,
+    source_url: Any = None,
+    ai_enabled: Any = None,
+    records_enabled: Any = None,
+    sage_enabled: Any = None,
+    visibility: Any = None,
+    monthly_credit_limit: Any = None,
+    per_invocation_credit_limit: Any = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    existing = get_mini_app_contract(normalized_workspace_id, app_id)
+    clean_name = str(name or "").strip() if name is not None else None
+    if name is not None and not clean_name:
+        raise ValueError("App name is required.")
+    permissions = [
+        str(item or "").strip()
+        for item in list(existing.get("permissions") or [])
+        if str(item or "").strip()
+    ]
+    permission_tokens = {item.lower() for item in permissions}
+
+    def _set_permission(permission: str, enabled: bool) -> None:
+        token = permission.lower()
+        if enabled and token not in permission_tokens:
+            permissions.append(permission)
+            permission_tokens.add(token)
+        if not enabled and token in permission_tokens:
+            permissions[:] = [item for item in permissions if item.lower() != token]
+            permission_tokens.discard(token)
+
+    if records_enabled is not None:
+        _set_permission(mini_app_host_service.APP_PERMISSION_RECORDS_WRITE, bool(records_enabled))
+
+    bridge_contracts = dict(existing.get("bridge_contracts") or {}) if isinstance(existing.get("bridge_contracts"), dict) else {}
+    if sage_enabled is not None:
+        if bool(sage_enabled):
+            bridge_contracts["app_to_sage"] = ["summary_request"]
+            _set_permission(mini_app_host_service.APP_PERMISSION_BRIDGE_SAGE_REQUEST, True)
+        else:
+            bridge_contracts.pop("app_to_sage", None)
+            _set_permission(mini_app_host_service.APP_PERMISSION_BRIDGE_SAGE_REQUEST, False)
+
+    policy = _normalize_ai_invoke_policy(existing.get("ai_invoke_policy"))
+    if monthly_credit_limit is not None:
+        policy["monthly_credit_cap"] = int(monthly_credit_limit)
+    if per_invocation_credit_limit is not None:
+        policy["per_invocation_credit_cap"] = int(per_invocation_credit_limit)
+    if ai_enabled is not None:
+        enabled = bool(ai_enabled)
+        _set_permission(mini_app_host_service.APP_PERMISSION_AI_INVOKE, enabled)
+        policy["consent_status"] = "granted" if enabled else "revoked"
+
+    clean_source_url = None
+    if source_url is not None:
+        clean_source_url = _validate_simple_app_source_url(source_url, required=True)
+
+    contract = upsert_mini_app_contract(
+        normalized_workspace_id,
+        app_id,
+        label=clean_name,
+        description=str(description or "").strip() if description is not None else None,
+        destination_url=clean_source_url if source_url is not None else None,
+        hosted_url=clean_source_url if source_url is not None else None,
+        delivery_mode="hosted" if source_url is not None else None,
+        permissions=permissions,
+        bridge_contracts=bridge_contracts,
+        ai_invoke_policy=policy,
+        visibility=_contract_visibility_for_simple_app(visibility) if visibility is not None else None,
+    )
+    _sync_public_app_index_for_contract(normalized_workspace_id, contract)
+    return _simple_app_card(normalized_workspace_id, contract)
+
+
+def clone_public_app(
+    workspace_id: str,
+    *,
+    public_app_id: str,
+    creator_label: Optional[str] = None,
+    creator_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_public_app_id = _normalize_app_id(public_app_id)
+    if not normalized_public_app_id:
+        raise KeyError("Public app id is required.")
+    index = _safe_read_public_apps_index()
+    record = dict((index.get("items") or {}).get(normalized_public_app_id) or {})
+    if not record:
+        raise KeyError(f"Public app '{normalized_public_app_id}' was not found.")
+    source_workspace_id = _normalize_workspace_id(record.get("source_workspace_id"))
+    source_app_id = _normalize_app_id(record.get("source_app_id"))
+    try:
+        source_contract = get_mini_app_contract(source_workspace_id, source_app_id)
+    except KeyError as exc:
+        raise KeyError(f"Public app '{normalized_public_app_id}' was not found.") from exc
+    if _normalize_simple_app_visibility(source_contract.get("visibility")) != "public":
+        _sync_public_app_index_for_contract(source_workspace_id, source_contract)
+        raise PermissionError(f"Public app '{normalized_public_app_id}' is no longer public.")
+    source_url = (
+        _normalize_url(source_contract.get("hosted_url"))
+        or _normalize_url(source_contract.get("destination_url"))
+        or _normalize_url((record.get("source") or {}).get("url") if isinstance(record.get("source"), dict) else None)
+    )
+    if not source_url:
+        raise ValueError("Only website apps can be cloned right now.")
+    source_url = _validate_simple_app_source_url(source_url, required=True)
+    clean_name = str(record.get("name") or source_contract.get("label") or source_app_id).strip() or source_app_id
+    state = _safe_read_state(normalized_workspace_id)
+    app_id = _unique_simple_app_id(state, clean_name)
+    contract = upsert_mini_app_contract(
+        normalized_workspace_id,
+        app_id,
+        label=clean_name,
+        description=str(record.get("description") or source_contract.get("description") or "").strip(),
+        icon_url=_normalize_url(record.get("icon_url") or source_contract.get("icon_url")),
+        publisher_id=str(creator_id or "").strip() or None,
+        publisher_name=str(creator_label or "").strip() or None,
+        destination_url=source_url,
+        hosted_url=source_url,
+        delivery_mode="hosted",
+        runtime_type="private",
+        runtime_mode="private",
+        visibility="workspace_private",
+        install_status="installed",
+        permissions=[
+            mini_app_host_service.APP_PERMISSION_SUMMARY_READ,
+            mini_app_host_service.APP_PERMISSION_RECORDS_WRITE,
+        ],
+        bridge_contracts={},
+        ai_invoke_policy={
+            "consent_required": True,
+            "consent_status": "not_granted",
+            "payer": "platform_credits",
+            "monthly_credit_cap": DEFAULT_AI_MONTHLY_CREDIT_CAP,
+            "per_invocation_credit_cap": DEFAULT_AI_INVOCATION_CREDIT_CAP,
+        },
+    )
+    clone_state = _safe_read_state(normalized_workspace_id)
+    apps = dict(clone_state.get("apps") or {})
+    entry = dict(apps.get(app_id) or {})
+    entry["cloned_from_public_app_id"] = normalized_public_app_id
+    entry["cloned_from_workspace_id"] = source_workspace_id
+    entry["cloned_from_app_id"] = source_app_id
+    entry["cloned_from_name"] = clean_name
+    entry["updated_at"] = _utc_now_iso()
+    apps[app_id] = entry
+    _save_state(normalized_workspace_id, {"apps": apps})
+    return _simple_app_card(normalized_workspace_id, contract)
 
 
 def get_hosted_mini_app_manifest(workspace_id: str, app_id: str, *, user_id: str = "") -> Dict[str, Any]:

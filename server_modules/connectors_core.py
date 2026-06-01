@@ -6,11 +6,63 @@ from server_modules import runtime_common as common
 from server_modules import secrets_broker
 from server_modules import secret_redaction_service
 from server_modules import provider_profiles as provider_profiles_service
+from server_modules import rust_runtime_kernel_client
 from server_modules.model_router import list_model_aliases
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
+
+_PROCESS_LIFECYCLE_EXPECTED_NEXT_ACTIONS = {
+    "start": "spawn",
+}
+
+
+def _enforce_process_lifecycle_decision(**payload: Any) -> Dict[str, Any]:
+    operation = str(payload.get("operation") or "process").strip() or "process"
+    try:
+        decision = rust_runtime_kernel_client.process_lifecycle_decision(**payload)
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raw = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else {}
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_process_lifecycle_denied",
+                "operation": operation,
+                "reason": raw.get("reason") or str(exc),
+                "decision": raw.get("decision") or "block",
+            },
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "rust_process_lifecycle_unavailable",
+                "operation": operation,
+                "reason": str(exc),
+            },
+        ) from exc
+    if not isinstance(decision, dict):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "rust_process_lifecycle_invalid_response",
+                "operation": operation,
+            },
+        )
+    expected_next_action = _PROCESS_LIFECYCLE_EXPECTED_NEXT_ACTIONS.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_next_action and next_action != expected_next_action:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_process_lifecycle_invalid_next_action",
+                "operation": operation,
+                "reason": f"unexpected_next_action:{next_action or 'missing'}",
+                "decision": str(decision.get("decision") or "").strip().lower() or "block",
+            },
+        )
+    return decision
 
 
 def _credential_type_from_openai_env_source(source: Any) -> str:
@@ -340,6 +392,16 @@ async def get_gemini_local_cli_status():
 async def start_anthropic_local_cli_login():
     if not shutil.which("claude"):
         raise HTTPException(status_code=400, detail="Claude CLI is not installed on this machine.")
+    _enforce_process_lifecycle_decision(
+        operation="start",
+        run_id="anthropic-local-cli-login",
+        status="not_started",
+        max_runtime_seconds=900,
+        grace_seconds=10,
+        process_kind="provider_cli_login",
+        provider="anthropic",
+        executable="claude",
+    )
     try:
         subprocess.Popen(
             ["claude", "auth", "login"],

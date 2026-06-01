@@ -12,7 +12,7 @@ from server_modules.deployed_agent_runtime_contract_service import (
     STUDIO_AGENT_MODE_TEXT,
     normalize_studio_agent_mode,
 )
-from server_modules import workspace_context
+from server_modules import rust_runtime_kernel_client, workspace_context
 
 
 AUTONOMY_READ_ONLY = "read_only"
@@ -145,6 +145,10 @@ _CRITICAL_CAPABILITIES = {
 
 
 class AgentComputerPolicyError(ValueError):
+    pass
+
+
+class AgentComputerPolicyRustGateError(AgentComputerPolicyError):
     pass
 
 
@@ -446,14 +450,12 @@ def normalize_agent_computer_policy(payload: Mapping[str, Any] | None) -> AgentC
 
 
 def decision_for_capability(policy: AgentComputerPolicy, capability: Any) -> str:
-    token = normalize_capability_class(capability)
-    if token in policy.blocked_capabilities:
-        return DECISION_BLOCK
-    if token in policy.approval_required_capabilities:
-        return DECISION_APPROVAL_REQUIRED
-    if token in policy.allowed_capabilities:
-        return DECISION_ALLOW
-    return DECISION_BLOCK if policy.autonomy_mode == AUTONOMY_EMERGENCY_STOP else DECISION_APPROVAL_REQUIRED
+    contract = policy if isinstance(policy, AgentComputerPolicy) else normalize_agent_computer_policy(policy)
+    decision = evaluate_agent_computer_request(
+        contract,
+        capability=capability,
+    )
+    return decision.decision
 
 
 def _domain_allowed(policy: AgentComputerPolicy, requested_domain: Any) -> bool:
@@ -494,6 +496,89 @@ def _path_allowed(policy: AgentComputerPolicy, requested_path: Any) -> bool:
     return any(_path_matches_scope(path, scope) for scope in explicit_scopes)
 
 
+def _explicit_filesystem_roots(values: Iterable[Any]) -> List[str]:
+    roots: List[str] = []
+    for value in values:
+        token = str(value or "").strip()
+        if not token or token == "*":
+            continue
+        if token.startswith(("/", "~")) and token not in roots:
+            roots.append(token)
+    return roots
+
+
+def _rust_path_containment_decision(
+    contract: AgentComputerPolicy,
+    *,
+    capability: str,
+    requested_path: Any,
+) -> AgentComputerPolicyDecision | None:
+    path = str(requested_path or "").strip()
+    if not path or not capability.startswith("file."):
+        return None
+    allowed_roots = _explicit_filesystem_roots(contract.filesystem_scope)
+    blocked_roots = _explicit_filesystem_roots(contract.blocked_filesystem_scope)
+    if not allowed_roots and not blocked_roots:
+        return None
+    if not allowed_roots and path.startswith("/"):
+        allowed_roots = ["/"]
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "check-path-containment",
+            {
+                "path": path,
+                "allowed_roots": allowed_roots,
+                "blocked_roots": blocked_roots,
+            },
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError:
+        return AgentComputerPolicyDecision(
+            decision=DECISION_BLOCK,
+            capability=capability,
+            reason="filesystem_scope_not_allowed",
+        )
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "allow_path_access":
+        return AgentComputerPolicyDecision(
+            decision=DECISION_BLOCK,
+            capability=capability,
+            reason="unexpected_next_action:allow_path_access",
+        )
+    return None
+
+
+def _rust_policy_decision(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token == "allow":
+        return DECISION_ALLOW
+    if token in {"require_approval", "approval_required"}:
+        return DECISION_APPROVAL_REQUIRED
+    return DECISION_BLOCK
+
+
+def _rust_policy_reason(value: Any, decision: str) -> str:
+    token = str(value or "").strip()
+    if decision == DECISION_ALLOW:
+        return "policy_allowed"
+    if decision == DECISION_APPROVAL_REQUIRED:
+        return "owner_approval_required"
+    if token == "domain_outside_policy_scope":
+        return "domain_not_allowed"
+    if token in {"path_outside_policy_scope", "path_blocked_by_policy_scope"}:
+        return "filesystem_scope_not_allowed"
+    if token == "unknown_capability":
+        return "policy_blocked"
+    return token or "policy_blocked"
+
+
+def _expected_policy_next_action(decision: str) -> str:
+    if decision == DECISION_ALLOW:
+        return "allow_agent_computer_request"
+    if decision == DECISION_APPROVAL_REQUIRED:
+        return "request_agent_computer_approval"
+    return ""
+
+
 def evaluate_agent_computer_request(
     policy: AgentComputerPolicy | Mapping[str, Any] | None,
     *,
@@ -503,29 +588,43 @@ def evaluate_agent_computer_request(
 ) -> AgentComputerPolicyDecision:
     contract = policy if isinstance(policy, AgentComputerPolicy) else normalize_agent_computer_policy(policy)
     token = normalize_capability_class(capability)
-    if not _domain_allowed(contract, requested_domain):
-        return AgentComputerPolicyDecision(
-            decision=DECISION_BLOCK,
-            capability=token,
-            reason="domain_not_allowed",
+    path_decision = _rust_path_containment_decision(
+        contract,
+        capability=token,
+        requested_path=requested_path,
+    )
+    if path_decision is not None:
+        return path_decision
+    rust_payload = {
+        "policy": contract.as_dict(),
+        "capability": token,
+        "requested_domain": str(requested_domain or "").strip() or None,
+        "requested_path": str(requested_path or "").strip() or None,
+    }
+    try:
+        rust_decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "validate-policy",
+            rust_payload,
+            allow_approval_required=True,
         )
-    if token.startswith("file.") and not _path_allowed(contract, requested_path):
-        return AgentComputerPolicyDecision(
-            decision=DECISION_BLOCK,
-            capability=token,
-            reason="filesystem_scope_not_allowed",
-        )
-    decision = decision_for_capability(contract, token)
-    if decision == DECISION_ALLOW:
-        return AgentComputerPolicyDecision(decision=decision, capability=token, reason="policy_allowed")
-    if decision == DECISION_APPROVAL_REQUIRED:
-        return AgentComputerPolicyDecision(
-            decision=decision,
-            capability=token,
-            reason="owner_approval_required",
-            approval_scope=token,
-        )
-    return AgentComputerPolicyDecision(decision=decision, capability=token, reason="policy_blocked")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        rust_decision = exc.decision
+    decision = _rust_policy_decision(rust_decision.get("decision"))
+    expected_next_action = _expected_policy_next_action(decision)
+    if expected_next_action:
+        next_action = str(rust_decision.get("next_action") or "").strip()
+        if next_action != expected_next_action:
+            return AgentComputerPolicyDecision(
+                decision=DECISION_BLOCK,
+                capability=token,
+                reason=f"unexpected_next_action:{expected_next_action}",
+            )
+    return AgentComputerPolicyDecision(
+        decision=decision,
+        capability=token,
+        reason=_rust_policy_reason(rust_decision.get("reason"), decision),
+        approval_scope=token if decision == DECISION_APPROVAL_REQUIRED else "",
+    )
 
 
 def validate_agent_computer_policy(
@@ -593,10 +692,7 @@ def _default_policy_state() -> Dict[str, Any]:
 def _read_policy_state(workspace_id: str) -> Dict[str, Any]:
     path = _policy_state_file(workspace_id)
     if not path.exists():
-        payload = _default_policy_state()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        return payload
+        return _default_policy_state()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -606,6 +702,48 @@ def _read_policy_state(workspace_id: str) -> Dict[str, Any]:
     if not isinstance(raw.get("policies"), dict):
         raw["policies"] = {}
     return raw
+
+
+def _enforce_agent_computer_policy_state_decision(
+    *,
+    workspace_id: str,
+    policy_id: str,
+    payload: Mapping[str, Any],
+) -> Dict[str, Any]:
+    normalized_payload = dict(payload or {})
+    try:
+        payload_bytes = len(
+            json.dumps(
+                normalized_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        )
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="upsert_agent_computer_policy",
+            state_class="agent_computer_policy",
+            workspace_id=str(workspace_id or "").strip(),
+            actor_id="system",
+            status=str(normalized_payload.get("autonomy_mode") or "policy_update"),
+            payload={
+                "policy_id": str(policy_id or "").strip(),
+                "policy": normalized_payload,
+            },
+            payload_bytes=payload_bytes,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "upsert_agent_computer_policy":
+            raise AgentComputerPolicyRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise AgentComputerPolicyRustGateError(exc.reason) from exc
 
 
 def _write_policy_state(workspace_id: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
@@ -644,6 +782,11 @@ def upsert_agent_computer_policy(*, workspace_id: str, policy: Mapping[str, Any]
             payload["created_at"] = _utc_now_iso()
         payload["updated_at"] = _utc_now_iso()
         policies[contract.policy_id] = payload
+        _enforce_agent_computer_policy_state_decision(
+            workspace_id=workspace,
+            policy_id=contract.policy_id,
+            payload=payload,
+        )
         _write_policy_state(workspace, state)
     except AgentComputerPolicyError:
         raise

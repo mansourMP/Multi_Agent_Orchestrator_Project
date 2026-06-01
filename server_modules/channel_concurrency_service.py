@@ -4,11 +4,13 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
+import json
 from typing import Any, AsyncIterator, Dict, Optional
 
 from server_modules import control_plane_repository
 from server_modules.db import asyncpg
 from server_modules import quota_policy_service, quota_response_service
+from server_modules import rust_runtime_kernel_client
 
 
 _WORKSPACE_DEFAULT_MAX_ACTIVE_THREADS = 24
@@ -39,6 +41,10 @@ class ChannelExecutionLimitError(Exception):
         self.quota_snapshot = quota_snapshot
 
 
+class ChannelConcurrencyRustGateError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class ChannelQuotaSnapshot:
     max_workspace_active_threads: int
@@ -52,6 +58,64 @@ class ChannelQuotaSnapshot:
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _payload_size_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value or "").encode("utf-8"))
+
+
+def _enforce_channel_execution_lease_transition(
+    *,
+    operation: str,
+    tenant_id: str,
+    workspace_id: str,
+    lease_id: str = "",
+    responder_install_id: Optional[str] = None,
+    thread_id: str = "",
+    session_key: str = "",
+    channel_key: str = "",
+    endpoint_key: str = "",
+    quota_snapshot: Optional["ChannelQuotaSnapshot"] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = {
+        "tenant_id": str(tenant_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip(),
+        "lease_id": str(lease_id or "").strip(),
+        "responder_install_id": str(responder_install_id or "").strip(),
+        "thread_id": str(thread_id or "").strip(),
+        "session_key": str(session_key or "").strip(),
+        "channel_key": str(channel_key or "").strip().lower(),
+        "endpoint_key": str(endpoint_key or "").strip().lower(),
+        "quota_snapshot": quota_snapshot.as_dict() if isinstance(quota_snapshot, ChannelQuotaSnapshot) else {},
+        "metadata": dict(metadata or {}),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class="channel_execution_leases",
+            tenant_id=str(payload["tenant_id"] or "default").strip() or "default",
+            workspace_id=str(payload["workspace_id"]),
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=_payload_size_bytes(payload),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != str(operation or "").strip():
+            raise ChannelConcurrencyRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise ChannelConcurrencyRustGateError(exc.reason) from exc
 
 
 def _coerce_int(
@@ -211,6 +275,19 @@ async def acquire_channel_execution_lease(
     now_ts = datetime.now(timezone.utc)
     ttl_seconds = max(quota_snapshot.max_runtime_seconds + 15, 30)
     expires_at = now_ts + timedelta(seconds=ttl_seconds)
+    _enforce_channel_execution_lease_transition(
+        operation="acquire_channel_execution_lease",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        lease_id=lease_id,
+        responder_install_id=responder_install_id,
+        thread_id=thread_id,
+        session_key=session_key,
+        channel_key=channel_key,
+        endpoint_key=endpoint_key,
+        quota_snapshot=quota_snapshot,
+        metadata=metadata,
+    )
     async with control_plane_repository._scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         if connection is None:
             raise _workspace_limit_error(quota_snapshot)
@@ -341,6 +418,12 @@ async def release_channel_execution_lease(
 ) -> None:
     if not str(lease_id or "").strip():
         return
+    _enforce_channel_execution_lease_transition(
+        operation="release_channel_execution_lease",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        lease_id=lease_id,
+    )
     async with control_plane_repository._scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         if connection is None:
             return

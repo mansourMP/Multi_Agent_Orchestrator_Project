@@ -344,11 +344,7 @@ def revoke_gateway_registration(
         raise ValueError("Gateway registration scope mismatch.")
     if user_id and str(registration.get("user_id") or "").strip() != str(user_id or "").strip():
         raise ValueError("Gateway registration scope mismatch.")
-    auth.revoke_local_gateway_device_link(
-        user_id=str(registration.get("user_id") or "").strip(),
-        device_id=str(registration.get("device_id") or "").strip(),
-        reason=reason or "Gateway registration revoked.",
-    )
+    resolved_reason = reason or "Gateway registration revoked."
     revoked = gateway_state_repository.revoke_gateway_registration(
         gateway_id=gateway_id,
         tenant_id=tenant_id,
@@ -358,7 +354,17 @@ def revoke_gateway_registration(
     )
     if not revoked:
         raise ValueError("Gateway registration was not found.")
+    auth.revoke_local_gateway_device_link(
+        user_id=str(revoked.get("user_id") or "").strip(),
+        device_id=str(revoked.get("device_id") or "").strip(),
+        reason=resolved_reason,
+    )
     return {
         "gateway": gateway_registration_public_payload(revoked),
         "scope": gateway_scope_payload(revoked),
+        "mutation_plan": {
+            "shutdown_live_connection": True,
+            "mark_dedicated_workstation_revoked": True,
+            "revocation_reason": resolved_reason,
+        },
     }

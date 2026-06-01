@@ -3,6 +3,77 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import HTTPException
+from server_modules import rust_runtime_kernel_client
+
+
+def _payload_field(payload: Any, key: str, default: Any = None) -> Any:
+    if isinstance(payload, dict):
+        return payload.get(key, default)
+    return getattr(payload, key, default)
+
+
+def _payload_metadata(payload: Any) -> dict[str, Any]:
+    metadata = _payload_field(payload, "metadata", {})
+    return dict(metadata or {}) if isinstance(metadata, dict) else {}
+
+
+def _current_user_field(current_user: Any, key: str, default: Any = None) -> Any:
+    if isinstance(current_user, dict):
+        return current_user.get(key, default)
+    return getattr(current_user, key, default)
+
+
+def _enforce_platform_orchestration_decision(request_payload: Any, *, current_user: Any, operation: str) -> dict[str, Any]:
+    metadata = _payload_metadata(request_payload)
+    workspace_id = str(_payload_field(request_payload, "workspace_id", None) or metadata.get("workspace_id") or "default").strip() or "default"
+    actor_id = str(_current_user_field(current_user, "user_id", None) or _current_user_field(current_user, "id", None) or "").strip()
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "platform-orchestration-decision",
+            {
+                "operation": operation,
+                "tenant_id": str(_payload_field(request_payload, "tenant_id", None) or metadata.get("tenant_id") or "default").strip() or "default",
+                "workspace_id": workspace_id,
+                "actor_id": actor_id,
+                "actor_role": str(_current_user_field(current_user, "role", None) or metadata.get("actor_role") or "member").strip() or "member",
+                "request_id": str(metadata.get("request_id") or metadata.get("client_request_id") or "").strip() or None,
+                "workflow_id": str(_payload_field(request_payload, "workflow_id", None) or metadata.get("workflow_id") or "").strip() or None,
+                "execution_target": str(metadata.get("execution_target") or _payload_field(request_payload, "execution_target", None) or "cloud").strip() or "cloud",
+                "runtime_mode": str(metadata.get("runtime_mode") or "hosted_secure").strip() or "hosted_secure",
+                "workspace_access": True,
+                "owner_access": str(_current_user_field(current_user, "role", "") or "").strip().lower() in {"owner", "admin"},
+                "entitlement_ok": True,
+                "billing_ok": True,
+                "csrf_valid": True,
+                "api_key_valid": True,
+                "runtime_attached": True,
+                "payload": True,
+            },
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "platform_orchestration_denied").strip()
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_platform_orchestration_denied",
+                "operation": operation,
+                "reason": reason,
+            },
+        ) from exc
+    expected_next_action = {
+        "run_create": "create_or_route_run",
+    }.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_next_action and next_action != expected_next_action:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_platform_orchestration_invalid_next_action",
+                "operation": operation,
+                "reason": f"unexpected_next_action:{next_action or 'missing'}",
+            },
+        )
+    return decision
 
 
 async def start_run_route_response(
@@ -15,8 +86,14 @@ async def start_run_route_response(
     stamp_request_owner_fn: Callable[..., Any],
     run_execution_services: Callable[[], Any],
 ) -> Any:
+    request_payload = body or run_start_request_class()
+    _enforce_platform_orchestration_decision(
+        request_payload,
+        current_user=current_user,
+        operation="run_create",
+    )
     return await start_run_response_fn(
-        body or run_start_request_class(),
+        request_payload,
         current_user=current_user,
         execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
         stamp_request_owner_fn=stamp_request_owner_fn,

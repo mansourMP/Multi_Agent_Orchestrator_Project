@@ -295,6 +295,54 @@ def _delete_memory(workspace_id: str, key: str, agent_install_id: str | None = N
     return deleted
 
 
+class AgentMemoryRustGateError(RuntimeError):
+    pass
+
+
+_AGENT_MEMORY_STATE_ACTIONS = {
+    "append_agent_memory_daily_log": "append_agent_memory_daily_log",
+}
+
+
+def _enforce_agent_memory_daily_log_append(
+    *,
+    workspace_id: str,
+    agent_install_id: str | None,
+    log_path,
+    entry_bytes: int,
+) -> None:
+    from server_modules import rust_runtime_kernel_client
+
+    payload = {
+        "workspace_id": str(workspace_id or "").strip(),
+        "agent_install_id": str(agent_install_id or "").strip(),
+        "log_path": str(log_path),
+        "entry_bytes": max(0, int(entry_bytes or 0)),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="append_agent_memory_daily_log",
+            state_class="agent_memory_daily_logs",
+            workspace_id=str(payload["workspace_id"]),
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=int(payload["entry_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        expected_action = _AGENT_MEMORY_STATE_ACTIONS["append_agent_memory_daily_log"]
+        next_action = str((decision or {}).get("next_action") or "").strip()
+        if next_action != expected_action:
+            raise AgentMemoryRustGateError(f"unexpected_next_action:{next_action or 'missing'}")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise AgentMemoryRustGateError(exc.reason) from exc
+
+
 def _save_daily_log(workspace_id: str, content: str, agent_install_id: str | None = None) -> None:
     normalized_content = str(content or "").strip()
     if not normalized_content:
@@ -303,6 +351,12 @@ def _save_daily_log(workspace_id: str, content: str, agent_install_id: str | Non
     now = datetime.now(timezone.utc).astimezone()
     log_path = log_dir / f"{now.strftime('%Y-%m-%d')}.md"
     entry = f"## {now.strftime('%H:%M')}\n\n{normalized_content}\n"
+    _enforce_agent_memory_daily_log_append(
+        workspace_id=workspace_id,
+        agent_install_id=agent_install_id,
+        log_path=log_path,
+        entry_bytes=len(entry.encode("utf-8")),
+    )
     if not log_path.exists():
         log_path.write_text(f"# {now.strftime('%Y-%m-%d')}\n\n{entry}", encoding="utf-8")
         return

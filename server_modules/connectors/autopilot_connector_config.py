@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Optional
 
+from server_modules import rust_runtime_kernel_client
+
 try:
     import fcntl
 except Exception:  # pragma: no cover - unavailable on some platforms
@@ -76,6 +78,7 @@ def _telegram_get_updates_process_lock(bot_token: str):
     _TELEGRAM_POLL_LOCK_DIR.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha1(str(bot_token or "").encode("utf-8")).hexdigest()[:16]
     lock_path = _TELEGRAM_POLL_LOCK_DIR / f"getupdates-{digest}.lock"
+    _enforce_telegram_poll_lock_write(lock_path)
     handle = lock_path.open("a+", encoding="utf-8")
     acquired = False
     try:
@@ -118,6 +121,37 @@ ORION_TELEGRAM_SPACE_STATUS_ENABLED = os.getenv("ORION_TELEGRAM_SPACE_STATUS_ENA
 ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS = os.getenv("ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS", "0") == "1"
 ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS = float(os.getenv("ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS", "3.0") or 3.0)
 ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES = max(1, int(os.getenv("ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES", "20") or 20))
+
+
+class AutopilotConnectorConfigRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_telegram_poll_lock_write(lock_path: Path) -> None:
+    payload = {
+        "lock_path": str(lock_path),
+        "payload_bytes": 0,
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_telegram_poll_lock_file",
+            state_class="telegram_poll_lock_files",
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=0,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_telegram_poll_lock_file":
+            raise AutopilotConnectorConfigRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise AutopilotConnectorConfigRustGateError(exc.reason) from exc
 ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED = os.getenv("ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED", "0") == "1"
 ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED = os.getenv("ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED", "0") == "1"
 ORION_TELEGRAM_MEDIA_ENABLED = os.getenv("ORION_TELEGRAM_MEDIA_ENABLED", "1") == "1"

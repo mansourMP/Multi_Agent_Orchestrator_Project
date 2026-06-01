@@ -19,6 +19,7 @@ from server_modules import (
     hardware_runtime_session_service,
     hardware_runtime_target_resolver,
     runtime_attachment_service,
+    rust_runtime_kernel_client,
     secret_redaction_service,
     session_service,
     thread_service,
@@ -93,6 +94,74 @@ def _new_run_id() -> str:
 
 def _new_request_id() -> str:
     return f"hreq_{uuid.uuid4().hex}"
+
+
+def _runtime_action_connector_and_action(action_id: str) -> tuple[str, str]:
+    token = _text(action_id).lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "browser.open": ("browser", "navigate"),
+        "browser.open_url": ("browser", "navigate"),
+        "browser.navigate": ("browser", "navigate"),
+        "browser.new_tab": ("browser", "new_tab"),
+        "browser.download_file": ("browser", "download_file"),
+        "screenshot.capture": ("browser", "screenshot"),
+        "browser.screenshot": ("browser", "screenshot"),
+        "computer.click": ("computer", "click"),
+        "computer.type": ("computer", "type"),
+        "shell.exec": ("shell", "exec"),
+        "shell.execute": ("shell", "exec"),
+    }
+    if token in aliases:
+        return aliases[token]
+    if "." in token:
+        connector_id, action = token.split(".", 1)
+        return connector_id, action
+    return "hardware", token
+
+
+def _runtime_action_argument_projection(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    projected: Dict[str, Any] = {}
+    for key in ("url", "selector", "text", "input", "command", "x", "y"):
+        if key in arguments:
+            projected[key] = arguments.get(key)
+    return projected
+
+
+def _enforce_cloud_runtime_action_decision(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    user_id: Optional[str],
+    action_id: str,
+    arguments: Dict[str, Any],
+    run_id: str,
+    thread_id: Optional[str],
+    request_id: str,
+    runtime_session_id: Optional[str],
+) -> Dict[str, Any]:
+    connector_id, connector_action = _runtime_action_connector_and_action(action_id)
+    payload = {
+        "operation": "execute_runtime_action",
+        "runtime_session_binding": "cloud_computer_agent",
+        "studio_agent_mode": "cloud_computer",
+        "connector_id": connector_id,
+        "action_id": connector_action,
+        "agent_id": _text(user_id) or "sage",
+        "tenant_id": _text(tenant_id) or "default",
+        "workspace_id": _text(workspace_id) or "default",
+        "runtime_session_id": _text(runtime_session_id) or f"pending:{_text(request_id)}",
+        "run_id": _text(run_id),
+        "thread_id": _text(thread_id),
+        **_runtime_action_argument_projection(arguments),
+    }
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "runtime-action-decision",
+        payload,
+    )
+    next_action = _text(decision.get("next_action"))
+    if next_action != "execute_cloud_runtime_action":
+        raise RuntimeError("unexpected_next_action")
+    return decision
 
 
 def get_cloud_computer_runtime_registry() -> virtual_computer_runtime.VirtualComputerRuntimeRegistry:
@@ -596,6 +665,18 @@ async def execute_hardware_action(
         if canonical_target_id in {"user_device_gateway", "empyralis_cloud_computer", "self_hosted_node"}
         else "degraded"
     )
+    if canonical_target_id == "empyralis_cloud_computer":
+        _enforce_cloud_runtime_action_decision(
+            tenant_id=_text(tenant_id) or "default",
+            workspace_id=_text(workspace_id) or "default",
+            user_id=user_id,
+            action_id=_text(action_id),
+            arguments=args,
+            run_id=resolved_run_id,
+            thread_id=thread_id,
+            request_id=resolved_request_id,
+            runtime_session_id=session_id or f"pending:{resolved_request_id}",
+        )
     runtime_session = await _create_runtime_session(
         tenant_id=_text(tenant_id) or "default",
         workspace_id=_text(workspace_id) or "default",

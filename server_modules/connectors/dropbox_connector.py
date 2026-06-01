@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules import rust_runtime_kernel_client
+
 try:
     import dropbox as _dropbox_sdk
 except Exception:  # pragma: no cover - optional dependency
@@ -88,6 +90,38 @@ def _metadata_payload(value: Any) -> Dict[str, Any]:
         "path_display": _read_attr(value, "path_display"),
         "path_lower": _read_attr(value, "path_lower"),
     }
+
+
+class DropboxConnectorRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_dropbox_download_write(*, dropbox_path: str, local_path: Path, content_bytes: int) -> None:
+    payload = {
+        "dropbox_path": str(dropbox_path or "").strip(),
+        "local_path": str(local_path),
+        "content_bytes": max(0, int(content_bytes or 0)),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_dropbox_download_file",
+            state_class="dropbox_download_files",
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=int(payload["content_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_dropbox_download_file":
+            raise DropboxConnectorRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise DropboxConnectorRustGateError(exc.reason) from exc
 
 
 def validate_dropbox_credentials(
@@ -224,6 +258,11 @@ def download_file(
         content = response.read()
     if content is None:
         raise RuntimeError("Dropbox download response did not contain file content.")
+    _enforce_dropbox_download_write(
+        dropbox_path=str(dropbox_path or "").strip(),
+        local_path=target,
+        content_bytes=len(bytes(content)),
+    )
     target.write_bytes(bytes(content))
     payload = _metadata_payload(metadata)
     payload.update(

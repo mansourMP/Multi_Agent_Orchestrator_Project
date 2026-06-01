@@ -5,6 +5,8 @@ import secrets
 import threading
 from pathlib import Path
 
+from server_modules import rust_runtime_kernel_client
+
 
 EMPYRALIS_STATE_HOME = Path(
     os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
@@ -64,10 +66,42 @@ def _read_secret_file(path: Path) -> str:
         return ""
 
 
+class JwtSecretRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_jwt_secret_state_decision(*, path: Path, secret: str) -> None:
+    payload = {
+        "path": str(path),
+        "secret_length": len(_normalize_secret(secret)),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_jwt_secret_file",
+            state_class="secret_material",
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=len(str(payload).encode("utf-8")),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_jwt_secret_file":
+            raise JwtSecretRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise JwtSecretRustGateError(exc.reason) from exc
+
+
 def _write_secret_file(path: Path, secret: str) -> str:
     normalized = _normalize_secret(secret)
     if not normalized:
         raise RuntimeError("JWT secret is empty.")
+    _enforce_jwt_secret_state_decision(path=path, secret=normalized)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"{normalized}\n", encoding="utf-8")
     try:

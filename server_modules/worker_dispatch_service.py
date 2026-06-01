@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 from fastapi import HTTPException
 from server_modules import agent_action_metering_service, browser_checkpoint_service
 from server_modules import machine_lease_service, usage_accounting_service
+from server_modules import rust_runtime_kernel_client
 
 
 @dataclass(slots=True)
@@ -23,6 +24,142 @@ class DispatchEnvelope:
     run_id: str
     worker_id: Optional[str]
     payload: Dict[str, Any] = field(default_factory=dict)
+
+
+def _run_context(run: Mapping[str, Any]) -> Dict[str, Any]:
+    context = run.get("context") if isinstance(run, Mapping) and isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return {
+        "tenant_id": str(context.get("tenant_id") or metadata.get("tenant_id") or "default").strip() or "default",
+        "workspace_id": str(context.get("workspace_id") or metadata.get("workspace_id") or "default").strip() or "default",
+    }
+
+
+def _enforce_local_worker_decision(**payload: Any) -> Dict[str, Any]:
+    operation = str(payload.get("operation") or "local_worker").strip() or "local_worker"
+    allow_block_result = bool(payload.pop("allow_block_result", False))
+    queue_empty = bool(payload.get("queue_empty"))
+    expected_next_action = None
+    if operation == "claim_run":
+        expected_next_action = "return_backpressure" if queue_empty else "claim_local_run"
+    elif operation == "worker_heartbeat":
+        expected_next_action = "record_worker_heartbeat"
+    elif operation == "run_heartbeat":
+        expected_next_action = "record_run_heartbeat"
+    elif operation == "complete_run":
+        expected_next_action = "complete_local_run"
+    elif operation == "pause_run":
+        expected_next_action = "pause_local_run"
+    elif operation == "fail_run":
+        expected_next_action = "fail_local_run"
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "local-worker-decision",
+            payload,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if expected_next_action and next_action != expected_next_action:
+            raise HTTPException(
+                status_code=423,
+                detail={
+                    "error": "rust_local_worker_denied",
+                    "operation": operation,
+                    "reason": f"unexpected_next_action:{next_action or 'missing'}",
+                },
+            )
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        if allow_block_result and isinstance(exc.result, dict):
+            return dict(exc.result)
+        reason = str(getattr(exc, "reason", "") or "local_worker_denied").strip()
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_local_worker_denied",
+                "operation": operation,
+                "reason": reason,
+            },
+        ) from exc
+
+
+def _raise_local_worker_gate_block(operation: str, reason: str) -> None:
+    normalized_reason = str(reason or "local_worker_denied").strip()
+    if normalized_reason == "local_run_not_owned_by_worker":
+        raise HTTPException(status_code=403, detail="Worker does not own this local run.")
+    if normalized_reason == "local_run_claim_missing":
+        raise HTTPException(status_code=409, detail="Run is not claimed by Gateway.")
+    raise HTTPException(
+        status_code=423,
+        detail={
+            "error": "rust_local_worker_denied",
+            "operation": operation,
+            "reason": normalized_reason,
+        },
+    )
+
+
+def _canonical_run_state_for_rust(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"running", "running_local", "executing", "claimed", "in_progress"}:
+        return "running"
+    if token in {"queued", "queued_local", "starting", "planning", "machine_allocating"}:
+        return "queued"
+    if token in {"completed", "succeeded", "success"}:
+        return "completed"
+    if token in {"cancelled", "canceled"}:
+        return "cancelled"
+    if token in {"timeout", "timed_out"}:
+        return "failed"
+    return token or "queued"
+
+
+def _enforce_run_state_transition_decision(
+    *,
+    operation: str,
+    run_id: str,
+    run: Mapping[str, Any],
+    actor_id: Optional[str],
+) -> Dict[str, Any]:
+    context_scope = _run_context(run)
+    expected_next_action = {
+        "complete": "complete_state_transition",
+        "fail": "fail_state_transition",
+    }.get(str(operation or "").strip())
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "state-transition-decision",
+            {
+                "operation": operation,
+                "entity_type": "run",
+                "entity_id": run_id,
+                "run_id": run_id,
+                "actor_id": actor_id,
+                "workspace_id": context_scope["workspace_id"],
+                "tenant_id": context_scope["tenant_id"],
+                "current_state": _canonical_run_state_for_rust(run.get("status") or run.get("state")),
+            },
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "state_transition_denied").strip()
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_state_transition_denied",
+                "operation": operation,
+                "reason": reason,
+            },
+        ) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_next_action and next_action != expected_next_action:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_state_transition_invalid_next_action",
+                "operation": operation,
+                "reason": f"unexpected_next_action:{next_action or 'missing'}",
+            },
+        )
+    return decision
 
 
 def claim_local_run(
@@ -46,6 +183,15 @@ def claim_local_run(
     parse_utc_ts_fn: Optional[Callable[[Any], Any]] = None,
     now_fn: Optional[Callable[[], Any]] = None,
 ) -> Optional[str]:
+    _enforce_local_worker_decision(
+        operation="claim_run",
+        workspace_id="default",
+        worker_id=worker_id,
+        actor_role="worker",
+        required_capabilities=list(required_capabilities or []),
+        queue_empty=not bool(pending_run_ids),
+        local_companion_enabled=True,
+    )
     return machine_lease_service.claim_local_machine_lease(
         worker_id,
         required_capabilities=required_capabilities,
@@ -88,6 +234,19 @@ def heartbeat_local_worker(
 
     current_run = str(current_run_id or "").strip()
     note_text = str(note or "").strip()
+    workspace_id = "default"
+    if current_run:
+        run = runs_by_id.get(current_run)
+        if isinstance(run, Mapping):
+            workspace_id = _run_context(run)["workspace_id"]
+    _enforce_local_worker_decision(
+        operation="worker_heartbeat",
+        workspace_id=workspace_id,
+        worker_id=worker,
+        run_id=current_run or None,
+        actor_role="worker",
+        local_companion_enabled=True,
+    )
     mark_local_worker_seen_fn(worker, current_run or None, "busy" if current_run else "idle", note=note_text or None)
 
     if current_run:
@@ -141,13 +300,26 @@ def heartbeat_local_run(
 
     note_text = str(note or "").strip()
     incoming_worker = str(worker_id or "").strip()
+    context_scope = _run_context(run)
     with local_queue_lock:
         claim = claimed_runs.get(run_id)
-        if not isinstance(claim, dict):
-            raise HTTPException(status_code=409, detail="Run is not claimed by Gateway.")
-        if incoming_worker and incoming_worker != str(claim.get("worker_id")):
-            raise HTTPException(status_code=403, detail="Worker does not own this local run.")
-        resolved_worker = incoming_worker or str(claim.get("worker_id") or "").strip()
+        resolved_worker = incoming_worker or (
+            str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else ""
+        )
+        local_worker_decision = _enforce_local_worker_decision(
+            operation="run_heartbeat",
+            workspace_id=context_scope["workspace_id"],
+            worker_id=incoming_worker or resolved_worker,
+            current_worker_id=str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else "",
+            run_id=run_id,
+            run_status=str(run.get("status") or "claimed").strip() or "claimed",
+            actor_role="worker",
+            local_companion_enabled=True,
+            claim_missing=not isinstance(claim, dict),
+            allow_block_result=True,
+        )
+        if str(local_worker_decision.get("decision") or "").strip().lower() == "block":
+            _raise_local_worker_gate_block("run_heartbeat", str(local_worker_decision.get("reason") or ""))
         now_iso = utc_now_iso_fn()
         claim["last_heartbeat_at"] = now_iso
         maybe_emit_local_still_working_fn(run_id, run, claim, note=note_text or None)
@@ -164,6 +336,27 @@ def heartbeat_local_run(
                 progress=bool(note_text or progress_event),
             )
     return {"status": "ok", "run_id": run_id, "last_heartbeat_at": now_iso}
+
+
+def _enforce_local_queue_terminal_transition(
+    *,
+    operation: str,
+    run_id: str,
+    run: Mapping[str, Any],
+    worker_id: Optional[str],
+    claim: Any,
+) -> Dict[str, Any]:
+    requester = str(worker_id or "").strip()
+    holder = ""
+    if isinstance(claim, Mapping):
+        holder = str(claim.get("worker_id") or claim.get("machine_id") or "").strip()
+    return machine_lease_service.enforce_queue_transition_decision(
+        operation=operation,
+        run_id=run_id,
+        requester_id=requester or holder,
+        lease_holder_id=holder,
+        status=str(run.get("status") or "claimed").strip() or "claimed",
+    )
 
 
 def complete_local_run(
@@ -189,14 +382,43 @@ def complete_local_run(
     with local_queue_lock:
         claim = claimed_runs.get(run_id)
         incoming_worker = str(worker_id or "").strip()
-        if isinstance(claim, dict) and incoming_worker and incoming_worker != str(claim.get("worker_id")):
-            raise HTTPException(status_code=403, detail="Worker does not own this local run.")
         resolved_worker = incoming_worker or (
             str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else ""
         )
 
     status = str(run.get("status") or "").strip().lower()
-    if status in {"completed", "failed", "timeout"}:
+    context_scope = _run_context(run)
+    local_worker_decision = _enforce_local_worker_decision(
+        operation="complete_run",
+        workspace_id=context_scope["workspace_id"],
+        worker_id=incoming_worker or resolved_worker or worker_id,
+        current_worker_id=str((claim or {}).get("worker_id") or "").strip() if isinstance(claim, dict) else "",
+        run_id=run_id,
+        run_status=status or "claimed",
+        actor_role="worker",
+        local_companion_enabled=True,
+        claim_missing=not isinstance(claim, dict),
+        allow_block_result=True,
+    )
+    if str(local_worker_decision.get("decision") or "").strip().lower() == "block":
+        _raise_local_worker_gate_block("complete_run", str(local_worker_decision.get("reason") or ""))
+    state_decision = _enforce_run_state_transition_decision(
+        operation="complete",
+        run_id=run_id,
+        run=run,
+        actor_id=resolved_worker or worker_id,
+    )
+    queue_decision = _enforce_local_queue_terminal_transition(
+        operation="complete",
+        run_id=run_id,
+        run=run,
+        worker_id=resolved_worker or worker_id,
+        claim=claim,
+    )
+    if (
+        str(state_decision.get("reason") or "").strip().lower() == "state_already_terminal"
+        or str(queue_decision.get("reason") or "").strip().lower() == "queue_item_already_terminal"
+    ):
         return {"status": "ok", "run_id": run_id, "already_terminal": True}
 
     if isinstance(result_data, dict):
@@ -328,6 +550,27 @@ def pause_local_run(
     if not isinstance(run, dict):
         raise HTTPException(status_code=404, detail="Run ID not found")
 
+    context_scope = _run_context(run)
+    with local_queue_lock:
+        claim = claimed_runs.get(run_id)
+        incoming_worker = str(worker_id or "").strip()
+        resolved_worker = incoming_worker or (
+            str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else ""
+        )
+    local_worker_decision = _enforce_local_worker_decision(
+        operation="pause_run",
+        workspace_id=context_scope["workspace_id"],
+        worker_id=incoming_worker or resolved_worker or worker_id,
+        current_worker_id=str((claim or {}).get("worker_id") or "").strip() if isinstance(claim, dict) else "",
+        run_id=run_id,
+        run_status=str(run.get("status") or "claimed").strip() or "claimed",
+        actor_role="worker",
+        local_companion_enabled=True,
+        claim_missing=not isinstance(claim, dict),
+        allow_block_result=True,
+    )
+    if str(local_worker_decision.get("decision") or "").strip().lower() == "block":
+        _raise_local_worker_gate_block("pause_run", str(local_worker_decision.get("reason") or ""))
     release = machine_lease_service.release_machine_lease_claim(
         run_id,
         worker_id=worker_id,
@@ -338,7 +581,9 @@ def pause_local_run(
         status_hint="idle",
         note="paused_waiting_for_input",
     )
-    resolved_worker = str(release.get("resolved_worker") or "").strip()
+    released_worker = str(release.get("resolved_worker") or "").strip()
+    if released_worker:
+        resolved_worker = released_worker
 
     pause_data = dict(result_data) if isinstance(result_data, dict) else {}
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
@@ -451,14 +696,43 @@ def fail_local_run(
     with local_queue_lock:
         claim = claimed_runs.get(run_id)
         incoming_worker = str(worker_id or "").strip()
-        if isinstance(claim, dict) and incoming_worker and incoming_worker != str(claim.get("worker_id")):
-            raise HTTPException(status_code=403, detail="Worker does not own this local run.")
         resolved_worker = incoming_worker or (
             str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else ""
         )
 
     status = str(run.get("status") or "").strip().lower()
-    if status in {"completed", "failed", "timeout"}:
+    context_scope = _run_context(run)
+    local_worker_decision = _enforce_local_worker_decision(
+        operation="fail_run",
+        workspace_id=context_scope["workspace_id"],
+        worker_id=incoming_worker or resolved_worker or worker_id,
+        current_worker_id=str((claim or {}).get("worker_id") or "").strip() if isinstance(claim, dict) else "",
+        run_id=run_id,
+        run_status=status or "claimed",
+        actor_role="worker",
+        local_companion_enabled=True,
+        claim_missing=not isinstance(claim, dict),
+        allow_block_result=True,
+    )
+    if str(local_worker_decision.get("decision") or "").strip().lower() == "block":
+        _raise_local_worker_gate_block("fail_run", str(local_worker_decision.get("reason") or ""))
+    state_decision = _enforce_run_state_transition_decision(
+        operation="fail",
+        run_id=run_id,
+        run=run,
+        actor_id=resolved_worker or worker_id,
+    )
+    queue_decision = _enforce_local_queue_terminal_transition(
+        operation="fail",
+        run_id=run_id,
+        run=run,
+        worker_id=resolved_worker or worker_id,
+        claim=claim,
+    )
+    if (
+        str(state_decision.get("reason") or "").strip().lower() == "state_already_terminal"
+        or str(queue_decision.get("reason") or "").strip().lower() == "queue_item_already_terminal"
+    ):
         return {"status": "ok", "run_id": run_id, "already_terminal": True}
 
     message = (

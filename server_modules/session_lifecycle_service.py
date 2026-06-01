@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from server_modules import session_service, workspace_context
+from server_modules import rust_runtime_kernel_client, session_service, workspace_context
 
 
 DEFAULT_MAX_TURNS_PER_SESSION = 100
@@ -91,6 +91,130 @@ def _coerce_int(value: Any, default: int, *, minimum: int = 0, maximum: int = 2_
     except (TypeError, ValueError):
         return default
     return max(minimum, min(parsed, maximum))
+
+
+def _parse_session_datetime(value: Any) -> Optional[datetime]:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    try:
+        parsed = datetime.fromisoformat(token.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _session_age_hours(session_record: Dict[str, Any]) -> int:
+    created_at = _parse_session_datetime(session_record.get("created_at"))
+    if created_at is None:
+        return 2_147_483_647
+    return max(0, int((_utc_now() - created_at).total_seconds() // 3600))
+
+
+def _session_idle_seconds(session_record: Dict[str, Any], policy: SessionLifecyclePolicy) -> int:
+    expires_at = _parse_session_datetime(session_record.get("expires_at"))
+    if expires_at is None:
+        return int(policy.idle_timeout.total_seconds())
+    last_activity = expires_at - timedelta(seconds=86400)
+    return max(0, int((_utc_now() - last_activity).total_seconds()))
+
+
+def _lifecycle_preset_for_policy(policy: SessionLifecyclePolicy) -> str:
+    if not policy.enforce_max_turns and not policy.idle_pruning_enabled:
+        return "unlimited"
+    if policy.max_turns_per_session <= 50 and policy.idle_timeout_hours <= 12:
+        return "short"
+    if policy.max_turns_per_session >= 500 or policy.idle_timeout_hours >= 72:
+        return "extended"
+    return "standard"
+
+
+def _session_lifecycle_request(
+    operation: str,
+    *,
+    session_record: Dict[str, Any],
+    turn_count: int,
+    policy: SessionLifecyclePolicy,
+    force: bool = False,
+) -> Dict[str, Any]:
+    max_turns = (
+        max(1, int(policy.max_turns_per_session))
+        if policy.enforce_max_turns and policy.max_turns_per_session > 0
+        else None
+    )
+    request = {
+        "operation": operation,
+        "session_id": str(session_record.get("session_id") or "").strip(),
+        "status": str(session_record.get("status") or "active").strip() or "active",
+        "preset": _lifecycle_preset_for_policy(policy),
+        "turn_count": max(0, int(turn_count or 0)),
+        "age_hours": _session_age_hours(session_record),
+        "idle_seconds": _session_idle_seconds(session_record, policy),
+        "max_age_hours": max(1, int(policy.prune_after_idle_days * 24)),
+        "idle_timeout_seconds": max(1, int(policy.idle_timeout.total_seconds())),
+        "force": bool(force),
+    }
+    if max_turns is not None:
+        request["max_turns"] = max_turns
+    return request
+
+
+def _session_lifecycle_decision(
+    operation: str,
+    *,
+    session_record: Dict[str, Any],
+    turn_count: int,
+    policy: SessionLifecyclePolicy,
+    force: bool = False,
+) -> Dict[str, Any]:
+    decision = rust_runtime_kernel_client.session_lifecycle_decision(
+        **_session_lifecycle_request(
+            operation,
+            session_record=session_record,
+            turn_count=turn_count,
+            policy=policy,
+            force=force,
+        )
+    )
+    expected_next_actions = {
+        "turn": {"continue"},
+        "prune": {"prune"},
+    }
+    expected = expected_next_actions.get(operation)
+    if expected and str(decision.get("decision") or "").strip() == "allow":
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action not in expected:
+            raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
+
+
+def _enforce_session_lifecycle_decision(
+    operation: str,
+    *,
+    session_record: Dict[str, Any],
+    turn_count: int,
+    policy: SessionLifecyclePolicy,
+    force: bool = False,
+) -> Dict[str, Any]:
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "session-lifecycle-decision",
+        _session_lifecycle_request(
+            operation,
+            session_record=session_record,
+            turn_count=turn_count,
+            policy=policy,
+            force=force,
+        ),
+    )
+    expected_next_actions = {
+        "prune": {"prune"},
+    }
+    expected = expected_next_actions.get(operation)
+    if expected:
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action not in expected:
+            raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
 
 
 def resolve_lifecycle_policy(
@@ -227,7 +351,22 @@ def check_max_turns(
 ) -> bool:
     if not policy.enforce_max_turns or policy.max_turns_per_session <= 0:
         return True
-    return turn_count < policy.max_turns_per_session
+    decision = rust_runtime_kernel_client.session_lifecycle_decision(
+        operation="turn",
+        session_id="turn-check",
+        status="active",
+        preset=_lifecycle_preset_for_policy(policy),
+        turn_count=max(0, int(turn_count or 0)),
+        max_turns=max(1, int(policy.max_turns_per_session)),
+        max_age_hours=max(1, int(policy.prune_after_idle_days * 24)),
+        idle_timeout_seconds=max(1, int(policy.idle_timeout.total_seconds())),
+    )
+    if str(decision.get("decision") or "").strip() != "allow":
+        return False
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "continue":
+        return False
+    return True
 
 
 def max_turns_reached_message(policy: SessionLifecyclePolicy) -> str:
@@ -274,10 +413,17 @@ async def list_prune_candidates(
         sessions = await session_service.list_workspace_runtime_sessions(workspace_id)
     except Exception:
         return []
-    return [
-        s for s in sessions
-        if is_session_eligible_for_pruning(s, policy)
-    ]
+    candidates: List[Dict[str, Any]] = []
+    for session in sessions:
+        decision = _session_lifecycle_decision(
+            "prune",
+            session_record=session,
+            turn_count=0,
+            policy=policy,
+        )
+        if str(decision.get("decision") or "").strip() == "allow":
+            candidates.append(session)
+    return candidates
 
 
 async def prune_idle_sessions(
@@ -296,6 +442,12 @@ async def prune_idle_sessions(
             continue
         if not dry_run:
             try:
+                _enforce_session_lifecycle_decision(
+                    "prune",
+                    session_record=session,
+                    turn_count=0,
+                    policy=policy,
+                )
                 await session_service.terminate_session(session_id)
             except Exception:
                 continue

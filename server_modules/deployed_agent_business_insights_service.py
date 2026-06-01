@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from server_modules import auth as auth_module
 from server_modules import control_plane_repository
+from server_modules import deployed_agent_service
 from server_modules import entitlements_service
 from server_modules import secret_redaction_service
 
@@ -284,6 +285,14 @@ async def review_owner_business_insight(
         workspace_id=workspace_id,
         deployed_agent_id=deployed_agent_id,
     )
+    deployed_agent_service._enforce_deployed_agent_service_decision(
+        "business_insight_review",
+        deployed_agent=scope["deployed_agent"],
+        tenant_id=scope["tenant_id"],
+        workspace_id=scope["workspace_id"],
+        current_user=current_user,
+        insight_id=insight_id,
+    )
     insight = await control_plane_repository.update_deployed_agent_business_insight_status(
         tenant_id=scope["tenant_id"],
         workspace_id=scope["workspace_id"],
@@ -310,6 +319,14 @@ async def apply_owner_business_insight(
         current_user=current_user,
         workspace_id=workspace_id,
         deployed_agent_id=deployed_agent_id,
+    )
+    deployed_agent_service._enforce_deployed_agent_service_decision(
+        "business_insight_apply",
+        deployed_agent=scope["deployed_agent"],
+        tenant_id=scope["tenant_id"],
+        workspace_id=scope["workspace_id"],
+        current_user=current_user,
+        insight_id=insight_id,
     )
     existing = await control_plane_repository.get_deployed_agent_business_insight(
         tenant_id=scope["tenant_id"],

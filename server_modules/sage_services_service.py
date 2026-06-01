@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from server_modules import personal_context_engine, workspace_context
+from server_modules import personal_context_engine, rust_runtime_kernel_client, workspace_context
 
 
 SAGE_SERVICE_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -81,10 +81,7 @@ def _default_state() -> Dict[str, Any]:
 
 def _safe_read_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
-        payload = _default_state()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return payload
+        return _default_state()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -114,6 +111,54 @@ def _save_state(workspace_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     payload["updated_at"] = _utc_now_iso()
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return payload
+
+
+class SageServicesRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_sage_service_state_decision(
+    *,
+    operation: str,
+    workspace_id: str,
+    service_id: str,
+    payload: Dict[str, Any],
+    actor_user_id: Optional[str],
+) -> Dict[str, Any]:
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    try:
+        payload_bytes = len(
+            json.dumps(
+                normalized_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        )
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class="sage_services",
+            workspace_id=_coerce_text(workspace_id),
+            actor_id=_coerce_text(actor_user_id),
+            status="active",
+            payload={
+                "service_id": _coerce_text(service_id),
+                "state": normalized_payload,
+            },
+            payload_bytes=payload_bytes,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = _coerce_text(decision.get("next_action"))
+        if next_action != _coerce_text(operation):
+            raise SageServicesRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise SageServicesRustGateError(exc.reason) from exc
 
 
 def _require_service(service_id: str) -> dict[str, Any]:
@@ -475,6 +520,13 @@ async def update_service_profile(
         policy_metadata=write_policy,
     )
     state["services"][service_id] = service_state
+    _enforce_sage_service_state_decision(
+        operation="update_sage_service_profile",
+        workspace_id=workspace_id,
+        service_id=service_id,
+        payload=service_state,
+        actor_user_id=actor_user_id,
+    )
     _save_state(workspace_id, state)
     await _publish_service_event(
         tenant_id=tenant_id,
@@ -520,6 +572,13 @@ async def create_service_entry(
         policy_metadata=write_policy,
     )
     state["services"][service_id] = service_state
+    _enforce_sage_service_state_decision(
+        operation="create_sage_service_entry",
+        workspace_id=workspace_id,
+        service_id=service_id,
+        payload=normalized,
+        actor_user_id=actor_user_id,
+    )
     _save_state(workspace_id, state)
     await _publish_service_event(
         tenant_id=tenant_id,
@@ -561,6 +620,13 @@ async def update_service_entry(
     )
     service_state["entries"] = entries
     state["services"][service_id] = service_state
+    _enforce_sage_service_state_decision(
+        operation="update_sage_service_entry",
+        workspace_id=workspace_id,
+        service_id=service_id,
+        payload=match,
+        actor_user_id=actor_user_id,
+    )
     _save_state(workspace_id, state)
     await _publish_service_event(
         tenant_id=tenant_id,
@@ -597,6 +663,13 @@ async def delete_service_entry(
         entry_id=_coerce_text(entry_id),
     )
     state["services"][service_id] = service_state
+    _enforce_sage_service_state_decision(
+        operation="delete_sage_service_entry",
+        workspace_id=workspace_id,
+        service_id=service_id,
+        payload=match,
+        actor_user_id=actor_user_id,
+    )
     _save_state(workspace_id, state)
     return get_sage_service(workspace_id=workspace_id, service_id=service_id)
 
@@ -627,6 +700,13 @@ async def set_service_entry_pinned(
     )
     service_state["entries"] = entries
     state["services"][service_id] = service_state
+    _enforce_sage_service_state_decision(
+        operation="set_sage_service_entry_pinned",
+        workspace_id=workspace_id,
+        service_id=service_id,
+        payload=match,
+        actor_user_id=actor_user_id,
+    )
     _save_state(workspace_id, state)
     return get_sage_service(workspace_id=workspace_id, service_id=service_id)
 

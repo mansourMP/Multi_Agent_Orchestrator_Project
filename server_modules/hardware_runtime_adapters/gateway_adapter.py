@@ -15,12 +15,74 @@ from server_modules import (
     hardware_result_correlator_service,
     hardware_runtime_session_service,
     hardware_runtime_target_resolver,
+    rust_runtime_kernel_client,
 )
 from server_modules.hardware_runtime_adapters.common import dict_value, text
 
 
 HARDWARE_RUNTIME_SESSION_BINDING = hardware_runtime_session_service.HARDWARE_RUNTIME_SESSION_BINDING
 FULL_RUNTIME_ACCESS_MODE = execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+
+
+def _actor_role_from_runtime_context(*, runtime_access_mode: str, user_id: Optional[str]) -> str:
+    if text(runtime_access_mode).lower() == FULL_RUNTIME_ACCESS_MODE:
+        return "owner"
+    if text(user_id):
+        return "member"
+    return "viewer"
+
+
+def _enforce_gateway_action_decision(
+    *,
+    operation: str,
+    tenant_id: str,
+    workspace_id: str,
+    gateway_id: str,
+    run_id: str,
+    request_id: str,
+    capability_id: str,
+    user_id: Optional[str],
+    runtime_access_mode: str,
+    risk_decision: str,
+    approval_provided: bool,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": operation,
+        "tenant_id": text(tenant_id) or "default",
+        "workspace_id": text(workspace_id) or "default",
+        "gateway_id": text(gateway_id),
+        "run_id": text(run_id),
+        "request_id": text(request_id),
+        "capability_id": text(capability_id),
+        "actor_role": _actor_role_from_runtime_context(
+            runtime_access_mode=runtime_access_mode,
+            user_id=user_id,
+        ),
+        "gateway_connected": True,
+        "risk_decision": text(risk_decision) or "allow",
+        "approval_provided": bool(approval_provided),
+    }
+    try:
+        decision = rust_runtime_kernel_client.gateway_action_decision(**payload)
+        decision = rust_runtime_kernel_client.enforce_kernel_decision(
+            "gateway-action-decision",
+            decision,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = text(getattr(exc, "reason", "")) or "rust_gateway_action_denied"
+        raise RuntimeError(f"Rust gateway-action gate blocked {operation}: {reason}") from exc
+    expected_next_action = {
+        ("tool_execute", "allow"): "dispatch_tool_invoke",
+        ("tool_execute", "require_approval"): "request_gateway_tool_approval",
+        ("browser_session_stop", "allow"): "stop_browser_session",
+    }.get((operation, text(decision.get("decision")).lower()))
+    next_action = text(decision.get("next_action"))
+    if expected_next_action and next_action != expected_next_action:
+        raise RuntimeError(
+            f"Rust gateway-action gate returned unexpected next_action for {operation}: "
+            f"{next_action or 'missing'}"
+        )
+    return decision
 
 
 def find_gateway_registration(
@@ -197,6 +259,19 @@ async def execute_gateway_action(
         action_id=action_id,
         arguments=arguments,
         require_approval=require_approval,
+    )
+    _enforce_gateway_action_decision(
+        operation="tool_execute",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        gateway_id=gateway_token,
+        run_id=run_id,
+        request_id=request_id,
+        capability_id=capability_id,
+        user_id=user_id,
+        runtime_access_mode=runtime_access_mode,
+        risk_decision="require_approval" if approval_required else "allow",
+        approval_provided=False,
     )
     if approval_required:
         approval = await gateway_approval_service.request_gateway_tool_approval(
@@ -382,6 +457,19 @@ async def stop_gateway_action(
             "reason": "gateway_offline",
             "trace_id": trace_id,
         }
+    _enforce_gateway_action_decision(
+        operation="browser_session_stop",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        gateway_id=gateway_token,
+        run_id=run_id,
+        request_id=request_id,
+        capability_id="browser.session.interrupt",
+        user_id=text((registration or {}).get("user_id")) or None,
+        runtime_access_mode="guarded",
+        risk_decision="allow",
+        approval_provided=True,
+    )
     try:
         interrupted = await gateway_execution_service.interrupt_tool_via_gateway(
             gateway_id=gateway_token,

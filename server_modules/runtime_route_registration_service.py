@@ -171,6 +171,7 @@ def build_runtime_route_bindings(
         current_user_is_privileged=current_user_is_privileged,
         extract_run_owner_user_id=extract_run_owner_user_id,
         enforce_workspace_access=enforce_workspace_access,
+        resolve_workspace_tenant_id=deps.resolve_workspace_tenant_id,
         normalize_run_id_token=late_server_export("_normalize_run_id_token"),
         summarize_history_item=summarize_history_item,
     )

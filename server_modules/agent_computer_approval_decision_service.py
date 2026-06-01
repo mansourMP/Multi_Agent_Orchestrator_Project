@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 
-from server_modules import agent_approval_memory_service
+from server_modules import agent_approval_memory_service, rust_runtime_kernel_client
 from server_modules import secret_redaction_service
 from server_modules.agent_computer_policy_service import (
     AgentComputerPolicy,
@@ -21,6 +21,8 @@ from server_modules.capability_risk_classifier_service import (
     CapabilityRiskDecision,
     classify_capability_risk,
 )
+
+_APPROVAL_REQUIREMENT_NEXT_ACTION = "request_owner_approval"
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,11 +138,50 @@ def _approval_card(
     target_scope: Mapping[str, str],
     reason: str,
 ) -> Dict[str, Any]:
+    try:
+        rust_approval = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "approval-requirement",
+            {
+                "decision": "require_approval",
+                "capability": risk_decision.capability,
+                "risk_level": risk_decision.risk_class,
+                "action_class": risk_decision.action_class,
+                "target_summary": risk_decision.target_summary,
+            },
+            allow_approval_required=True,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        rust_approval = {
+            "decision": "require_approval",
+            "reason": exc.reason or "approval_required",
+            "approval_required": True,
+            "approval": {
+                "scope": ":".join(
+                    [
+                        risk_decision.capability,
+                        risk_decision.action_class,
+                        risk_decision.risk_class,
+                        risk_decision.target_summary,
+                    ]
+                ),
+                "ttl_seconds": 60 if risk_decision.risk_class == "critical" else 300,
+                "single_use": True,
+                "owner_visible": True,
+            },
+        }
+    approval_payload = rust_approval.get("approval") if isinstance(rust_approval.get("approval"), Mapping) else {}
+    next_action = _coerce_text(rust_approval.get("next_action"))
+    if next_action and next_action != _APPROVAL_REQUIREMENT_NEXT_ACTION:
+        raise RuntimeError(f"unexpected_next_action:{next_action}")
     card = {
         "status": "approval_required",
         "action": risk_decision.capability,
         "description": f"{risk_decision.capability} requires approval for {risk_decision.target_summary}.",
         "reason": reason,
+        "approval": dict(approval_payload),
+        "approval_ttl_seconds": int(approval_payload.get("ttl_seconds") or 0),
+        "single_use": bool(approval_payload.get("single_use")),
+        "rust_approval_reason": str(rust_approval.get("reason") or ""),
         "risk_class": risk_decision.risk_class,
         "risk_level": risk_decision.risk_level,
         "target_summary": risk_decision.target_summary,

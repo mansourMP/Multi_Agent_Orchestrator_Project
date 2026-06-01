@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
-from server_modules import agent_registry_repository, control_plane_repository, entitlements_service, workspace_context
+from server_modules import agent_registry_repository, control_plane_repository, entitlements_service, rust_runtime_kernel_client, workspace_context
 
 
 DEFAULT_QUIET_HOURS_START = 23
@@ -135,6 +135,92 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
     except ValueError:
         return None
     return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _enforce_session_scheduler_decision(
+    operation: str,
+    *,
+    workspace_id: str,
+    policy: SchedulerPolicyBounds,
+    trigger_id: str = "",
+    trigger_kind: str = "",
+    wake_mode: str = "",
+    priority: int = 0,
+    attempt: int = 0,
+    max_retries: int = DEFAULT_RETRY_POLICY.max_retries,
+    base_delay_seconds: int = DEFAULT_RETRY_POLICY.base_delay_seconds,
+    max_delay_seconds: int = DEFAULT_RETRY_POLICY.max_delay_seconds,
+    status: str = "",
+    candidate_count: int = 0,
+    owner_approval_provided: bool = False,
+    scheduler_enabled: bool = True,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    device_state = _coerce_dict(payload).get("device_state")
+    if not isinstance(device_state, dict):
+        device_state = {}
+    request = {
+        "operation": operation,
+        "workspace_id": str(workspace_id or "").strip(),
+        "trigger_id": str(trigger_id or "").strip(),
+        "trigger_kind": str(trigger_kind or "").strip(),
+        "wake_mode": str(wake_mode or trigger_kind or "").strip(),
+        "priority": int(priority or 0),
+        "attempt": int(attempt or 0),
+        "max_retries": int(max_retries or 0),
+        "base_delay_seconds": int(base_delay_seconds or 1),
+        "max_delay_seconds": int(max_delay_seconds or 1),
+        "status": str(status or "").strip(),
+        "candidate_count": int(candidate_count or 0),
+        "scheduler_enabled": bool(scheduler_enabled),
+        "quiet_hours_start": policy.quiet_hours_start,
+        "quiet_hours_end": policy.quiet_hours_end,
+        "current_hour": _utc_now().hour,
+        "quiet_hours_override": bool(_coerce_dict(payload).get("quiet_hours_override")),
+        "max_event_triggers_per_hour": policy.max_event_triggers_per_hour,
+        "max_self_proposed_per_hour": policy.max_self_proposed_per_hour,
+        "max_runtime_seconds": policy.max_runtime_seconds,
+        "battery_percent": int(device_state.get("battery_percent") or 100),
+        "minimum_battery_percent": policy.minimum_battery_percent,
+        "network_online": bool(device_state.get("network_online", True)),
+        "require_network_online": policy.require_network_online,
+        "require_owner_approval_for_privileged_wakeups": policy.require_owner_approval_for_privileged_wakeups,
+        "owner_approval_provided": bool(owner_approval_provided),
+        "plan_tier": policy.plan_tier,
+    }
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "session-scheduler-decision",
+        request,
+    )
+    expected_next_actions = {
+        "event_trigger": {
+            "schedule_event_trigger",
+            "defer_session_scheduler_operation",
+        },
+        "self_proposed_trigger": {
+            "schedule_self_proposed_trigger",
+            "request_session_scheduler_approval",
+            "defer_session_scheduler_operation",
+        },
+        "wake_decision": {
+            "trigger_wakeup",
+            "request_session_scheduler_approval",
+            "defer_session_scheduler_operation",
+        },
+        "claim_wake_requests": {"claim_due_wake_requests"},
+        "finalize_wake_requests": {"finalize_wake_requests"},
+        "schedule_retry": {"schedule_retry"},
+        "failure_decision": {"record_scheduler_failure"},
+    }
+    expected = expected_next_actions.get(operation)
+    if expected:
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action not in expected:
+            raise RuntimeError(
+                "Rust session scheduler returned unexpected next_action for "
+                f"{operation}: {next_action or 'missing'}"
+            )
+    return decision
 
 
 def _workspace_scheduler_metadata(workspace: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -390,6 +476,33 @@ async def _persist_wakeup(
     denial_reason: Optional[str],
     metadata: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
+    payload_dict = _coerce_dict(payload)
+    metadata_dict = _coerce_dict(metadata)
+    trigger_id = (
+        str(metadata_dict.get("event_id") or "").strip()
+        or str(payload_dict.get("run_id") or "").strip()
+        or str(payload_dict.get("event_type") or "").strip()
+        or str(summary or reason or trigger_kind or "").strip()
+    )
+    operation = (
+        "event_trigger"
+        if str(trigger_kind or "").strip() == "event_trigger"
+        else "self_proposed_trigger"
+        if str(trigger_kind or "").strip() == "self_proposed"
+        else "wake_decision"
+    )
+    _enforce_session_scheduler_decision(
+        operation,
+        workspace_id=workspace_id,
+        policy=policy,
+        trigger_id=trigger_id,
+        trigger_kind=trigger_kind,
+        wake_mode=trigger_kind,
+        priority=int(payload_dict.get("priority") or 0),
+        status=status,
+        owner_approval_provided=not approval_required or _coerce_bool(metadata_dict.get("approval_granted"), False),
+        payload={**payload_dict, "device_state": _coerce_dict(metadata_dict.get("device_state"))},
+    )
     record = await control_plane_repository.append_agent_scheduler_wake_request(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -399,13 +512,13 @@ async def _persist_wakeup(
         requested_by=requested_by,
         reason=reason,
         summary=summary,
-        payload=_coerce_dict(payload),
+        payload=payload_dict,
         policy=policy.as_dict(),
         approval_required=approval_required,
         status=status,
         denial_reason=denial_reason,
         due_at=due_at,
-        metadata=_coerce_dict(metadata),
+        metadata=metadata_dict,
     )
     if not isinstance(record, dict):
         raise SchedulerPolicyError("Failed to persist scheduler wake request.")
@@ -602,6 +715,13 @@ async def claim_due_wake_requests(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
     )
+    _enforce_session_scheduler_decision(
+        "claim_wake_requests",
+        workspace_id=workspace_id,
+        policy=policy,
+        trigger_id="claim_due_wake_requests",
+        candidate_count=max(1, int(limit or DEFAULT_WAKE_BATCH_LIMIT)),
+    )
     claimed = await control_plane_repository.claim_due_agent_scheduler_wake_requests(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -640,11 +760,24 @@ async def finalize_wake_requests(
     mark_context_seen: bool = False,
     metadata_patch: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
+    _, _, policy = await _load_scheduler_scope(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+    )
     updated: list[dict[str, Any]] = []
     for item in wake_requests:
         wake_id = str(_coerce_dict(item).get("id") or "").strip()
         if not wake_id:
             continue
+        _enforce_session_scheduler_decision(
+            "finalize_wake_requests",
+            workspace_id=workspace_id,
+            policy=policy,
+            trigger_id=wake_id,
+            status=status,
+            candidate_count=len(wake_requests),
+            payload=_coerce_dict(item),
+        )
         row = await control_plane_repository.update_agent_scheduler_wake_request_status(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -829,6 +962,10 @@ async def schedule_retry(
     wake_id = str(payload.get("id") or "").strip()
     if not wake_id:
         return None
+    _, _, scheduler_policy = await _load_scheduler_scope(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+    )
     existing_meta = _coerce_dict(
         _coerce_dict(payload.get("metadata")).get("retry", payload.get("retry"))
     )
@@ -837,6 +974,18 @@ async def schedule_retry(
     )
     next_attempt = current_attempt + 1
     if not should_retry(next_attempt, retry_policy):
+        _enforce_session_scheduler_decision(
+            "failure_decision",
+            workspace_id=workspace_id,
+            policy=scheduler_policy,
+            trigger_id=wake_id,
+            attempt=next_attempt,
+            max_retries=retry_policy.max_retries,
+            base_delay_seconds=retry_policy.base_delay_seconds,
+            max_delay_seconds=retry_policy.max_delay_seconds,
+            status="failed_permanent",
+            payload=payload,
+        )
         return await control_plane_repository.update_agent_scheduler_wake_request_status(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -851,6 +1000,18 @@ async def schedule_retry(
     )
     delay_seconds = compute_retry_delay(next_attempt, retry_policy)
     due_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+    _enforce_session_scheduler_decision(
+        "schedule_retry",
+        workspace_id=workspace_id,
+        policy=scheduler_policy,
+        trigger_id=wake_id,
+        attempt=next_attempt,
+        max_retries=retry_policy.max_retries,
+        base_delay_seconds=retry_policy.base_delay_seconds,
+        max_delay_seconds=retry_policy.max_delay_seconds,
+        status="pending",
+        payload=payload,
+    )
     return await control_plane_repository.update_agent_scheduler_wake_request_status(
         tenant_id=tenant_id,
         workspace_id=workspace_id,

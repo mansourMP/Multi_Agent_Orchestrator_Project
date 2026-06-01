@@ -7,6 +7,65 @@ from typing import Any, Callable, Optional
 
 from fastapi import HTTPException
 
+from server_modules import rust_runtime_kernel_client
+
+
+def _enforce_run_trigger_decision(*, expected_next_action: str | None = None, **payload: Any) -> dict[str, Any]:
+    operation = str(payload.get("operation") or "run_trigger").strip() or "run_trigger"
+    try:
+        decision = rust_runtime_kernel_client.run_trigger_decision(**payload)
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raw = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else {}
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_run_trigger_denied",
+                "operation": operation,
+                "reason": raw.get("reason") or str(exc),
+                "decision": raw.get("decision") or "block",
+            },
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "rust_run_trigger_unavailable",
+                "operation": operation,
+                "reason": str(exc),
+            },
+        ) from exc
+    if not isinstance(decision, dict):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "rust_run_trigger_invalid_response",
+                "operation": operation,
+            },
+        )
+    normalized_decision = str(decision.get("decision") or "").strip().lower()
+    if bool(decision.get("ok")) is False or normalized_decision in {"block", "require_approval"}:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_run_trigger_denied",
+                "operation": operation,
+                "reason": decision.get("reason") or "run_trigger_denied",
+                "decision": normalized_decision or "block",
+            },
+        )
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_next_action and next_action != expected_next_action:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_run_trigger_denied",
+                "operation": operation,
+                "reason": f"unexpected_next_action:{next_action or 'missing'}",
+                "decision": normalized_decision or "allow",
+            },
+        )
+    return decision
+
 
 def _resolve(value_or_factory: Any) -> Any:
     if not callable(value_or_factory):
@@ -191,6 +250,16 @@ def register_webhook_trigger_payload(
     if not workflow_id:
         raise HTTPException(status_code=400, detail="workflow_id is required.")
     trigger_id = str(uuid_factory()).strip()
+    _enforce_run_trigger_decision(
+        expected_next_action="register_webhook_trigger",
+        operation="register_webhook",
+        workspace_id=workspace_id,
+        trigger_id=trigger_id,
+        actor_role="system",
+        url_pattern=url_pattern,
+        workflow_id=workflow_id,
+        trigger_enabled=bool(body.get("enabled", True)),
+    )
     trigger = build_webhook_trigger_fn(
         trigger_id=trigger_id,
         workspace_id=workspace_id,
@@ -224,6 +293,18 @@ async def ingest_webhook_payload(
         raise HTTPException(status_code=404, detail="No webhook trigger matched this request.")
     workflow_id = str(matched_trigger.get("workflow_id") or "").strip()
     user_goal = str(matched_trigger.get("user_goal") or "").strip() or f"Handle webhook event for workflow '{workflow_id}'."
+    _enforce_run_trigger_decision(
+        expected_next_action="start_run",
+        operation="ingest_webhook",
+        workspace_id=normalized_workspace_id,
+        trigger_id=str(matched_trigger.get("id") or "").strip() or None,
+        actor_role="system",
+        trigger_matched=True,
+        trigger_enabled=bool(matched_trigger.get("enabled", True)),
+        workflow_id=workflow_id,
+        request_url=str(request_url),
+        payload_present=payload is not None,
+    )
     request_payload = run_start_request_class(
         engine="orion",
         workflow_id=workflow_id or None,

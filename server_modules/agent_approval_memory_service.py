@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from urllib.parse import urlparse
 
+from server_modules import rust_runtime_kernel_client
 from server_modules import workspace_context
 from server_modules.capability_risk_classifier_service import normalize_capability_for_risk
 
@@ -115,6 +116,47 @@ def _lower(value: Any) -> str:
 
 def _generate_rule_id() -> str:
     return APPROVAL_MEMORY_RULE_PREFIX + uuid.uuid4().hex
+
+
+def _enforce_approval_memory_state_decision(*, operation: str, rule: AgentApprovalMemoryRule) -> Dict[str, Any]:
+    rule_payload = rule.as_dict()
+    payload = {
+        "operation": operation,
+        "state_class": "agent_approval_memory",
+        "storage_engine": "durable_postgres",
+        "tenant_id": rule.workspace_id,
+        "workspace_id": rule.workspace_id,
+        "actor_id": rule.owner_user_id,
+        "status": rule.status,
+        "payload": rule_payload,
+        "payload_bytes": len(json.dumps(rule_payload, sort_keys=True).encode("utf-8")),
+        "workspace_access": True,
+        "owner_access": True,
+        "destructive_approval": True,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "runtime-state-store-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        result = getattr(exc, "result", None)
+        if not isinstance(result, dict):
+            result = {}
+        raise RuntimeError(
+            result.get("reason")
+            or f"Rust runtime state store denied approval memory operation: {operation}"
+        ) from exc
+    expected_next_action = {
+        "upsert_approval_memory_rule": "write_approval_memory_rule",
+        "consume_approval_memory_rule": "consume_approval_memory_rule",
+    }.get(operation, operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != expected_next_action:
+        raise RuntimeError(
+            f"Rust runtime state store returned unexpected next_action for approval memory operation {operation}: {next_action or 'missing'}"
+        )
+    return decision
 
 
 def _state_file(workspace_id: str) -> Path:
@@ -285,6 +327,7 @@ def create_approval_memory_rule(
     try:
         state = _read_state(rule.workspace_id)
         state.setdefault("rules", {})[rule.rule_id] = rule.as_dict()
+        _enforce_approval_memory_state_decision(operation="upsert_approval_memory_rule", rule=rule)
         _write_state(rule.workspace_id, state)
     except Exception as exc:
         raise RuntimeError("Failed to persist approval memory rule.") from exc
@@ -457,6 +500,7 @@ def consume_matching_approval_memory_rule(
     updated = _normalize_rule({**dict(current), "use_count": rule.use_count + 1, "updated_at": _utc_now_iso()})
     state["rules"][updated.rule_id] = updated.as_dict()
     try:
+        _enforce_approval_memory_state_decision(operation="consume_approval_memory_rule", rule=updated)
         _write_state(updated.workspace_id, state)
     except Exception as exc:
         raise RuntimeError("Failed to consume approval memory rule.") from exc

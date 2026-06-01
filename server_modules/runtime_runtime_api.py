@@ -32,10 +32,37 @@ from server_modules import run_state_repository, runs_output, shared, telemetry
 from server_modules import billing_service, entitlements_service
 from server_modules import security_audit_service
 from server_modules import multimodal_provider_service
+from server_modules import rust_runtime_kernel_client
 
 SUPPORTED_STT_CONTENT_TYPES = multimodal_provider_service.SUPPORTED_STT_CONTENT_TYPES
 TTS_MAX_CHARS = multimodal_provider_service.TTS_MAX_CHARS
 TTS_VOICES = multimodal_provider_service.TTS_VOICES
+
+_RUNTIME_SESSION_API_EXPECTED_NEXT_ACTIONS: dict[str, str] = {
+    "stt_request": "transcribe_audio",
+    "tts_request": "synthesize_tts",
+    "machine_control": "apply_machine_control",
+    "run_hard_kill": "hard_kill_runtime_run",
+    "runtime_register": "register_runtime",
+    "runtime_bootstrap": "bootstrap_runtime_companion",
+    "self_hosted_command_enqueue": "enqueue_self_hosted_command",
+    "self_hosted_command_claim": "claim_self_hosted_command",
+    "self_hosted_command_result": "record_self_hosted_command_result",
+    "hardware_action_execute": "execute_hardware_action",
+    "hardware_action_stop": "stop_hardware_action",
+    "runtime_start": "start_runtime_session",
+    "runtime_heartbeat": "touch_runtime_session",
+    "runtime_stop": "stop_runtime_session",
+    "runtime_revoke": "revoke_runtime_session",
+    "runtime_recover": "recover_runtime_session",
+    "runtime_control_stream": "stream_runtime_control",
+    "runtime_task_claim": "claim_runtime_task",
+    "runtime_task_heartbeat": "record_runtime_task_heartbeat",
+    "runtime_task_control_state": "read_runtime_task_control_state",
+    "runtime_task_complete": "complete_runtime_task",
+    "runtime_task_pause": "pause_runtime_task",
+    "runtime_task_fail": "fail_runtime_task",
+}
 
 
 class RuntimeRegisterPayload(BaseModel):
@@ -241,6 +268,94 @@ def _ensure_runtime_action_operator(current_user: Dict[str, Any], workspace_id: 
     if role in {"owner", "admin"} or bool((current_user or {}).get("is_admin")):
         return
     raise HTTPException(status_code=403, detail="Workspace owner or admin role is required.")
+
+
+def _enforce_runtime_session_api_decision(
+    *,
+    operation: str,
+    tenant_id: str,
+    workspace_id: str,
+    current_user: Optional[Dict[str, Any]] = None,
+    action_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    runtime_target: Optional[str] = None,
+    runtime_id: Optional[str] = None,
+    runtime_type: Optional[str] = None,
+    runtime_role: Optional[str] = None,
+    node_id: Optional[str] = None,
+    instance_id: Optional[str] = None,
+    session_token: Optional[str] = None,
+    enrollment_token_present: Optional[bool] = None,
+    timeout_seconds: Optional[int] = None,
+    required_capabilities: Optional[List[str]] = None,
+    status: Optional[str] = None,
+    current_run_bound: Optional[bool] = None,
+    runtime_session_valid: Optional[bool] = None,
+    command_type: Optional[str] = None,
+    command_payload_present: Optional[bool] = None,
+    max_commands: Optional[int] = None,
+    lease_seconds: Optional[int] = None,
+    artifact_count: Optional[int] = None,
+    content_type: Optional[str] = None,
+    audio_bytes: Optional[int] = None,
+    text_length: Optional[int] = None,
+) -> Dict[str, Any]:
+    user_payload = current_user or {}
+    role = workspace_role(user_payload, workspace_id) if current_user is not None else "runtime"
+    operator_approved = role in {"owner", "admin"} or bool(user_payload.get("is_admin"))
+    payload = {
+        "operation": operation,
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "workspace_access": True,
+        "entitlement_ok": True,
+        "operator_role": "admin" if bool((current_user or {}).get("is_admin")) else role,
+        "operator_approved": operator_approved,
+        "action_id": action_id,
+        "agent_id": agent_id,
+        "run_id": run_id,
+        "runtime_target": runtime_target,
+        "runtime_id": runtime_id,
+        "runtime_type": runtime_type,
+        "runtime_role": runtime_role,
+        "node_id": node_id,
+        "instance_id": instance_id,
+        "session_token": session_token,
+        "enrollment_token": True if enrollment_token_present is True else None,
+        "timeout_seconds": timeout_seconds or 30,
+        "capabilities": list(required_capabilities or []),
+        "required_capabilities": list(required_capabilities or []),
+        "status": status,
+        "current_run_bound": current_run_bound if current_run_bound is not None else bool(run_id),
+        "runtime_session_valid": bool(session_token) if runtime_session_valid is None else bool(runtime_session_valid),
+        "command_type": command_type,
+        "command_payload": True if command_payload_present is True else None,
+        "max_commands": max_commands,
+        "lease_seconds": lease_seconds,
+        "artifacts": [{} for _ in range(max(0, int(artifact_count or 0)))],
+        "content_type": content_type,
+        "audio_bytes": audio_bytes,
+        "text_length": text_length,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "runtime-session-api-decision",
+            payload,
+        )
+        expected_next_action = _RUNTIME_SESSION_API_EXPECTED_NEXT_ACTIONS.get(str(operation or "").strip())
+        next_action = str(decision.get("next_action") or "").strip()
+        if expected_next_action and next_action != expected_next_action:
+            raise HTTPException(
+                status_code=403,
+                detail=f"unexpected_next_action:{next_action or 'missing'}",
+            )
+        return decision
+    except (
+        rust_runtime_kernel_client.RustKernelApprovalRequired,
+        rust_runtime_kernel_client.RustKernelDecisionError,
+    ) as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
 
 
 class MachineEnrollmentStatePayload(BaseModel):
@@ -560,6 +675,13 @@ def register_runtime_routes(app) -> None:
         audio_bytes = await request.body()
         if not audio_bytes:
             raise HTTPException(status_code=400, detail="Audio payload is required.")
+        _enforce_runtime_session_api_decision(
+            operation="stt_request",
+            tenant_id="default",
+            workspace_id="default",
+            content_type=raw_content_type,
+            audio_bytes=len(audio_bytes),
+        )
         try:
             result = await _transcribe_audio_bytes(audio_bytes, raw_content_type)
         except httpx.HTTPStatusError as exc:
@@ -576,6 +698,12 @@ def register_runtime_routes(app) -> None:
     async def synthesize_speech(payload: RuntimeTtsPayload):
         if payload.voice not in TTS_VOICES:
             raise HTTPException(status_code=400, detail="Unsupported voice.")
+        _enforce_runtime_session_api_decision(
+            operation="tts_request",
+            tenant_id="default",
+            workspace_id="default",
+            text_length=len(payload.text or ""),
+        )
         try:
             chunks = await _synthesize_tts_chunks(payload.text, payload.voice, payload.speed)
         except httpx.HTTPStatusError as exc:
@@ -851,11 +979,19 @@ def register_runtime_routes(app) -> None:
             capability_id="machines.manage",
         )
         _ensure_advanced_features_access(workspace_id)
+        tenant_id = str((machine or {}).get("tenant_id") or "default").strip() or "default"
+        _enforce_runtime_session_api_decision(
+            operation="machine_control",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
+            runtime_id=str(machine_id or "").strip(),
+        )
         result = local_queue.handle_delete_local_runtime(machine_id)
         revoke_workspace_owner_machine_trust(workspace_id, str(machine_id or "").strip())
         security_audit_service.emit_security_audit_event(
             action="runtime_target.machine_deleted",
-            tenant_id=str((machine or {}).get("tenant_id") or "default").strip() or "default",
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
             current_user=current_user,
             machine_id=str(machine_id or "").strip() or None,
@@ -890,10 +1026,18 @@ def register_runtime_routes(app) -> None:
         )
         _ensure_advanced_features_access(workspace_id)
         body = payload or MachineControlPayload()
+        tenant_id = str((machine or {}).get("tenant_id") or "default").strip() or "default"
+        _enforce_runtime_session_api_decision(
+            operation="machine_control",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
+            runtime_id=str(machine_id or "").strip(),
+        )
         result = local_queue.handle_set_local_runtime_control(machine_id, action="suspend", reason=body.reason)
         security_audit_service.emit_security_audit_event(
             action="runtime_target.machine_suspended",
-            tenant_id=str((machine or {}).get("tenant_id") or "default").strip() or "default",
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
             current_user=current_user,
             machine_id=str(machine_id or "").strip() or None,
@@ -929,10 +1073,18 @@ def register_runtime_routes(app) -> None:
         )
         _ensure_advanced_features_access(workspace_id)
         body = payload or MachineControlPayload()
+        tenant_id = str((machine or {}).get("tenant_id") or "default").strip() or "default"
+        _enforce_runtime_session_api_decision(
+            operation="machine_control",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
+            runtime_id=str(machine_id or "").strip(),
+        )
         result = local_queue.handle_set_local_runtime_control(machine_id, action="resume", reason=body.reason)
         security_audit_service.emit_security_audit_event(
             action="runtime_target.machine_resumed",
-            tenant_id=str((machine or {}).get("tenant_id") or "default").strip() or "default",
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
             current_user=current_user,
             machine_id=str(machine_id or "").strip() or None,
@@ -969,6 +1121,14 @@ def register_runtime_routes(app) -> None:
         _ensure_advanced_features_access(workspace_id)
         body = payload or MachineControlPayload()
         requested_by = str((current_user or {}).get("user_id") or (current_user or {}).get("auth_type") or "operator").strip() or "operator"
+        tenant_id = str((machine or {}).get("tenant_id") or "default").strip() or "default"
+        _enforce_runtime_session_api_decision(
+            operation="machine_control",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
+            runtime_id=str(machine_id or "").strip(),
+        )
         result = local_queue.handle_request_local_runtime_hard_kill(
             machine_id,
             reason=body.reason,
@@ -976,7 +1136,7 @@ def register_runtime_routes(app) -> None:
         )
         security_audit_service.emit_security_audit_event(
             action="runtime_target.machine_hard_killed",
-            tenant_id=str((machine or {}).get("tenant_id") or "default").strip() or "default",
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
             current_user=current_user,
             machine_id=str(machine_id or "").strip() or None,
@@ -1006,6 +1166,15 @@ def register_runtime_routes(app) -> None:
         )
         body = payload or MachineControlPayload()
         requested_by = str((current_user or {}).get("user_id") or (current_user or {}).get("auth_type") or "operator").strip() or "operator"
+        tenant_id = str(context.get("tenant_id") or metadata.get("tenant_id") or "default").strip() or "default"
+        _enforce_runtime_session_api_decision(
+            operation="run_hard_kill",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
+            run_id=str(run_id),
+            runtime_id=str(run.get("machine_id") or run.get("local_worker_id") or "").strip() or None,
+        )
         result = local_queue.handle_request_local_run_hard_kill(
             str(run_id),
             reason=body.reason,
@@ -1014,7 +1183,7 @@ def register_runtime_routes(app) -> None:
         result["workspace_id"] = workspace_id
         security_audit_service.emit_security_audit_event(
             action="runtime_target.run_hard_killed",
-            tenant_id=context.get("tenant_id") or metadata.get("tenant_id") or "default",
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
             current_user=current_user,
             run_id=str(run_id),
@@ -1035,6 +1204,16 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or RuntimeRegisterPayload()
+        _enforce_runtime_session_api_decision(
+            operation="runtime_register",
+            tenant_id="default",
+            workspace_id="default",
+            runtime_id=runtime_token,
+            runtime_type=body.runtime_type,
+            runtime_role=body.runtime_role,
+            instance_id=body.instance_id,
+            required_capabilities=list(body.capabilities or []),
+        )
         def _register_runtime() -> tuple[Dict[str, Any], Dict[str, Any]]:
             registration = local_queue.handle_register_local_cluster_runtime(
                 runtime_token,
@@ -1096,6 +1275,17 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload
+        _enforce_runtime_session_api_decision(
+            operation="runtime_bootstrap",
+            tenant_id="default",
+            workspace_id="default",
+            runtime_id=runtime_token,
+            runtime_type=body.runtime_type or "local_companion",
+            runtime_role=body.runtime_role,
+            instance_id=body.instance_id,
+            enrollment_token_present=bool(body.enrollment_token),
+            required_capabilities=list(body.capabilities or []),
+        )
 
         def _bootstrap_runtime() -> Dict[str, Any]:
             return local_queue.handle_bootstrap_enrolled_local_companion_runtime(
@@ -1190,6 +1380,18 @@ def register_runtime_routes(app) -> None:
             raise HTTPException(status_code=403, detail="Workspace owner or admin role is required.")
         _ensure_advanced_features_access(workspace_id)
         tenant_id = workspace_tenant_id(current_user, workspace_id)
+        _enforce_runtime_session_api_decision(
+            operation="self_hosted_command_enqueue",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
+            runtime_id=runtime_profile_id,
+            node_id=payload.runtime_node_id,
+            agent_id=payload.agent_id,
+            command_type=payload.command_type,
+            command_payload_present=bool(payload.command_payload),
+            timeout_seconds=payload.ttl_seconds,
+        )
         try:
             result = await agent_registry_repository.enqueue_self_hosted_runtime_command(
                 runtime_profile_id=runtime_profile_id,
@@ -1208,6 +1410,16 @@ def register_runtime_routes(app) -> None:
 
     @app.post("/runtime/self-hosted-nodes/{runtime_profile_id}/commands/claim")
     async def claim_self_hosted_node_commands(runtime_profile_id: str, payload: SelfHostedNodeCommandClaimPayload):
+        _enforce_runtime_session_api_decision(
+            operation="self_hosted_command_claim",
+            tenant_id="default",
+            workspace_id="default",
+            runtime_id=runtime_profile_id,
+            session_token=payload.node_session_token,
+            runtime_session_valid=True,
+            max_commands=payload.max_commands,
+            lease_seconds=payload.lease_seconds,
+        )
         try:
             return await agent_registry_repository.claim_self_hosted_runtime_commands(
                 runtime_profile_id=runtime_profile_id,
@@ -1224,6 +1436,16 @@ def register_runtime_routes(app) -> None:
         command_id: str,
         payload: SelfHostedNodeCommandResultPayload,
     ):
+        _enforce_runtime_session_api_decision(
+            operation="self_hosted_command_result",
+            tenant_id="default",
+            workspace_id="default",
+            runtime_id=runtime_profile_id,
+            session_token=payload.node_session_token,
+            runtime_session_valid=True,
+            status=payload.status,
+            artifact_count=len(payload.artifacts or []),
+        )
         try:
             result = await agent_registry_repository.complete_self_hosted_runtime_command(
                 runtime_profile_id=runtime_profile_id,
@@ -1252,6 +1474,19 @@ def register_runtime_routes(app) -> None:
         _ensure_runtime_action_operator(current_user, workspace_id)
         _ensure_advanced_features_access(workspace_id)
         tenant_id = workspace_tenant_id(current_user, workspace_id)
+        _enforce_runtime_session_api_decision(
+            operation="hardware_action_execute",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
+            action_id=payload.action_id,
+            run_id=payload.run_id,
+            runtime_target=payload.runtime_target,
+            runtime_id=payload.gateway_id or payload.device_id or payload.session_id,
+            node_id=payload.node_id,
+            session_token=payload.session_id,
+            timeout_seconds=payload.timeout_seconds,
+        )
         try:
             return await hardware_action_broker_service.execute_hardware_action(
                 tenant_id=tenant_id,
@@ -1291,6 +1526,18 @@ def register_runtime_routes(app) -> None:
         _ensure_runtime_action_operator(current_user, workspace_id)
         _ensure_advanced_features_access(workspace_id)
         tenant_id = workspace_tenant_id(current_user, workspace_id)
+        _enforce_runtime_session_api_decision(
+            operation="hardware_action_stop",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
+            run_id=payload.run_id,
+            runtime_target=payload.runtime_target,
+            runtime_id=payload.gateway_id or payload.session_id,
+            node_id=payload.node_id,
+            session_token=payload.session_id,
+            timeout_seconds=payload.timeout_seconds,
+        )
         try:
             return await hardware_action_broker_service.stop_hardware_action(
                 tenant_id=tenant_id,
@@ -1321,6 +1568,16 @@ def register_runtime_routes(app) -> None:
             local_payload.note = "runtime_heartbeat"
         def _heartbeat_runtime() -> Dict[str, Any]:
             local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_start",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=body.instance_id,
+                session_token=body.session_token,
+                runtime_session_valid=True,
+                run_id=body.current_run_id,
+            )
             return local_queue.handle_heartbeat_local_runtime(runtime_token, local_payload)
 
         result = await run_in_threadpool(_heartbeat_runtime)
@@ -1338,6 +1595,16 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or RuntimeRegisterPayload()
+        _enforce_runtime_session_api_decision(
+            operation="runtime_register",
+            tenant_id="default",
+            workspace_id="default",
+            runtime_id=runtime_token,
+            runtime_type=body.runtime_type,
+            runtime_role=body.runtime_role,
+            instance_id=body.instance_id,
+            required_capabilities=list(body.capabilities or []),
+        )
         result = await run_in_threadpool(
             local_queue.handle_register_local_cluster_runtime,
             runtime_token,
@@ -1374,6 +1641,16 @@ def register_runtime_routes(app) -> None:
         body = payload or LocalClusterLifecyclePayload()
         def _start_runtime() -> Dict[str, Any]:
             local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_heartbeat",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=body.instance_id,
+                session_token=body.session_token,
+                runtime_session_valid=True,
+                run_id=body.current_run_id,
+            )
             return local_queue.handle_start_local_runtime(runtime_token, _local_cluster_worker_payload(body))
 
         result = await run_in_threadpool(_start_runtime)
@@ -1397,6 +1674,16 @@ def register_runtime_routes(app) -> None:
         body = payload or LocalClusterLifecyclePayload()
         def _heartbeat_local_cluster_runtime() -> Dict[str, Any]:
             local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_heartbeat",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=body.instance_id,
+                session_token=body.session_token,
+                runtime_session_valid=True,
+                run_id=body.current_run_id,
+            )
             return local_queue.handle_heartbeat_local_runtime(runtime_token, _local_cluster_worker_payload(body))
 
         result = await run_in_threadpool(_heartbeat_local_cluster_runtime)
@@ -1411,6 +1698,15 @@ def register_runtime_routes(app) -> None:
         body = payload or LocalClusterLifecyclePayload()
         def _stop_runtime() -> Dict[str, Any]:
             local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_stop",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=body.instance_id,
+                session_token=body.session_token,
+                runtime_session_valid=True,
+            )
             return local_queue.handle_stop_local_runtime(
                 runtime_token,
                 reason=body.reason,
@@ -1430,6 +1726,12 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or LocalClusterLifecyclePayload()
+        _enforce_runtime_session_api_decision(
+            operation="runtime_revoke",
+            tenant_id="default",
+            workspace_id="default",
+            runtime_id=runtime_token,
+        )
         result = await run_in_threadpool(local_queue.handle_revoke_local_runtime, runtime_token, reason=body.reason)
         result["machine"] = _runtime_summary_from_worker_item(result.get("machine") or {})
         return result
@@ -1442,6 +1744,16 @@ def register_runtime_routes(app) -> None:
         body = payload or LocalClusterLifecyclePayload()
         def _recover_runtime() -> Dict[str, Any]:
             local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_recover",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=body.instance_id,
+                session_token=body.session_token,
+                runtime_session_valid=True,
+                run_id=body.current_run_id,
+            )
             return local_queue.handle_recover_local_runtime(runtime_token, _local_cluster_worker_payload(body))
 
         result = await run_in_threadpool(_recover_runtime)
@@ -1462,6 +1774,15 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         local_queue._assert_runtime_session(runtime_token, session_token, instance_id=instance_id)
+        _enforce_runtime_session_api_decision(
+            operation="runtime_control_stream",
+            tenant_id="default",
+            workspace_id="default",
+            runtime_id=runtime_token,
+            instance_id=instance_id,
+            session_token=session_token,
+            runtime_session_valid=True,
+        )
         safe_heartbeat = max(1.0, min(float(heartbeat_seconds), 60.0))
         return EventSourceResponse(
             local_queue.aiter_runtime_control_stream(
@@ -1485,6 +1806,17 @@ def register_runtime_routes(app) -> None:
             raise HTTPException(status_code=400, detail="Only local execution_target is supported by this runtime bridge.")
         def _claim_task() -> Dict[str, Any]:
             local_queue._assert_runtime_session(runtime_token, payload.session_token, instance_id=payload.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_task_claim",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=payload.instance_id,
+                session_token=payload.session_token,
+                runtime_session_valid=True,
+                runtime_target=requested_target,
+                required_capabilities=list(payload.required_capabilities or []),
+            )
             return local_queue.handle_claim_local_run(
                 local_queue.LocalRunClaimRequest(
                     worker_id=runtime_token,
@@ -1511,6 +1843,18 @@ def register_runtime_routes(app) -> None:
         )
         def _heartbeat_task() -> Dict[str, Any]:
             local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_task_heartbeat",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=body.instance_id,
+                session_token=body.session_token,
+                runtime_session_valid=True,
+                run_id=str(task_id),
+                status="running",
+                current_run_bound=True,
+            )
             return local_queue.handle_heartbeat_local_run(task_id, local_payload)
 
         result = await run_in_threadpool(_heartbeat_task)
@@ -1526,6 +1870,18 @@ def register_runtime_routes(app) -> None:
         runtime_token = str(body.runtime_id or "").strip()
         def _get_control_state() -> Dict[str, Any]:
             local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_task_control_state",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=body.instance_id,
+                session_token=body.session_token,
+                runtime_session_valid=True,
+                run_id=str(task_id),
+                status="running",
+                current_run_bound=True,
+            )
             return local_queue.handle_get_local_run_control_state(
                 task_id,
                 local_queue.LocalRunControlStatePayload(worker_id=runtime_token or None),
@@ -1537,7 +1893,20 @@ def register_runtime_routes(app) -> None:
     @app.post("/runtime/tasks/{task_id}/complete")
     async def complete_runtime_task(task_id: uuid.UUID, payload: RuntimeTaskCompletePayload):
         def _complete_task() -> Dict[str, Any]:
-            local_queue._assert_runtime_session(str(payload.runtime_id or "").strip(), payload.session_token, instance_id=payload.instance_id)
+            runtime_token = str(payload.runtime_id or "").strip()
+            local_queue._assert_runtime_session(runtime_token, payload.session_token, instance_id=payload.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_task_complete",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=payload.instance_id,
+                session_token=payload.session_token,
+                runtime_session_valid=True,
+                run_id=str(task_id),
+                status="running",
+                current_run_bound=True,
+            )
             return local_queue.handle_complete_local_run(
                 task_id,
                 local_queue.LocalRunCompletePayload(
@@ -1554,7 +1923,20 @@ def register_runtime_routes(app) -> None:
     @app.post("/runtime/tasks/{task_id}/pause")
     async def pause_runtime_task(task_id: uuid.UUID, payload: RuntimeTaskPausePayload):
         def _pause_task() -> Dict[str, Any]:
-            local_queue._assert_runtime_session(str(payload.runtime_id or "").strip(), payload.session_token, instance_id=payload.instance_id)
+            runtime_token = str(payload.runtime_id or "").strip()
+            local_queue._assert_runtime_session(runtime_token, payload.session_token, instance_id=payload.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_task_pause",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=payload.instance_id,
+                session_token=payload.session_token,
+                runtime_session_valid=True,
+                run_id=str(task_id),
+                status="running",
+                current_run_bound=True,
+            )
             return local_queue.handle_pause_local_run(
                 task_id,
                 local_queue.LocalRunPausePayload(
@@ -1572,7 +1954,20 @@ def register_runtime_routes(app) -> None:
     @app.post("/runtime/tasks/{task_id}/fail")
     async def fail_runtime_task(task_id: uuid.UUID, payload: RuntimeTaskFailPayload):
         def _fail_task() -> Dict[str, Any]:
-            local_queue._assert_runtime_session(str(payload.runtime_id or "").strip(), payload.session_token, instance_id=payload.instance_id)
+            runtime_token = str(payload.runtime_id or "").strip()
+            local_queue._assert_runtime_session(runtime_token, payload.session_token, instance_id=payload.instance_id)
+            _enforce_runtime_session_api_decision(
+                operation="runtime_task_fail",
+                tenant_id="default",
+                workspace_id="default",
+                runtime_id=runtime_token,
+                instance_id=payload.instance_id,
+                session_token=payload.session_token,
+                runtime_session_valid=True,
+                run_id=str(task_id),
+                status="running",
+                current_run_bound=True,
+            )
             return local_queue.handle_fail_local_run(
                 task_id,
                 local_queue.LocalRunFailPayload(

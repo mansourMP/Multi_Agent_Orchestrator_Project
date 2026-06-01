@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 from typing import Dict
 
+from server_modules import rust_runtime_kernel_client
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _WORKSPACE_DIR = _REPO_ROOT / ".orion-stack" / "workspace"
@@ -94,6 +95,53 @@ DEFAULT_CONTEXT_FILE_CONTENTS: Dict[str, str] = {
         "- Capture lessons and behavior improvements for future sessions.\n"
     ),
 }
+
+
+class WorkspaceContextRustGateError(RuntimeError):
+    pass
+
+
+_WORKSPACE_CONTEXT_STATE_ACTIONS = {
+    "initialize_workspace_context_file": "initialize_workspace_context_file",
+    "save_workspace_context_file": "save_workspace_context_file",
+}
+
+
+def _enforce_workspace_context_state_decision(
+    *,
+    operation: str,
+    filename: str,
+    content: str,
+    workspace_id: str | None = None,
+    agent_install_id: str | None = None,
+) -> None:
+    payload = {
+        "filename": filename,
+        "content_bytes": len(str(content or "").encode("utf-8")),
+        "agent_install_id": str(agent_install_id or "").strip(),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class="workspace_context_files",
+            workspace_id=str(workspace_id or "").strip(),
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=int(payload["content_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        expected_action = _WORKSPACE_CONTEXT_STATE_ACTIONS.get(str(operation or "").strip())
+        next_action = str((decision or {}).get("next_action") or "").strip()
+        if expected_action and next_action != expected_action:
+            raise WorkspaceContextRustGateError(f"unexpected_next_action:{next_action or 'missing'}")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise WorkspaceContextRustGateError(exc.reason) from exc
 
 
 def workspace_context_dir() -> Path:
@@ -353,7 +401,15 @@ def ensure_workspace_context_files(
     for filename in ALLOWED_CONTEXT_FILENAMES:
         path = root / filename
         if not path.exists():
-            path.write_text(DEFAULT_CONTEXT_FILE_CONTENTS.get(filename, "").strip() + "\n", encoding="utf-8")
+            default_content = DEFAULT_CONTEXT_FILE_CONTENTS.get(filename, "").strip() + "\n"
+            _enforce_workspace_context_state_decision(
+                operation="initialize_workspace_context_file",
+                filename=filename,
+                content=default_content,
+                workspace_id=workspace_id,
+                agent_install_id=agent_install_id,
+            )
+            path.write_text(default_content, encoding="utf-8")
     for filename, path in _iter_context_file_paths(root):
         try:
             out[filename] = path.read_text(encoding="utf-8")
@@ -423,6 +479,13 @@ def write_workspace_context_file(
     if projected_total > MAX_CONTEXT_SCOPE_BYTES:
         raise ValueError("Context file storage exceeds workspace quota.")
 
+    _enforce_workspace_context_state_decision(
+        operation="save_workspace_context_file",
+        filename=normalized,
+        content=payload,
+        workspace_id=workspace_id,
+        agent_install_id=agent_install_id,
+    )
     path.write_text(payload, encoding="utf-8")
     return {
         "filename": normalized,

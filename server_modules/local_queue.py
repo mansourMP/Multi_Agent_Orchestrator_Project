@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from server_modules import machine_lease_service, outbox_service, run_state_repository, safe_mode_service, worker_dispatch_service
+from server_modules import machine_lease_service, outbox_service, run_state_repository, rust_runtime_kernel_client, safe_mode_service, worker_dispatch_service
 from server_modules import browser_checkpoint_service
 from server_modules.telemetry import mark_machine_revocation_requested, observe_machine_revocation_propagated
 
@@ -76,6 +76,18 @@ _DURABLE_RUNTIME_SCOPE_FIELDS = (
     "session_scope",
     "session_scope_key",
 )
+_RUNTIME_HEALTH_OPERATOR_NEXT_ACTIONS = {
+    "restore_rust_kernel",
+    "inspect_plugin_system",
+    "investigate_runtime_health",
+    "complete_workspace_bootstrap",
+    "request_owner_approval",
+    "wait_for_quiet_hours",
+    "monitor_running_work",
+    "wait_for_retry",
+    "claim_next_work",
+    "idle",
+}
 
 
 def _init():
@@ -2078,6 +2090,22 @@ def _claim_local_run(worker_id: str, required_capabilities: Optional[List[str]] 
     )
 
 
+def _enforce_local_queue_cancel_transition(
+    *,
+    run_id: str,
+    previous_status: str,
+    requester_id: str = "operator_local_queue_cleanup",
+) -> Dict[str, Any]:
+    return machine_lease_service.enforce_queue_transition_decision(
+        operation="cancel",
+        run_id=run_id,
+        requester_id=requester_id,
+        lease_holder_id="",
+        status=str(previous_status or "queued_local").strip() or "queued_local",
+        force=True,
+    )
+
+
 def _local_run_summary(run_id: str, run: Dict[str, Any], claim: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     _init()
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
@@ -2892,6 +2920,10 @@ def handle_cleanup_local_run_queue(
                 selected.append(item)
                 if not dry_run:
                     previous_status = str(run.get("status") or "").strip() or "queued_local"
+                    _enforce_local_queue_cancel_transition(
+                        run_id=run_id,
+                        previous_status=previous_status,
+                    )
                     log_queue = run.get("logs")
                     result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else {}
                     result_data = dict(result_data)
@@ -3183,9 +3215,49 @@ def handle_get_local_runtime_status(runtime_id: str) -> Dict[str, Any]:
     }
 
 
+def _local_runtime_health_decision(runtime_token: str, runtime: Dict[str, Any]) -> Dict[str, Any]:
+    online = bool(runtime.get("online"))
+    status = str(runtime.get("status") or "offline").strip().lower() or "offline"
+    raw_health = str(runtime.get("health_state") or "unknown").strip().lower() or "unknown"
+    unavailable_worker_count = 0 if online and status not in {"offline", "failed", "revoked"} else 1
+    stale_heartbeat_count = 1 if raw_health in {"stale", "unhealthy", "failed"} else 0
+    decision = rust_runtime_kernel_client.runtime_health_decision(
+        operation="runtime_lane_health",
+        tenant_id=str(runtime.get("tenant_id") or "default").strip() or "default",
+        workspace_id=str(runtime.get("workspace_id") or "default").strip() or "default",
+        runtime={
+            "runtime_id": runtime_token,
+            "online": online,
+            "status": status,
+            "reported_health_state": raw_health,
+            "unavailable_worker_count": unavailable_worker_count,
+            "stale_heartbeat_count": stale_heartbeat_count,
+            "rust_kernel_available": rust_runtime_kernel_client.runtime_kernel_available(),
+        },
+        lane_queue={
+            "unavailable_worker_count": unavailable_worker_count,
+            "stale_heartbeat_count": stale_heartbeat_count,
+        },
+        scheduler={"enabled": True},
+        plugin={"ok": True},
+        rust_kernel={"available": rust_runtime_kernel_client.runtime_kernel_available()},
+        profile={"complete": True},
+        bootstrap={"complete": True},
+    )
+    next_action = str((decision or {}).get("next_action") or "").strip()
+    if next_action not in _RUNTIME_HEALTH_OPERATOR_NEXT_ACTIONS:
+        raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
+
+
 def handle_get_local_runtime_health(runtime_id: str) -> Dict[str, Any]:
     runtime = _runtime_status_item(runtime_id)
     runtime_token = str(runtime.get("runtime_id") or runtime.get("machine_id") or runtime_id).strip() or str(runtime_id or "").strip()
+    raw_health_state = str(runtime.get("health_state") or "unknown").strip().lower() or "unknown"
+    rust_health = _local_runtime_health_decision(runtime_token, runtime)
+    classified_health_state = str(rust_health.get("health") or "").strip().lower()
+    if not classified_health_state and str(rust_health.get("decision") or "").strip().lower() == "block":
+        classified_health_state = "critical"
     return {
         "ok": True,
         "runtime_id": runtime_token,
@@ -3197,7 +3269,10 @@ def handle_get_local_runtime_health(runtime_id: str) -> Dict[str, Any]:
         "status": str(runtime.get("status") or "offline").strip().lower() or "offline",
         "current_run_id": runtime.get("current_run_id"),
         "last_seen_at": runtime.get("last_seen_at"),
-        "health_state": str(runtime.get("health_state") or "unknown").strip().lower() or "unknown",
+        "health_state": classified_health_state or raw_health_state,
+        "reported_health_state": raw_health_state,
+        "runtime_health": rust_health,
+        "readiness": rust_health.get("readiness") if isinstance(rust_health.get("readiness"), dict) else {},
         "health_updated_at": runtime.get("health_updated_at"),
         "summary_channel": runtime.get("summary_channel"),
         "artifact_channel": runtime.get("artifact_channel"),

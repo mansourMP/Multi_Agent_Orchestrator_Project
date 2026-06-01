@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from server_modules import workspace_context
+from server_modules import rust_runtime_kernel_client, workspace_context
 
 
 SAGE_PROFILE_BOOTSTRAP_QUESTIONS: tuple[Dict[str, str], ...] = (
@@ -75,10 +75,7 @@ def _default_state() -> Dict[str, Any]:
 
 def _safe_read_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
-        payload = _default_state()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return payload
+        return _default_state()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -96,6 +93,51 @@ def _save_state(workspace_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     payload["updated_at"] = _utc_now_iso()
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return payload
+
+
+class SageProfileRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_sage_profile_state_decision(
+    *,
+    operation: str,
+    workspace_id: str,
+    payload: Dict[str, Any],
+    actor_user_id: Optional[str] = None,
+    state_class: str = "sage_profile",
+) -> Dict[str, Any]:
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    try:
+        payload_bytes = len(
+            json.dumps(
+                normalized_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        )
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class=state_class,
+            workspace_id=str(workspace_id or "").strip(),
+            actor_id=_coerce_text(actor_user_id) or "system",
+            status="active",
+            payload=normalized_payload,
+            payload_bytes=payload_bytes,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = _coerce_text(decision.get("next_action"))
+        if next_action != operation:
+            raise SageProfileRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise SageProfileRustGateError(exc.reason) from exc
 
 
 def _coerce_text(value: Any) -> str:
@@ -275,6 +317,17 @@ def sync_profile_context_files(*, workspace_id: str, profile: Dict[str, Any]) ->
         }
         if not is_replaceable_projection:
             continue
+        _enforce_sage_profile_state_decision(
+            operation="update_workspace_context_file",
+            state_class="workspace_context_files",
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            payload={
+                "filename": filename,
+                "content": content,
+                "source": "sage_profile_projection",
+            },
+        )
         workspace_context.write_workspace_context_file(
             filename,
             content,
@@ -299,10 +352,7 @@ def list_sage_profile(
 ) -> Dict[str, Any]:
     state = _read_state(workspace_id)
     profile = _normalize_profile(state.get("profile") if isinstance(state.get("profile"), dict) else {})
-    if _has_profile_content(profile):
-        projections = sync_profile_context_files(workspace_id=workspace_id, profile=profile)
-    else:
-        projections = projected_context_files(profile)
+    projections = projected_context_files(profile)
     seed = account_seed if isinstance(account_seed, dict) else {}
     return {
         "workspace_id": workspace_id,
@@ -348,6 +398,12 @@ def upsert_sage_profile(
         profile["standing_rules"] = _normalize_rules(standing_rules_text)
     state["profile"] = profile
     state["last_updated_by"] = _coerce_text(actor_user_id) or None
+    _enforce_sage_profile_state_decision(
+        operation="upsert_sage_profile",
+        workspace_id=workspace_id,
+        actor_user_id=actor_user_id,
+        payload=state,
+    )
     _save_state(workspace_id, state)
     sync_profile_context_files(workspace_id=workspace_id, profile=profile)
     return list_sage_profile(workspace_id=workspace_id)
@@ -377,6 +433,12 @@ def answer_sage_profile_bootstrap(
         profile[field] = normalized_answer
     state["profile"] = profile
     state["last_updated_by"] = _coerce_text(actor_user_id) or None
+    _enforce_sage_profile_state_decision(
+        operation="upsert_sage_profile",
+        workspace_id=workspace_id,
+        actor_user_id=actor_user_id,
+        payload=state,
+    )
     _save_state(workspace_id, state)
     sync_profile_context_files(workspace_id=workspace_id, profile=profile)
     return list_sage_profile(workspace_id=workspace_id)

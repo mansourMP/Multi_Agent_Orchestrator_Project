@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from server_modules import billing_credit_config
 from server_modules import control_plane_repository
 from server_modules import run_state_repository
+from server_modules import rust_runtime_kernel_client
 from server_modules.direct_tool_config_service import run_async_tool_call
 
 
@@ -76,6 +77,75 @@ def billing_plan_label(plan_id: Any) -> str:
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _enforce_billing_control_plane_decision(
+    *,
+    operation: str,
+    record_type: str,
+    tenant_id: Optional[str],
+    workspace_id: str,
+    target_status: str,
+    idempotency_key: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": operation,
+        "record_type": record_type,
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "workspace_id": str(workspace_id or "").strip(),
+        "actor_id": "billing_service",
+        "actor_role": "system",
+        "target_status": str(target_status or "").strip() or "active",
+        "idempotency_key": str(idempotency_key or "").strip(),
+        "owner_access": True,
+        "admin_access": True,
+        "workspace_access": True,
+        "billing_entitled": True,
+        "quota_ok": True,
+        "approval_provided": True,
+        "owner_approval_provided": True,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "control-plane-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        result = getattr(exc, "result", None)
+        if not isinstance(result, dict):
+            result = {}
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": result.get("operation") or operation,
+                "reason": result.get("reason") or str(exc),
+            },
+        ) from exc
+    mutation_plan = _coerce_dict(decision.get("mutation_plan"))
+    if mutation_plan.get("apply") is not True:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": decision.get("operation") or operation,
+                "reason": decision.get("reason") or "missing_rust_mutation_plan",
+            },
+        )
+    next_action = str(mutation_plan.get("next_action") or decision.get("next_action") or "").strip()
+    if next_action != "apply_control_plane_write":
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_invalid_next_action",
+                "operation": decision.get("operation") or operation,
+                "reason": (
+                    "Rust control-plane service returned unexpected next_action for "
+                    f"billing operation {operation}: {next_action or 'missing'}"
+                ),
+            },
+        )
+    return decision
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -682,6 +752,14 @@ def create_workspace_checkout_session(
         raise HTTPException(status_code=400, detail=f"Billing plan '{normalized_plan_id}' is not configured.")
     summary = workspace_billing_summary_for_workspace_id(workspace_id)
     account = _coerce_dict(summary.get("account"))
+    _enforce_billing_control_plane_decision(
+        operation="workspace_billing_plan_update",
+        record_type="workspace_billing_subscription",
+        tenant_id=str(summary.get("tenant_id") or "").strip() or None,
+        workspace_id=workspace_id,
+        target_status=normalized_plan_id,
+        idempotency_key=f"{workspace_id}:checkout:{normalized_plan_id}",
+    )
     form_fields: Dict[str, Any] = {
         "mode": "subscription",
         "success_url": str(success_url or _billing_success_url(workspace_id)).strip(),
@@ -735,6 +813,15 @@ def create_workspace_portal_session(
     customer_id = str(account.get("provider_customer_id") or "").strip()
     if not customer_id:
         raise HTTPException(status_code=400, detail="Workspace does not have a billable customer account yet.")
+    subscription = _coerce_dict(summary.get("subscription"))
+    _enforce_billing_control_plane_decision(
+        operation="billing_update",
+        record_type="workspace_billing_portal",
+        tenant_id=str(summary.get("tenant_id") or "").strip() or None,
+        workspace_id=workspace_id,
+        target_status=str(subscription.get("status") or "active").strip().lower() or "active",
+        idempotency_key=f"{workspace_id}:billing_portal:{customer_id}",
+    )
     response = _stripe_api_request(
         "/billing_portal/sessions",
         {
@@ -745,7 +832,6 @@ def create_workspace_portal_session(
     portal_url = str(response.get("url") or "").strip()
     if not portal_url:
         raise HTTPException(status_code=502, detail="Stripe portal session did not include a usable URL.")
-    subscription = _coerce_dict(summary.get("subscription"))
     run_async_tool_call(
         control_plane_repository.upsert_workspace_billing_subscription(
             workspace_id,
@@ -790,6 +876,14 @@ def create_credit_purchase_checkout_session(
     unit_amount_cents = int(round(amount_usd * 100))
     summary = workspace_billing_summary_for_workspace_id(workspace_id)
     account = _coerce_dict(summary.get("account"))
+    _enforce_billing_control_plane_decision(
+        operation="billing_update",
+        record_type="workspace_billing_credit_checkout",
+        tenant_id=str(summary.get("tenant_id") or "").strip() or None,
+        workspace_id=workspace_id,
+        target_status="credit_purchase",
+        idempotency_key=f"{workspace_id}:credit_checkout:{unit_amount_cents}",
+    )
     form_fields: Dict[str, Any] = {
         "mode": "payment",
         "success_url": str(success_url or _billing_credit_success_url(workspace_id)).strip(),

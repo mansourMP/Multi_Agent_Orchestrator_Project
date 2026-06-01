@@ -53,9 +53,48 @@ def _read_json(path: Path) -> Dict[str, Any]:
         return {}
 
 
+class SkillsRegistryRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_skills_registry_file_write(*, path: Path, kind: str, payload_bytes: int) -> None:
+    from server_modules import rust_runtime_kernel_client
+
+    payload = {
+        "path": str(path),
+        "kind": str(kind or "file").strip() or "file",
+        "payload_bytes": max(0, int(payload_bytes or 0)),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_skills_registry_file",
+            state_class="skills_registry_files",
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=int(payload["payload_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        decision = rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        if str(decision.get("next_action") or "").strip() != "write_skills_registry_file":
+            raise SkillsRegistryRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise SkillsRegistryRustGateError(exc.reason) from exc
+
+
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    _enforce_skills_registry_file_write(
+        path=path,
+        kind="json",
+        payload_bytes=len(serialized.encode("utf-8")),
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(serialized, encoding="utf-8")
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -260,11 +299,23 @@ def _normalize_skill_tree(skill_dir: Path) -> Dict[str, Any]:
     if not readme_path.exists():
         readme_body = _readme_from_dir(skill_dir)
         if readme_body.strip():
-            readme_path.write_text(readme_body + "\n", encoding="utf-8")
+            readme_payload = readme_body + "\n"
+            _enforce_skills_registry_file_write(
+                path=readme_path,
+                kind="readme",
+                payload_bytes=len(readme_payload.encode("utf-8")),
+            )
+            readme_path.write_text(readme_payload, encoding="utf-8")
     handler_path = skill_dir / "handler.py"
     query_handler = skill_dir / "query_handler.py"
     if not handler_path.exists() and query_handler.exists():
-        handler_path.write_text(_read_text(query_handler), encoding="utf-8")
+        handler_payload = _read_text(query_handler)
+        _enforce_skills_registry_file_write(
+            path=handler_path,
+            kind="handler",
+            payload_bytes=len(handler_payload.encode("utf-8")),
+        )
+        handler_path.write_text(handler_payload, encoding="utf-8")
     return manifest
 
 

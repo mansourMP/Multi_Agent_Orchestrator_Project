@@ -13,6 +13,7 @@ from server_modules import connectors_core
 from server_modules import control_plane_repository
 from server_modules import platform_analytics_service
 from server_modules import provider_profiles as provider_profiles_service
+from server_modules import rust_runtime_kernel_client
 from server_modules import workspace_config_schema
 from server_modules.runtime_models import CredentialUpsertRequest, ProviderProfileUpsertRequest
 from server_modules.workspace_bootstrap_service import build_workspace_bootstrap
@@ -45,6 +46,76 @@ def _enforce_owner_scope(current_user: Any, workspace_id: str) -> str:
         workspace_id,
         minimum_role="owner",
     )
+
+
+def _current_user_actor_id(current_user: Any) -> str:
+    if isinstance(current_user, dict):
+        return str(current_user.get("user_id") or current_user.get("id") or "").strip()
+    return str(getattr(current_user, "user_id", None) or getattr(current_user, "id", None) or "").strip()
+
+
+def _current_user_tenant_id(current_user: Any, workspace_id: str) -> str:
+    if isinstance(current_user, dict):
+        workspace_access = current_user.get("workspace_access") if isinstance(current_user.get("workspace_access"), dict) else {}
+        scoped = workspace_access.get(workspace_id) if isinstance(workspace_access.get(workspace_id), dict) else {}
+        return str(scoped.get("tenant_id") or current_user.get("tenant_id") or "default").strip() or "default"
+    return "default"
+
+
+def _enforce_control_plane_service_decision(**payload: Any) -> Dict[str, Any]:
+    operation = _read_string(payload.get("operation"), "control_plane_service")
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "control-plane-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _read_string(getattr(exc, "reason", ""), "control_plane_service_denied")
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": operation,
+                "reason": reason,
+            },
+        ) from exc
+    mutation_plan = _coerce_dict(decision.get("mutation_plan"))
+    expected_next_actions = {
+        "membership_update": {"apply_control_plane_write"},
+        "secret_reference_write": {"apply_control_plane_write"},
+        "membership_remove": {"apply_control_plane_destructive_write"},
+        "invite_revoke": {
+            "apply_control_plane_write",
+            "return_existing_control_plane_record",
+        },
+        "provider_models_refresh": {"apply_control_plane_write"},
+    }.get(operation, {"apply_control_plane_write"})
+    next_action = _read_string(
+        mutation_plan.get("next_action") or decision.get("next_action"),
+    )
+    allow_idempotent_return = operation == "invite_revoke" and next_action == "return_existing_control_plane_record"
+    if mutation_plan.get("apply") is not True and not allow_idempotent_return:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": decision.get("operation") or operation,
+                "reason": decision.get("reason") or "missing_rust_mutation_plan",
+            },
+        )
+    if next_action not in expected_next_actions:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_invalid_next_action",
+                "operation": decision.get("operation") or operation,
+                "reason": (
+                    "Rust control-plane service returned unexpected next_action for "
+                    f"{operation}: {next_action or 'missing'}"
+                ),
+            },
+        )
+    return decision
 
 
 SAGE_TOOL_POLICY_DEFINITIONS: Dict[str, Dict[str, Any]] = {
@@ -387,6 +458,22 @@ async def upsert_workspace_provider_credential(
 ) -> Dict[str, Any]:
     resolved_workspace_id = _enforce_owner_scope(current_user, workspace_id)
     provider_id = _normalize_provider_id(provider)
+    _enforce_control_plane_service_decision(
+        operation="secret_reference_write",
+        record_type="provider_credential",
+        tenant_id=_current_user_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_current_user_actor_id(current_user),
+        actor_role="owner",
+        idempotency_key=f"provider_credential:{resolved_workspace_id}:{provider_id}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     key_value = _read_string(api_key)
     requires_secret = _provider_requires_secret(provider_id)
     credential_secret_payload = _provider_secret_payload(provider_id, key_value, base_url=base_url)
@@ -798,10 +885,29 @@ async def invite_workspace_member(
     role: str,
 ) -> Dict[str, Any]:
     resolved_workspace_id = _enforce_owner_scope(current_user, workspace_id)
+    clean_email = _require_email(email)
+    clean_role = _require_role(role)
+    _enforce_control_plane_service_decision(
+        operation="invite_create",
+        record_type="workspace_member_invite",
+        tenant_id=_current_user_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_current_user_actor_id(current_user),
+        actor_role="owner",
+        target_status="pending",
+        idempotency_key=f"invite_create:{resolved_workspace_id}:{clean_email}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     invite = await control_plane_repository.create_workspace_invite(
         workspace_id=resolved_workspace_id,
-        email=_require_email(email),
-        role=_require_role(role),
+        email=clean_email,
+        role=clean_role,
         invited_by_user_id=str((current_user or {}).get("user_id") or "").strip() or None,
         metadata={
             "source": "workspace_admin_service",
@@ -827,6 +933,23 @@ async def update_workspace_member_role(
     if not isinstance(member, dict):
         raise HTTPException(status_code=404, detail="Workspace member not found.")
     _guard_last_owner(member, members, next_role=clean_role)
+    _enforce_control_plane_service_decision(
+        operation="membership_update",
+        record_type="workspace_membership",
+        tenant_id=_current_user_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_current_user_actor_id(current_user),
+        target_actor_id=clean_user_id,
+        actor_role="owner",
+        target_status=clean_role,
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     return auth_module.upsert_workspace_membership(
         clean_user_id,
         resolved_workspace_id,
@@ -847,10 +970,89 @@ async def remove_workspace_member(
     if not isinstance(member, dict):
         raise HTTPException(status_code=404, detail="Workspace member not found.")
     _guard_last_owner(member, members)
+    _enforce_control_plane_service_decision(
+        operation="membership_remove",
+        record_type="workspace_membership",
+        tenant_id=_current_user_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_current_user_actor_id(current_user),
+        target_actor_id=clean_user_id,
+        actor_role="owner",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     return auth_module.remove_workspace_membership(
         clean_user_id,
         resolved_workspace_id,
     )
+
+
+def _enforce_workspace_invite_revoke_decision(
+    *,
+    workspace_id: str,
+    current_user: Any,
+    invite_id: str,
+    invite_status: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "invite_revoke",
+        "record_type": "workspace_member_invite",
+        "tenant_id": _current_user_tenant_id(current_user, workspace_id),
+        "workspace_id": workspace_id,
+        "actor_id": _current_user_actor_id(current_user),
+        "actor_role": "owner",
+        "target_status": str(invite_status or "pending").strip().lower() or "pending",
+        "idempotency_key": f"invite_revoke:{workspace_id}:{invite_id}",
+        "owner_access": True,
+        "admin_access": True,
+        "workspace_access": True,
+        "billing_entitled": True,
+        "quota_ok": True,
+        "approval_provided": True,
+        "owner_approval_provided": True,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "control-plane-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        result = getattr(exc, "result", None)
+        if not isinstance(result, dict):
+            result = {}
+        reason = str(result.get("reason") or str(exc)).strip() or "rust_control_plane_service_denied"
+        status_code = 409 if reason == "invite_already_accepted" else 423
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": result.get("operation") or "invite_revoke",
+                "reason": reason,
+            },
+        ) from exc
+    mutation_plan = decision.get("mutation_plan")
+    if not isinstance(mutation_plan, dict):
+        mutation_plan = {}
+    next_action = str(
+        mutation_plan.get("next_action") or decision.get("next_action") or ""
+    ).strip()
+    if next_action == "return_existing_control_plane_record":
+        return decision
+    if mutation_plan.get("apply") is not True:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": decision.get("operation") or "invite_revoke",
+                "reason": decision.get("reason") or "missing_rust_mutation_plan",
+            },
+        )
+    return decision
 
 
 async def revoke_workspace_invite(
@@ -870,9 +1072,16 @@ async def revoke_workspace_invite(
     if not isinstance(invite, dict):
         raise HTTPException(status_code=404, detail="Workspace invite not found.")
     status = str(invite.get("status") or "pending").strip().lower()
-    if status == "accepted":
-        raise HTTPException(status_code=409, detail="Accepted invites cannot be revoked.")
-    if status == "revoked":
+    decision = _enforce_workspace_invite_revoke_decision(
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        invite_id=clean_invite_id,
+        invite_status=status,
+    )
+    mutation_plan = decision.get("mutation_plan")
+    if not isinstance(mutation_plan, dict):
+        mutation_plan = {}
+    if str(mutation_plan.get("next_action") or decision.get("next_action") or "").strip() == "return_existing_control_plane_record":
         return invite
     revoked = await control_plane_repository.revoke_workspace_invite(clean_invite_id)
     if not isinstance(revoked, dict):

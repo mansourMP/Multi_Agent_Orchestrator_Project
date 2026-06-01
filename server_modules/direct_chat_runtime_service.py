@@ -21,6 +21,7 @@ from server_modules import direct_chat_provider_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_response_service
 from server_modules import no_provider_service
+from server_modules import rust_runtime_kernel_client
 from server_modules import thread_service
 from server_modules.direct_chat_context_service import should_exclude_prior_message
 from server_modules.direct_tool_config_service import run_async_tool_call
@@ -88,6 +89,110 @@ def _request_id_from_turn_request(turn_request: Any) -> str:
         if token:
             return token
     return ""
+
+
+def _turn_request_field(turn_request: Any, field_name: str) -> str:
+    if isinstance(turn_request, dict):
+        return str(turn_request.get(field_name) or "").strip()
+    return str(getattr(turn_request, field_name, "") or "").strip()
+
+
+def _direct_chat_runtime_user_role(
+    *,
+    session_ctx: Optional[Dict[str, Any]],
+    resolved_turn_request: Any,
+) -> str:
+    actor: Dict[str, Any] = {}
+    if isinstance(resolved_turn_request, dict):
+        actor = resolved_turn_request.get("actor") if isinstance(resolved_turn_request.get("actor"), dict) else {}
+    else:
+        raw_actor = getattr(resolved_turn_request, "actor", None)
+        actor = raw_actor if isinstance(raw_actor, dict) else {}
+    if str(actor.get("type") or "").strip().lower() == "system":
+        return "system"
+
+    current_user = session_ctx.get("current_user") if isinstance(session_ctx, dict) and isinstance(session_ctx.get("current_user"), dict) else {}
+    metadata: Dict[str, Any] = {}
+    if isinstance(session_ctx, dict) and isinstance(session_ctx.get("metadata"), dict):
+        metadata.update(session_ctx["metadata"])
+    context_hints = _turn_request_context_hints(resolved_turn_request)
+    if isinstance(context_hints.get("metadata"), dict):
+        metadata.update(context_hints["metadata"])
+
+    if bool(current_user.get("is_admin")):
+        return "admin"
+    auth_type = str(current_user.get("auth_type") or metadata.get("auth_type") or "").strip().lower()
+    if auth_type == "api_key":
+        return "admin"
+
+    session_role = session_ctx.get("role") if isinstance(session_ctx, dict) else None
+    session_user_role = session_ctx.get("user_role") if isinstance(session_ctx, dict) else None
+    for value in (
+        current_user.get("role"),
+        current_user.get("user_role"),
+        session_role,
+        session_user_role,
+        metadata.get("role"),
+        metadata.get("user_role"),
+    ):
+        token = str(value or "").strip()
+        if token:
+            return token
+    return "member"
+
+
+def _direct_chat_run_api_gate_error_payload(reason: str) -> Dict[str, Any]:
+    return {
+        "reply": "",
+        "actions": [],
+        "mode": "error",
+        "error": str(reason or "rust_run_api_gate_blocked").strip() or "rust_run_api_gate_blocked",
+    }
+
+
+def _enforce_direct_chat_run_api_decision(
+    *,
+    session_ctx: Optional[Dict[str, Any]],
+    resolved_turn_request: Any,
+    workspace_id: str,
+    thread_id: str,
+    request_id: str,
+) -> Optional[Dict[str, Any]]:
+    payload = {
+        "operation": "stream_chat",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "tenant_id": _turn_request_field(resolved_turn_request, "tenant_id") or "default",
+        "user_role": _direct_chat_runtime_user_role(
+            session_ctx=session_ctx,
+            resolved_turn_request=resolved_turn_request,
+        ),
+        "run_id": None,
+        "run_status": None,
+        "body": {
+            "thread_id": str(thread_id or "").strip() or None,
+            "request_id": str(request_id or "").strip() or None,
+        },
+        "workspace_access_denied": False,
+        "owner_access_denied": False,
+        "kill_switch_active": False,
+        "entitlement_blocked": False,
+        "budget_exhausted": False,
+        "history_window_allowed": True,
+    }
+    try:
+        decision = dict(
+            rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "run-api-decision",
+                payload,
+            )
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(exc.reason or "rust_run_api_denied").strip()
+        return _direct_chat_run_api_gate_error_payload(f"rust_run_api_gate_blocked:{reason}")
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "start_chat_stream":
+        return _direct_chat_run_api_gate_error_payload(f"unexpected_next_action:{next_action or 'missing'}")
+    return None
 
 
 def _runtime_identity_for_availability(
@@ -946,6 +1051,23 @@ def build_direct_operator_reply(
                 proactive_suggestions=proactive_suggestions,
                 base_context_used=base_context_used,
                 services=services.direct_chat_response_services,
+            ),
+        }
+        return
+
+    gate_error_payload = _enforce_direct_chat_run_api_decision(
+        session_ctx=session_ctx,
+        resolved_turn_request=resolved_turn_request,
+        workspace_id=normalized_workspace_id,
+        thread_id=normalized_thread_id,
+        request_id=normalized_request_id,
+    )
+    if gate_error_payload is not None:
+        yield {
+            "type": "final",
+            "payload": services.with_context_used(
+                {**gate_error_payload, "suggestions": proactive_suggestions},
+                base_context_used,
             ),
         }
         return

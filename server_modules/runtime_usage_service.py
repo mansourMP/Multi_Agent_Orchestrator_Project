@@ -3,13 +3,64 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import HTTPException
-from server_modules import run_state_repository
+from server_modules import run_state_repository, rust_runtime_kernel_client
 from server_modules import usage_accounting_service
 
 
 def normalize_usage_period(period: Any) -> str:
     value = str(period or "all").strip().lower()
     return value if value in {"day", "week", "month", "all"} else "all"
+
+
+def _usage_user_role(current_user: Any) -> str:
+    if isinstance(current_user, dict):
+        if str(current_user.get("auth_type") or "").strip().lower() == "api_key":
+            return "system"
+        role = str(current_user.get("workspace_role") or current_user.get("role") or "viewer").strip()
+        return role or "viewer"
+    return "viewer"
+
+
+def _enforce_usage_workspace_list_decision(
+    *,
+    current_user: Any,
+    workspace_id: str,
+    resolve_workspace_tenant_id: Callable[[Any, str], str] | Callable[[str], str] | None,
+) -> dict[str, Any]:
+    if not callable(resolve_workspace_tenant_id):
+        return {}
+    try:
+        tenant_id = resolve_workspace_tenant_id(current_user, workspace_id)
+    except TypeError:
+        tenant_id = resolve_workspace_tenant_id(workspace_id)
+    tenant_token = str(tenant_id or "").strip() or "default"
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "run-api-decision",
+            {
+                "operation": "list_runs",
+                "workspace_id": str(workspace_id or "").strip() or "default",
+                "tenant_id": tenant_token,
+                "user_role": _usage_user_role(current_user),
+                "workspace_access_denied": False,
+                "owner_access_denied": False,
+                "kill_switch_active": False,
+                "history_window_allowed": True,
+                "body": {
+                    "user_id": str((current_user or {}).get("user_id") or "").strip() or "user",
+                    "usage_requested": True,
+                },
+            },
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HTTPException(status_code=409, detail=f"Rust run-api gate blocked list_runs: {exc.reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "list_runs":
+        raise HTTPException(
+            status_code=423,
+            detail=f"Rust run-api gate returned unexpected next_action for list_runs: {next_action or 'missing'}",
+        )
+    return dict(decision)
 
 
 def usage_snapshots_for_user(
@@ -23,8 +74,18 @@ def usage_snapshots_for_user(
     serialize_snapshot: Callable[[str, Any], dict[str, Any]],
     current_user_is_privileged: Callable[[Any], bool],
     extract_run_owner_user_id: Callable[[Any], str],
+    allowed_workspace_ids_fn: Callable[[Any], set[str] | None] | None = None,
+    resolve_workspace_tenant_id: Callable[[Any, str], str] | Callable[[str], str] | None = None,
 ) -> list[dict[str, Any]]:
     refresh_server_exports()
+    allowed_workspace_ids = allowed_workspace_ids_fn(current_user) if callable(allowed_workspace_ids_fn) else None
+    if allowed_workspace_ids:
+        for workspace_id in sorted(str(item or "").strip() for item in allowed_workspace_ids if str(item or "").strip()):
+            _enforce_usage_workspace_list_decision(
+                current_user=current_user,
+                workspace_id=workspace_id,
+                resolve_workspace_tenant_id=resolve_workspace_tenant_id,
+            )
     with run_history_lock:
         archived_items = list(run_history)
     combined: dict[str, dict[str, Any]] = {}

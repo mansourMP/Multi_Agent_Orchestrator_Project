@@ -8,9 +8,12 @@ normalize here before handing into `agent_turn` or durable execution internals.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Callable, Optional
 
+from fastapi import HTTPException
+
+from server_modules import rust_runtime_kernel_client
 from server_modules.agent_turn import (
     AgentTurnRequest,
     agent_turn,
@@ -87,6 +90,103 @@ def _default_system_user(current_user: Optional[dict[str, Any]] = None) -> dict[
         if isinstance(current_user, dict)
         else {"auth_type": "api_key", "user_id": "", "email": ""}
     )
+
+
+def _run_api_user_role(current_user: Any) -> str:
+    if not isinstance(current_user, dict):
+        return "member"
+    role = str(
+        current_user.get("workspace_role")
+        or current_user.get("role")
+        or current_user.get("user_role")
+        or ("admin" if str(current_user.get("auth_type") or "").strip() == "admin_api_key" else "member")
+    ).strip()
+    return role or "member"
+
+
+def _request_body_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump()
+        return dict(dumped) if isinstance(dumped, dict) else {}
+    if hasattr(value, "dict"):
+        dumped = value.dict()
+        return dict(dumped) if isinstance(dumped, dict) else {}
+    return {}
+
+
+def _turn_request_body(turn_request: AgentTurnRequest) -> dict[str, Any]:
+    return asdict(turn_request)
+
+
+def _turn_request_run_id(turn_request: AgentTurnRequest) -> Optional[str]:
+    context_hints = dict(turn_request.context_hints or {})
+    metadata = dict(context_hints.get("metadata") or {}) if isinstance(context_hints.get("metadata"), dict) else {}
+    run_id = str(
+        metadata.get("run_id")
+        or metadata.get("id")
+        or context_hints.get("run_id")
+        or ""
+    ).strip()
+    return run_id or None
+
+
+def _enforce_turn_ingress_run_api_decision(
+    *,
+    operation: str,
+    turn_request: AgentTurnRequest,
+    current_user: Any,
+    body: Optional[dict[str, Any]] = None,
+    run_id: Optional[str] = None,
+) -> dict[str, Any]:
+    payload = {
+        "operation": str(operation or "").strip(),
+        "workspace_id": str(turn_request.workspace_id or "").strip(),
+        "tenant_id": str(turn_request.tenant_id or "").strip(),
+        "user_role": _run_api_user_role(current_user),
+        "run_id": str(run_id or "").strip() or None,
+        "run_status": None,
+        "body": dict(body or {}),
+        "workspace_access_denied": False,
+        "owner_access_denied": False,
+        "kill_switch_active": False,
+        "entitlement_blocked": False,
+        "budget_exhausted": False,
+        "history_window_allowed": True,
+    }
+    try:
+        decision = dict(
+            rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "run-api-decision",
+                payload,
+            )
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(exc.reason or "rust_run_api_denied").strip()
+        raise HTTPException(status_code=409, detail=f"Rust run-api gate blocked {operation}: {reason}")
+    allowed_next_actions = {
+        "start_turn": {
+            "start_turn",
+            "request_local_execution_confirmation",
+            "request_browser_execution_confirmation",
+        },
+        "start_run": {
+            "start_run",
+            "request_local_execution_confirmation",
+            "request_browser_execution_confirmation",
+        },
+    }.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if allowed_next_actions and next_action not in allowed_next_actions:
+        raise HTTPException(
+            status_code=423,
+            detail=(
+                "Rust run-api gate returned unexpected next_action for "
+                f"{operation}: {next_action or 'missing'}"
+            ),
+        )
+    return decision
 
 
 async def _resolve_turn_ingress(
@@ -194,6 +294,13 @@ async def start_turn(
         run_request=run_request,
     )
     resolved_turn_request = resolution.turn_request
+    _enforce_turn_ingress_run_api_decision(
+        operation="start_turn",
+        turn_request=resolved_turn_request,
+        current_user=current_user,
+        body=_turn_request_body(resolved_turn_request),
+        run_id=_turn_request_run_id(resolved_turn_request),
+    )
 
     if (
         callable(stream_response_builder)
@@ -244,6 +351,13 @@ async def start_run_start(
         current_user=current_user,
         body=request,
         stamp_request_owner_fn=stamp_request_owner_fn,
+    )
+    _enforce_turn_ingress_run_api_decision(
+        operation="start_run",
+        turn_request=resolution.turn_request,
+        current_user=current_user,
+        body=_request_body_dict(resolution.request) or _turn_request_body(resolution.turn_request),
+        run_id=_turn_request_run_id(resolution.turn_request),
     )
     execution = await execute_durable_turn_request(
         turn_request=resolution.turn_request,

@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from fastapi import HTTPException
 from server_modules import run_state_repository
+from server_modules import rust_runtime_kernel_client
 
 
 LOGGER = logging.getLogger(__name__)
@@ -96,6 +97,123 @@ def _worker_runtime_scope_allows_run(record: Mapping[str, Any], run_scope: Mappi
     if enrollment_scope == "tenant":
         return True
     return worker_workspace == run_workspace
+
+
+def _enforce_machine_lease_decision(
+    *,
+    operation: str,
+    holder_id: Optional[str],
+    current_holder_id: Optional[str] = None,
+    lease_id: Optional[str] = None,
+    current_lease_id: Optional[str] = None,
+    active_lease_count: int = 0,
+    max_concurrent_leases: int = 1,
+    lease_ttl_seconds: int = 900,
+    stale: bool = False,
+    force: bool = False,
+    allow_block_result: bool = False,
+) -> Dict[str, Any]:
+    expected_next_action_map = {
+        "acquire": "persist_machine_lease_transition",
+        "renew": "persist_machine_lease_transition",
+        "release": "release_machine_lease_transition",
+        "heartbeat": "touch_machine_lease",
+    }
+    payload = {
+        "operation": operation,
+        "holder_id": str(holder_id or "").strip(),
+        "requested_holder_id": str(holder_id or "").strip(),
+        "current_holder_id": str(current_holder_id or "").strip(),
+        "lease_id": str(lease_id or "").strip(),
+        "current_lease_id": str(current_lease_id or "").strip(),
+        "active_lease_count": max(0, int(active_lease_count or 0)),
+        "max_concurrent_leases": max(1, int(max_concurrent_leases or 1)),
+        "lease_ttl_seconds": max(1, int(lease_ttl_seconds or 0)),
+        "requested_ttl_seconds": max(1, int(lease_ttl_seconds or 0)),
+        "stale": bool(stale),
+        "expired": bool(stale),
+        "force": bool(force),
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced("machine-lease-decision", payload)
+        expected_next_action = expected_next_action_map.get(str(operation or "").strip())
+        next_action = str(decision.get("next_action") or "").strip()
+        if str(decision.get("decision") or "").strip().lower() == "allow" and expected_next_action and next_action != expected_next_action:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Rust machine-lease gate blocked {operation}: unexpected_next_action:{next_action or 'missing'}",
+            )
+        return decision
+    except rust_runtime_kernel_client.RustKernelApprovalRequired as exc:
+        if allow_block_result and isinstance(exc.result, dict):
+            return dict(exc.result)
+        raise HTTPException(status_code=409, detail=f"Rust machine-lease gate requires approval for {operation}: {exc.reason}") from exc
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        if allow_block_result and isinstance(exc.result, dict):
+            return dict(exc.result)
+        raise HTTPException(status_code=409, detail=f"Rust machine-lease gate blocked {operation}: {exc.reason}") from exc
+
+
+def _enforce_queue_transition_decision(
+    *,
+    operation: str,
+    run_id: str,
+    requester_id: Optional[str],
+    lease_holder_id: Optional[str] = None,
+    status: str = "queued",
+    stale: bool = False,
+    force: bool = False,
+    attempts: int = 0,
+    max_attempts: int = 3,
+) -> Dict[str, Any]:
+    expected_next_action = {
+        "enqueue": "enqueue_queue_item",
+        "claim": "claim_queue_item",
+        "complete": "complete_queue_item",
+        "retry": "retry_queue_item",
+        "cancel": "cancel_queue_item",
+        "release": "release_queue_item",
+        "dead_letter": "dead_letter_queue_item",
+    }.get(str(operation or "").strip())
+    payload = {
+        "operation": operation,
+        "item_id": str(run_id or "").strip(),
+        "run_id": str(run_id or "").strip(),
+        "requester_id": str(requester_id or "").strip(),
+        "worker_id": str(requester_id or "").strip(),
+        "lease_holder_id": str(lease_holder_id or "").strip(),
+        "current_holder_id": str(lease_holder_id or "").strip(),
+        "status": str(status or "unknown").strip(),
+        "current_status": str(status or "unknown").strip(),
+        "stale": bool(stale),
+        "lease_stale": bool(stale),
+        "force": bool(force),
+        "attempts": max(0, int(attempts or 0)),
+        "max_attempts": max(1, int(max_attempts or 1)),
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced("queue-transition-decision", payload)
+    except rust_runtime_kernel_client.RustKernelApprovalRequired as exc:
+        raise HTTPException(status_code=409, detail=f"Rust queue gate requires approval for {operation}: {exc.reason}") from exc
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HTTPException(status_code=409, detail=f"Rust queue gate blocked {operation}: {exc.reason}") from exc
+    if str(operation or "").strip() == "fail":
+        expected_next_action = (
+            "schedule_queue_retry"
+            if bool(decision.get("retryable")) or str(decision.get("next_status") or "").strip() == "retry_scheduled"
+            else "fail_queue_item"
+        )
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_next_action and next_action != expected_next_action:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Rust queue gate returned unexpected next_action for {operation}: {next_action or 'missing'}",
+        )
+    return decision
+
+
+def enforce_queue_transition_decision(**request: Any) -> Dict[str, Any]:
+    return _enforce_queue_transition_decision(**request)
 
 
 def _dispatch_claim_repository_write(
@@ -286,6 +404,30 @@ def issue_machine_session(
 
 
 def touch_machine_session(record: Dict[str, Any], *, touched_at: str) -> None:
+    holder_id = str(
+        record.get("machine_id")
+        or record.get("runtime_id")
+        or record.get("worker_id")
+        or record.get("instance_id")
+        or record.get("session_scope_key")
+        or "runtime-session"
+    ).strip() or "runtime-session"
+    lease_id = str(
+        record.get("lease_id")
+        or record.get("machine_lease_id")
+        or record.get("session_scope_key")
+        or record.get("session_token_hash")
+        or holder_id
+    ).strip() or holder_id
+    _enforce_machine_lease_decision(
+        operation="heartbeat",
+        holder_id=holder_id,
+        current_holder_id=holder_id,
+        lease_id=lease_id,
+        current_lease_id=lease_id,
+        lease_ttl_seconds=int(record.get("lease_seconds") or 900),
+        stale=False,
+    )
     record["session_last_authenticated_at"] = touched_at
     record["trust_state"] = "verified"
 
@@ -662,6 +804,29 @@ def claim_local_machine_lease(
                     or context.get("user_id")
                     or ""
                 ).strip()
+                active_worker_lease_count = len(
+                    [
+                        item
+                        for item in claimed_runs.values()
+                        if isinstance(item, Mapping)
+                        and str(item.get("worker_id") or item.get("machine_id") or "").strip() == worker_id
+                    ]
+                )
+                max_concurrent_leases = max(1, int(worker_state.get("max_concurrent_sessions") or 1))
+                _enforce_machine_lease_decision(
+                    operation="acquire",
+                    holder_id=worker_id,
+                    active_lease_count=active_worker_lease_count,
+                    max_concurrent_leases=max_concurrent_leases,
+                    lease_ttl_seconds=lease_seconds,
+                )
+                _enforce_queue_transition_decision(
+                    operation="claim",
+                    run_id=claimed_run_id,
+                    requester_id=worker_id,
+                    lease_holder_id=None,
+                    status=str(run.get("status") or "queued_local").strip() or "queued_local",
+                )
                 claim_record = build_machine_lease_record(
                     machine_id=machine_id,
                     run_id=claimed_run_id,
@@ -777,19 +942,40 @@ def release_machine_lease_claim(
         claim = claimed_runs.get(run_id)
         incoming_worker = str(worker_id or "").strip()
         incoming_lease = str(lease_id or "").strip()
-        if isinstance(claim, dict) and incoming_worker and incoming_worker != str(claim.get("worker_id")):
-            raise HTTPException(status_code=403, detail="Worker does not own this local run.")
-        if isinstance(claim, dict) and incoming_lease and incoming_lease != str(claim.get("lease_id") or ""):
-            return {
-                "claim": dict(claim),
-                "resolved_worker": incoming_worker or str(claim.get("worker_id") or "").strip(),
-                "released": False,
-                "lease_mismatch": True,
-            }
         resolved_worker = incoming_worker or (
             str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else ""
         )
         released_claim = dict(claim) if isinstance(claim, dict) else None
+        if isinstance(released_claim, dict):
+            _enforce_queue_transition_decision(
+                operation="release",
+                run_id=run_id,
+                requester_id=resolved_worker,
+                lease_holder_id=str(released_claim.get("worker_id") or released_claim.get("machine_id") or "").strip(),
+                status="claimed",
+            )
+            lease_decision = _enforce_machine_lease_decision(
+                operation="release",
+                holder_id=resolved_worker,
+                current_holder_id=str(released_claim.get("worker_id") or released_claim.get("machine_id") or "").strip(),
+                lease_id=incoming_lease or str(released_claim.get("lease_id") or "").strip(),
+                current_lease_id=str(released_claim.get("lease_id") or "").strip(),
+                force=False,
+                allow_block_result=True,
+            )
+            if str(lease_decision.get("decision") or "").strip().lower() == "block":
+                reason = str(lease_decision.get("reason") or "").strip().lower()
+                if reason == "lease_release_not_owned":
+                    raise HTTPException(status_code=403, detail="Worker does not own this local run.")
+                if reason == "lease_release_id_mismatch":
+                    return {
+                        "claim": dict(released_claim),
+                        "resolved_worker": resolved_worker,
+                        "released": False,
+                        "lease_mismatch": True,
+                        "decision_id": lease_decision.get("decision_id"),
+                    }
+                raise HTTPException(status_code=409, detail=f"Rust machine-lease gate blocked release: {reason or 'unknown_reason'}")
         released = claimed_runs.pop(run_id, None) is not None
 
     if released and callable(persist_local_runtime_state_fn):
@@ -819,8 +1005,24 @@ def reconcile_machine_lease_release(
         if run_id in local_pending_run_ids:
             local_pending_run_ids[:] = [rid for rid in local_pending_run_ids if rid != run_id]
             changed = True
-        popped = local_claimed_runs.pop(run_id, None)
+        popped = local_claimed_runs.get(run_id)
         if isinstance(popped, dict):
+            _enforce_queue_transition_decision(
+                operation="release",
+                run_id=run_id,
+                requester_id=str(popped.get("worker_id") or popped.get("machine_id") or "").strip(),
+                lease_holder_id=str(popped.get("worker_id") or popped.get("machine_id") or "").strip(),
+                status="claimed",
+            )
+            _enforce_machine_lease_decision(
+                operation="release",
+                holder_id=str(popped.get("worker_id") or popped.get("machine_id") or "").strip(),
+                current_holder_id=str(popped.get("worker_id") or popped.get("machine_id") or "").strip(),
+                lease_id=str(popped.get("lease_id") or "").strip(),
+                current_lease_id=str(popped.get("lease_id") or "").strip(),
+                force=False,
+            )
+            local_claimed_runs.pop(run_id, None)
             released_claim = dict(popped)
             changed = True
     if changed:
@@ -848,8 +1050,24 @@ def reconcile_recovered_machine_leases(
             local_pending_run_ids[:] = next_pending
             changed = True
         for run_id in recovered_set:
-            popped = local_claimed_runs.pop(run_id, None)
+            popped = local_claimed_runs.get(run_id)
             if isinstance(popped, dict):
+                _enforce_queue_transition_decision(
+                    operation="release",
+                    run_id=run_id,
+                    requester_id=str(popped.get("worker_id") or popped.get("machine_id") or "").strip(),
+                    lease_holder_id=str(popped.get("worker_id") or popped.get("machine_id") or "").strip(),
+                    status="claimed",
+                )
+                _enforce_machine_lease_decision(
+                    operation="release",
+                    holder_id=str(popped.get("worker_id") or popped.get("machine_id") or "").strip(),
+                    current_holder_id=str(popped.get("worker_id") or popped.get("machine_id") or "").strip(),
+                    lease_id=str(popped.get("lease_id") or "").strip(),
+                    current_lease_id=str(popped.get("lease_id") or "").strip(),
+                    force=False,
+                )
+                local_claimed_runs.pop(run_id, None)
                 released_claims[run_id] = dict(popped)
                 changed = True
     if changed:
@@ -902,6 +1120,23 @@ def cleanup_stale_machine_leases(
 
             worker_id = str(claim.get("worker_id") or "").strip() or None
             machine_id = str(claim.get("machine_id") or worker_id or "").strip() or None
+            _enforce_queue_transition_decision(
+                operation="release",
+                run_id=run_id,
+                requester_id=worker_id or machine_id,
+                lease_holder_id=worker_id or machine_id,
+                status="claimed",
+                stale=True,
+            )
+            _enforce_machine_lease_decision(
+                operation="release",
+                holder_id=worker_id or machine_id,
+                current_holder_id=worker_id or machine_id,
+                lease_id=str(claim.get("lease_id") or "").strip(),
+                current_lease_id=str(claim.get("lease_id") or "").strip(),
+                stale=True,
+                force=False,
+            )
             claimed_runs.pop(run_id, None)
             changed = True
             _dispatch_release_repository_write(run_id, lease_id=str(claim.get("lease_id") or "").strip() or None)

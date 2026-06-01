@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from server_modules.agent_turn import AgentTurnRequest
 from server_modules import error_response_service
 from server_modules.error_contracts import INTERNAL_ERROR, POLICY_BLOCK, USER_INPUT_ERROR
+from server_modules import rust_runtime_kernel_client
 
 
 @dataclass(slots=True)
@@ -49,6 +50,60 @@ def _turn_request_field(turn_request: Any, field_name: str) -> str:
     if isinstance(turn_request, dict):
         return str(turn_request.get(field_name) or "").strip()
     return str(getattr(turn_request, field_name, "") or "").strip()
+
+
+def _current_user_role(current_user: dict[str, Any]) -> str:
+    if bool(current_user.get("is_admin")):
+        return "admin"
+    auth_type = str(current_user.get("auth_type") or "").strip().lower()
+    if auth_type == "api_key":
+        return "admin"
+    return str(current_user.get("role") or "member").strip() or "member"
+
+
+def _enforce_direct_chat_stream_run_api_decision(
+    *,
+    current_user: dict[str, Any],
+    turn_request: Any,
+    workspace_id: str,
+    thread_id: str,
+    request_id: str,
+) -> dict[str, Any]:
+    payload = {
+        "operation": "stream_chat",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "tenant_id": _turn_request_field(turn_request, "tenant_id") or "default",
+        "user_role": _current_user_role(current_user),
+        "run_id": None,
+        "run_status": None,
+        "body": {
+            "thread_id": str(thread_id or "").strip() or None,
+            "request_id": str(request_id or "").strip() or None,
+        },
+        "workspace_access_denied": False,
+        "owner_access_denied": False,
+        "kill_switch_active": False,
+        "entitlement_blocked": False,
+        "budget_exhausted": False,
+        "history_window_allowed": True,
+    }
+    try:
+        decision = dict(
+            rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "run-api-decision",
+                payload,
+            )
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(exc.reason or "rust_run_api_denied").strip()
+        raise HTTPException(status_code=409, detail=f"Rust run-api gate blocked stream_chat: {reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "start_chat_stream":
+        raise HTTPException(
+            status_code=423,
+            detail=f"Rust run-api gate returned unexpected next_action for stream_chat: {next_action or 'missing'}",
+        )
+    return decision
 
 
 def _assistant_turn_session_metadata(
@@ -127,6 +182,13 @@ async def build_agent_turn_stream_response(
         str(execution.get("client_request_id") or "").strip()
         or str(fallback_client_request_id or "").strip()
         or _turn_request_request_id(turn_request)
+    )
+    _enforce_direct_chat_stream_run_api_decision(
+        current_user=current_user,
+        turn_request=turn_request,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        request_id=client_request_id,
     )
     producer = execution["producer"]
 

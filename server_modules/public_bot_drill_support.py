@@ -14,12 +14,52 @@ from typing import Any, AsyncIterator, Callable, Dict, Iterable, Iterator, List,
 
 import pytest
 
+from server_modules import rust_runtime_kernel_client
 from server_modules.blackbox_runtime_support import BlackboxHarness, blackbox_runtime_context
 
 
 UNACCEPTABLE_P95_MS = 5_000.0
 BASELINE_PROVIDER_DELAY_SECONDS = 0.25
 BASELINE_DB_POOL_SIZE = 16
+
+
+class PublicBotDrillRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_public_bot_drill_report_write(
+    *,
+    output_path: Path,
+    json_path: Path,
+    markdown_payload: str,
+    json_payload: str,
+) -> None:
+    payload = {
+        "output_path": str(output_path),
+        "json_path": str(json_path),
+        "markdown_bytes": len(markdown_payload.encode("utf-8")),
+        "json_bytes": len(json_payload.encode("utf-8")),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_public_bot_drill_report",
+            state_class="public_bot_drill_reports",
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=int(payload["markdown_bytes"]) + int(payload["json_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_public_bot_drill_report":
+            raise PublicBotDrillRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise PublicBotDrillRustGateError(exc.reason) from exc
 
 
 def _now_perf() -> float:
@@ -1637,8 +1677,16 @@ def render_prompt14_markdown(report: Mapping[str, Any]) -> str:
 
 def write_prompt14_report(*, output_path: Path) -> Dict[str, Any]:
     report = build_prompt14_report()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(render_prompt14_markdown(report), encoding="utf-8")
     json_path = output_path.with_suffix(".json")
-    json_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    markdown_payload = render_prompt14_markdown(report)
+    json_payload = json.dumps(report, indent=2, sort_keys=True)
+    _enforce_public_bot_drill_report_write(
+        output_path=output_path,
+        json_path=json_path,
+        markdown_payload=markdown_payload,
+        json_payload=json_payload,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(markdown_payload, encoding="utf-8")
+    json_path.write_text(json_payload, encoding="utf-8")
     return report

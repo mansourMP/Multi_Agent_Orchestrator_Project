@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from server_modules import activity_ledger_service
 from server_modules import memory_service
+from server_modules import rust_runtime_kernel_client
 
 
 BOARD_ENTRY_KINDS = {
@@ -59,6 +60,63 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
 
 def _coerce_list(value: Any) -> List[Any]:
     return list(value or []) if isinstance(value, list) else []
+
+
+def _enforce_shared_board_state_decision(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    actor_id: str,
+    record: Dict[str, Any],
+) -> Dict[str, Any]:
+    try:
+        payload_bytes = len(json.dumps(record, sort_keys=True).encode("utf-8"))
+    except Exception:
+        payload_bytes = 0
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "runtime-state-store-decision",
+            {
+                "operation": "write_shared_operational_board_entry",
+                "state_class": "shared_operational_board",
+                "storage_engine": "durable_postgres",
+                "tenant_id": str(tenant_id or "").strip() or _normalize_workspace_id(workspace_id),
+                "workspace_id": _normalize_workspace_id(workspace_id),
+                "actor_id": str(actor_id or "").strip() or "shared-board",
+                "status": str(record.get("status") or "active").strip() or "active",
+                "payload": record,
+                "payload_bytes": payload_bytes,
+                "workspace_access": True,
+                "owner_access": True,
+                "destructive_approval": True,
+            },
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        result = getattr(exc, "result", None)
+        if not isinstance(result, dict):
+            result = {}
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_runtime_state_store_denied",
+                "operation": result.get("operation") or "write_shared_operational_board_entry",
+                "reason": result.get("reason") or str(exc),
+            },
+        ) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "write_shared_operational_board_entry":
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_runtime_state_store_invalid_next_action",
+                "operation": "write_shared_operational_board_entry",
+                "reason": (
+                    "Rust runtime state store returned unexpected next_action for "
+                    f"shared operational board write: {next_action or 'missing'}"
+                ),
+            },
+        )
+    return decision
 
 
 def normalize_board_permission(value: Any) -> str:
@@ -398,6 +456,12 @@ async def write_shared_operational_board_entry(
             "role": str(_coerce_dict(actor).get("role") or "").strip() or None,
         },
     }
+    _enforce_shared_board_state_decision(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        actor_id=str(record["author"].get("id") or record["author"].get("display_name") or "shared-board").strip(),
+        record=record,
+    )
     path = _board_log_path(workspace_id)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")

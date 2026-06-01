@@ -10,6 +10,7 @@ from server_modules import (
     hardware_result_correlator_service,
     hardware_runtime_session_service,
     hardware_runtime_target_resolver,
+    rust_runtime_kernel_client,
     secret_redaction_service,
     virtual_computer_runtime,
 )
@@ -174,6 +175,60 @@ def cloud_computer_summary(capability_id: str, virtual_action: str, response: Di
     return f"{capability_id or 'cloud computer action'} completed."
 
 
+def _virtual_action_payload(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    projected: Dict[str, Any] = {}
+    for key in ("url", "text", "command", "x", "y", "delta_x", "delta_y", "duration_ms", "seconds"):
+        if key in arguments:
+            projected[key] = arguments.get(key)
+    keys = arguments.get("keys") or arguments.get("key")
+    if isinstance(keys, list):
+        projected["key_count"] = len(keys)
+        projected["hotkey_count"] = len(keys)
+        projected["hotkey_token_too_long"] = any(len(text(item)) > 32 for item in keys)
+    elif keys is not None:
+        projected["key_count"] = 1
+        projected["hotkey_count"] = 1
+        projected["hotkey_token_too_long"] = len(text(keys)) > 32
+    return projected
+
+
+def enforce_virtual_computer_decision(
+    operation: str,
+    payload: Dict[str, Any],
+    *,
+    allow_approval_required: bool = False,
+) -> Dict[str, Any]:
+    expected_next_actions = {
+        "provider_admission": {"admit_virtual_computer_provider"},
+        "isolation_profile": {"build_isolation_profile"},
+        "identity_context": {"build_identity_context"},
+        "cost_quota": {"build_cost_quota_profile"},
+        "action_payload": {
+            "validate_computer_use_action_payload",
+            "request_run_command_approval",
+            "request_computer_action_approval",
+        },
+        "network_policy": {
+            "assert_network_browser_security",
+            "request_download_approval",
+        },
+        "artifact_export": {
+            "collect_virtual_computer_artifact",
+            "request_local_artifact_export_approval",
+        },
+        "session_state": {"assert_virtual_session_active"},
+    }
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "virtual-computer-decision",
+        {"operation": operation, **payload},
+        allow_approval_required=allow_approval_required,
+    )
+    next_action = text(decision.get("next_action"))
+    if next_action not in expected_next_actions.get(operation, set()):
+        raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
+
+
 async def execute_cloud_computer_action(
     *,
     tenant_id: str,
@@ -224,7 +279,41 @@ async def execute_cloud_computer_action(
         )
         return {"status": "degraded", "reason": reason, "runtime_session": runtime_session, "trace_id": trace_id}
 
-    if cloud_computer_approval_required(
+    virtual_action_decision = enforce_virtual_computer_decision(
+        "action_payload",
+        {
+            "runtime_choice": runtime_choice,
+            "computer_action": virtual_action,
+            "tool_action": virtual_action,
+            "virtual_action": virtual_action,
+            "action_args": virtual_action_args,
+            "approval_granted": hardware_access_policy_service.normalize_runtime_access_mode(runtime_access_mode) == FULL_RUNTIME_ACCESS_MODE,
+            **_virtual_action_payload(virtual_action_args),
+        },
+        allow_approval_required=True,
+    )
+    if virtual_action in {virtual_computer_runtime.ACTION_OPEN_URL, virtual_computer_runtime.ACTION_DOWNLOAD_ARTIFACT}:
+        enforce_virtual_computer_decision(
+            "network_policy",
+            {
+                "runtime_choice": runtime_choice,
+                "computer_action": virtual_action,
+                "tool_action": virtual_action,
+                "virtual_action": virtual_action,
+                "url": text(virtual_action_args.get("url")),
+            },
+        )
+    if virtual_action == virtual_computer_runtime.ACTION_SCREENSHOT:
+        enforce_virtual_computer_decision(
+            "artifact_export",
+            {
+                "runtime_choice": runtime_choice,
+                "artifact_type": "screenshot",
+                "export_target": "workspace",
+            },
+        )
+
+    if bool(virtual_action_decision.get("approval_required")) or cloud_computer_approval_required(
         capability_id=capability_id,
         action_id=action_id,
         virtual_action=virtual_action,
@@ -297,7 +386,38 @@ async def execute_cloud_computer_action(
     session_persistence = cloud_computer_session_persistence(cost_metadata)
     session_mode = text(session_persistence.get("session_mode") or session_persistence.get("mode")).lower()
     control_metadata = cloud_computer_control_metadata(cost_metadata)
+    identity_metadata = dict_value(dict_value(cost_metadata).get("identity_context"))
     runtime_session_id = text(runtime_session.get("session_id")) or hardware_runtime_session_service.new_runtime_session_id()
+    enforce_virtual_computer_decision(
+        "identity_context",
+        {
+            "runtime_choice": runtime_choice,
+            **identity_metadata,
+        },
+    )
+    enforce_virtual_computer_decision(
+        "provider_admission",
+        {
+            "runtime_provider_id": provider_id or "",
+            "runtime_choice": runtime_choice,
+            "runtime_target": runtime_choice,
+        },
+    )
+    enforce_virtual_computer_decision(
+        "isolation_profile",
+        {
+            "runtime_choice": runtime_choice,
+            **dict_value(control_metadata.get("computer_automation")),
+        },
+    )
+    enforce_virtual_computer_decision(
+        "cost_quota",
+        {
+            "runtime_choice": runtime_choice,
+            **dict_value(control_metadata.get("runtime_quota")),
+            **dict_value(control_metadata.get("cost_quota")),
+        },
+    )
     create_payload = {
         "tenant_id": text(tenant_id) or "default",
         "workspace_id": text(workspace_id) or "default",
@@ -454,6 +574,15 @@ async def stop_cloud_computer_action(
             "canonical_runtime_target": canonical_target_id,
             "trace_id": trace_id,
         }
+    enforce_virtual_computer_decision(
+        "session_state",
+        {
+            "runtime_choice": virtual_computer_runtime.RUNTIME_CHOICE_VIRTUAL_BROWSER,
+            "state": "running",
+            "session_operation": "terminate",
+            "session_id": runtime_session_id,
+        },
+    )
     try:
         runtime = runtime_registry_getter().resolve(virtual_computer_runtime.RUNTIME_CHOICE_VIRTUAL_BROWSER)
         terminated = await runtime.terminate_session(

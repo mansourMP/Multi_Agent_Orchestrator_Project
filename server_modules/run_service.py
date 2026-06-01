@@ -26,6 +26,7 @@ from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules import execution_sandbox_service
 from server_modules import machine_lease_service
 from server_modules import outbox_service
+from server_modules import rust_runtime_kernel_client
 from server_modules.policy_service import apply_execution_route_metadata, decide_execution_target
 from server_modules.run_execution_handle import attach_execution_handle, build_run_record, durable_run_payload
 from server_modules import run_state_repository
@@ -4375,6 +4376,66 @@ def resolve_run_execution_boundary(
     apply_execution_route_metadata_fn: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
     schedule_id: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    def _enforce_run_routing_decision(
+        *,
+        operation: str,
+        selected_target: str,
+        runtime_mode: str,
+        runtime_selection: Optional[Dict[str, Any]] = None,
+        precheck: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "operation": operation,
+            "workspace_id": _run_service_text(metadata.get("workspace_id")) or "default",
+            "run_id": _run_service_text(metadata.get("run_id")),
+            "schedule_id": _run_service_text(schedule_id),
+            "parent_run_id": _run_service_text(metadata.get("parent_run_id")),
+            "execution_target_selected": selected_target,
+            "execution_target": selected_target,
+            "runtime_mode": runtime_mode,
+        }
+        if operation == "execution_boundary":
+            selected_attachment = _metadata_dict((runtime_selection or {}).get("selected_attachment"))
+            payload.update(
+                {
+                    "runtime_selection_present": bool(runtime_selection),
+                    "runtime_attachment_id": _hint_text(selected_attachment.get("attachment_id")),
+                    "runtime_attachment_kind": _hint_text(selected_attachment.get("attachment_kind")),
+                    "runtime_selection_target": _hint_text((runtime_selection or {}).get("execution_target_selected")) or selected_target,
+                    "machine_target": _hint_text((runtime_selection or {}).get("machine_target")) or _hint_text(metadata.get("machine_target")),
+                    "workspace_runtime_deployment_mode": _hint_text((runtime_selection or {}).get("deployment_mode"))
+                    or _hint_text(metadata.get("workspace_runtime_deployment_mode")),
+                }
+            )
+        elif operation == "local_confirmation":
+            precheck = precheck if isinstance(precheck, dict) else {}
+            payload.update(
+                {
+                    "outcome_pack": _run_service_text(metadata.get("outcome_pack")),
+                    "blocked_count": int(precheck.get("blocked_count") or 0),
+                    "require_confirmation_count": int(precheck.get("require_confirmation_count") or 0),
+                    "approval_required_count": int(precheck.get("approval_required_count") or 0),
+                }
+            )
+        try:
+            return rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "run-routing-decision",
+                payload,
+                allow_approval_required=(operation == "local_confirmation"),
+            )
+        except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+            detail = _run_service_text(exc.reason) or "rust_run_routing_denied"
+            raise HTTPException(status_code=409, detail=f"Rust run-routing gate blocked {operation}: {detail}") from exc
+
+    def _require_run_routing_next_action(decision: Dict[str, Any], *allowed_actions: str) -> str:
+        next_action = _run_service_text(decision.get("next_action"))
+        if next_action in allowed_actions:
+            return next_action
+        raise HTTPException(
+            status_code=409,
+            detail=f"Rust run-routing gate blocked {decision.get('operation') or 'operation'}: unexpected_next_action:{next_action or 'missing'}",
+        )
+
     try:
         route = decide_execution_target_fn(metadata, schedule_id=schedule_id)
     except TypeError:
@@ -4388,6 +4449,15 @@ def resolve_run_execution_boundary(
     ).strip().lower() or "cloud"
     runtime_mode = _resolve_runtime_mode_from_metadata(resolved_metadata, selected_target=selected_target)
     runtime_selection = _runtime_selection_payload(resolved_metadata)
+    _require_run_routing_next_action(
+        _enforce_run_routing_decision(
+            operation="execution_boundary",
+            selected_target=selected_target,
+            runtime_mode=runtime_mode,
+            runtime_selection=runtime_selection,
+        ),
+        "write_execution_boundary_metadata",
+    )
     if runtime_selection:
         resolved_metadata = _merge_runtime_selection_metadata(
             resolved_metadata,
@@ -5048,6 +5118,96 @@ def create_run_result_from_prepared_request(
     return dict(result) if isinstance(result, dict) else {"result": result}
 
 
+def _run_service_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _run_service_idempotency_key(req: Any, metadata: Dict[str, Any], *, schedule_id: Optional[str]) -> str:
+    for key in (
+        "idempotency_key",
+        "client_request_id",
+        "request_id",
+        "run_request_id",
+        "turn_id",
+    ):
+        token = _run_service_text(metadata.get(key) or getattr(req, key, None))
+        if token:
+            return token
+    seed = {
+        "schedule_id": schedule_id,
+        "workspace_id": metadata.get("workspace_id") or getattr(req, "workspace_id", None),
+        "tenant_id": metadata.get("tenant_id") or getattr(req, "tenant_id", None),
+        "thread_id": metadata.get("thread_id") or getattr(req, "thread_id", None),
+        "session_id": metadata.get("session_id") or getattr(req, "session_id", None),
+        "provider": getattr(req, "provider", None),
+        "credential_id": getattr(req, "credential_id", None),
+        "engine": metadata.get("engine") or getattr(req, "engine", None),
+    }
+    digest = hashlib.sha256(json.dumps(seed, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return f"run-create:{digest[:32]}"
+
+
+def _enforce_rust_run_service_decision(
+    *,
+    operation: str,
+    req: Any,
+    metadata: Dict[str, Any],
+    route: Dict[str, Any],
+    schedule_id: Optional[str],
+    local_confirmation_required: bool = False,
+) -> Dict[str, Any]:
+    trigger_source = "schedule" if schedule_id else _run_service_text(metadata.get("trigger_source") or "user")
+    actor_id = (
+        _run_service_text(metadata.get("actor_id"))
+        or _run_service_text(metadata.get("owner_user_id"))
+        or _run_service_text(getattr(req, "actor_id", None))
+        or _run_service_text(getattr(req, "user_id", None))
+        or ("scheduler" if schedule_id else "system")
+    )
+    payload = {
+        "operation": operation,
+        "tenant_id": _run_service_text(metadata.get("tenant_id") or getattr(req, "tenant_id", None) or "default"),
+        "workspace_id": _run_service_text(metadata.get("workspace_id") or getattr(req, "workspace_id", None)),
+        "actor_id": actor_id,
+        "actor_role": _run_service_text(metadata.get("actor_role") or "member"),
+        "thread_id": _run_service_text(metadata.get("thread_id") or getattr(req, "thread_id", None) or metadata.get("session_id") or "run_start"),
+        "workflow_id": _run_service_text(metadata.get("workflow_id") or schedule_id),
+        "runtime_target": _run_service_text(route.get("runtime_target") or route.get("selected") or metadata.get("runtime_target") or "auto"),
+        "execution_target": _run_service_text(route.get("selected") or metadata.get("execution_target_selected") or metadata.get("execution_target") or "text"),
+        "trigger_source": trigger_source,
+        "idempotency_key": _run_service_idempotency_key(req, metadata, schedule_id=schedule_id),
+        "workspace_access": True,
+        "runtime_attached": True,
+        "runtime_healthy": True,
+        "local_confirmation_required": bool(local_confirmation_required),
+        "local_confirmation_provided": False,
+        "browser_required": bool(metadata.get("browser_execution_required") or metadata.get("browser_required")),
+        "browser_ready": not bool(metadata.get("browser_blocked")),
+        "webhook_signature_valid": True,
+        "quota_ok": True,
+        "budget_ok": True,
+        "policy_decision": "allow",
+        "risk_level": "normal",
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "run-service-decision",
+            payload,
+            allow_approval_required=True,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        detail = _run_service_text(exc.reason) or "rust_run_service_denied"
+        raise HTTPException(status_code=409, detail=f"Rust run-service gate blocked {operation}: {detail}")
+    metadata["rust_run_service_decision"] = {
+        "command": "run-service-decision",
+        "decision": decision.get("decision"),
+        "next_action": decision.get("next_action"),
+        "reason": decision.get("reason"),
+        "approval_required": bool(decision.get("approval_required")),
+    }
+    return decision
+
+
 def create_legacy_run_result_from_request(
     request: RunStartRequest,
     *,
@@ -5394,6 +5554,29 @@ def schedule_auto_retry_for_failed_children(
         timer.daemon = True
         timer.start()
 
+    def _scheduler_retry_decision(*, retry_count: int) -> Optional[Dict[str, Any]]:
+        try:
+            decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "scheduler-decision",
+                {
+                    "operation": "retry",
+                    "enabled": True,
+                    "retry_count": max(0, int(retry_count or 0)),
+                    "max_retries": max(1, int(auto_retry_max_retries or 1)),
+                    "current_hour": datetime.now(timezone.utc).hour,
+                    "quiet_hours_override": True,
+                    "wake_mode": "owner_approved",
+                },
+            )
+        except rust_runtime_kernel_client.RustKernelDecisionError:
+            return None
+        if not isinstance(decision, dict):
+            return None
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "schedule_retry":
+            return None
+        return decision
+
     stale_lineages = {
         lineage_key
         for lineage_key in list(pending_retry_state.keys())
@@ -5442,14 +5625,16 @@ def schedule_auto_retry_for_failed_children(
                 child_retry_count(child),
                 safe_int(auto_retry_attempts.get(pending_key), 0),
             )
-            if retry_count >= auto_retry_max_retries:
-                continue
+        scheduler_decision = _scheduler_retry_decision(retry_count=retry_count)
+        if scheduler_decision is None:
+            continue
         child_run_id = str(child.get("run_id") or "").strip()
         scheduled.add(lineage_key)
         attempt = retry_count + 1
         next_retry_at = None
-        if auto_retry_delay_seconds > 0:
-            next_retry_at = (datetime.now(timezone.utc) + timedelta(seconds=float(auto_retry_delay_seconds))).isoformat().replace("+00:00", "Z")
+        scheduler_delay_seconds = float(scheduler_decision.get("delay_seconds") or auto_retry_delay_seconds or 0.0)
+        if scheduler_delay_seconds > 0:
+            next_retry_at = (datetime.now(timezone.utc) + timedelta(seconds=scheduler_delay_seconds)).isoformat().replace("+00:00", "Z")
         pending_retry_state[lineage_key] = {
             "failed_child_run_id": child_run_id,
             "attempt": attempt,
@@ -5472,7 +5657,7 @@ def schedule_auto_retry_for_failed_children(
         _schedule_retry_timer(
             failed_child=child,
             pending=pending_key,
-            delay_seconds=float(auto_retry_delay_seconds or 0.0),
+            delay_seconds=scheduler_delay_seconds,
             attempt=attempt,
         )
 
@@ -6060,40 +6245,128 @@ def create_run_from_prepared_request(
         selected_target=metadata.get("execution_target_selected") or metadata.get("execution_target"),
     )
     metadata["policy_mode"] = runtime_policy.get("policy_mode")
-    needs_local_confirmation = services.local_execution_requires_start_confirmation(
-        metadata,
-        metadata["tool_policy_precheck"],
-    )
+    try:
+        local_confirmation_decision = resolve_run_execution_boundary.__globals__["rust_runtime_kernel_client"].run_runtime_kernel_enforced(
+            "run-routing-decision",
+            {
+                "operation": "local_confirmation",
+                "workspace_id": _run_service_text(metadata.get("workspace_id")) or "default",
+                "run_id": _run_service_text(metadata.get("run_id")),
+                "schedule_id": _run_service_text(schedule_id),
+                "parent_run_id": _run_service_text(metadata.get("parent_run_id")),
+                "execution_target_selected": _run_service_text(
+                    metadata.get("execution_target_selected") or metadata.get("execution_target")
+                )
+                or "cloud",
+                "execution_target": _run_service_text(
+                    metadata.get("execution_target_selected") or metadata.get("execution_target")
+                )
+                or "cloud",
+                "runtime_mode": _run_service_text(metadata.get("runtime_mode")),
+                "outcome_pack": _run_service_text(metadata.get("outcome_pack")),
+                "blocked_count": int(metadata["tool_policy_precheck"].get("blocked_count") or 0),
+                "require_confirmation_count": int(metadata["tool_policy_precheck"].get("require_confirmation_count") or 0),
+                "approval_required_count": int(metadata["tool_policy_precheck"].get("approval_required_count") or 0),
+            },
+            allow_approval_required=True,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        detail = _run_service_text(exc.reason) or "rust_run_routing_denied"
+        raise HTTPException(
+            status_code=409,
+            detail=f"Rust run-routing gate blocked local_confirmation: {detail}",
+        ) from exc
+    local_confirmation_next_action = _run_service_text(local_confirmation_decision.get("next_action"))
+    if local_confirmation_next_action not in {
+        "continue_without_confirmation",
+        "continue_local_execution",
+        "request_local_execution_confirmation",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Rust run-routing gate blocked local_confirmation: "
+                f"unexpected_next_action:{local_confirmation_next_action or 'missing'}"
+            ),
+        )
+    needs_local_confirmation = local_confirmation_next_action == "request_local_execution_confirmation"
     if needs_local_confirmation:
         metadata["local_execution_waiting_confirmation"] = True
         metadata["local_execution_waiting_approval"] = True
         preview_context["metadata"] = metadata
+    rust_decision = _enforce_rust_run_service_decision(
+        operation="create",
+        req=req,
+        metadata=metadata,
+        route=route,
+        schedule_id=schedule_id,
+        local_confirmation_required=needs_local_confirmation,
+    )
+    rust_requires_approval = bool(rust_decision.get("approval_required")) or _run_service_text(
+        rust_decision.get("decision")
+    ) in {"require_approval", "requires_approval"}
+    rust_next_action = _run_service_text(rust_decision.get("next_action"))
+    expected_next_action = "request_run_service_approval" if rust_requires_approval else "create_run_record"
+    if rust_next_action != expected_next_action:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Rust run-service gate blocked create: "
+                f"unexpected_next_action:{rust_next_action or 'missing'}"
+            ),
+        )
+    if rust_requires_approval:
+        metadata["run_service_waiting_approval"] = True
+        preview_context["metadata"] = metadata
     run_id = services.create_run(
         engine=engine,
         context=preview_context,
-        defer_local_enqueue=needs_local_confirmation,
+        defer_local_enqueue=rust_requires_approval,
     )
     created_run = services.load_created_run(run_id) if callable(services.load_created_run) else {}
     if not isinstance(created_run, dict):
         created_run = {}
     status = "starting"
-    if needs_local_confirmation:
+    if rust_requires_approval:
+        approval_labels = []
+        approval_prompt = "Run requires approval before execution."
+        approval_source = "run_service_approval"
+        pending_metadata = {
+            "target": metadata.get("execution_target_selected"),
+            "policy_mode": metadata.get("policy_mode"),
+            "outcome_pack": metadata.get("outcome_pack"),
+            "rust_reason": _run_service_text(rust_decision.get("reason")) or None,
+            "rust_next_action": _run_service_text(rust_decision.get("next_action")) or None,
+        }
+        if needs_local_confirmation:
+            approval_labels = services.precheck_human_action_labels(
+                metadata["tool_policy_precheck"],
+                decision="require_confirmation",
+            )
+            approval_prompt = services.local_execution_confirmation_prompt(
+                metadata["tool_policy_precheck"]
+            )
+            approval_source = "local_execution_start"
+            pending_metadata.update(
+                {
+                    "approval_actions": list(
+                        metadata["tool_policy_precheck"].get("require_confirmation") or []
+                    ),
+                    "approval_labels": approval_labels,
+                    "approval_capabilities": list(
+                        metadata["tool_policy_precheck"].get("capability_ids") or []
+                    ),
+                }
+            )
         approval_labels = services.precheck_human_action_labels(
             metadata["tool_policy_precheck"],
             decision="require_confirmation",
         )
         pending = services.begin_run_pending_confirmation(
             run_id,
-            services.local_execution_confirmation_prompt(metadata["tool_policy_precheck"]),
-            source="local_execution_start",
-            metadata={
-                "target": metadata.get("execution_target_selected"),
-                "policy_mode": metadata.get("policy_mode"),
-                "approval_actions": list(metadata["tool_policy_precheck"].get("require_confirmation") or []),
-                "approval_labels": approval_labels,
-                "approval_capabilities": list(metadata["tool_policy_precheck"].get("capability_ids") or []),
-                "outcome_pack": metadata.get("outcome_pack"),
-            },
+            approval_prompt,
+            source=approval_source,
+            metadata=pending_metadata,
         )
         status = "waiting_for_input"
     else:

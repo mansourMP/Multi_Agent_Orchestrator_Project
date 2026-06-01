@@ -11,6 +11,7 @@ from server_modules import (
     execution_mode_policy,
     gateway_activity_service,
     gateway_state_repository,
+    rust_runtime_kernel_client,
 )
 
 
@@ -84,6 +85,40 @@ def create_gateway_pairing_intent(
     )
     if trace_id:
         merged_metadata["trace_id"] = trace_id
+    decision = rust_runtime_kernel_client.gateway_service_decision(
+        operation="pairing_bootstrap",
+        tenant_id=str(tenant_id or "").strip() or "default",
+        workspace_id=str(workspace_id or "").strip() or "default",
+        actor_id=str(user_id or "").strip() or "user",
+        actor_role="owner",
+        gateway_id="",
+        session_id="",
+        request_id=str(trace_id or "").strip() or None,
+        capability_id="gateway.pairing",
+        run_id="",
+        trace_id=str(trace_id or "").strip() or None,
+        quota_profile="standard",
+        risk_level="normal",
+        policy_decision="allow",
+        device_trust_state="trusted",
+        approval_provided=True,
+        approval_memory_hit=False,
+        kill_switch_enabled=False,
+        quota_ok=True,
+        gateway_registered=False,
+        session_valid=False,
+        websocket_token_present=False,
+        frame_valid=True,
+        payload_present=True,
+    )
+    if str(decision.get("decision") or "").strip() != "allow":
+        detail = str(decision.get("reason") or "rust_gateway_pairing_denied").strip()
+        raise ValueError(f"Rust gateway-service blocked pairing_bootstrap: {detail}")
+    if str(decision.get("next_action") or "").strip() != "allow_gateway_service_operation":
+        raise ValueError(
+            "Rust gateway-service returned unexpected next_action for pairing_bootstrap: "
+            f"{str(decision.get('next_action') or 'missing').strip() or 'missing'}"
+        )
     return gateway_state_repository.create_pairing_intent(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -110,6 +145,42 @@ def register_gateway(
     merged_metadata = dict(metadata or {})
     if trace_id:
         merged_metadata["trace_id"] = trace_id
+    pairing = gateway_state_repository.get_pairing_intent_by_token(pairing_token)
+    if pairing is not None:
+        decision = rust_runtime_kernel_client.gateway_service_decision(
+            operation="pairing_bootstrap",
+            tenant_id=str(pairing.get("tenant_id") or "").strip() or "default",
+            workspace_id=str(pairing.get("workspace_id") or "").strip() or "default",
+            actor_id=str(pairing.get("user_id") or "").strip() or "user",
+            actor_role="owner",
+            gateway_id=str(gateway_id or "").strip(),
+            session_id="",
+            request_id=str(trace_id or "").strip() or None,
+            capability_id="gateway.registration",
+            run_id="",
+            trace_id=str(trace_id or "").strip() or None,
+            quota_profile="standard",
+            risk_level="normal",
+            policy_decision="allow",
+            device_trust_state="trusted",
+            approval_provided=True,
+            approval_memory_hit=False,
+            kill_switch_enabled=False,
+            quota_ok=True,
+            gateway_registered=False,
+            session_valid=False,
+            websocket_token_present=False,
+            frame_valid=True,
+            payload_present=True,
+        )
+        if str(decision.get("decision") or "").strip() != "allow":
+            detail = str(decision.get("reason") or "rust_gateway_pairing_denied").strip()
+            raise ValueError(f"Rust gateway-service blocked pairing_bootstrap: {detail}")
+        if str(decision.get("next_action") or "").strip() != "allow_gateway_service_operation":
+            raise ValueError(
+                "Rust gateway-service returned unexpected next_action for pairing_bootstrap: "
+                f"{str(decision.get('next_action') or 'missing').strip() or 'missing'}"
+            )
     registration = gateway_state_repository.register_gateway_from_pairing(
         pairing_token=pairing_token,
         device_id=device_id,

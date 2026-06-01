@@ -10,6 +10,8 @@ from urllib import request as urlrequest
 
 import certifi
 
+from server_modules import rust_runtime_kernel_client
+
 
 def telegram_safe_path_token(value: Any) -> str:
     token = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(value or "").strip())
@@ -33,6 +35,33 @@ class TelegramMediaService:
         self.media_max_bytes = max(1024, int(media_max_bytes or 1024))
         self.media_include_in_goal = bool(media_include_in_goal)
         self.telegram_api_request = telegram_api_request
+
+    def _enforce_media_file_write(self, *, remote_file_path: str, dest_path: Path, max_bytes: int) -> None:
+        payload = {
+            "remote_suffix": Path(str(remote_file_path or "")).suffix.strip().lower()[:16],
+            "dest_path": str(dest_path),
+            "max_bytes": max(0, int(max_bytes or 0)),
+        }
+        try:
+            decision = rust_runtime_kernel_client.runtime_state_store_decision(
+                operation="write_telegram_media_file",
+                state_class="telegram_media_files",
+                actor_id="system",
+                status="active",
+                payload=payload,
+                payload_bytes=int(payload["max_bytes"]),
+                workspace_access=True,
+                owner_access=True,
+            )
+            rust_runtime_kernel_client.enforce_kernel_decision(
+                "runtime-state-store-decision",
+                decision,
+            )
+            next_action = str(decision.get("next_action") or "").strip()
+            if next_action != "write_telegram_media_file":
+                raise RuntimeError("unexpected_next_action")
+        except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+            raise RuntimeError(exc.reason) from exc
 
     def extract_message(self, update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(update, dict):
@@ -123,6 +152,11 @@ class TelegramMediaService:
         return ".bin"
 
     def download_file(self, bot_token: str, remote_file_path: str, dest_path: Path, max_bytes: int) -> int:
+        self._enforce_media_file_write(
+            remote_file_path=remote_file_path,
+            dest_path=dest_path,
+            max_bytes=max_bytes,
+        )
         file_url = f"https://api.telegram.org/file/bot{bot_token}/{remote_file_path}"
         req = urlrequest.Request(file_url, method="GET")
         context = ssl.create_default_context(cafile=certifi.where())

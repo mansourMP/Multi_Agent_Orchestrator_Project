@@ -14,6 +14,7 @@ from server_modules import (
     deployed_agent_config_schema,
     deployed_agent_runtime_contract_service,
     runtime_attachment_service,
+    rust_runtime_kernel_client,
     session_service,
     virtual_computer_runtime,
 )
@@ -574,6 +575,246 @@ def _runtime_provider_id_for_config(config: Any) -> Optional[str]:
     return None
 
 
+def _runtime_money_cents(value: Any) -> int:
+    try:
+        return int(round(float(value or 0) * 100))
+    except Exception:
+        return 0
+
+
+def _deployed_virtual_runtime_service_payload(
+    *,
+    operation: str,
+    deployed_agent: Dict[str, Any],
+    config: Any,
+    privacy_snapshot: Dict[str, Any],
+    computer_safety_snapshot: Dict[str, Any],
+    **extra: Any,
+) -> Dict[str, Any]:
+    automation = config.computer_automation
+    recording_snapshot = _coerce_dict(computer_safety_snapshot.get("screenshot_session_recording"))
+    allowed_domains = [
+        str(item).strip()
+        for item in _coerce_list(computer_safety_snapshot.get("domain_allowlist"))
+        if str(item).strip()
+    ] or list(automation.allowed_domains or [])
+    daily_budget = (
+        automation.daily_budget_usd
+        or automation.monthly_budget_usd
+        or config.commerce_policy.monthly_cost_cap_usd
+        or 0
+    )
+    payload: Dict[str, Any] = {
+        "operation": operation,
+        "tenant_id": _text(deployed_agent.get("tenant_id")),
+        "workspace_id": _text(deployed_agent.get("workspace_id") or deployed_agent.get("owner_workspace_id")),
+        "deployed_agent_id": _text(deployed_agent.get("id")),
+        "studio_agent_mode": _text(config.studio_agent_mode).lower(),
+        "runtime_target": _text(config.runtime_target),
+        "runtime_choice": _runtime_choice_for_config(config),
+        "runtime_provider_id": _runtime_provider_id_for_config(config) or "provider_policy_default",
+        "runtime_profile_id": _text(config.runtime_profile_id),
+        "privacy_contract_valid": _validate_privacy_contract_snapshot(privacy_snapshot),
+        "computer_safety_contract_valid": _validate_computer_safety_contract_snapshot(
+            computer_safety_snapshot,
+            require_for_mode=_text(config.studio_agent_mode).lower() in COMPUTER_RUNTIME_MODES,
+        ),
+        "allowed_domain_count": len(allowed_domains),
+        "daily_budget_usd_cents": _runtime_money_cents(daily_budget),
+        "session_timeout_seconds": int(
+            computer_safety_snapshot.get("session_timeout_seconds")
+            or automation.idle_timeout_seconds
+            or DEFAULT_IDLE_TIMEOUT_SECONDS
+        ),
+        "max_runtime_seconds": int(
+            computer_safety_snapshot.get("max_runtime_seconds")
+            or automation.max_session_runtime_seconds
+            or DEFAULT_MAX_RUNTIME_SECONDS
+        ),
+        "session_recording_enabled": _session_recording_enabled(config),
+        "session_recording_policy": _text(
+            recording_snapshot.get("recording_policy") or automation.session_recording_policy
+        ).lower(),
+        "filesystem_scope": _text(computer_safety_snapshot.get("filesystem_default_access")) or "none",
+        "terminal_command_policy": _text(computer_safety_snapshot.get("terminal_command_policy")) or "blocked",
+        "sensitive_action_confirmation_required": bool(
+            computer_safety_snapshot.get("sensitive_action_confirmation_required")
+        ),
+        "owner_approval_provided": True,
+    }
+    payload.update({key: value for key, value in extra.items() if value is not None})
+    return payload
+
+
+def _enforce_deployed_virtual_runtime_service_decision(
+    *,
+    operation: str,
+    deployed_agent: Dict[str, Any],
+    config: Any,
+    privacy_snapshot: Dict[str, Any],
+    computer_safety_snapshot: Dict[str, Any],
+    **extra: Any,
+) -> Dict[str, Any]:
+    allowed_next_actions = {
+        "build_policy_payload": {"build_deployed_agent_virtual_runtime_payload"},
+        "execute_cloud_tool": {"execute_bound_runtime_tool_call"},
+        "terminate_cloud_session": {"terminate_and_meter_runtime_session"},
+        "terminate_self_hosted_session": {"terminate_and_meter_runtime_session"},
+    }.get(str(operation or "").strip())
+    payload = _deployed_virtual_runtime_service_payload(
+        operation=operation,
+        deployed_agent=deployed_agent,
+        config=config,
+        privacy_snapshot=privacy_snapshot,
+        computer_safety_snapshot=computer_safety_snapshot,
+        **extra,
+    )
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "deployed-virtual-runtime-service-decision",
+            payload,
+        )
+        if allowed_next_actions is not None:
+            next_action = _text(decision.get("next_action"))
+            if next_action not in allowed_next_actions:
+                raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _text(exc.reason) or "rust_runtime_service_denied"
+        raise RuntimeError(f"Rust deployed virtual-runtime service blocked {operation}: {reason}") from exc
+
+
+def _enforce_deployed_virtual_runtime_decision(
+    *,
+    operation: str,
+    deployed_agent: Dict[str, Any],
+    config: Any,
+    privacy_snapshot: Dict[str, Any],
+    computer_safety_snapshot: Dict[str, Any],
+    **extra: Any,
+) -> Dict[str, Any]:
+    allowed_next_actions = {
+        "build_policy_payload": {"build_deployed_agent_virtual_runtime_payload"},
+    }.get(str(operation or "").strip())
+    automation = getattr(config, "computer_automation", None)
+    allowed_domains = [
+        str(item).strip()
+        for item in _coerce_list(computer_safety_snapshot.get("domain_allowlist"))
+        if str(item).strip()
+    ] or list(getattr(automation, "allowed_domains", None) or [])
+    payload = {
+        "operation": operation,
+        "tenant_id": _text(deployed_agent.get("tenant_id")),
+        "workspace_id": _text(deployed_agent.get("workspace_id")),
+        "deployed_agent_id": _text(deployed_agent.get("id")),
+        "deployment_state": _text(deployed_agent.get("deployment_state")),
+        "studio_agent_mode": config.studio_agent_mode,
+        "privacy_contract_valid": bool(privacy_snapshot),
+        "computer_safety_contract_valid": bool(computer_safety_snapshot),
+        "domain_count": len(allowed_domains),
+        "daily_budget_usd_cents": int(round(float(getattr(automation, "daily_budget_usd", 0) or 0) * 100)),
+        "monthly_budget_usd_cents": int(round(float(getattr(automation, "monthly_budget_usd", 0) or 0) * 100)),
+        "cost_cap_usd_cents": int(round(float(getattr(config.commerce_policy, "monthly_cost_cap_usd", 0) or 0) * 100)),
+        "session_recording_policy": _text(
+            _coerce_dict(computer_safety_snapshot.get("screenshot_session_recording")).get("recording_policy")
+            or getattr(automation, "session_recording_policy", None)
+        ).lower(),
+        "kill_switch_active": bool(_coerce_dict(_coerce_dict(deployed_agent.get("metadata")).get("kill_switch")).get("active")),
+        "workspace_emergency_stop_active": bool(
+            _coerce_dict(_coerce_dict(deployed_agent.get("metadata")).get("workspace_emergency_stop")).get("active")
+        ),
+        **extra,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "deployed-virtual-runtime-decision",
+            payload,
+        )
+        if allowed_next_actions is not None:
+            next_action = _text(decision.get("next_action"))
+            if next_action not in allowed_next_actions:
+                raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _text(exc.reason) or "rust_virtual_runtime_denied"
+        raise RuntimeError(f"Rust deployed virtual-runtime blocked {operation}: {reason}") from exc
+
+
+def _enforce_runtime_binding_decision(**payload: Any) -> Dict[str, Any]:
+    operation = _text(payload.get("operation")) or "ensure_runtime_session"
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "runtime-binding-decision",
+            payload,
+        )
+        next_action = _text(decision.get("next_action"))
+        allowed_next_actions = {
+            "ensure_cloud_runtime_session": {
+                "create_cloud_runtime_session",
+                "create_local_gateway_runtime_session",
+                "reuse_runtime_session",
+                "skip_runtime_binding",
+            },
+            "ensure_self_hosted_runtime_session": {
+                "create_self_hosted_runtime_session",
+                "reuse_runtime_session",
+                "skip_self_hosted_binding",
+            },
+        }.get(operation)
+        if allowed_next_actions is None:
+            raise RuntimeError(f"unexpected runtime binding operation: {operation}")
+        if next_action not in allowed_next_actions:
+            raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _text(exc.reason) or "runtime_binding_denied"
+        raise RuntimeError(f"Rust runtime binding blocked {operation}: {reason}") from exc
+
+
+def _enforce_runtime_action_decision(**payload: Any) -> Dict[str, Any]:
+    operation = _text(payload.get("operation")) or "execute_runtime_action"
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "runtime-action-decision",
+            payload,
+        )
+        next_action = _text(decision.get("next_action"))
+        runtime_binding = _text(payload.get("runtime_session_binding")).lower()
+        allowed_next_actions = {
+            _RUNTIME_BINDING_CLOUD: {
+                "execute_cloud_runtime_action",
+                "skip_runtime_action",
+            },
+            _RUNTIME_BINDING_SELF_HOSTED: {
+                "execute_self_hosted_runtime_action",
+                "skip_runtime_action",
+            },
+        }.get(runtime_binding)
+        if allowed_next_actions is None:
+            raise RuntimeError(f"unexpected runtime action binding: {runtime_binding or 'missing'}")
+        if next_action not in allowed_next_actions:
+            raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _text(exc.reason) or "runtime_action_denied"
+        raise RuntimeError(f"Rust runtime action blocked {operation}: {reason}") from exc
+
+
+def _runtime_binding_metadata_updates(
+    decision: Dict[str, Any],
+    *,
+    fallback_binding: str,
+    fallback_session_id: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    metadata = {
+        "runtime_session_id": _text(decision.get("runtime_session_id")) or fallback_session_id,
+        "runtime_session_binding": _text(decision.get("runtime_session_binding")).lower() or fallback_binding,
+    }
+    metadata.update({key: value for key, value in dict(extra or {}).items() if value is not None})
+    return metadata
+
+
 def build_deployed_agent_virtual_runtime_payload(
     deployed_agent: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -583,9 +824,23 @@ def build_deployed_agent_virtual_runtime_payload(
     if mode == deployed_agent_runtime_contract_service.STUDIO_AGENT_MODE_SELF_HOSTED:
         raise ValueError(
             "self_hosted_agent cannot use cloud runtime payload builder; dedicated self-hosted runtime binding is required."
-        )
+    )
     privacy_snapshot, computer_safety_snapshot = _validated_contract_snapshots(record, config)
     _validate_required_runtime_policy_fields(config, computer_safety_snapshot)
+    _enforce_deployed_virtual_runtime_service_decision(
+        operation="build_policy_payload",
+        deployed_agent=record,
+        config=config,
+        privacy_snapshot=privacy_snapshot,
+        computer_safety_snapshot=computer_safety_snapshot,
+    )
+    _enforce_deployed_virtual_runtime_decision(
+        operation="build_policy_payload",
+        deployed_agent=record,
+        config=config,
+        privacy_snapshot=privacy_snapshot,
+        computer_safety_snapshot=computer_safety_snapshot,
+    )
     automation = config.computer_automation
     runtime_choice = _runtime_choice_for_config(config)
     allowed_domains = [str(item).strip() for item in _coerce_list(computer_safety_snapshot.get("domain_allowlist")) if str(item).strip()] or list(automation.allowed_domains or [])
@@ -1280,15 +1535,34 @@ async def ensure_cloud_runtime_session_binding(
     existing_runtime_binding = _text(
         current_session_metadata.get("runtime_session_binding") or current_turn_metadata.get("runtime_session_binding")
     ).lower()
-    if existing_runtime_session_id and existing_runtime_binding == runtime_session_binding:
+    binding_decision = _enforce_runtime_binding_decision(
+        operation="ensure_cloud_runtime_session",
+        deployed_agent_id=resolved_deployed_agent_id,
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        session_id=resolved_session_id,
+        thread_id=_text(thread_id) or resolved_session_id,
+        studio_agent_mode=mode,
+        existing_runtime_session_id=existing_runtime_session_id or None,
+        existing_runtime_binding=existing_runtime_binding or None,
+        local_gateway_attachment_present=bool(local_gateway_attachment),
+        local_gateway_online=bool(local_gateway_attachment),
+        local_gateway_healthy=bool(local_gateway_attachment),
+        local_gateway_revoked=False,
+        runtime_attachment_id=_text(local_gateway_attachment.get("attachment_id")) or None,
+        gateway_id=_text((_coerce_dict(local_gateway_attachment.get("gateway_identity"))).get("gateway_id") or local_gateway_attachment.get("runtime_id")) or None,
+        runtime_node_id=_text(local_gateway_attachment.get("runtime_node_id") or local_gateway_attachment.get("runtime_id")) or None,
+    )
+    if _text(binding_decision.get("next_action")) == "reuse_runtime_session":
         return {
             "deployed_agent": None,
             "runtime_payload": None,
             "runtime_response": None,
-            "metadata_updates": {
-                "runtime_session_id": existing_runtime_session_id,
-                "runtime_session_binding": runtime_session_binding,
-            },
+            "metadata_updates": _runtime_binding_metadata_updates(
+                binding_decision,
+                fallback_binding=runtime_session_binding,
+                fallback_session_id=existing_runtime_session_id,
+            ),
         }
 
     payload = build_deployed_agent_virtual_runtime_payload(deployed_agent)
@@ -1443,18 +1717,47 @@ async def ensure_self_hosted_runtime_session_binding(
     existing_runtime_binding = _text(
         current_session_metadata.get("runtime_session_binding") or current_turn_metadata.get("runtime_session_binding")
     ).lower()
-    if existing_runtime_session_id and existing_runtime_binding == _RUNTIME_BINDING_SELF_HOSTED:
+    binding_decision = _enforce_runtime_binding_decision(
+        operation="ensure_self_hosted_runtime_session",
+        deployed_agent_id=resolved_deployed_agent_id,
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        session_id=resolved_session_id,
+        thread_id=_text(thread_id) or resolved_session_id,
+        studio_agent_mode=mode,
+        existing_runtime_session_id=existing_runtime_session_id or None,
+        existing_runtime_binding=existing_runtime_binding or None,
+        self_hosted_binding_present=bool(binding_contract),
+        runtime_node_id=_text(binding_contract.get("runtime_node_id")) or None,
+        runtime_profile_id=_text(binding_contract.get("runtime_profile_id")) or None,
+        runtime_attachment_id=_text(binding_contract.get("runtime_attachment_id")) or None,
+        binding_workspace_id=_text(binding_contract.get("workspace_id")) or None,
+        self_hosted_node_registered=True,
+        self_hosted_node_gate_passed=True,
+        agent_allowed_on_node=True,
+        active_sessions=0,
+        max_concurrent_sessions=0,
+        filesystem_scope=_text(binding_contract.get("filesystem_scope")) or "none",
+        workspace_scoped_filesystem_allowed=_text(binding_contract.get("filesystem_scope")).lower() != "workspace_scoped"
+        or _text(binding_contract.get("workspace_id")) == resolved_workspace_id,
+        domain_allowlist_present=bool(_coerce_list(binding_contract.get("domain_allowlist"))),
+        session_recording_enabled=bool(_coerce_dict(binding_contract.get("approval_policy")) or True),
+    )
+    if _text(binding_decision.get("next_action")) == "reuse_runtime_session":
         return {
             "deployed_agent": None,
             "runtime_payload": None,
             "runtime_response": None,
-            "metadata_updates": {
-                "runtime_session_id": existing_runtime_session_id,
-                "runtime_session_binding": _RUNTIME_BINDING_SELF_HOSTED,
-                "runtime_node_id": _text(binding_contract.get("runtime_node_id")),
-                "runtime_attachment_id": _text(binding_contract.get("runtime_attachment_id")),
-                "runtime_profile_id": _text(binding_contract.get("runtime_profile_id")),
-            },
+            "metadata_updates": _runtime_binding_metadata_updates(
+                binding_decision,
+                fallback_binding=_RUNTIME_BINDING_SELF_HOSTED,
+                fallback_session_id=existing_runtime_session_id,
+                extra={
+                    "runtime_node_id": _text(binding_contract.get("runtime_node_id")),
+                    "runtime_attachment_id": _text(binding_contract.get("runtime_attachment_id")),
+                    "runtime_profile_id": _text(binding_contract.get("runtime_profile_id")),
+                },
+            ),
         }
 
     runtime_attachment = await _assert_self_hosted_runtime_gate(
@@ -1463,6 +1766,27 @@ async def ensure_self_hosted_runtime_session_binding(
         workspace_id=resolved_workspace_id,
         runtime_session_id=None,
         phase="session_init",
+    )
+    _enforce_runtime_binding_decision(
+        operation="ensure_self_hosted_runtime_session",
+        deployed_agent_id=resolved_deployed_agent_id,
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        session_id=resolved_session_id,
+        thread_id=_text(thread_id) or resolved_session_id,
+        studio_agent_mode=mode,
+        existing_runtime_session_id=existing_runtime_session_id or None,
+        existing_runtime_binding=existing_runtime_binding or None,
+        self_hosted_binding_present=bool(binding_contract),
+        runtime_node_id=_text(binding_contract.get("runtime_node_id")) or None,
+        runtime_profile_id=_text(binding_contract.get("runtime_profile_id")) or None,
+        runtime_attachment_id=_text(binding_contract.get("runtime_attachment_id")) or None,
+        binding_workspace_id=_text(binding_contract.get("workspace_id")) or None,
+        self_hosted_node_registered=True,
+        self_hosted_node_gate_passed=True,
+        agent_allowed_on_node=True,
+        active_sessions=0,
+        max_concurrent_sessions=0,
     )
     payload = build_deployed_agent_self_hosted_runtime_payload(
         deployed_agent,
@@ -1663,11 +1987,83 @@ async def execute_bound_cloud_runtime_tool_call(
             f"Cloud Computer runtime rejected raw policy override payload: {', '.join(rejected_override_keys)}."
         )
 
-    runtime_action, runtime_action_args = _cloud_runtime_tool_action(
+    privacy_snapshot, computer_safety_snapshot = _validated_contract_snapshots(deployed_agent, config)
+    _enforce_deployed_virtual_runtime_service_decision(
+        operation="execute_cloud_tool",
+        deployed_agent=deployed_agent,
+        config=config,
+        privacy_snapshot=privacy_snapshot,
+        computer_safety_snapshot=computer_safety_snapshot,
+        session_id=runtime_session_id,
+        runtime_session_id=runtime_session_id,
+        run_id=resolved_run_id,
+        thread_id=resolved_thread_id or runtime_session_id,
+        runtime_session_binding=_RUNTIME_BINDING_CLOUD,
+        runtime_session_bound=True,
+        runtime_session_healthy=True,
+        connector_id=_text(connector_id).lower(),
+        action_id=_text(action_id).lower(),
+        action_supported=True,
+        forbidden_policy_override=False,
+    )
+    kill_state = _runtime_kill_state(deployed_agent)
+    try:
+        action_decision = _enforce_runtime_action_decision(
+            operation="execute_runtime_action",
+            deployed_agent_id=deployed_agent_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            runtime_session_id=runtime_session_id,
+            run_id=resolved_run_id,
+            thread_id=resolved_thread_id or runtime_session_id,
+            studio_agent_mode=_text(config.studio_agent_mode).lower(),
+            runtime_session_binding=_RUNTIME_BINDING_CLOUD,
+            connector_id=_text(connector_id).lower(),
+            action_id=_text(action_id).lower(),
+            raw_policy_override_present=False,
+            forbidden_override_key_count=0,
+            kill_switch_active=bool(kill_state.get("kill_switch_active")),
+            workspace_emergency_stop=bool(kill_state.get("workspace_emergency_stop_active")),
+            agent_paused=kill_state.get("deployment_state") == "paused",
+            agent_suspended=kill_state.get("deployment_state") == "suspended",
+            agent_archived=kill_state.get("deployment_state") == "archived",
+            url=_coerce_dict(argument_payload).get("url"),
+            selector=_coerce_dict(argument_payload).get("selector"),
+            x=_coerce_dict(argument_payload).get("x"),
+            y=_coerce_dict(argument_payload).get("y"),
+            text=_coerce_dict(argument_payload).get("text"),
+            input=_coerce_dict(argument_payload).get("input"),
+            command=_coerce_dict(argument_payload).get("command"),
+        )
+    except RuntimeError as exc:
+        await _append_cloud_runtime_audit_event(
+            deployed_agent=deployed_agent,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            run_id=resolved_run_id,
+            thread_id=resolved_thread_id or runtime_session_id,
+            session_key=runtime_session_id,
+            action="deployed_agent_cloud_runtime_action_denied",
+            title="Cloud Computer action denied",
+            summary="Cloud Computer runtime action was denied before execution.",
+            status="blocked",
+            event_class="blocked_action",
+            review_required=True,
+            payload={
+                "runtime_session_id": runtime_session_id,
+                "connector_id": _text(connector_id).lower() or None,
+                "action_id": _text(action_id).lower() or None,
+                "reason": str(exc),
+            },
+            metadata={"runtime_session_binding": _RUNTIME_BINDING_CLOUD},
+        )
+        raise
+    python_runtime_action, runtime_action_args = _cloud_runtime_tool_action(
         connector_id=connector_id,
         action_id=action_id,
         argument_payload=argument_payload,
     )
+    runtime_action = _text(action_decision.get("runtime_action")) or python_runtime_action
     payload = build_deployed_agent_virtual_runtime_payload(deployed_agent)
     payload.update(
         {
@@ -1917,12 +2313,63 @@ async def execute_bound_self_hosted_runtime_tool_call(
         raise RuntimeError(
             f"Self-hosted runtime rejected raw policy override payload: {', '.join(rejected_override_keys)}."
         )
-
-    runtime_action, runtime_action_args = _cloud_runtime_tool_action(
+    kill_state = _runtime_kill_state(deployed_agent)
+    try:
+        action_decision = _enforce_runtime_action_decision(
+            operation="execute_runtime_action",
+            deployed_agent_id=deployed_agent_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            runtime_session_id=runtime_session_id,
+            run_id=_text(metadata.get("run_id")) or runtime_session_id,
+            thread_id=resolved_thread_id or runtime_session_id,
+            studio_agent_mode=_text(config.studio_agent_mode).lower(),
+            runtime_session_binding=_RUNTIME_BINDING_SELF_HOSTED,
+            connector_id=_text(connector_id).lower(),
+            action_id=_text(action_id).lower(),
+            raw_policy_override_present=False,
+            forbidden_override_key_count=0,
+            kill_switch_active=bool(kill_state.get("kill_switch_active")),
+            workspace_emergency_stop=bool(kill_state.get("workspace_emergency_stop_active")),
+            agent_paused=kill_state.get("deployment_state") == "paused",
+            agent_suspended=kill_state.get("deployment_state") == "suspended",
+            agent_archived=kill_state.get("deployment_state") == "archived",
+            self_hosted_node_gate_passed=True,
+            self_hosted_node_concurrency_exceeded=False,
+            url=_coerce_dict(argument_payload).get("url"),
+            selector=_coerce_dict(argument_payload).get("selector"),
+            x=_coerce_dict(argument_payload).get("x"),
+            y=_coerce_dict(argument_payload).get("y"),
+            text=_coerce_dict(argument_payload).get("text"),
+            input=_coerce_dict(argument_payload).get("input"),
+            command=_coerce_dict(argument_payload).get("command"),
+        )
+    except RuntimeError as exc:
+        await _append_cloud_runtime_audit_event(
+            deployed_agent=deployed_agent,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            action="deployed_agent_self_hosted_runtime_action_denied",
+            title="Self-hosted runtime action denied",
+            summary="Self-hosted runtime action was denied before execution.",
+            status="blocked",
+            event_class="blocked_action",
+            review_required=True,
+            payload={
+                "runtime_session_id": runtime_session_id,
+                "connector_id": _text(connector_id).lower() or None,
+                "action_id": _text(action_id).lower() or None,
+                "reason": str(exc),
+            },
+            metadata={"runtime_session_binding": _RUNTIME_BINDING_SELF_HOSTED},
+        )
+        raise
+    python_runtime_action, runtime_action_args = _cloud_runtime_tool_action(
         connector_id=connector_id,
         action_id=action_id,
         argument_payload=argument_payload,
     )
+    runtime_action = _text(action_decision.get("runtime_action")) or python_runtime_action
     payload = build_deployed_agent_self_hosted_runtime_payload(
         deployed_agent,
         runtime_attachment=runtime_attachment,
@@ -2013,6 +2460,31 @@ async def terminate_bound_cloud_runtime_session(
     metadata = _coerce_dict((session_record or {}).get("metadata"))
     if _text(metadata.get("runtime_session_binding")).lower() != _RUNTIME_BINDING_CLOUD:
         return None
+    resolved_tenant_id = _text(tenant_id) or _text((session_record or {}).get("tenant_id"))
+    resolved_workspace_id = _text(workspace_id) or _text((session_record or {}).get("workspace_id"))
+    resolved_deployed_agent_id = _text(metadata.get("deployed_agent_id"))
+    if resolved_deployed_agent_id and resolved_tenant_id and resolved_workspace_id:
+        deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+            resolved_deployed_agent_id,
+            tenant_id=resolved_tenant_id,
+            owner_workspace_id=resolved_workspace_id,
+        )
+        if isinstance(deployed_agent, dict):
+            config = deployed_agent_config_schema.deployed_agent_config_from_record(deployed_agent)
+            record_metadata = _coerce_dict(deployed_agent.get("metadata"))
+            privacy_snapshot = _coerce_dict(record_metadata.get("privacy_contract_snapshot"))
+            computer_safety_snapshot = _coerce_dict(record_metadata.get("computer_safety_contract_snapshot"))
+            _enforce_deployed_virtual_runtime_service_decision(
+                operation="terminate_cloud_session",
+                deployed_agent=deployed_agent,
+                config=config,
+                privacy_snapshot=privacy_snapshot,
+                computer_safety_snapshot=computer_safety_snapshot,
+                session_id=token,
+                runtime_session_id=_text(metadata.get("runtime_session_id")) or token,
+                runtime_session_binding=_RUNTIME_BINDING_CLOUD,
+                actor_id="system",
+            )
     runtime_session_id = _text(metadata.get("runtime_session_id")) or token
     runtime_choice = _text(metadata.get("runtime_choice")) or "virtual_browser"
     runtime_provider_id = _text(metadata.get("runtime_provider_id")) or None
@@ -2021,8 +2493,8 @@ async def terminate_bound_cloud_runtime_session(
         preferred_provider_id=runtime_provider_id,
     )
     payload = {
-        "tenant_id": _text(tenant_id) or _text((session_record or {}).get("tenant_id")),
-        "workspace_id": _text(workspace_id) or _text((session_record or {}).get("workspace_id")),
+        "tenant_id": resolved_tenant_id,
+        "workspace_id": resolved_workspace_id,
         "session_id": runtime_session_id,
         "browser_session_id": runtime_session_id,
         "runtime_provider_id": runtime_provider_id,
@@ -2038,8 +2510,8 @@ async def terminate_bound_cloud_runtime_session(
     await _record_bound_cloud_runtime_usage_event(
         session_record=session_record or {},
         metadata=metadata,
-        tenant_id=_text(tenant_id) or _text((session_record or {}).get("tenant_id")),
-        workspace_id=_text(workspace_id) or _text((session_record or {}).get("workspace_id")),
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
         runtime_session_id=runtime_session_id,
         ended_at=ended_at,
     )
@@ -2181,6 +2653,31 @@ async def terminate_bound_self_hosted_runtime_session(
     metadata = _coerce_dict((session_record or {}).get("metadata"))
     if _text(metadata.get("runtime_session_binding")).lower() != _RUNTIME_BINDING_SELF_HOSTED:
         return None
+    resolved_tenant_id = _text(tenant_id) or _text((session_record or {}).get("tenant_id"))
+    resolved_workspace_id = _text(workspace_id) or _text((session_record or {}).get("workspace_id"))
+    resolved_deployed_agent_id = _text(metadata.get("deployed_agent_id"))
+    if resolved_deployed_agent_id and resolved_tenant_id and resolved_workspace_id:
+        deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+            resolved_deployed_agent_id,
+            tenant_id=resolved_tenant_id,
+            owner_workspace_id=resolved_workspace_id,
+        )
+        if isinstance(deployed_agent, dict):
+            config = deployed_agent_config_schema.deployed_agent_config_from_record(deployed_agent)
+            record_metadata = _coerce_dict(deployed_agent.get("metadata"))
+            privacy_snapshot = _coerce_dict(record_metadata.get("privacy_contract_snapshot"))
+            computer_safety_snapshot = _coerce_dict(record_metadata.get("computer_safety_contract_snapshot"))
+            _enforce_deployed_virtual_runtime_service_decision(
+                operation="terminate_self_hosted_session",
+                deployed_agent=deployed_agent,
+                config=config,
+                privacy_snapshot=privacy_snapshot,
+                computer_safety_snapshot=computer_safety_snapshot,
+                session_id=token,
+                runtime_session_id=_text(metadata.get("runtime_session_id")) or token,
+                runtime_session_binding=_RUNTIME_BINDING_SELF_HOSTED,
+                actor_id="system",
+            )
     runtime_session_id = _text(metadata.get("runtime_session_id")) or token
     runtime_choice = _text(metadata.get("runtime_choice")) or "virtual_code_sandbox"
     runtime_provider_id = _text(metadata.get("runtime_provider_id")) or virtual_computer_runtime.PROVIDER_ID_DOCKER_KUBERNETES
@@ -2189,8 +2686,8 @@ async def terminate_bound_self_hosted_runtime_session(
         preferred_provider_id=runtime_provider_id,
     )
     payload = {
-        "tenant_id": _text(tenant_id) or _text((session_record or {}).get("tenant_id")),
-        "workspace_id": _text(workspace_id) or _text((session_record or {}).get("workspace_id")),
+        "tenant_id": resolved_tenant_id,
+        "workspace_id": resolved_workspace_id,
         "session_id": runtime_session_id,
         "browser_session_id": runtime_session_id,
         "runtime_provider_id": runtime_provider_id,

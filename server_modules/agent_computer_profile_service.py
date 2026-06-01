@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
-from server_modules import workspace_context
+from server_modules import rust_runtime_kernel_client, workspace_context
 
 
 PROFILE_ID_PREFIX = "acp_"
@@ -168,10 +168,7 @@ def _default_state() -> Dict[str, Any]:
 def _read_state(workspace_id: str) -> Dict[str, Any]:
     path = _state_file(workspace_id)
     if not path.exists():
-        payload = _default_state()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return payload
+        return _default_state()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -185,11 +182,53 @@ def _read_state(workspace_id: str) -> Dict[str, Any]:
 
 def _write_state(workspace_id: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
     path = _state_file(workspace_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
     next_payload = dict(payload)
     next_payload["updated_at"] = _utc_now_iso()
+    _enforce_agent_computer_profile_state_decision(workspace_id=workspace_id, payload=next_payload)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(next_payload, indent=2), encoding="utf-8")
     return next_payload
+
+
+class AgentComputerProfileRustGateError(AgentComputerProfileError):
+    pass
+
+
+def _enforce_agent_computer_profile_state_decision(
+    *,
+    workspace_id: str,
+    payload: Mapping[str, Any],
+) -> None:
+    normalized_payload = dict(payload or {})
+    try:
+        payload_bytes = len(
+            json.dumps(
+                normalized_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        )
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="save_agent_computer_profile_state",
+            state_class="agent_computer_profiles",
+            workspace_id=_coerce_text(workspace_id),
+            actor_id="system",
+            status="active",
+            payload=normalized_payload,
+            payload_bytes=payload_bytes,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = _coerce_text(decision.get("next_action"))
+        if next_action != "save_agent_computer_profile_state":
+            raise AgentComputerProfileRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise AgentComputerProfileRustGateError(exc.reason) from exc
 
 
 def normalize_agent_computer_profile(payload: Mapping[str, Any] | None) -> AgentComputerProfile:

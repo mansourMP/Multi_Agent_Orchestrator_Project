@@ -12,6 +12,7 @@ from server_modules import (
     gateway_protocol_service,
     gateway_state_repository,
     gateway_transparency_service,
+    rust_runtime_kernel_client,
     secret_redaction_service,
 )
 
@@ -187,6 +188,92 @@ def _require_active_gateway_registration(gateway_id: str, *, workspace_id: str =
     return registration
 
 
+def _enforce_gateway_service_decision(**payload: Any) -> Dict[str, Any]:
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _text(getattr(exc, "reason", "")) or "gateway_service_denied"
+        raise ValueError(f"Rust gateway-service blocked {payload.get('operation') or 'operation'}: {reason}") from exc
+    allowed_next_actions = {
+        "tool_execute": {"dispatch_gateway_operation"},
+        "tool_interrupt": {"dispatch_gateway_operation"},
+    }.get(_text(payload.get("operation")))
+    next_action = _text(
+        (decision.get("mutation_plan") if isinstance(decision.get("mutation_plan"), dict) else {}).get("next_action")
+        or decision.get("next_action")
+    )
+    if allowed_next_actions and next_action not in allowed_next_actions:
+        raise ValueError(
+            "Rust gateway-service returned unexpected next_action for "
+            f"{payload.get('operation') or 'operation'}: {next_action or 'missing'}"
+        )
+    return decision
+
+
+def _enforce_gateway_quota_check(
+    *,
+    gateway_id: str,
+    session_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    device_id: str,
+    request_id: str,
+    quota_profile: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "quota_check",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "actor_id": "system",
+        "actor_role": "owner",
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "request_id": str(request_id or "").strip() or None,
+        "capability_id": "gateway.quota.check",
+        "trace_id": str(request_id or "").strip() or None,
+        "quota_profile": str(quota_profile or "").strip() or "standard",
+        "risk_level": "normal",
+        "policy_decision": "allow",
+        "device_trust_state": "trusted",
+        "protocol_version": "gateway.v1",
+        "approval_provided": True,
+        "approval_memory_hit": False,
+        "kill_switch_enabled": False,
+        "quota_ok": True,
+        "gateway_registered": True,
+        "session_valid": True,
+        "websocket_token_present": True,
+        "frame_valid": True,
+        "payload_present": True,
+        "metadata": {
+            "gateway_id": str(gateway_id or "").strip(),
+            "session_id": str(session_id or "").strip(),
+            "workspace_id": str(workspace_id or "").strip() or "default",
+            "tenant_id": str(tenant_id or "").strip() or "default",
+            "device_id": str(device_id or "").strip() or None,
+            "quota_profile": str(quota_profile or "").strip() or "standard",
+        },
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _text(getattr(exc, "reason", "")) or "gateway_quota_check_denied"
+        raise ValueError(f"Rust gateway-service blocked quota_check: {reason}") from exc
+    next_action = _text(decision.get("next_action"))
+    if next_action != "allow_gateway_service_operation":
+        raise ValueError(
+            "Rust gateway-service returned unexpected next_action for "
+            f"quota_check: {next_action or 'missing'}"
+        )
+    return decision
+
+
 async def execute_tool_via_gateway(
     *,
     gateway_id: str,
@@ -200,6 +287,8 @@ async def execute_tool_via_gateway(
     runtime_access_mode: Optional[str] = None,
     empyralis_approved: bool = False,
     screenshot_retention: Optional[str] = None,
+    gateway_session_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     registration = _require_active_gateway_registration(gateway_id, workspace_id=workspace_id)
     _gw = str(registration.get("gateway_id") or "").strip()
@@ -207,6 +296,48 @@ async def execute_tool_via_gateway(
     _tid = str(trace_id or "").strip()
     _cap = str(capability_id or "").strip()
     supervisor_capability_id, supervisor_arguments = _gateway_supervisor_capability(_cap, arguments)
+    registration_metadata = dict(registration.get("metadata") or {})
+    _session_id = _text(
+        gateway_session_id
+        or registration.get("active_session_id")
+        or registration_metadata.get("gateway_session_id")
+        or request_id
+        or run_id
+    )
+    _enforce_gateway_quota_check(
+        gateway_id=_gw,
+        session_id=_session_id,
+        workspace_id=_ws,
+        tenant_id=str(registration.get("tenant_id") or "default").strip() or "default",
+        device_id=str(registration.get("device_id") or "").strip(),
+        request_id=_text(request_id or run_id),
+        quota_profile="gateway_tool_execution",
+    )
+    _enforce_gateway_service_decision(
+        operation="tool_execute",
+        tenant_id=str(registration.get("tenant_id") or "default").strip() or "default",
+        workspace_id=_ws,
+        actor_id=_text(actor_id, "system"),
+        actor_role="system",
+        gateway_id=_gw,
+        session_id=_session_id,
+        request_id=_text(request_id),
+        capability_id=_cap,
+        run_id=_text(run_id),
+        trace_id=_tid,
+        risk_level="normal",
+        policy_decision="allow",
+        device_trust_state=_text(registration.get("device_trust_state"), "trusted"),
+        protocol_version="gateway.v1",
+        approval_provided=bool(empyralis_approved),
+        approval_memory_hit=True,
+        kill_switch_enabled=False,
+        quota_ok=True,
+        gateway_registered=True,
+        session_valid=True,
+        frame_valid=True,
+        payload_present=True,
+    )
     ready, readiness_reason = gateway_registration_execution_readiness(
         registration,
         workspace_id=workspace_id,
@@ -296,6 +427,41 @@ async def interrupt_tool_via_gateway(
     _gw = str(registration.get("gateway_id") or "").strip()
     _ws = str(registration.get("workspace_id") or "").strip()
     _tid = str(trace_id or "").strip()
+    _session_id = str(request_id or run_id or "").strip()
+    _enforce_gateway_quota_check(
+        gateway_id=_gw,
+        session_id=_session_id,
+        workspace_id=_ws,
+        tenant_id=str(registration.get("tenant_id") or "default").strip() or "default",
+        device_id=str(registration.get("device_id") or "").strip(),
+        request_id=str(request_id or run_id or "").strip(),
+        quota_profile="gateway_tool_execution",
+    )
+    _enforce_gateway_service_decision(
+        operation="tool_interrupt",
+        tenant_id=str(registration.get("tenant_id") or "default").strip() or "default",
+        workspace_id=_ws,
+        actor_id="system",
+        actor_role="system",
+        gateway_id=_gw,
+        session_id=_session_id,
+        request_id=str(request_id or "").strip(),
+        capability_id="tool.interrupt",
+        run_id=str(run_id or "").strip(),
+        trace_id=_tid,
+        risk_level="normal",
+        policy_decision="allow",
+        device_trust_state=_text(registration.get("device_trust_state"), "trusted"),
+        protocol_version="gateway.v1",
+        approval_provided=True,
+        approval_memory_hit=True,
+        kill_switch_enabled=False,
+        quota_ok=True,
+        gateway_registered=True,
+        session_valid=True,
+        frame_valid=True,
+        payload_present=True,
+    )
     gateway_transparency_service.emit_gateway_action_event(
         event_type="gateway_action_started",
         title="Gateway interrupt",

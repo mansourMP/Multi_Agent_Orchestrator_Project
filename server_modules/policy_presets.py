@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Mapping
 
+from server_modules import rust_runtime_kernel_client
 from server_modules.agent_computer_policy_service import (
     AgentComputerPolicy,
     AUTONOMY_ASK_EVERY_TIME,
@@ -73,6 +74,7 @@ PRESET_ALIASES: dict[str, str] = {
     "kill": PRESET_DENY_ALL,
     "stop": PRESET_DENY_ALL,
 }
+_POLICY_PRESET_NEXT_ACTION = "apply_policy_preset"
 
 
 class PolicyPresetError(ValueError):
@@ -292,8 +294,18 @@ def get_preset(name: Any) -> PolicyPreset:
 
 
 def apply_preset(name: Any, overrides: Mapping[str, Any] | None = None) -> AgentComputerPolicy:
-    preset = get_preset(name)
-    policy = preset.to_agent_computer_policy()
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "policy-preset",
+            {"preset": str(name or "").strip()},
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise PolicyPresetError(str(exc.reason or "policy_preset_denied")) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action and next_action != _POLICY_PRESET_NEXT_ACTION:
+        raise PolicyPresetError(f"unexpected_next_action:{next_action}")
+    policy_payload = decision.get("policy") if isinstance(decision.get("policy"), Mapping) else {}
+    policy = normalize_agent_computer_policy(dict(policy_payload))
     if overrides:
         return normalize_agent_computer_policy({**policy.as_dict(), **dict(overrides)})
     return policy

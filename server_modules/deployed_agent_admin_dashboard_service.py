@@ -13,6 +13,16 @@ def _normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _actor_role(current_user: Optional[Dict[str, Any]], workspace_id: str) -> str:
+    user = dict(current_user or {}) if isinstance(current_user, dict) else {}
+    workspace_access = user.get("workspace_access") if isinstance(user.get("workspace_access"), dict) else {}
+    scoped = workspace_access.get(workspace_id) if isinstance(workspace_access.get(workspace_id), dict) else {}
+    role = _normalize_text(scoped.get("role") or user.get("role")).lower()
+    if role in {"owner", "admin", "member"}:
+        return "owner" if role == "owner" else "admin"
+    return "admin"
+
+
 class DeployedAgentAdminDashboardService:
     async def get_dashboard(
         self,
@@ -35,6 +45,20 @@ class DeployedAgentAdminDashboardService:
         tenant_id = _normalize_text(workspace.get("tenant_id"))
         if not tenant_id:
             raise HTTPException(status_code=400, detail="Workspace is missing a tenant binding.")
+        deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+            agent_id,
+            tenant_id=tenant_id,
+            owner_workspace_id=resolved_workspace_id,
+        )
+        if not isinstance(deployed_agent, dict):
+            raise HTTPException(status_code=404, detail="Deployed agent not found.")
+        deployed_agent_service._enforce_deployed_agent_service_decision(
+            "admin_dashboard",
+            deployed_agent=deployed_agent,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            current_user=current_user,
+        )
         payload = await control_plane_repository.get_deployed_agent_admin_dashboard(
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
@@ -46,34 +70,28 @@ class DeployedAgentAdminDashboardService:
         )
         if not isinstance(payload, dict):
             raise HTTPException(status_code=404, detail="Deployed agent not found.")
-        deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
-            agent_id,
-            tenant_id=tenant_id,
-            owner_workspace_id=resolved_workspace_id,
-        )
         readiness_payload: Dict[str, Any] = {}
-        if isinstance(deployed_agent, dict):
-            try:
-                readiness_payload = await deployed_agent_service.get_deployed_agent_telegram_readiness(
-                    current_user=current_user,
-                    owner_workspace_id=resolved_workspace_id,
-                    deployed_agent_id=agent_id,
-                )
-            except HTTPException:
-                readiness_payload = {}
-            configured_binding = dict(readiness_payload.get("configured_binding") or {})
-            projected_agent = deployed_agent_service.project_deployed_agent(
-                deployed_agent,
-                include_internal=False,
-            ) or {}
-            payload["customer_entry"] = deployed_agent_service.build_deployed_agent_customer_entry(
-                deployed_agent=deployed_agent,
-                bot_username=_normalize_text(configured_binding.get("bot_username")) or None,
-                endpoint_key=_normalize_text(configured_binding.get("endpoint_key")) or None,
+        try:
+            readiness_payload = await deployed_agent_service.get_deployed_agent_telegram_readiness(
+                current_user=current_user,
+                owner_workspace_id=resolved_workspace_id,
+                deployed_agent_id=agent_id,
             )
-            payload["specialist_profile"] = dict(
-                (projected_agent.get("config") or {}).get("specialist_profile") or {}
-            )
+        except HTTPException:
+            readiness_payload = {}
+        configured_binding = dict(readiness_payload.get("configured_binding") or {})
+        projected_agent = deployed_agent_service.project_deployed_agent(
+            deployed_agent,
+            include_internal=False,
+        ) or {}
+        payload["customer_entry"] = deployed_agent_service.build_deployed_agent_customer_entry(
+            deployed_agent=deployed_agent,
+            bot_username=_normalize_text(configured_binding.get("bot_username")) or None,
+            endpoint_key=_normalize_text(configured_binding.get("endpoint_key")) or None,
+        )
+        payload["specialist_profile"] = dict(
+            (projected_agent.get("config") or {}).get("specialist_profile") or {}
+        )
         return DeployedAgentAdminDashboardResponse.model_validate(payload)
 
 

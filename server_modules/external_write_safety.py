@@ -7,6 +7,8 @@ import time
 from datetime import timedelta
 from typing import Any, Callable, Dict, Optional
 
+from server_modules import rust_runtime_kernel_client
+
 _server = None
 
 
@@ -24,6 +26,10 @@ def _init():
 _EXTERNAL_WRITE_PENDING_WAIT_SECONDS = 60.0
 _EXTERNAL_WRITE_PENDING_STALE_SECONDS = 300.0
 _EXTERNAL_WRITE_SCOPE_VERSION = 2
+
+
+class ExternalWriteRustGateError(RuntimeError):
+    pass
 
 
 def _stable_json_text(value: Any) -> str:
@@ -44,6 +50,13 @@ def _external_write_payload_hash(payload: Any) -> str:
 
 def stable_value_fingerprint(value: Any) -> str:
     return hashlib.sha256(_stable_json_text(value).encode("utf-8")).hexdigest()
+
+
+def _payload_size_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value or "").encode("utf-8"))
 
 
 def _normalized_scope_value(value: Any) -> Any:
@@ -175,6 +188,52 @@ def _annotate_external_write_response(
     return annotated
 
 
+def _enforce_external_write_execution_decision(
+    *,
+    run_id: Optional[str],
+    step_key: str,
+    category: str,
+    target_system: Optional[str],
+    scope: Dict[str, Any],
+    payload_hash: str,
+    idempotency_key: str,
+) -> Dict[str, Any]:
+    workspace_id = str((scope or {}).get("workspace_id") or "").strip()
+    payload = {
+        "run_id": str(run_id or "").strip(),
+        "workspace_id": workspace_id,
+        "step_key": str(step_key or "").strip(),
+        "category": str(category or "").strip(),
+        "target_system": str(target_system or "").strip(),
+        "payload_hash": str(payload_hash or "").strip(),
+        "idempotency_key": str(idempotency_key or "").strip(),
+        "scope": dict(scope or {}),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="execute_external_write_once",
+            state_class="external_write_executions",
+            workspace_id=workspace_id,
+            run_id=str(run_id or "").strip(),
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=_payload_size_bytes(payload),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "execute_external_write_once":
+            raise ExternalWriteRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise ExternalWriteRustGateError(exc.reason) from exc
+
+
 def execute_external_write_once(
     *,
     run_id: Optional[str],
@@ -288,6 +347,15 @@ def execute_external_write_once(
         raise RuntimeError("Duplicate-protected external write is still pending from another execution.")
 
     try:
+        _enforce_external_write_execution_decision(
+            run_id=run_id,
+            step_key=step_key,
+            category=category,
+            target_system=target_system,
+            scope=scope,
+            payload_hash=payload_hash,
+            idempotency_key=idempotency_key,
+        )
         response = execute()
     except Exception:
         with IDEMPOTENCY_LOCK:

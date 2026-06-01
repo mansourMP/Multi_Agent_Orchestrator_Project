@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import re
 import uuid
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from server_modules import deployed_agent_virtual_runtime_service
 from server_modules import skills_service
 from server_modules import secret_redaction_service
 from server_modules import agent_action_metering_service, tool_broker_guard_service
+from server_modules import rust_runtime_kernel_client
 
 _BROWSER_CAPTURE_ACTIONS = {"screenshot", "pdf"}
 _BROWSER_MUTATION_ACTIONS = {"click", "fill", "execute_js", "download_file"}
@@ -20,6 +22,71 @@ _FILE_WRITE_ACTIONS = {"write", "append", "rename", "move", "copy", "mkdir", "to
 _CHANNEL_CONNECTORS = {"discord", "email", "gmail", "imsg", "mail", "signal", "slack", "telegram", "whatsapp"}
 _HTTP_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 _CLOUD_COMPUTER_RUNTIME_CONNECTORS = {"browser", "computer", "shell"}
+
+
+class DirectToolExecutionRustGateError(RuntimeError):
+    pass
+
+
+def _payload_size_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value or "").encode("utf-8"))
+
+
+def _enforce_direct_tool_execution_transition(
+    *,
+    operation: str,
+    tenant_id: Optional[str],
+    workspace_id: str,
+    run_id: Optional[str],
+    thread_id: str,
+    tool_call_id: str,
+    tool_name: str,
+    connector_id: str,
+    action_id: str,
+    status: str,
+    governance_metadata: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = {
+        "tenant_id": str(tenant_id or "default").strip() or "default",
+        "workspace_id": str(workspace_id or "").strip(),
+        "run_id": str(run_id or "").strip(),
+        "thread_id": str(thread_id or "").strip(),
+        "tool_call_id": str(tool_call_id or "").strip(),
+        "tool_name": str(tool_name or "").strip(),
+        "connector_id": str(connector_id or "").strip().lower(),
+        "action_id": str(action_id or "").strip().lower(),
+        "status": str(status or "").strip(),
+        "governance": dict(governance_metadata or {}),
+        "metadata": dict(metadata or {}),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class="direct_tool_execution",
+            tenant_id=str(payload["tenant_id"]),
+            workspace_id=str(payload["workspace_id"]),
+            run_id=str(payload["run_id"]),
+            actor_id="system",
+            status=str(status or "active").strip() or "active",
+            payload=payload,
+            payload_bytes=_payload_size_bytes(payload),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != str(operation or "").strip():
+            raise DirectToolExecutionRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise DirectToolExecutionRustGateError(exc.reason) from exc
 
 
 def _default_update_memory_context_file(*args: Any, **kwargs: Any) -> Any:
@@ -691,6 +758,20 @@ def execute_single_direct_tool_call(
         surface="connector" if str(connector_id or "").strip().lower() in _CHANNEL_CONNECTORS else "direct_tool",
     )
     if not broker_decision.allowed:
+        _enforce_direct_tool_execution_transition(
+            operation="block_direct_tool_execution",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            thread_id=thread_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            connector_id=connector_id,
+            action_id=action_id,
+            status="blocked",
+            governance_metadata=governance_metadata,
+            metadata={"broker_code": broker_decision.code},
+        )
         agent_action_metering_service.record_blocked_sync(
             tenant_id=tenant_id or "default",
             workspace_id=workspace_id,
@@ -736,6 +817,20 @@ def execute_single_direct_tool_call(
             idempotency_key=f"direct_tool.blocked:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}:{broker_decision.code}",
         )
         raise RuntimeError(broker_decision.detail or "Direct tool call was blocked by broker guard.")
+    _enforce_direct_tool_execution_transition(
+        operation="start_direct_tool_execution",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        thread_id=thread_id,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        connector_id=connector_id,
+        action_id=action_id,
+        status="started",
+        governance_metadata=governance_metadata,
+        metadata={"source_surface": source_surface},
+    )
     security_audit_service.emit_security_audit_event(
         action="direct_tool.started",
         status="started",
@@ -842,6 +937,20 @@ def execute_single_direct_tool_call(
                 callbacks=callbacks,
             )
     except Exception as exc:
+        _enforce_direct_tool_execution_transition(
+            operation="fail_direct_tool_execution",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            thread_id=thread_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            connector_id=connector_id,
+            action_id=action_id,
+            status="failed",
+            governance_metadata=governance_metadata,
+            metadata={"error_type": type(exc).__name__},
+        )
         agent_action_metering_service.record_failed_sync(
             **common_action_metering,
             error_code=type(exc).__name__,
@@ -858,6 +967,20 @@ def execute_single_direct_tool_call(
             idempotency_key=f"direct_tool.failed:{workspace_id}:{run_id or thread_id}:{index}:{tool_name}",
         )
         raise
+    _enforce_direct_tool_execution_transition(
+        operation="complete_direct_tool_execution",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        thread_id=thread_id,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        connector_id=connector_id,
+        action_id=action_id,
+        status="completed",
+        governance_metadata=governance_metadata,
+        metadata={"result_summary": _redact_audit_summary(result)},
+    )
     security_audit_service.emit_security_audit_event(
         action="direct_tool.completed",
         status="success",

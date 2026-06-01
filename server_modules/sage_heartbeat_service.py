@@ -266,8 +266,57 @@ async def build_sage_heartbeat_snapshot(
         lane_queue=lane_queue if isinstance(lane_queue, dict) else {},
         quiet_hours=quiet_hours_status,
     )
+    plugin_health = _plugin_health_snapshot()
+    rust_kernel_health = _rust_kernel_health_snapshot()
+    heartbeat_decision = _heartbeat_snapshot_decision(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        queue_overview=queue_overview,
+        quiet_hours=quiet_hours_status,
+        policy=policy,
+        rust_kernel=rust_kernel_health,
+        lane_queue=lane_queue if isinstance(lane_queue, dict) else {},
+    )
+    runtime_health = _runtime_health_decision(
+        operation="heartbeat_snapshot",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        profile=profile,
+        bootstrap=bootstrap,
+        quiet_hours=quiet_hours_status,
+        ambient_monitor=scheduler_payload.get("ambient_monitor") if isinstance(scheduler_payload.get("ambient_monitor"), dict) else {},
+        reminders_count=len(schedule_items),
+        wake_queue=wake_queue,
+        lane_queue=lane_queue if isinstance(lane_queue, dict) else {},
+        queue_overview=queue_overview,
+        policy=policy,
+        plugin=plugin_health,
+        rust_kernel=rust_kernel_health,
+    )
+    readiness_gate = _runtime_health_decision(
+        operation="readiness_gate",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        profile=profile,
+        bootstrap=bootstrap,
+        quiet_hours=quiet_hours_status,
+        ambient_monitor=scheduler_payload.get("ambient_monitor") if isinstance(scheduler_payload.get("ambient_monitor"), dict) else {},
+        reminders_count=len(schedule_items),
+        wake_queue=wake_queue,
+        lane_queue=lane_queue if isinstance(lane_queue, dict) else {},
+        queue_overview=queue_overview,
+        policy=policy,
+        plugin=plugin_health,
+        rust_kernel=rust_kernel_health,
+    )
     return {
         "workspace_id": workspace_id,
+        "health": heartbeat_decision.get("health"),
+        "readiness": readiness_gate.get("readiness") if isinstance(readiness_gate.get("readiness"), dict) else {},
+        "readiness_gate": readiness_gate,
+        "operator_next_action": heartbeat_decision.get("next_action"),
+        "heartbeat_snapshot": heartbeat_decision,
+        "runtime_health": runtime_health,
         "profile": {
             "recurring_responsibility": _coerce_text(profile.get("recurring_responsibility")) or None,
             "communication_style": _coerce_text(profile.get("communication_style")) or None,
@@ -302,8 +351,144 @@ async def build_sage_heartbeat_snapshot(
             "max_self_proposed_per_hour": int(policy.get("max_self_proposed_per_hour") or 0),
         },
         "retry": bounded_scheduler_service.retry_queue_status(workspace_id),
-        "plugin": _plugin_health_snapshot(),
+        "plugin": plugin_health,
+        "rust_kernel": rust_kernel_health,
     }
+
+
+def _runtime_health_decision(
+    *,
+    operation: str = "heartbeat_snapshot",
+    tenant_id: str,
+    workspace_id: str,
+    profile: Dict[str, Any],
+    bootstrap: Dict[str, Any],
+    quiet_hours: Dict[str, Any],
+    ambient_monitor: Dict[str, Any],
+    reminders_count: int,
+    wake_queue: Dict[str, Any],
+    lane_queue: Dict[str, Any],
+    queue_overview: Dict[str, Any],
+    policy: Dict[str, Any],
+    plugin: Dict[str, Any],
+    rust_kernel: Dict[str, Any],
+) -> Dict[str, Any]:
+    from server_modules import rust_runtime_kernel_client
+
+    payload = {
+        "operation": operation,
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "profile": {
+            "complete": bool(profile) and not bool(bootstrap.get("complete") is False),
+        },
+        "bootstrap": {
+            "complete": bool(bootstrap.get("complete")),
+        },
+        "scheduler": {
+            "enabled": bool(policy) or bool(wake_queue),
+        },
+        "policy": {
+            **(policy if isinstance(policy, dict) else {}),
+            "scheduler_enabled": True,
+        },
+        "quiet_hours": {
+            "active": bool(quiet_hours.get("active") or quiet_hours.get("quiet_hours_active")),
+        },
+        "ambient_monitor": ambient_monitor if isinstance(ambient_monitor, dict) else {},
+        "reminders": {
+            "count": int(reminders_count or 0),
+        },
+        "wake_queue": wake_queue if isinstance(wake_queue, dict) else {},
+        "lane_queue": lane_queue if isinstance(lane_queue, dict) else {},
+        "queue_overview": queue_overview if isinstance(queue_overview, dict) else {},
+        "retry": bounded_scheduler_service.retry_queue_status(workspace_id),
+        "plugin": plugin if isinstance(plugin, dict) else {},
+        "rust_kernel": rust_kernel if isinstance(rust_kernel, dict) else {},
+        "runtime": {
+            "rust_kernel_available": bool((rust_kernel if isinstance(rust_kernel, dict) else {}).get("available")),
+            "stale_heartbeat_count": int((lane_queue if isinstance(lane_queue, dict) else {}).get("stale_heartbeat_count") or 0),
+            "unavailable_worker_count": int((lane_queue if isinstance(lane_queue, dict) else {}).get("unavailable_worker_count") or 0),
+        },
+    }
+    decision = rust_runtime_kernel_client.runtime_health_decision(**payload)
+    expected_next_actions = {
+        "restore_rust_kernel",
+        "inspect_plugin_system",
+        "investigate_runtime_health",
+        "complete_workspace_bootstrap",
+        "request_owner_approval",
+        "wait_for_quiet_hours",
+        "monitor_running_work",
+        "wait_for_retry",
+        "claim_next_work",
+        "idle",
+    }
+    next_action = _coerce_text(decision.get("next_action"))
+    if next_action not in expected_next_actions:
+        raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
+
+
+def _heartbeat_snapshot_decision(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    queue_overview: Dict[str, Any],
+    quiet_hours: Dict[str, Any],
+    policy: Dict[str, Any],
+    rust_kernel: Dict[str, Any],
+    lane_queue: Dict[str, Any],
+) -> Dict[str, Any]:
+    from server_modules import rust_runtime_kernel_client
+
+    recent = lane_queue.get("recent") if isinstance(lane_queue.get("recent"), list) else []
+    failed_count = sum(
+        1
+        for entry in recent
+        if isinstance(entry, dict)
+        and _coerce_text(entry.get("status")).lower() in {"failed", "cancelled", "canceled"}
+    )
+    retry_status = bounded_scheduler_service.retry_queue_status(workspace_id)
+    payload = {
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "queue": {
+            "queued_count": int(queue_overview.get("queued_count") or 0),
+            "running_now_count": int(queue_overview.get("running_now_count") or 0),
+            "blocked_on_approval_count": int(queue_overview.get("blocked_on_approval_count") or 0),
+            "failed_count": int(failed_count),
+        },
+        "scheduler": {
+            "retry_pending_count": int(retry_status.get("pending_count") or 0),
+            "quiet_hours_active": bool(quiet_hours.get("active") or quiet_hours.get("quiet_hours_active")),
+            "enabled": bool(policy) or bool(queue_overview.get("pending_wakeup_count")),
+        },
+        "session": {
+            "status": "active",
+            "turn_count": 0,
+            "idle_seconds": 0,
+        },
+        "rust_kernel_available": bool((rust_kernel if isinstance(rust_kernel, dict) else {}).get("available")),
+    }
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "heartbeat-snapshot",
+        payload,
+    )
+    expected_next_actions = {
+        "investigate",
+        "request_owner_approval",
+        "reset_session",
+        "wait_for_quiet_hours",
+        "monitor_running_work",
+        "wait_for_retry",
+        "claim_next_work",
+        "idle",
+    }
+    next_action = _coerce_text(decision.get("next_action"))
+    if next_action not in expected_next_actions:
+        raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
 
 
 def _plugin_health_snapshot() -> Dict[str, Any]:
@@ -312,3 +497,22 @@ def _plugin_health_snapshot() -> Dict[str, Any]:
         return get_global_hook_registry().snapshot()
     except Exception:
         return {"error": "plugin_system_unavailable"}
+
+
+def _rust_kernel_health_snapshot() -> Dict[str, Any]:
+    try:
+        from server_modules import rust_runtime_kernel_client
+
+        binary = rust_runtime_kernel_client.runtime_kernel_binary()
+        return {
+            "available": binary is not None,
+            "binary_path": str(binary) if binary is not None else None,
+            "commands": sorted(rust_runtime_kernel_client.ALLOWED_KERNEL_COMMANDS),
+            "adapter": "server_modules.rust_runtime_kernel_client",
+        }
+    except Exception:
+        return {
+            "available": False,
+            "error": "rust_runtime_kernel_status_unavailable",
+            "adapter": "server_modules.rust_runtime_kernel_client",
+        }

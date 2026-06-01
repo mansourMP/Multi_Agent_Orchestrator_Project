@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from server_modules import runtime_config as config
 from server_modules import egress_policy
 from server_modules import error_response_service, quota_policy_service, quota_response_service
+from server_modules import rust_runtime_kernel_client
 from server_modules.error_contracts import AUTHORIZATION_ERROR, IDEMPOTENCY_CONFLICT
 from server_modules import secrets_broker
 from server_modules import shared as shared
@@ -58,12 +59,47 @@ def metrics_add(key: str, amount: float):
         RUNTIME_METRICS[key] = RUNTIME_METRICS.get(key, 0) + amount
 
 
+class RuntimeCommonRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_runtime_common_json_write(path: Path, payload: Dict[str, Any], serialized: str) -> None:
+    metadata = {
+        "path": str(path),
+        "payload_type": type(payload).__name__,
+        "keys": sorted(str(key) for key in payload.keys())[:80] if isinstance(payload, dict) else [],
+        "payload_bytes": len(serialized.encode("utf-8")),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_runtime_common_json",
+            state_class="runtime_common_json_files",
+            actor_id="system",
+            status="active",
+            payload=metadata,
+            payload_bytes=int(metadata["payload_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_runtime_common_json":
+            raise RuntimeCommonRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise RuntimeCommonRustGateError(exc.reason) from exc
+
+
 def _safe_write_json(path: Path, payload: Dict[str, Any]):
+    serialized = json.dumps(payload, indent=2)
+    _enforce_runtime_common_json_write(path, payload, serialized)
     parent = path.parent if path.parent != Path("") else Path(".")
     parent.mkdir(parents=True, exist_ok=True)
     # Use per-write temp file names so concurrent writers cannot race on a shared tmp path.
     tmp_path = parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
-    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp_path.write_text(serialized, encoding="utf-8")
     tmp_path.replace(path)
 
 

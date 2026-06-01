@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from server_modules import config_defaults_service
 from server_modules import control_plane_repository
+from server_modules import rust_runtime_kernel_client
 from server_modules import workspace_config_schema
 from server_modules.direct_tool_config_service import run_async_tool_call
 
@@ -79,6 +80,57 @@ def _control_plane_call(coro: Any) -> Any:
         return run_async_tool_call(coro)
     except Exception:
         return None
+
+
+def _enforce_acquisition_control_plane_decision(
+    *,
+    operation: str,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    actor_id: str,
+    record_type: str,
+    idempotency_key: str,
+    source: str = "channel_acquisition",
+) -> Dict[str, Any]:
+    payload = {
+        "operation": operation,
+        "tenant_id": str(tenant_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip(),
+        "actor_id": str(actor_id or "").strip() or "system",
+        "actor_role": "system",
+        "record_type": record_type,
+        "agent_id": str(deployed_agent_id or "").strip(),
+        "idempotency_key": str(idempotency_key or "").strip(),
+        "source": str(source or "channel_acquisition").strip().lower() or "channel_acquisition",
+        "workspace_access": True,
+        "owner_access": True,
+        "admin_access": True,
+        "billing_entitled": True,
+        "quota_ok": True,
+        "status_transition_valid": True,
+        "approval_provided": True,
+        "owner_approval_provided": True,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "control-plane-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(exc.reason or "channel_acquisition_denied").strip()
+        raise RuntimeError(f"Rust channel acquisition gate blocked {operation}: {reason}") from exc
+    next_action = str(
+        (decision.get("mutation_plan") if isinstance(decision.get("mutation_plan"), dict) else {}).get("next_action")
+        or decision.get("next_action")
+        or ""
+    ).strip()
+    if next_action != "apply_control_plane_write":
+        raise RuntimeError(
+            "Rust channel acquisition gate returned unexpected next_action for "
+            f"{operation}: {next_action or 'missing'}"
+        )
+    return decision
 
 
 class ChannelUserAcquisitionService:
@@ -479,14 +531,26 @@ class ChannelUserAcquisitionService:
         resolved_deployed_agent_id = str(deployed_agent_id or "").strip()
         if not resolved_tenant_id or not resolved_workspace_id or not resolved_deployed_agent_id:
             raise ValueError("tenant_id, workspace_id, and deployed_agent_id are required.")
+        resolved_channel_key = str(channel_key or "").strip().lower() or "telegram"
+        resolved_external_user_id = str(external_user_id or "").strip()
+        _enforce_acquisition_control_plane_decision(
+            operation="channel_user_acquisition_touch_write",
+            tenant_id=resolved_tenant_id,
+            workspace_id=resolved_workspace_id,
+            deployed_agent_id=resolved_deployed_agent_id,
+            actor_id=resolved_external_user_id,
+            record_type="channel_user_acquisition_touch",
+            idempotency_key=f"{resolved_deployed_agent_id}:{resolved_channel_key}:{resolved_external_user_id}:touch",
+            source=str(source or "channel_acquisition").strip().lower() or "channel_acquisition",
+        )
         touch = self.control_plane_runner(
             control_plane_repository.upsert_channel_user_acquisition_touch(
                 tenant_id=resolved_tenant_id,
                 workspace_id=resolved_workspace_id,
                 deployed_agent_id=resolved_deployed_agent_id,
-                channel_key=str(channel_key or "").strip().lower() or "telegram",
+                channel_key=resolved_channel_key,
                 endpoint_key=str(endpoint_key or "").strip().lower() or None,
-                external_user_id=str(external_user_id or "").strip(),
+                external_user_id=resolved_external_user_id,
                 source=str(source or "").strip().lower() or None,
                 campaign_token=str(campaign_token or "").strip() or None,
                 metadata=metadata,
@@ -498,9 +562,9 @@ class ChannelUserAcquisitionService:
             tenant_id=resolved_tenant_id,
             workspace_id=resolved_workspace_id,
             deployed_agent_id=resolved_deployed_agent_id,
-            channel_key=str(channel_key or "").strip().lower() or "telegram",
+            channel_key=resolved_channel_key,
             endpoint_key=str(endpoint_key or "").strip().lower(),
-            external_user_id=str(external_user_id or "").strip(),
+            external_user_id=resolved_external_user_id,
             source=str(source or "").strip().lower(),
             campaign_token=str(campaign_token or "").strip(),
             metadata=metadata,
@@ -516,6 +580,16 @@ class ChannelUserAcquisitionService:
         converted_email: Optional[str],
         auth_flow: Optional[str],
     ) -> Optional[Dict[str, Any]]:
+        _enforce_acquisition_control_plane_decision(
+            operation="channel_user_acquisition_conversion_write",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            deployed_agent_id="unknown_agent",
+            actor_id=converted_user_id,
+            record_type="channel_user_acquisition_touch",
+            idempotency_key=f"{touch_id}:conversion:{converted_user_id}",
+            source="channel_acquisition",
+        )
         touch = self.control_plane_runner(
             control_plane_repository.mark_channel_user_acquisition_touch_converted(
                 touch_id=touch_id,

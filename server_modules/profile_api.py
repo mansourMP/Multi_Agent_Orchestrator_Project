@@ -10,6 +10,7 @@ from urllib.parse import quote_plus
 
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
+from server_modules import rust_runtime_kernel_client
 from server_modules.auth import enforce_workspace_access
 
 
@@ -204,13 +205,56 @@ def _safe_read_text(path: Path, fallback: str = "") -> str:
 
 
 def _write_json(path: Path, payload: Any) -> None:
+    _enforce_profile_file_state_decision(path=path, kind="json", payload=payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def _write_text(path: Path, text: str) -> None:
+    _enforce_profile_file_state_decision(path=path, kind="text", payload={"content_bytes": len(str(text or "").encode("utf-8"))})
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
+class ProfileApiRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_profile_file_state_decision(*, path: Path, kind: str, payload: Any) -> None:
+    if isinstance(payload, dict):
+        safe_payload = dict(payload)
+    else:
+        safe_payload = {"value_type": type(payload).__name__}
+    safe_payload["path"] = str(path)
+    safe_payload["kind"] = str(kind or "").strip()
+    try:
+        payload_bytes = len(
+            json.dumps(
+                safe_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        )
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_profile_api_file",
+            state_class="profile_api_files",
+            actor_id="system",
+            status="active",
+            payload=safe_payload,
+            payload_bytes=payload_bytes,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_profile_api_file":
+            raise ProfileApiRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise ProfileApiRustGateError(exc.reason) from exc
 
 
 def _default_profile_registry() -> Dict[str, Any]:

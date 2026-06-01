@@ -85,6 +85,7 @@ from server_modules import runtime_run_access_service
 from server_modules import runtime_run_detail_service
 from server_modules import runtime_run_query_service
 from server_modules import runtime_run_resume_service
+from server_modules import rust_runtime_kernel_client
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
 from server_modules import transcript_events_service
@@ -309,10 +310,17 @@ def _workspace_history_cutoff_ts(
     cache: dict[str, dict[str, Any]],
     workspace_id: str,
 ) -> Optional[float]:
+    history_window_days = _workspace_history_window_days(cache, workspace_id)
+    return float(_utc_now().timestamp()) - float(history_window_days * 86400)
+
+
+def _workspace_history_window_days(
+    cache: dict[str, dict[str, Any]],
+    workspace_id: str,
+) -> int:
     payload = _workspace_entitlement_payload(cache, workspace_id)
     capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
-    history_window_days = max(1, int(capabilities.get("history_window_days") or 30))
-    return float(_utc_now().timestamp()) - float(history_window_days * 86400)
+    return max(1, int(capabilities.get("history_window_days") or 30))
 
 
 def _payload_timestamp_seconds(payload: dict[str, Any], *keys: str) -> Optional[float]:
@@ -364,6 +372,16 @@ def _payload_within_workspace_history_window(
 
 def normalize_thread_turn_record(record: Dict[str, Any]) -> Dict[str, Any]:
     payload = dict(record or {})
+    decision = thread_service._enforce_thread_record_decision(
+        operation="normalize_turn",
+        tenant_id=str(payload.get("tenant_id") or "default").strip() or "default",
+        workspace_id=str(payload.get("workspace_id") or "default").strip() or "default",
+        thread_id=str(payload.get("thread_id") or "").strip(),
+        actor_role="member",
+        turn_role=str(payload.get("role") or "").strip() or "assistant",
+        status=str(payload.get("status") or "").strip() or "",
+    )
+    thread_service._require_thread_next_action(decision, "normalize_thread_turn_record")
     return {
         "id": str(payload.get("id") or "").strip(),
         "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
@@ -371,8 +389,8 @@ def normalize_thread_turn_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "thread_id": str(payload.get("thread_id") or "").strip(),
         "session_id": str(payload.get("session_id") or "").strip() or None,
         "request_id": str(payload.get("request_id") or "").strip() or None,
-        "role": str(payload.get("role") or "").strip() or "assistant",
-        "status": str(payload.get("status") or "").strip() or None,
+        "role": str(decision.get("normalized_role") or payload.get("role") or "").strip() or "assistant",
+        "status": str(decision.get("normalized_status") or payload.get("status") or "").strip() or None,
         "content": str(payload.get("content") or ""),
         "run_id": str(payload.get("run_id") or "").strip() or None,
         "actor": _coerce_dict(payload.get("actor")),
@@ -387,6 +405,16 @@ def normalize_thread_turn_record(record: Dict[str, Any]) -> Dict[str, Any]:
 def normalize_thread_record(record: Dict[str, Any]) -> Dict[str, Any]:
     payload = dict(record or {})
     turns = payload.get("turns") if isinstance(payload.get("turns"), list) else []
+    decision = thread_service._enforce_thread_record_decision(
+        operation="normalize_thread",
+        tenant_id=str(payload.get("tenant_id") or "default").strip() or "default",
+        workspace_id=str(payload.get("workspace_id") or "default").strip() or "default",
+        thread_id=str(payload.get("id") or payload.get("thread_id") or "").strip(),
+        actor_role="member",
+        title=str(payload.get("title") or "").strip() or "New chat",
+        status=str(payload.get("status") or "").strip() or "active",
+    )
+    thread_service._require_thread_next_action(decision, "normalize_thread_record")
     return {
         "id": str(payload.get("id") or "").strip(),
         "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
@@ -394,8 +422,8 @@ def normalize_thread_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "owner_user_id": str(payload.get("owner_user_id") or "").strip() or None,
         "master_agent_install_id": str(payload.get("master_agent_install_id") or "").strip() or None,
         "channel": str(payload.get("channel") or "").strip() or None,
-        "title": str(payload.get("title") or "").strip() or "New chat",
-        "status": str(payload.get("status") or "").strip() or None,
+        "title": str(decision.get("normalized_title") or payload.get("title") or "").strip() or "New chat",
+        "status": str(decision.get("normalized_status") or payload.get("status") or "").strip() or None,
         "metadata": _coerce_dict(payload.get("metadata")),
         "created_at": str(payload.get("created_at") or "").strip() or None,
         "updated_at": str(payload.get("updated_at") or "").strip() or None,
@@ -411,6 +439,16 @@ def _history_filtered_thread_record(
 ) -> Optional[Dict[str, Any]]:
     payload = normalize_thread_record(record)
     workspace_id = str(payload.get("workspace_id") or "default").strip() or "default"
+    history_window_days = _workspace_history_window_days(cache, workspace_id)
+    decision = thread_service._enforce_thread_record_decision(
+        operation="history_filter",
+        tenant_id=str(payload.get("tenant_id") or "default").strip() or "default",
+        workspace_id=workspace_id,
+        thread_id=str(payload.get("id") or "").strip(),
+        actor_role="member",
+        history_window_days=history_window_days,
+    )
+    thread_service._require_thread_next_action(decision, "include_history_record")
     if not _payload_within_workspace_history_window(
         payload=payload,
         workspace_id=workspace_id,
@@ -555,6 +593,117 @@ _match_webhook_trigger = runtime_webhook_trigger_service.build_match_webhook_tri
 )
 
 
+def _enforce_run_api_decision(
+    *,
+    operation: str,
+    workspace_id: str,
+    tenant_id: str,
+    user_role: str,
+    body: Optional[dict[str, Any]] = None,
+    run_id: Optional[str] = None,
+    run_status: Optional[str] = None,
+) -> dict[str, Any]:
+    payload = {
+        "operation": operation,
+        "workspace_id": str(workspace_id or "").strip(),
+        "tenant_id": str(tenant_id or "").strip(),
+        "user_role": str(user_role or "viewer").strip() or "viewer",
+        "run_id": str(run_id or "").strip() or None,
+        "run_status": str(run_status or "").strip() or None,
+        "body": dict(body or {}),
+        "workspace_access_denied": False,
+        "owner_access_denied": False,
+        "kill_switch_active": False,
+        "entitlement_blocked": False,
+        "budget_exhausted": False,
+        "history_window_allowed": True,
+    }
+    try:
+        decision = dict(
+            rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "run-api-decision",
+                payload,
+            )
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(exc.reason or "rust_run_api_denied").strip()
+        raise HTTPException(status_code=409, detail=f"Rust run-api gate blocked {operation}: {reason}")
+    allowed_next_actions = {
+        "list_runs": {"list_runs"},
+        "get_run": {"get_run", "request_owner_approval"},
+        "start_turn": {
+            "start_turn",
+            "request_local_execution_confirmation",
+            "request_browser_execution_confirmation",
+        },
+        "start_run": {
+            "start_run",
+            "request_local_execution_confirmation",
+            "request_browser_execution_confirmation",
+        },
+        "stream_chat": {"start_chat_stream"},
+        "cancel_run": {"cancel_run"},
+        "retry_run": {"retry_run"},
+        "resume_run": {"resume_run"},
+        "approve_run": {"resolve_run_approval"},
+        "webhook_trigger": {"trigger_webhook_run"},
+    }.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if allowed_next_actions and next_action not in allowed_next_actions:
+        raise HTTPException(
+            status_code=423,
+            detail=(
+                "Rust run-api gate returned unexpected next_action for "
+                f"{operation}: {next_action or 'missing'}"
+            ),
+        )
+    return decision
+
+
+def _enforce_session_lifecycle_route_decision(
+    *,
+    operation: str,
+    session_record: dict[str, Any],
+    force: bool = False,
+) -> dict[str, Any]:
+    payload = {
+        "operation": str(operation or "").strip(),
+        "session_id": str(session_record.get("session_id") or "").strip() or None,
+        "status": str(session_record.get("status") or "active").strip() or "active",
+        "preset": "standard",
+        "turn_count": max(0, int(session_record.get("turn_count") or 0)),
+        "age_hours": max(0, int(session_record.get("age_hours") or 0)),
+        "idle_seconds": max(0, int(session_record.get("idle_seconds") or 0)),
+        "max_age_hours": max(1, int(session_record.get("max_age_hours") or 24)),
+        "idle_timeout_seconds": max(1, int(session_record.get("idle_timeout_seconds") or 3600)),
+        "force": bool(force),
+    }
+    try:
+        decision = dict(
+            rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "session-lifecycle-decision",
+                payload,
+            )
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(exc.reason or "rust_session_lifecycle_denied").strip()
+        raise HTTPException(status_code=409, detail=f"Rust session lifecycle gate blocked {operation}: {reason}")
+    expected_next_actions = {
+        "create": {"create"},
+        "close": {"close"},
+    }.get(str(operation or "").strip())
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_next_actions and next_action not in expected_next_actions:
+        raise HTTPException(
+            status_code=423,
+            detail=(
+                "Rust session lifecycle gate returned unexpected next_action for "
+                f"{operation}: {next_action or 'missing'}"
+            ),
+        )
+    return decision
+
+
 _normalize_usage_period = runtime_usage_service.normalize_usage_period
 
 
@@ -568,6 +717,8 @@ _usage_snapshots_for_user = lambda current_user: runtime_usage_service.usage_sna
     serialize_snapshot=_late_server_export("_serialize_run_snapshot"),
     current_user_is_privileged=_current_user_is_privileged,
     extract_run_owner_user_id=_extract_run_owner_user_id,
+    allowed_workspace_ids_fn=allowed_workspace_ids,
+    resolve_workspace_tenant_id=workspace_tenant_id,
 )
 
 
@@ -837,6 +988,22 @@ def register_run_routes(app) -> None:
             current_user=current_user,
             minimum_role="member",
         )
+        turn_workspace_id = str(payload.get("workspace_id") or "default").strip() or "default"
+        turn_tenant_id = workspace_tenant_id(current_user, turn_workspace_id)
+        run_api_decision = _enforce_run_api_decision(
+            operation="start_turn",
+            workspace_id=turn_workspace_id,
+            tenant_id=turn_tenant_id,
+            user_role="member",
+            body=payload,
+            run_id=str(payload.get("run_id") or payload.get("id") or "").strip() or None,
+        )
+        payload["rust_run_api_decision"] = {
+            "command": "run-api-decision",
+            "decision": run_api_decision.get("decision"),
+            "next_action": run_api_decision.get("next_action"),
+            "reason": run_api_decision.get("reason"),
+        }
 
         try:
             ingress = await turn_ingress_service.start_turn(
@@ -876,6 +1043,20 @@ def register_run_routes(app) -> None:
             if workspace_id
             else None
         )
+        if requested_workspace_id:
+            requested_workspace_token = str(requested_workspace_id).strip() or "default"
+            _enforce_run_api_decision(
+                operation="list_runs",
+                workspace_id=requested_workspace_token,
+                tenant_id=workspace_tenant_id(current_user, requested_workspace_token),
+                user_role="viewer",
+                body={
+                    "limit": max(1, min(int(limit or 50), 200)),
+                    "offset": max(0, int(offset or 0)),
+                    "status": str(status or "").strip() or None,
+                    "pack_id": str(pack_id or "").strip() or None,
+                },
+            )
         base_history_item_matches = _late_server_export("_history_item_matches")
         entitlement_cache: dict[str, dict[str, Any]] = {}
 
@@ -990,6 +1171,21 @@ def register_run_routes(app) -> None:
             actor["id"] = str((current_user or {}).get("user_id") or (current_user or {}).get("email") or "anonymous").strip()
         if not str(actor.get("display_name") or "").strip():
             actor["display_name"] = str((current_user or {}).get("email") or actor.get("id") or "").strip()
+        requested_session_id = str(payload.get("session_id") or "").strip() or None
+        existing_session_record = (
+            await session_service.get_session(requested_session_id)
+            if requested_session_id
+            else None
+        )
+        _enforce_session_lifecycle_route_decision(
+            operation="create",
+            session_record=existing_session_record
+            if isinstance(existing_session_record, dict)
+            else {
+                "session_id": requested_session_id or "",
+                "status": "new",
+            },
+        )
         metadata = normalize_direct_chat_session_metadata(
             current_user=current_user,
             workspace_id=workspace_id,
@@ -1002,7 +1198,7 @@ def register_run_routes(app) -> None:
             actor=actor,
             channel=str(payload.get("channel") or "web").strip() or "web",
             metadata=metadata,
-            session_id=str(payload.get("session_id") or "").strip() or None,
+            session_id=requested_session_id,
         )
         record = await session_service.get_session(session_id) or {
             "session_id": session_id,
@@ -1039,6 +1235,15 @@ def register_run_routes(app) -> None:
         current_user=Depends(member_dependency),
     ):
         record = await session_service.get_session(session_id)
+        _enforce_session_lifecycle_route_decision(
+            operation="close",
+            session_record=record
+            if isinstance(record, dict)
+            else {
+                "session_id": str(session_id or "").strip(),
+                "status": "active",
+            },
+        )
         if isinstance(record, dict):
             enforce_workspace_access(
                 current_user,

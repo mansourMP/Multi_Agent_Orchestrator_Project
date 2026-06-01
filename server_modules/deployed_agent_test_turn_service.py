@@ -13,6 +13,7 @@ from server_modules import (
     deployed_agent_transparency_service,
     empyralis_model_tier_routing_service,
     model_router,
+    rust_runtime_kernel_client,
     studio_app_boundary_service,
     transparency_event_store_service,
     usage_accounting_service,
@@ -63,6 +64,37 @@ def _authoritative_runtime_mode(config: Any) -> str:
         runtime_target=getattr(config, "runtime_target", None),
         runtime_supplier=getattr(config, "runtime_supplier", None),
     )
+
+
+def _enforce_deployed_test_turn_readiness(
+    *,
+    deployed_agent_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    config: Any,
+    deployment_state: str,
+) -> Dict[str, Any]:
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "deployed-readiness-decision",
+            {
+                "stage": "test_turn",
+                "workspace_id": workspace_id,
+                "tenant_id": tenant_id,
+                "deployed_agent_id": deployed_agent_id,
+                "studio_agent_mode": _authoritative_runtime_mode(config),
+                "current_state": deployment_state,
+                "next_state": deployment_state,
+                "backing_install_required": False,
+            },
+        )
+        next_action = _coerce_text(decision.get("next_action"))
+        if next_action != "execute_studio_test_turn":
+            raise ValueError(f"unexpected_next_action:{next_action or 'missing'}")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _coerce_text(getattr(exc, "reason", "")) or "deployed_readiness_denied"
+        raise ValueError(f"Rust deployed-readiness blocked test turn: {reason}") from exc
 
 
 def _build_policy_decisions(
@@ -682,6 +714,20 @@ async def execute_test_turn(
     config = deployed_agent_config_schema.deployed_agent_config_from_record(agent_record)
 
     deployment_state = _coerce_text(agent_record.get("deployment_state") or config.deployment_state)
+    deployed_agent_service._enforce_deployed_agent_service_decision(
+        "test_turn",
+        deployed_agent=agent_record,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        current_user=current_user,
+    )
+    _enforce_deployed_test_turn_readiness(
+        deployed_agent_id=deployed_agent_id,
+        workspace_id=workspace_id,
+        tenant_id=tenant_id,
+        config=config,
+        deployment_state=deployment_state,
+    )
     if deployment_state not in TESTABLE_STATES:
         raise ValueError(
             f"Agent state '{deployment_state}' does not allow test turns. "

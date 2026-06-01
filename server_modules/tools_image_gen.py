@@ -11,6 +11,8 @@ from typing import Any, Dict, Iterable, List, Optional
 import httpx
 from openai import OpenAI
 
+from server_modules import rust_runtime_kernel_client
+
 
 DEFAULT_OUTPUT_DIR = Path(".orion-stack") / "generated_images"
 VALID_MODELS = {"dall-e-3", "dall-e-2", "stable-diffusion"}
@@ -67,7 +69,40 @@ def _target_paths(save_to: Optional[str], *, count: int, prompt: str) -> List[Pa
     ]
 
 
+class ImageGenerationRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_generated_image_file_write(path: Path, payload: bytes) -> None:
+    metadata = {
+        "path": str(path),
+        "payload_bytes": len(bytes(payload or b"")),
+        "suffix": path.suffix.lower(),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_generated_image_file",
+            state_class="generated_image_files",
+            actor_id="system",
+            status="active",
+            payload=metadata,
+            payload_bytes=int(metadata["payload_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_generated_image_file":
+            raise ImageGenerationRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise ImageGenerationRustGateError(exc.reason) from exc
+
+
 def _write_binary(path: Path, payload: bytes) -> str:
+    _enforce_generated_image_file_write(path, payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
     return str(path)

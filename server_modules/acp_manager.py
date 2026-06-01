@@ -16,6 +16,7 @@ from server_modules.runtime_config import (
 )
 from server_modules import outbox_service
 from server_modules import run_state_repository
+from server_modules import rust_runtime_kernel_client
 from server_modules.run_execution_handle import (
     RunExecutionHandle,
     durable_run_payload,
@@ -48,10 +49,45 @@ def _safe_read_json(path: Path, fallback: Any) -> Any:
         return fallback
 
 
+class AcpManagerRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_acp_manager_json_write(path: Path, payload: Any, serialized: str) -> None:
+    metadata = {
+        "path": str(path),
+        "payload_type": type(payload).__name__,
+        "keys": sorted(str(key) for key in payload.keys())[:80] if isinstance(payload, dict) else [],
+        "payload_bytes": len(serialized.encode("utf-8")),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_acp_manager_json",
+            state_class="acp_manager_state",
+            actor_id="system",
+            status="active",
+            payload=metadata,
+            payload_bytes=int(metadata["payload_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_acp_manager_json":
+            raise AcpManagerRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise AcpManagerRustGateError(exc.reason) from exc
+
+
 def _safe_write_json(path: Path, payload: Any) -> None:
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    _enforce_acp_manager_json_write(path, payload, serialized)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.write_text(serialized, encoding="utf-8")
     tmp_path.replace(path)
 
 

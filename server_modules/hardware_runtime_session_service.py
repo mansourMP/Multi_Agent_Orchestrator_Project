@@ -7,6 +7,7 @@ import uuid
 from server_modules import (
     hardware_access_policy_service,
     hardware_runtime_target_resolver,
+    rust_runtime_kernel_client,
     secret_redaction_service,
     session_service,
 )
@@ -39,6 +40,76 @@ def _dict(value: Any) -> Dict[str, Any]:
 
 def _list_dicts(value: Any) -> List[Dict[str, Any]]:
     return [dict(item) for item in list(value or []) if isinstance(item, dict)]
+
+
+def _runtime_binding_mode_for_target(canonical_runtime_target: str) -> str:
+    target = _text(canonical_runtime_target)
+    if target == "empyralis_cloud_computer":
+        return "cloud_computer"
+    if target == "user_device_gateway":
+        return "my_computer"
+    if target == "self_hosted_node":
+        return "self_hosted"
+    return "text"
+
+
+def _enforce_runtime_binding_decision(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    canonical_runtime_target: str,
+    gateway_id: Optional[str],
+    device_id: Optional[str],
+    node_id: Optional[str],
+    thread_id: Optional[str],
+    session_id: str,
+) -> Dict[str, Any]:
+    mode = _runtime_binding_mode_for_target(canonical_runtime_target)
+    if mode == "self_hosted":
+        return {
+            "ok": True,
+            "decision": "allow",
+            "operation": "ensure_self_hosted_runtime_session",
+            "next_action": "skip_hardware_self_hosted_runtime_binding",
+        }
+    operation = "ensure_cloud_runtime_session" if mode == "cloud_computer" else "ensure_runtime_session"
+    payload = {
+        "operation": operation,
+        "deployed_agent_id": "sage_hardware_runtime",
+        "tenant_id": _text(tenant_id) or "default",
+        "workspace_id": _text(workspace_id) or "default",
+        "session_id": _text(session_id),
+        "thread_id": _text(thread_id) or _text(session_id),
+        "studio_agent_mode": mode,
+    }
+    if mode == "my_computer":
+        gateway_present = bool(_text(gateway_id) or _text(device_id))
+        payload.update(
+            {
+                "local_gateway_attachment_present": gateway_present,
+                "local_gateway_online": gateway_present,
+                "local_gateway_healthy": gateway_present,
+                "local_gateway_revoked": False,
+                "runtime_attachment_id": _text(gateway_id) or _text(device_id) or None,
+                "gateway_id": _text(gateway_id) or None,
+                "runtime_node_id": _text(node_id) or None,
+            }
+        )
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced("runtime-binding-decision", payload)
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise RuntimeError(f"Rust runtime-binding gate blocked {operation}: {exc.reason}") from exc
+    next_action = _text(decision.get("next_action"))
+    expected_next_action = {
+        "text": "skip_runtime_binding",
+        "cloud_computer": "create_cloud_runtime_session",
+        "my_computer": "create_local_gateway_runtime_session",
+    }.get(mode)
+    if expected_next_action and next_action != expected_next_action:
+        raise RuntimeError(
+            f"Rust runtime-binding gate blocked {operation}: unexpected_next_action:{next_action or 'missing'}"
+        )
+    return dict(decision)
 
 
 def new_runtime_session_id() -> str:
@@ -158,6 +229,16 @@ async def create_runtime_session(
     execution_mode: Optional[str],
 ) -> Dict[str, Any]:
     resolved_session_id = _text(session_id) or new_runtime_session_id()
+    _enforce_runtime_binding_decision(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        canonical_runtime_target=canonical_runtime_target,
+        gateway_id=gateway_id,
+        device_id=device_id,
+        node_id=node_id,
+        thread_id=thread_id,
+        session_id=resolved_session_id,
+    )
     access_metadata = hardware_access_policy_service.runtime_access_metadata(runtime_access_mode, execution_mode)
     metadata = {
         "thread_id": _text(thread_id) or resolved_session_id,

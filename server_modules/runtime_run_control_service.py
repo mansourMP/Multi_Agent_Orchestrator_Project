@@ -3,7 +3,82 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import HTTPException
-from server_modules import browser_checkpoint_service
+from server_modules import browser_checkpoint_service, rust_runtime_kernel_client
+
+
+def _run_control_scope(run: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str, str, str]:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    workspace_id = str(
+        run.get("workspace_id")
+        or context.get("workspace_id")
+        or metadata.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+    tenant_id = str(
+        run.get("tenant_id")
+        or context.get("tenant_id")
+        or metadata.get("tenant_id")
+        or "default"
+    ).strip() or "default"
+    run_status = str(
+        run.get("status")
+        or run.get("state")
+        or context.get("status")
+        or metadata.get("status")
+        or ""
+    ).strip()
+    return context, metadata, workspace_id, tenant_id, run_status
+
+
+def _run_control_actor_role(current_user: Any) -> str:
+    if isinstance(current_user, dict):
+        role = str(current_user.get("workspace_role") or current_user.get("role") or "member").strip()
+        return role or "member"
+    return "member"
+
+
+def _enforce_run_control_run_api_decision(
+    *,
+    operation: str,
+    run_id: str,
+    snapshot_run: dict[str, Any],
+    current_user: Any,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    _context, _metadata, workspace_id, tenant_id, run_status = _run_control_scope(snapshot_run)
+    rust_payload = {
+        "operation": str(operation or "").strip(),
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "run_id": str(run_id or "").strip(),
+        "run_status": run_status,
+        "user_role": _run_control_actor_role(current_user),
+        "workspace_access_denied": False,
+        "owner_access_denied": False,
+        "kill_switch_active": False,
+        "history_window_allowed": True,
+        "body": {"user_id": str((current_user or {}).get("user_id") or "").strip() or "user", **dict(body or {})},
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "run-api-decision",
+            rust_payload,
+            allow_approval_required=True,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HTTPException(status_code=409, detail=f"Rust run-api gate blocked {operation}: {exc.reason}") from exc
+    allowed_next_actions = {
+        "resume_run": {"resume_run"},
+        "pause_run": {"pause_run"},
+    }.get(operation, set())
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action not in allowed_next_actions:
+        raise HTTPException(
+            status_code=423,
+            detail=f"Rust run-api gate returned unexpected next_action for {operation}: {next_action or 'missing'}",
+        )
+    return dict(decision)
 
 
 def local_worker_recovery_confirmation_required(run: dict[str, Any]) -> bool:
@@ -139,6 +214,13 @@ def pause_run_for_takeover(
         raise HTTPException(status_code=404, detail="Run ID not found")
     snapshot = serialize_run_snapshot(run_id, snapshot_run)
     enforce_run_owner_access(current_user, snapshot)
+    _enforce_run_control_run_api_decision(
+        operation="pause_run",
+        run_id=run_id,
+        snapshot_run=snapshot_run,
+        current_user=current_user,
+        body={"manual_takeover_requested": True},
+    )
 
     status = str(snapshot_run.get("status") or "").strip().lower()
     if status in {"completed", "failed", "timeout", "cancelled", "canceled", "stopped"}:
@@ -336,6 +418,13 @@ def resume_waiting_run(
         raise HTTPException(status_code=404, detail="Run ID not found")
     snapshot = serialize_run_snapshot(run_id, snapshot_run)
     enforce_run_owner_access(current_user, snapshot)
+    _enforce_run_control_run_api_decision(
+        operation="resume_run",
+        run_id=run_id,
+        snapshot_run=snapshot_run,
+        current_user=current_user,
+        body={"resume_requested": True},
+    )
     if str(snapshot_run.get("status") or "").strip().lower() != "waiting_for_input":
         raise HTTPException(status_code=409, detail="Run is not waiting for input.")
     pending_confirmation = get_pending_confirmation(snapshot_run)

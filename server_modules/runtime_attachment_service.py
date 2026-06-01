@@ -19,6 +19,7 @@ from server_modules import (
     hybrid_policy_service,
     memory_service,
     run_state_repository,
+    rust_runtime_kernel_client,
 )
 
 
@@ -80,6 +81,15 @@ RUNTIME_SENSITIVE_ACTIONS = (
 _RUNTIME_ATTACHMENTS_CACHE: Dict[str, Dict[str, Any]] = {}
 _RUNTIME_TARGETS_CACHE: Dict[str, Dict[str, Any]] = {}
 _RUNTIME_CACHE_LIMIT = 128
+
+_RUNTIME_ATTACHMENT_EXPECTED_NEXT_ACTIONS: dict[str, str] = {
+    "normalize_target": "normalize_runtime_target_id",
+    "build_targets": "build_workspace_runtime_targets",
+    "select_attachment": "select_runtime_attachment",
+    "self_hosted_gate": "ensure_self_hosted_node_gate",
+    "local_companion_gate": "select_local_companion_attachment",
+    "usage_credit_event": "build_runtime_usage_credit_event",
+}
 
 TRUST_MODEL_MAP: dict[str, dict[str, Any]] = {
     "hosted_secure": {
@@ -182,6 +192,96 @@ def _list_strings(value: Any) -> List[str]:
     return out
 
 
+def _enforce_rust_runtime_attachment_decision(
+    *,
+    operation: str,
+    tenant_id: str,
+    workspace_id: str,
+    attachment: Optional[Dict[str, Any]] = None,
+    runtime_target: Optional[str] = None,
+    deployment_mode: Optional[str] = None,
+    attachment_count: Optional[int] = None,
+    required_capabilities: Optional[List[str]] = None,
+    required_connectors: Optional[List[str]] = None,
+    requested_machine_target: Optional[str] = None,
+    surface: Optional[str] = None,
+    session_id: Optional[str] = None,
+    active_seconds: Optional[int] = None,
+    billable_seconds: Optional[int] = None,
+    raise_value_error: bool = False,
+) -> Dict[str, Any]:
+    attachment_payload = _coerce_dict(attachment)
+    required_capability_tokens = _list_strings(required_capabilities)
+    required_connector_tokens = _list_strings(required_connectors)
+    requested_machine_token = str(requested_machine_target or "").strip()
+    runtime_kind = str(attachment_payload.get("attachment_kind") or attachment_payload.get("kind") or "").strip()
+    runtime_id = str(
+        attachment_payload.get("attachment_id")
+        or attachment_payload.get("runtime_node_id")
+        or attachment_payload.get("runtime_id")
+        or attachment_payload.get("machine_id")
+        or ""
+    ).strip()
+    payload = {
+        "operation": operation,
+        "tenant_id": str(tenant_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip(),
+        "runtime_target": str(runtime_target or "").strip(),
+        "deployment_mode": str(deployment_mode or "").strip(),
+        "attachment_count": int(attachment_count or 0),
+        "attachment_id": runtime_id,
+        "runtime_id": str(attachment_payload.get("runtime_id") or "").strip(),
+        "machine_id": str(attachment_payload.get("machine_id") or "").strip(),
+        "runtime_node_id": str(attachment_payload.get("runtime_node_id") or "").strip(),
+        "runtime_profile_id": str(attachment_payload.get("runtime_profile_id") or "").strip(),
+        "attachment_kind": runtime_kind,
+        "kind": runtime_kind,
+        "status": str(attachment_payload.get("status") or "").strip(),
+        "control_state": str(attachment_payload.get("control_state") or "").strip(),
+        "online": bool(attachment_payload.get("online")),
+        "healthy": bool(attachment_payload.get("healthy")),
+        "capability_match": (not required_capability_tokens or _attachment_capability_match(attachment_payload, required_capability_tokens)),
+        "capability_readiness_match": (
+            not required_capability_tokens
+            or _local_companion_ready_capability_match(attachment_payload, required_capability_tokens)
+        ),
+        "connector_match": (not required_connector_tokens or _attachment_connector_match(attachment_payload, required_connector_tokens)),
+        "requested_machine_target": requested_machine_token,
+        "machine_target_match": (not requested_machine_token or _matches_requested_machine(attachment_payload, requested_machine_token)),
+        "allowed_agent_ids_present": bool(_list_strings(attachment_payload.get("allowed_agent_ids"))),
+        "agent_allowed": True,
+        "max_concurrent_sessions": int(attachment_payload.get("max_concurrent_sessions") or 0),
+        "active_sessions": int(attachment_payload.get("active_sessions") or attachment_payload.get("active_session_count") or 0),
+        "existing_session_reuse": bool(attachment_payload.get("existing_session_reuse")),
+        "surface": str(surface or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "active_seconds": int(active_seconds or 0),
+        "billable_seconds": int(billable_seconds or 0),
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced("runtime-attachment-decision", payload)
+        expected_next_action = _RUNTIME_ATTACHMENT_EXPECTED_NEXT_ACTIONS.get(str(operation or "").strip())
+        next_action = str(decision.get("next_action") or "").strip()
+        if expected_next_action and next_action != expected_next_action:
+            message = f"Rust runtime-attachment gate blocked {operation}: unexpected_next_action:{next_action or 'missing'}"
+            if raise_value_error:
+                raise ValueError(message)
+            raise RuntimeAttachmentSelectionError(
+                message,
+                reason="unexpected_next_action",
+                enforcement_state=dict(decision),
+            )
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        if raise_value_error:
+            raise ValueError(f"Rust runtime-attachment gate blocked {operation}: {exc.reason}") from exc
+        raise RuntimeAttachmentSelectionError(
+            f"Rust runtime-attachment gate blocked {operation}: {exc.reason}",
+            reason=exc.reason,
+            enforcement_state=dict(exc.decision),
+        ) from exc
+
+
 def _runtime_target_token(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -189,6 +289,24 @@ def _runtime_target_token(value: Any) -> str:
 def normalize_runtime_target_id(value: Any) -> str:
     token = _runtime_target_token(value)
     return RUNTIME_TARGET_ALIAS_TO_LEGACY.get(token, token)
+
+
+def _rust_normalized_runtime_target_id(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    value: Any,
+    raise_value_error: bool = False,
+) -> str:
+    decision = _enforce_rust_runtime_attachment_decision(
+        operation="normalize_target",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        runtime_target=str(value or "").strip(),
+        raise_value_error=raise_value_error,
+    )
+    target = str(decision.get("runtime_target") or "").strip()
+    return target or normalize_runtime_target_id(value)
 
 
 def canonical_runtime_target_id(value: Any) -> str:
@@ -291,7 +409,12 @@ def build_runtime_usage_credit_event(
     surface_token = str(surface or "").strip().lower()
     if surface_token not in RUNTIME_USAGE_SURFACES:
         raise ValueError("surface must be sage, studio, or mini_app.")
-    target_token = normalize_runtime_target_id(runtime_target)
+    target_token = _rust_normalized_runtime_target_id(
+        tenant_id=tenant_token,
+        workspace_id=workspace_token,
+        value=runtime_target,
+        raise_value_error=True,
+    )
     if target_token not in SUPPORTED_RUNTIME_TARGET_IDS:
         raise ValueError("runtime_target is unsupported.")
     canonical_target_token = canonical_runtime_target_id(target_token)
@@ -308,6 +431,17 @@ def build_runtime_usage_credit_event(
     if active > 0 and billable > active:
         raise ValueError("billable_seconds cannot exceed active_seconds.")
     cost = _float_or_raise(estimated_cost_usd, field_name="estimated_cost_usd")
+    _enforce_rust_runtime_attachment_decision(
+        operation="usage_credit_event",
+        tenant_id=tenant_token,
+        workspace_id=workspace_token,
+        runtime_target=target_token,
+        surface=surface_token,
+        session_id=session_token,
+        active_seconds=int(active),
+        billable_seconds=int(billable),
+        raise_value_error=True,
+    )
     billable_minutes = round(billable / 60.0, 6)
     target_definition = dict(RUNTIME_TARGET_DEFINITIONS.get(target_token) or {})
     line_item = credit_ledger_contract.build_credit_ledger_line_item(
@@ -913,6 +1047,13 @@ def build_workspace_runtime_targets(
 ) -> Dict[str, Any]:
     attachments = [dict(item) for item in list(inventory.get("attachments") or []) if isinstance(item, dict)]
     deployment_mode = str(inventory.get("deployment_mode") or _deployment_mode(attachments)).strip() or "cloud_only"
+    _enforce_rust_runtime_attachment_decision(
+        operation="build_targets",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        deployment_mode=deployment_mode,
+        attachment_count=len(attachments),
+    )
     default_target_id = _default_runtime_target_id(
         deployment_mode=deployment_mode,
         attachments=attachments,
@@ -1274,6 +1415,13 @@ def ensure_self_hosted_node_gate(
             "Self-hosted node has invalid max_concurrent_sessions.",
             reason="self_hosted_node_concurrency_invalid",
         )
+    _enforce_rust_runtime_attachment_decision(
+        operation="self_hosted_gate",
+        tenant_id=str(attachment.get("tenant_id") or "default").strip() or "default",
+        workspace_id=workspace_id,
+        attachment=attachment,
+        required_capabilities=required_capabilities,
+    )
 
 
 def _managed_cloud_attachment(*, tenant_id: str, workspace_id: str, runtime_profiles: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -1672,6 +1820,15 @@ async def resolve_install_runtime_plan(
                 workspace_id=workspace_id,
                 required_capabilities=required_capabilities,
             )
+        _enforce_rust_runtime_attachment_decision(
+            operation="select_attachment",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            attachment=selected,
+            required_capabilities=required_capabilities,
+            required_connectors=required_connectors,
+            requested_machine_target=requested_machine_token,
+        )
         execution_target_selected = "cloud_computer" if selected_attachment_kind == "cloud_computer" else "cloud"
         return {
             "runtime_mode": runtime_mode,
@@ -1748,6 +1905,22 @@ async def resolve_install_runtime_plan(
             reason="privileged_runtime_approval_required",
             enforcement_state=hybrid_policy,
         )
+    _enforce_rust_runtime_attachment_decision(
+        operation="local_companion_gate",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        attachment=selected,
+        required_capabilities=required_capabilities,
+    )
+    _enforce_rust_runtime_attachment_decision(
+        operation="select_attachment",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        attachment=selected,
+        required_capabilities=required_capabilities,
+        required_connectors=required_connectors,
+        requested_machine_target=requested_machine_token,
+    )
     return {
         "runtime_mode": runtime_mode,
         "deployment_mode": str(runtime_inventory.get("deployment_mode") or "local_only"),

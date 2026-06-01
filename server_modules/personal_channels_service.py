@@ -11,6 +11,7 @@ from server_modules import (
     kill_switch_gate,
     personal_channel_sage_bridge_service,
     personal_channels_repository,
+    rust_runtime_kernel_client,
     secret_redaction_service,
     security_audit_service,
 )
@@ -35,6 +36,122 @@ LOCAL_BRIDGE_PERSONAL_CHANNELS: Dict[str, Dict[str, str]] = {
     "imessage_personal": {"provider": "bluebubbles_local_bridge", "label": "iMessage"},
     "wechat_personal": {"provider": "wechat_local_bridge", "label": "WeChat"},
 }
+
+
+def _enforce_personal_gateway_config_decision(
+    *,
+    gateway_id: str,
+    registration: Dict[str, Any],
+    capability_id: str,
+    run_id: str,
+    trace_id: str,
+) -> Dict[str, Any]:
+    metadata = dict(registration.get("metadata") or {})
+    session_id = str(
+        registration.get("active_session_id")
+        or metadata.get("gateway_session_id")
+        or metadata.get("session_id")
+        or ""
+    ).strip()
+    payload = {
+        "operation": "tool_execute",
+        "tenant_id": str(registration.get("tenant_id") or "default").strip() or "default",
+        "workspace_id": str(registration.get("workspace_id") or "default").strip() or "default",
+        "actor_id": "system",
+        "actor_role": "owner",
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": session_id,
+        "request_id": str(trace_id or "").strip() or None,
+        "capability_id": str(capability_id or "").strip(),
+        "run_id": str(run_id or "").strip(),
+        "trace_id": str(trace_id or "").strip() or None,
+        "quota_profile": "standard",
+        "risk_level": "normal",
+        "policy_decision": "allow",
+        "device_trust_state": str(registration.get("device_trust_state") or "trusted").strip() or "trusted",
+        "protocol_version": "gateway.v1",
+        "approval_provided": True,
+        "approval_memory_hit": False,
+        "kill_switch_enabled": False,
+        "quota_ok": True,
+        "gateway_registered": True,
+        "session_valid": bool(session_id),
+        "websocket_token_present": True,
+        "frame_valid": True,
+        "payload_present": True,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "personal_gateway_config_denied").strip()
+        raise ValueError(f"Rust gateway-service blocked tool_execute: {reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "dispatch_gateway_operation":
+        raise ValueError(
+            "Rust gateway-service returned unexpected next_action for "
+            f"tool_execute: {next_action or 'missing'}"
+        )
+    return decision
+
+
+def _enforce_personal_channel_dispatch_decision(
+    *,
+    gateway_id: str,
+    registration: Dict[str, Any],
+    capability_id: str,
+    request_id: str,
+) -> Dict[str, Any]:
+    metadata = dict(registration.get("metadata") or {})
+    session_id = str(
+        registration.get("active_session_id")
+        or metadata.get("gateway_session_id")
+        or metadata.get("session_id")
+        or ""
+    ).strip()
+    payload = {
+        "operation": "protocol_route",
+        "tenant_id": str(registration.get("tenant_id") or "default").strip() or "default",
+        "workspace_id": str(registration.get("workspace_id") or "default").strip() or "default",
+        "actor_id": "system",
+        "actor_role": "owner",
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": session_id,
+        "request_id": str(request_id or "").strip() or None,
+        "capability_id": str(capability_id or "").strip(),
+        "trace_id": str(request_id or "").strip() or None,
+        "quota_profile": "standard",
+        "risk_level": "normal",
+        "policy_decision": "allow",
+        "device_trust_state": str(registration.get("device_trust_state") or "trusted").strip() or "trusted",
+        "protocol_version": "gateway.v1",
+        "approval_provided": True,
+        "approval_memory_hit": False,
+        "kill_switch_enabled": False,
+        "quota_ok": True,
+        "gateway_registered": True,
+        "session_valid": bool(session_id),
+        "websocket_token_present": True,
+        "frame_valid": True,
+        "payload_present": True,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "personal_channel_dispatch_denied").strip()
+        raise ValueError(f"Rust gateway-service blocked protocol_route: {reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "dispatch_gateway_operation":
+        raise ValueError(
+            "Rust gateway-service returned unexpected next_action for "
+            f"protocol_route: {next_action or 'missing'}"
+        )
+    return decision
 
 
 _LOCAL_BRIDGE_PERSONAL_CHANNEL_COPY: Dict[str, Dict[str, str]] = {
@@ -874,6 +991,12 @@ async def _deliver_whatsapp_personal_reply(
     from server_modules import gateway_protocol_service
 
     try:
+        _enforce_personal_channel_dispatch_decision(
+            gateway_id=str(gateway_id or "").strip(),
+            registration=registration,
+            capability_id="channel.whatsapp.personal.send",
+            request_id=str(idempotency_key or "").strip(),
+        )
         dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
             gateway_id=str(gateway_id or "").strip(),
             channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
@@ -1145,6 +1268,12 @@ async def _handle_telegram_gateway_channel_inbound(
     from server_modules import gateway_protocol_service
 
     try:
+        _enforce_personal_channel_dispatch_decision(
+            gateway_id=str(gateway_id or "").strip(),
+            registration=registration,
+            capability_id="channel.telegram.personal.send",
+            request_id=str(idempotency_key or "").strip(),
+        )
         dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
             gateway_id=str(gateway_id or "").strip(),
             channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
@@ -1297,6 +1426,12 @@ async def _deliver_local_bridge_personal_reply(
 
     from server_modules import gateway_protocol_service
 
+    _enforce_personal_channel_dispatch_decision(
+        gateway_id=str(gateway_id or "").strip(),
+        registration=registration,
+        capability_id=f"{str(channel_key or '').strip()}.send",
+        request_id=idempotency_key,
+    )
     dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
         gateway_id=str(gateway_id or "").strip(),
         channel_key=channel_key,
@@ -1436,6 +1571,12 @@ async def send_local_bridge_personal_message(
 
     from server_modules import gateway_protocol_service
 
+    _enforce_personal_channel_dispatch_decision(
+        gateway_id=str(gateway_id or "").strip(),
+        registration=registration,
+        capability_id=f"{str(channel_key or '').strip()}.send",
+        request_id=str(idempotency_key or "").strip(),
+    )
     dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
         gateway_id=str(gateway_id or "").strip(),
         channel_key=channel_key,
@@ -1483,6 +1624,12 @@ async def send_whatsapp_personal_message(
 
     from server_modules import gateway_protocol_service
 
+    _enforce_personal_channel_dispatch_decision(
+        gateway_id=str(gateway_id or "").strip(),
+        registration=registration,
+        capability_id="channel.whatsapp.personal.send",
+        request_id=str(idempotency_key or "").strip(),
+    )
     dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
         gateway_id=str(gateway_id or "").strip(),
         channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
@@ -1539,6 +1686,13 @@ async def configure_whatsapp_personal_gateway(
         raise ValueError("At least one WhatsApp personal setup field is required.")
     run_id = f"gateway-whatsapp-setup-{uuid4().hex[:12]}"
     trace_id = f"gateway-whatsapp-setup-{uuid4().hex[:12]}"
+    _enforce_personal_gateway_config_decision(
+        gateway_id=str(gateway_id or "").strip(),
+        registration=registration,
+        capability_id=WHATSAPP_PERSONAL_CONFIGURE_CAPABILITY,
+        run_id=run_id,
+        trace_id=trace_id,
+    )
     execution = await gateway_execution_service.execute_tool_via_gateway(
         gateway_id=str(gateway_id or "").strip(),
         capability_id=WHATSAPP_PERSONAL_CONFIGURE_CAPABILITY,
@@ -1583,6 +1737,12 @@ async def send_telegram_personal_message(
 
     from server_modules import gateway_protocol_service
 
+    _enforce_personal_channel_dispatch_decision(
+        gateway_id=str(gateway_id or "").strip(),
+        registration=registration,
+        capability_id="channel.telegram.personal.send",
+        request_id=str(idempotency_key or "").strip(),
+    )
     dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
         gateway_id=str(gateway_id or "").strip(),
         channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
@@ -1648,6 +1808,13 @@ async def configure_telegram_personal_gateway(
         raise ValueError("At least one Telegram personal setup field is required.")
     run_id = f"gateway-telegram-setup-{uuid4().hex[:12]}"
     trace_id = f"gateway-telegram-setup-{uuid4().hex[:12]}"
+    _enforce_personal_gateway_config_decision(
+        gateway_id=str(gateway_id or "").strip(),
+        registration=registration,
+        capability_id=TELEGRAM_PERSONAL_CONFIGURE_CAPABILITY,
+        run_id=run_id,
+        trace_id=trace_id,
+    )
     execution = await gateway_execution_service.execute_tool_via_gateway(
         gateway_id=str(gateway_id or "").strip(),
         capability_id=TELEGRAM_PERSONAL_CONFIGURE_CAPABILITY,

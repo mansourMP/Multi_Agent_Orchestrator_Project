@@ -19,6 +19,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from server_modules.usage_reporting import build_usage_record, enrich_usage_record
 from server_modules.agent_turn import build_local_worker_turn_request
+from server_modules import rust_runtime_kernel_client
 
 from orion_local_worker_content import normalize_content_plan_items
 from orion_local_worker_execution import (
@@ -51,13 +52,32 @@ def ensure_trailing_slashless(url: str) -> str:
 
 
 def build_runtime_capabilities() -> List[str]:
-    return [
-        "browser_automation.interactive",
-        "filesystem.read_write",
-        "shell.execute",
-        "screenshot.capture",
-        "local.worker",
-    ]
+    capability_map = {
+        "browser_control": "browser_automation.interactive",
+        "read_files": "filesystem.read_write",
+        "write_files": "filesystem.read_write",
+        "shell_command": "shell.execute",
+    }
+    capabilities = []
+    try:
+        manifest = rust_runtime_kernel_client.capability_manifest(include_aliases=False)
+        next_action = str(manifest.get("next_action") or "").strip()
+        if next_action and next_action != "return_capability_manifest":
+            raise RuntimeError(f"unexpected_next_action:{next_action}")
+        for item in list(manifest.get("capabilities") or []):
+            mapped = capability_map.get(str(item or "").strip())
+            if mapped and mapped not in capabilities:
+                capabilities.append(mapped)
+    except Exception:
+        capabilities = [
+            "browser_automation.interactive",
+            "filesystem.read_write",
+            "shell.execute",
+        ]
+    for extra in ("screenshot.capture", "local.worker"):
+        if extra not in capabilities:
+            capabilities.append(extra)
+    return capabilities
 
 
 def runtime_bootstrap_shape(enrollment_token: str) -> Tuple[str, List[str]]:

@@ -15,6 +15,7 @@ from fastapi import HTTPException
 
 from server_modules import agent_memory as _workspace_memory_store
 from server_modules import memory_summary_service
+from server_modules import rust_runtime_kernel_client
 from server_modules import workspace_context_memory_adapter
 from server_modules.telemetry import get_tracer, set_span_attributes
 from server_modules.workspace_context import (
@@ -220,6 +221,72 @@ def _sha256_text(value: str) -> str:
 
 def _normalize_workspace_id(workspace_id: str) -> str:
     return str(workspace_id or "default").strip() or "default"
+
+
+def _enforce_memory_state_decision(
+    *,
+    operation: str,
+    workspace_id: str,
+    actor_id: str = _MEMORY_DEFAULT_ACTOR,
+    payload: Optional[Dict[str, Any]] = None,
+    status: str = "active",
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    record = dict(payload or {})
+    try:
+        payload_bytes = len(json.dumps(record, sort_keys=True).encode("utf-8"))
+    except Exception:
+        payload_bytes = 0
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "runtime-state-store-decision",
+            {
+                "operation": operation,
+                "state_class": "workspace_memory",
+                "storage_engine": "durable_postgres",
+                "tenant_id": normalized_workspace_id,
+                "workspace_id": normalized_workspace_id,
+                "actor_id": _normalize_memory_actor(actor_id),
+                "status": status,
+                "payload": record,
+                "payload_bytes": payload_bytes,
+                "workspace_access": True,
+                "owner_access": True,
+                "destructive_approval": True,
+            },
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        result = getattr(exc, "result", None)
+        if not isinstance(result, dict):
+            result = {}
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_runtime_state_store_denied",
+                "operation": result.get("operation") or operation,
+                "reason": result.get("reason") or str(exc),
+            },
+        ) from exc
+    expected_next_action = {
+        "upsert_workspace_memory": "write_workspace_memory",
+        "delete_workspace_memory": "delete_workspace_memory",
+        "append_workspace_daily_log": "append_workspace_daily_log",
+        "update_workspace_context_file": "write_workspace_context_file",
+    }.get(operation, operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != expected_next_action:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_runtime_state_store_invalid_next_action",
+                "operation": operation,
+                "reason": (
+                    "Rust runtime state store returned unexpected next_action "
+                    f"for workspace memory operation {operation}: {next_action or 'missing'}"
+                ),
+            },
+        )
+    return decision
 
 
 def _normalize_memory_lookup_key(value: str) -> str:
@@ -442,8 +509,18 @@ def save_memory(
     sync_memory_md: bool = True,
     agent_install_id: str | None = None,
 ) -> None:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    _enforce_memory_state_decision(
+        operation="upsert_workspace_memory",
+        workspace_id=normalized_workspace_id,
+        payload={
+            "key": str(key or "").strip(),
+            "content": str(content or ""),
+            "agent_install_id": str(agent_install_id or "").strip() or None,
+        },
+    )
     _workspace_memory_store._save_memory(
-        _normalize_workspace_id(workspace_id),
+        normalized_workspace_id,
         key,
         content,
         sync_memory_md=sync_memory_md,
@@ -474,16 +551,35 @@ def semantic_search(
 
 
 def delete_memory(workspace_id: str, key: str, *, agent_install_id: str | None = None) -> bool:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    _enforce_memory_state_decision(
+        operation="delete_workspace_memory",
+        workspace_id=normalized_workspace_id,
+        payload={
+            "key": str(key or "").strip(),
+            "agent_install_id": str(agent_install_id or "").strip() or None,
+        },
+        status="archived",
+    )
     return _workspace_memory_store._delete_memory(
-        _normalize_workspace_id(workspace_id),
+        normalized_workspace_id,
         key,
         agent_install_id=str(agent_install_id or "").strip() or None,
     )
 
 
 def save_daily_log(workspace_id: str, content: str, *, agent_install_id: str | None = None) -> None:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    _enforce_memory_state_decision(
+        operation="append_workspace_daily_log",
+        workspace_id=normalized_workspace_id,
+        payload={
+            "content": str(content or ""),
+            "agent_install_id": str(agent_install_id or "").strip() or None,
+        },
+    )
     _workspace_memory_store._save_daily_log(
-        _normalize_workspace_id(workspace_id),
+        normalized_workspace_id,
         content,
         agent_install_id=str(agent_install_id or "").strip() or None,
     )
@@ -554,6 +650,17 @@ def update_memory_context_file(
         normalized_filename,
         workspace_id=normalized_workspace_id,
         agent_install_id=normalized_agent_install_id,
+    )
+    _enforce_memory_state_decision(
+        operation="update_workspace_context_file",
+        workspace_id=normalized_workspace_id,
+        actor_id=actor,
+        payload={
+            "filename": normalized_filename,
+            "content": str(content or ""),
+            "agent_install_id": normalized_agent_install_id,
+            "run_id": run_id,
+        },
     )
     saved = write_workspace_context_file(
         normalized_filename,
@@ -633,6 +740,17 @@ def memory_append_daily_note(
     payload = f"{entry}\n"
     if str(existing or "").strip():
         payload = f"{str(existing).rstrip()}\n{entry}\n"
+    _enforce_memory_state_decision(
+        operation="append_workspace_daily_log",
+        workspace_id=normalized_workspace_id,
+        actor_id=actor,
+        payload={
+            "filename": filename,
+            "content": entry,
+            "agent_install_id": normalized_agent_install_id,
+            "run_id": run_id,
+        },
+    )
     saved = write_workspace_context_file(
         filename,
         payload,

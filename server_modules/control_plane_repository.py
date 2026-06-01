@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from server_modules import db as runtime_db
 from server_modules import credit_ledger_contract
+from server_modules import rust_runtime_kernel_client
 from server_modules.sqlite_helpers import connect_sqlite_rw
 
 
@@ -51,6 +52,173 @@ def _new_workspace_billing_metadata() -> Dict[str, Any]:
             "hosted_sage_ai_monthly_cap_usd": NEW_ACCOUNT_HOSTED_SAGE_AI_MONTHLY_CAP_USD,
         }
     }
+
+
+def _control_plane_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _enforce_control_plane_service_decision(
+    *,
+    operation: str,
+    tenant_id: str,
+    workspace_id: str,
+    actor_id: str,
+    actor_role: str = "admin",
+    target_actor_id: str = "",
+    record_type: str = "workspace",
+    idempotency_key: str = "",
+    agent_id: str = "",
+    **fields: Any,
+) -> Dict[str, Any]:
+    clean_actor_role = _control_plane_text(actor_role) or "admin"
+    payload = {
+        "operation": operation,
+        "record_type": record_type,
+        "tenant_id": _control_plane_text(tenant_id),
+        "workspace_id": _control_plane_text(workspace_id),
+        "actor_id": _control_plane_text(actor_id) or "system",
+        "actor_role": clean_actor_role,
+        "target_actor_id": _control_plane_text(target_actor_id),
+        "agent_id": _control_plane_text(agent_id),
+        "idempotency_key": _control_plane_text(idempotency_key),
+        "workspace_access": True,
+        "owner_access": clean_actor_role in {"owner", "admin", "system"},
+        "admin_access": clean_actor_role in {"owner", "admin", "system"},
+        "billing_entitled": True,
+        "quota_ok": True,
+        "status_transition_valid": True,
+        "approval_provided": True,
+        "owner_approval_provided": True,
+    }
+    payload.update(fields)
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "control-plane-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _control_plane_text(exc.reason) or "rust_control_plane_service_denied"
+        raise RuntimeError(f"Rust control-plane service blocked {operation}: {reason}")
+    allowed_next_actions = {
+        "create": {"apply_control_plane_write"},
+        "update": {"apply_control_plane_write"},
+        "status_transition": {"apply_control_plane_write"},
+        "workspace_update": {"apply_control_plane_write"},
+        "membership_update": {"apply_control_plane_write"},
+        "membership_remove": {"apply_control_plane_destructive_write"},
+        "invite_create": {"apply_control_plane_write"},
+        "invite_accept": {"apply_control_plane_write"},
+        "invite_revoke": {
+            "apply_control_plane_destructive_write",
+            "return_existing_control_plane_record",
+        },
+        "pilot_invite_create": {"apply_control_plane_write"},
+        "pilot_invite_claim": {"apply_control_plane_write"},
+        "pilot_invite_revoke": {"apply_control_plane_destructive_write"},
+        "workspace_billing_defaults_write": {"apply_control_plane_write"},
+        "deployed_agent_daily_message_quota_consume": {"apply_control_plane_write"},
+        "deployed_agent_daily_message_warning_update": {"apply_control_plane_write"},
+        "deployed_agent_cost_ledger_write": {"apply_control_plane_write"},
+        "workspace_hosted_ai_cost_ledger_write": {"apply_control_plane_write"},
+        "credit_ledger_event_write": {"apply_control_plane_write"},
+        "deployed_agent_record_write": {"apply_control_plane_write"},
+        "agent_action_event_write": {"apply_control_plane_write"},
+        "workspace_tenant_binding_ensure": {"apply_control_plane_write"},
+        "user_profile_update": {"apply_control_plane_write"},
+        "agent_turn_transcript_event_append": {"apply_control_plane_write"},
+        "agent_thread_ensure": {"apply_control_plane_write"},
+        "agent_session_upsert": {"apply_control_plane_write"},
+        "agent_session_terminate": {"apply_control_plane_write"},
+        "agent_turn_upsert": {"apply_control_plane_write"},
+        "knowledge_source_upsert": {"apply_control_plane_write"},
+        "knowledge_source_chunks_replace": {"apply_control_plane_write"},
+        "knowledge_retrieval_event_write": {"apply_control_plane_write"},
+        "compiled_workflow_artifact_create": {"apply_control_plane_write"},
+        "workspace_agent_install_compiled_artifact_update": {"apply_control_plane_write"},
+        "self_hosted_enrollment_intent_create": {"apply_control_plane_write"},
+        "self_hosted_runtime_enroll": {"apply_control_plane_write"},
+        "self_hosted_runtime_approve": {"apply_control_plane_write"},
+        "self_hosted_runtime_heartbeat": {"apply_control_plane_write"},
+        "self_hosted_command_enqueue": {"apply_control_plane_write"},
+        "self_hosted_command_claim": {"apply_control_plane_write"},
+        "self_hosted_command_complete": {"apply_control_plane_write"},
+        "workspace_billing_plan_update": {"apply_control_plane_write"},
+        "workspace_billing_account_write": {"apply_control_plane_write"},
+        "workspace_billing_subscription_write": {"apply_control_plane_write"},
+        "external_user_privacy_request_write": {"apply_control_plane_write"},
+        "external_user_privacy_audit_write": {"apply_control_plane_write"},
+        "external_user_privacy_delete": {"apply_control_plane_destructive_write"},
+        "deployed_agent_scope_data_delete": {"apply_control_plane_destructive_write"},
+        "workspace_scope_data_delete": {"apply_control_plane_destructive_write"},
+        "security_control_state_write": {"apply_control_plane_write"},
+        "governance_hold_write": {"apply_control_plane_write"},
+        "governance_hold_release": {"apply_control_plane_write"},
+        "agent_channel_event_write": {"apply_control_plane_write"},
+        "personal_context_event_write": {"apply_control_plane_write"},
+        "personal_context_event_seen_update": {"apply_control_plane_write"},
+        "activity_ledger_event_write": {"apply_control_plane_write"},
+        "agent_trace_create": {"apply_control_plane_write"},
+        "agent_trace_event_write": {"apply_control_plane_write"},
+        "agent_trace_finish": {"apply_control_plane_write"},
+        "agent_secret_access_event_write": {"apply_control_plane_write"},
+        "agent_egress_event_write": {"apply_control_plane_write"},
+    }.get(operation)
+    next_action = _control_plane_text(
+        (decision.get("mutation_plan") if isinstance(decision.get("mutation_plan"), dict) else {}).get("next_action")
+        or decision.get("next_action")
+    )
+    if allowed_next_actions and next_action not in allowed_next_actions:
+        raise RuntimeError(
+            "Rust control-plane service returned unexpected next_action for "
+            f"{operation}: {next_action or 'missing'}"
+        )
+    return decision
+
+
+def _enforce_control_plane_record_decision(
+    *,
+    operation: str,
+    record_type: str,
+    tenant_id: str,
+    workspace_id: str,
+    actor_role: str = "system",
+    record_id: str = "",
+    current_status: str = "",
+    next_status: str = "",
+) -> Dict[str, Any]:
+    payload = {
+        "operation": operation,
+        "record_type": record_type,
+        "tenant_id": _control_plane_text(tenant_id),
+        "workspace_id": _control_plane_text(workspace_id),
+        "record_id": _control_plane_text(record_id),
+        "actor_role": _control_plane_text(actor_role) or "system",
+        "current_status": _control_plane_text(current_status),
+        "next_status": _control_plane_text(next_status),
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "control-plane-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _control_plane_text(exc.reason) or "rust_control_plane_record_denied"
+        raise RuntimeError(f"Rust control-plane record blocked {operation}: {reason}")
+    expected_actions = {
+        "create": {"create_record"},
+        "update": {"update_record"},
+        "upsert": {"upsert_record"},
+        "status_transition": {"write_status_transition", "noop"},
+    }.get(operation)
+    next_action = _control_plane_text(decision.get("next_action"))
+    if expected_actions and next_action not in expected_actions:
+        raise RuntimeError(
+            "Rust control-plane record returned unexpected next_action for "
+            f"{operation}: {next_action or 'missing'}"
+        )
+    return decision
+
 
 _SCHEMA_READY = False
 _SCHEMA_LOCK: asyncio.Lock = asyncio.Lock()
@@ -3392,6 +3560,17 @@ async def ensure_workspace_membership(
     if not normalized_email or not resolved_tenant_id or not resolved_workspace_id:
         return None
     display_label = str(display_name or "").strip()
+    _enforce_control_plane_service_decision(
+        operation="membership_update",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=resolved_user_id,
+        actor_role="admin",
+        target_actor_id=resolved_user_id,
+        record_type="workspace_membership",
+        idempotency_key=f"{resolved_workspace_id}:{resolved_user_id}",
+        source="workspace_membership",
+    )
 
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
@@ -3943,6 +4122,13 @@ async def update_workspace_profile(workspace_id: str, updates: Dict[str, Any]) -
                     existing_record = _local_workspace_record_from_row(existing)
                     if existing_record is None:
                         return None
+                    _enforce_control_plane_service_decision(
+                        operation="workspace_update",
+                        tenant_id=str(existing_record.get("tenant_id") or "").strip(),
+                        workspace_id=clean_workspace_id,
+                        actor_id=str(updates.get("actor_id") or updates.get("updated_by_user_id") or "system").strip(),
+                        actor_role=str(updates.get("actor_role") or "admin").strip(),
+                    )
                     next_metadata = _coerce_dict(updates.get("metadata")) if "metadata" in updates else _workspace_shell_metadata(
                         _coerce_dict(existing_record.get("metadata")),
                         preferred_shell_profile=updates.get("preferred_shell_profile")
@@ -3983,6 +4169,13 @@ async def update_workspace_profile(workspace_id: str, updates: Dict[str, Any]) -
         if existing is None:
             return None
         existing_record = dict(existing)
+        _enforce_control_plane_service_decision(
+            operation="workspace_update",
+            tenant_id=str(existing_record.get("tenant_id") or "").strip(),
+            workspace_id=clean_workspace_id,
+            actor_id=str(updates.get("actor_id") or updates.get("updated_by_user_id") or "system").strip(),
+            actor_role=str(updates.get("actor_role") or "admin").strip(),
+        )
         next_name = str(updates.get("name") or "").strip() or str(existing_record.get("name") or "").strip()
         next_workspace_type = _normalize_workspace_type(
             updates.get("workspace_type"),
@@ -4279,6 +4472,15 @@ async def create_workspace_invite(
         return None
     invite_id = f"invite_{uuid.uuid4().hex}"
     metadata_payload = dict(metadata or {})
+    _enforce_control_plane_service_decision(
+        operation="invite_create",
+        tenant_id=tenant_id,
+        workspace_id=clean_workspace_id,
+        actor_id=str(invited_by_user_id or "system").strip(),
+        actor_role=str(metadata_payload.get("actor_role") or "admin").strip(),
+        record_type="workspace_member_invite",
+        idempotency_key=f"invite:{clean_workspace_id}:{email_token}",
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             now_ts = int(time.time())
@@ -4383,6 +4585,17 @@ async def accept_workspace_invite(
     clean_user_id = str(accepted_by_user_id or "").strip()
     if not clean_invite_id or not clean_user_id:
         return None
+    _enforce_control_plane_service_decision(
+        operation="invite_accept",
+        tenant_id="invite",
+        workspace_id="invite",
+        actor_id=clean_user_id,
+        actor_role="member",
+        target_actor_id=clean_user_id,
+        record_type="workspace_member_invite",
+        idempotency_key=clean_invite_id,
+        source="workspace_invite",
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             now_ts = int(time.time())
@@ -4436,6 +4649,30 @@ async def revoke_workspace_invite(invite_id: str) -> Optional[Dict[str, Any]]:
             now_ts = int(time.time())
             with _LOCAL_IDENTITY_LOCK:
                 with _connect_local_identity_db() as fallback:
+                    existing_row = fallback.execute(
+                        "SELECT * FROM workspace_member_invites WHERE id = ? LIMIT 1",
+                        (clean_invite_id,),
+                    ).fetchone()
+                    current_record = _workspace_invite_record_from_row(existing_row)
+                    if current_record is None:
+                        return None
+                    decision = _enforce_control_plane_service_decision(
+                        operation="invite_revoke",
+                        tenant_id="invite",
+                        workspace_id="invite",
+                        actor_id="invite-revoker",
+                        actor_role="admin",
+                        record_type="workspace_member_invite",
+                        idempotency_key=clean_invite_id,
+                        target_status=str(current_record.get("status") or "pending").strip().lower() or "pending",
+                        source="workspace_invite",
+                    )
+                    next_action = _control_plane_text(
+                        (decision.get("mutation_plan") if isinstance(decision.get("mutation_plan"), dict) else {}).get("next_action")
+                        or decision.get("next_action")
+                    )
+                    if next_action == "return_existing_control_plane_record":
+                        return current_record
                     fallback.execute(
                         """
                         UPDATE workspace_member_invites
@@ -4452,6 +4689,30 @@ async def revoke_workspace_invite(invite_id: str) -> Optional[Dict[str, Any]]:
                     ).fetchone()
                     fallback.commit()
             return _workspace_invite_record_from_row(row)
+        existing_row = await connection.fetchrow(
+            "SELECT * FROM workspace_member_invites WHERE id = $1 LIMIT 1",
+            clean_invite_id,
+        )
+        if existing_row is None:
+            return None
+        current_record = dict(existing_row)
+        decision = _enforce_control_plane_service_decision(
+            operation="invite_revoke",
+            tenant_id="invite",
+            workspace_id="invite",
+            actor_id="invite-revoker",
+            actor_role="admin",
+            record_type="workspace_member_invite",
+            idempotency_key=clean_invite_id,
+            target_status=str(current_record.get("status") or "pending").strip().lower() or "pending",
+            source="workspace_invite",
+        )
+        next_action = _control_plane_text(
+            (decision.get("mutation_plan") if isinstance(decision.get("mutation_plan"), dict) else {}).get("next_action")
+            or decision.get("next_action")
+        )
+        if next_action == "return_existing_control_plane_record":
+            return current_record
         await connection.execute(
             """
             UPDATE workspace_member_invites
@@ -4524,6 +4785,17 @@ async def create_pilot_invite(
         return None
     invite_id = f"pilot_invite_{uuid.uuid4().hex}"
     metadata_payload = dict(metadata or {})
+    _enforce_control_plane_service_decision(
+        operation="pilot_invite_create",
+        tenant_id="pilot",
+        workspace_id="pilot",
+        actor_id=str(created_by_user_id or "pilot-invite-admin").strip(),
+        actor_role="admin",
+        record_type="pilot_invite",
+        idempotency_key=clean_code,
+        target_status="active",
+        source="pilot_invite",
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             now_ts = int(time.time())
@@ -4632,6 +4904,16 @@ async def claim_pilot_invite(code: str) -> Optional[Dict[str, Any]]:
     clean_code = str(code or "").strip().upper()
     if not clean_code:
         return None
+    _enforce_control_plane_service_decision(
+        operation="pilot_invite_claim",
+        tenant_id="pilot",
+        workspace_id="pilot",
+        actor_id="pilot-invite-claimer",
+        actor_role="member",
+        record_type="pilot_invite",
+        idempotency_key=clean_code,
+        source="pilot_invite",
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             now_ts = int(time.time())
@@ -4699,6 +4981,17 @@ async def revoke_pilot_invite(invite_id: str) -> Optional[Dict[str, Any]]:
     clean_invite_id = str(invite_id or "").strip()
     if not clean_invite_id:
         return None
+    _enforce_control_plane_service_decision(
+        operation="pilot_invite_revoke",
+        tenant_id="pilot",
+        workspace_id="pilot",
+        actor_id="pilot-invite-admin",
+        actor_role="admin",
+        record_type="pilot_invite",
+        idempotency_key=clean_invite_id,
+        target_status="revoked",
+        source="pilot_invite",
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             now_ts = int(time.time())
@@ -5006,6 +5299,17 @@ async def ensure_workspace_billing_defaults(
         return None
     now_dt = _utc_now_ts()
     now_ts = int(time.time())
+    _enforce_control_plane_service_decision(
+        operation="workspace_billing_defaults_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=clean_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="workspace_billing",
+        idempotency_key=f"{clean_workspace_id}:billing_defaults",
+        billing_entitled=True,
+        quota_ok=True,
+    )
 
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
@@ -5174,6 +5478,18 @@ async def update_workspace_billing_plan(
     if not resolved_tenant_id:
         return None
     now_ts = int(time.time())
+    _enforce_control_plane_service_decision(
+        operation="workspace_billing_plan_update",
+        tenant_id=resolved_tenant_id,
+        workspace_id=clean_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="workspace_billing_subscription",
+        idempotency_key=f"{clean_workspace_id}:billing_plan:{clean_plan_id}",
+        target_status=clean_plan_id,
+        billing_entitled=True,
+        quota_ok=True,
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             with _LOCAL_IDENTITY_LOCK:
@@ -5256,6 +5572,18 @@ async def upsert_workspace_billing_account(
         return None
     now_dt = _utc_now_ts()
     now_ts = int(time.time())
+    _enforce_control_plane_service_decision(
+        operation="workspace_billing_account_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=clean_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="workspace_billing_account",
+        idempotency_key=f"{clean_workspace_id}:billing_account",
+        target_status=str(status or "active").strip().lower() or "active",
+        billing_entitled=True,
+        quota_ok=True,
+    )
 
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
@@ -5343,6 +5671,26 @@ async def upsert_workspace_billing_subscription(
         return None
     now_dt = _utc_now_ts()
     now_ts = int(time.time())
+    _enforce_control_plane_service_decision(
+        operation="workspace_billing_subscription_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=clean_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="workspace_billing_subscription",
+        idempotency_key=f"{clean_workspace_id}:billing_subscription:{str(provider_subscription_id or plan_id or '').strip() or 'default'}",
+        target_status=str(status or "active").strip().lower() or "active",
+        billing_entitled=True,
+        quota_ok=True,
+    )
+    _enforce_control_plane_record_decision(
+        operation="upsert",
+        record_type="workspace_billing_subscription",
+        tenant_id=resolved_tenant_id,
+        workspace_id=clean_workspace_id,
+        actor_role="system",
+        next_status=str(status or "active").strip().lower() or "active",
+    )
 
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
@@ -5522,6 +5870,22 @@ async def create_deployed_agent(
     if not resolved_tenant_id or not resolved_workspace_id or not resolved_install_id or not resolved_name:
         return None
     record_id = str(deployed_agent_id or f"dagent_{uuid.uuid4().hex[:16]}").strip()
+    normalized_deployment_state = str(deployment_state or "draft").strip().lower() or "draft"
+    normalized_runtime_target = str(runtime_target or "cloud").strip() or "cloud"
+    normalized_billing_plan = str(billing_plan or "free").strip() or "free"
+    _enforce_control_plane_service_decision(
+        operation="create",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(created_by_user_id or "").strip() or "system",
+        actor_role="system",
+        record_type="deployed_agent",
+        idempotency_key=f"{resolved_workspace_id}:deployed_agent:create:{record_id}",
+        agent_id=record_id,
+        target_status=normalized_deployment_state,
+        runtime_target=normalized_runtime_target,
+        billing_plan=normalized_billing_plan,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             now = _utc_now_iso()
@@ -5536,11 +5900,11 @@ async def create_deployed_agent(
                     "avatar": str(avatar or "").strip() or None,
                     "persona": str(persona or "").strip(),
                     "system_prompt": str(system_prompt or "").strip(),
-                    "deployment_state": str(deployment_state or "draft").strip().lower() or "draft",
+                    "deployment_state": normalized_deployment_state,
                     "channels": channels or {},
                     "knowledge_sources": knowledge_sources or [],
-                    "runtime_target": str(runtime_target or "cloud").strip() or "cloud",
-                    "billing_plan": str(billing_plan or "free").strip() or "free",
+                    "runtime_target": normalized_runtime_target,
+                    "billing_plan": normalized_billing_plan,
                     "is_public": False,
                     "quality_stars": None,
                     "cost_tier": None,
@@ -5575,11 +5939,11 @@ async def create_deployed_agent(
             str(avatar or "").strip() or None,
             str(persona or "").strip(),
             str(system_prompt or "").strip(),
-            str(deployment_state or "draft").strip().lower() or "draft",
+            normalized_deployment_state,
             _to_json(channels, default={}),
             _to_json(knowledge_sources, default=[]),
-            str(runtime_target or "cloud").strip() or "cloud",
-            str(billing_plan or "free").strip() or "free",
+            normalized_runtime_target,
+            normalized_billing_plan,
             _to_json(metadata, default={}),
             _to_json(operational_state, default={}),
         )
@@ -5654,6 +6018,18 @@ async def consume_deployed_agent_daily_message_quota(
     resolved_usage_day = resolved_usage_day or datetime.now(timezone.utc).date()
     now_ts = _utc_now_ts()
     record_id = f"dusage_{uuid.uuid4().hex[:16]}"
+    _enforce_control_plane_service_decision(
+        operation="deployed_agent_daily_message_quota_consume",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=resolved_deployed_agent_id,
+        actor_role="system",
+        record_type="deployed_agent_daily_message_usage",
+        idempotency_key=f"{resolved_deployed_agent_id}:{resolved_channel_key}:{resolved_external_user_id}:{resolved_usage_day}:consume",
+        agent_id=resolved_deployed_agent_id,
+        quota_ok=True,
+        billing_entitled=True,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -5722,6 +6098,18 @@ async def mark_deployed_agent_daily_message_warning_sent(
     if usage_day is not None and resolved_usage_day is None:
         raise ValueError("usage_day must be an ISO date string or date value.")
     resolved_usage_day = resolved_usage_day or datetime.now(timezone.utc).date()
+    _enforce_control_plane_service_decision(
+        operation="deployed_agent_daily_message_warning_update",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=resolved_deployed_agent_id,
+        actor_role="system",
+        record_type="deployed_agent_daily_message_usage",
+        idempotency_key=f"{resolved_deployed_agent_id}:{resolved_channel_key}:{resolved_external_user_id}:{resolved_usage_day}:warning",
+        agent_id=resolved_deployed_agent_id,
+        quota_ok=True,
+        billing_entitled=True,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -5815,6 +6203,19 @@ async def record_deployed_agent_monthly_cost_ledger_entry(
     resolved_usage_month = resolved_usage_month or datetime.now(timezone.utc).date().replace(day=1)
     record_id = str(ledger_entry_id or f"dcost_{uuid.uuid4().hex[:16]}").strip()
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="deployed_agent_cost_ledger_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=resolved_deployed_agent_id,
+        actor_role="system",
+        record_type="deployed_agent_monthly_cost_ledger",
+        idempotency_key=f"{resolved_deployed_agent_id}:{resolved_run_id}:cost_ledger",
+        agent_id=resolved_deployed_agent_id,
+        run_id=resolved_run_id,
+        billing_entitled=True,
+        quota_ok=True,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -5891,6 +6292,17 @@ async def record_workspace_hosted_ai_monthly_cost_ledger_entry(
     resolved_usage_month = resolved_usage_month or datetime.now(timezone.utc).date().replace(day=1)
     record_id = str(ledger_entry_id or f"shost_{uuid.uuid4().hex[:16]}").strip()
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="workspace_hosted_ai_cost_ledger_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="workspace_hosted_ai_monthly_cost_ledger",
+        idempotency_key=f"{resolved_request_id}:hosted_ai_cost",
+        billing_entitled=True,
+        quota_ok=True,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -6016,6 +6428,20 @@ async def record_credit_ledger_event(
     source_event_token = str(source_event_id or event.get("source_event_id") or "").strip() or None
     record_id = str(ledger_event_id or event.get("id") or f"cled_{uuid.uuid4().hex[:16]}").strip()
     now_created_at = _coerce_timestamptz(normalized.get("created_at")) or _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="credit_ledger_event_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(normalized.get("agent_id") or normalized.get("user_id") or "system").strip() or "system",
+        actor_role="system",
+        record_type="credit_ledger_event",
+        idempotency_key=f"{source_table_token or 'credit_ledger'}:{source_event_token or record_id}",
+        agent_id=str(normalized.get("agent_id") or "").strip(),
+        run_id=str(normalized.get("run_id") or "").strip(),
+        thread_id=str(normalized.get("thread_id") or "").strip(),
+        billing_entitled=True,
+        quota_ok=True,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -6221,6 +6647,28 @@ async def record_agent_action_event(
     source_event_token = str(source_event_id or event.get("source_event_id") or "").strip() or None
     idempotency_token = str(idempotency_key or event.get("idempotency_key") or "").strip() or None
     now_created_at = _coerce_timestamptz(event.get("created_at")) or _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="agent_action_event_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(event.get("agent_id") or event.get("user_id") or event.get("app_id") or "system").strip() or "system",
+        actor_role="system",
+        record_type="agent_action_event",
+        idempotency_key=(
+            idempotency_token
+            or (
+                f"{source_table_token}:{source_event_token}"
+                if source_table_token and source_event_token
+                else record_id
+            )
+        ),
+        agent_id=str(event.get("agent_id") or "").strip(),
+        run_id=str(event.get("run_id") or "").strip(),
+        thread_id=str(event.get("thread_id") or "").strip(),
+        source=str(event.get("source_surface") or event.get("surface") or "agent_action").strip().lower(),
+        billing_entitled=True,
+        quota_ok=True,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -6470,6 +6918,18 @@ async def upsert_knowledge_source(
     resolved_source_id = _require_scope_token(source_id, "source_id")
     resolved_source_uri = _require_scope_token(source_uri, "source_uri")
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="knowledge_source_upsert",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(agent_id or "knowledge-source").strip(),
+        actor_role="system",
+        record_type="knowledge_source",
+        idempotency_key=resolved_source_id,
+        agent_id=str(agent_id or "").strip(),
+        target_status=str(status or "indexed").strip().lower() or "indexed",
+        source=str(source_kind or "file").strip().lower() or "file",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -6524,6 +6984,17 @@ async def replace_knowledge_source_chunks(
     normalized_chunks = [dict(item) for item in list(chunks or []) if isinstance(item, dict)]
     now_ts = _utc_now_ts()
     inserted: List[Dict[str, Any]] = []
+    _enforce_control_plane_service_decision(
+        operation="knowledge_source_chunks_replace",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(agent_id or resolved_source_id).strip(),
+        actor_role="system",
+        record_type="knowledge_chunks",
+        idempotency_key=f"{resolved_source_id}:{len(normalized_chunks)}",
+        agent_id=str(agent_id or "").strip(),
+        source="knowledge",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return []
@@ -6694,6 +7165,20 @@ async def record_knowledge_retrieval_event(
     resolved_event_id = str(event_id or f"kret_{uuid.uuid4().hex[:16]}").strip()
     resolved_surface = _require_scope_token(surface, "surface").lower()
     resolved_query_hash = _require_scope_token(query_hash, "query_hash")
+    _enforce_control_plane_service_decision(
+        operation="knowledge_retrieval_event_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(user_id or agent_id or app_id or run_id or "knowledge-retrieval").strip(),
+        actor_role="system",
+        record_type="knowledge_retrieval_event",
+        idempotency_key=resolved_event_id,
+        agent_id=str(agent_id or "").strip(),
+        run_id=str(run_id or "").strip(),
+        thread_id=str(thread_id or "").strip(),
+        source=resolved_surface,
+        target_status=str(status or "logged").strip().lower() or "logged",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -7025,6 +7510,16 @@ async def upsert_deployed_agent_conversation_memory(
     resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
     resolved_memory_id = str(memory_id or f"dmem_{uuid.uuid4().hex[:16]}").strip()
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="deployed_agent_record_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=resolved_deployed_agent_id,
+        actor_role="system",
+        record_type="deployed_agent_conversation_memory",
+        idempotency_key=f"{resolved_deployed_agent_id}:{resolved_channel_key}:{resolved_external_user_id}",
+        agent_id=resolved_deployed_agent_id,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -7169,6 +7664,16 @@ async def upsert_deployed_agent_business_insight_candidate(
     resolved_channel_key = str(channel_key or "").strip().lower()
     resolved_insight_id = str(insight_id or f"bins_{uuid.uuid4().hex[:16]}").strip()
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="deployed_agent_record_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=resolved_deployed_agent_id,
+        actor_role="system",
+        record_type="deployed_agent_business_insight",
+        idempotency_key=f"{resolved_deployed_agent_id}:{resolved_pattern_key}:{resolved_channel_key or 'all'}",
+        agent_id=resolved_deployed_agent_id,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -7238,6 +7743,16 @@ async def update_deployed_agent_business_insight_status(
     if resolved_status not in {"candidate", "approved", "dismissed", "archived", "applied"}:
         raise ValueError("Unsupported business insight status.")
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="deployed_agent_record_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(actor_user_id or "").strip() or "system",
+        actor_role="admin",
+        record_type="deployed_agent_business_insight",
+        idempotency_key=f"{resolved_deployed_agent_id}:{resolved_insight_id}:{resolved_status}",
+        agent_id=resolved_deployed_agent_id,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -7282,6 +7797,16 @@ async def mark_deployed_agent_business_insight_applied(
     resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
     resolved_insight_id = _require_scope_token(insight_id, "insight_id")
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="deployed_agent_record_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(actor_user_id or "").strip() or "system",
+        actor_role="admin",
+        record_type="deployed_agent_business_insight",
+        idempotency_key=f"{resolved_deployed_agent_id}:{resolved_insight_id}:applied",
+        agent_id=resolved_deployed_agent_id,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -7340,6 +7865,18 @@ async def upsert_external_user_privacy_request(
         resolved_status = "requested"
     now_ts = _utc_now_ts()
     completed_at = now_ts if resolved_status == "completed" else None
+    _enforce_control_plane_service_decision(
+        operation="external_user_privacy_request_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(completed_by_user_id or "").strip() or resolved_external_user_id,
+        actor_role="system" if completed_by_user_id else "service",
+        record_type="external_user_privacy_request",
+        idempotency_key=f"{resolved_deployed_agent_id}:{resolved_channel_key}:{resolved_external_user_id}:{resolved_status}",
+        agent_id=resolved_deployed_agent_id,
+        target_status=resolved_status,
+        source=str(request_source or "external_user").strip().lower() or "external_user",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -7432,6 +7969,17 @@ async def append_external_user_privacy_delete_audit(
     resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
     resolved_audit_id = str(audit_id or f"privaudit_{uuid.uuid4().hex[:16]}").strip()
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="external_user_privacy_audit_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(actor_user_id or "").strip() or "system",
+        actor_role="system",
+        record_type="external_user_privacy_delete_audit",
+        idempotency_key=f"{resolved_deployed_agent_id}:{resolved_channel_key}:{resolved_external_user_id}:{resolved_audit_id}",
+        agent_id=resolved_deployed_agent_id,
+        target_status=str(status or "completed").strip().lower() or "completed",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -7481,6 +8029,17 @@ async def delete_deployed_agent_external_user_data(
     resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
     resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
     resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    _enforce_control_plane_service_decision(
+        operation="external_user_privacy_delete",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="external_user_privacy_delete",
+        idempotency_key=f"{resolved_deployed_agent_id}:{resolved_channel_key}:{resolved_external_user_id}:delete",
+        agent_id=resolved_deployed_agent_id,
+        retention_lock=False,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return {
@@ -7617,6 +8176,17 @@ async def delete_deployed_agent_scope_data(
     resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
     resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
     resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    _enforce_control_plane_service_decision(
+        operation="deployed_agent_scope_data_delete",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="deployed_agent_scope_data",
+        idempotency_key=f"{resolved_deployed_agent_id}:scope_delete",
+        agent_id=resolved_deployed_agent_id,
+        retention_lock=False,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return {
@@ -7734,6 +8304,16 @@ async def delete_workspace_scope_data(
 ) -> Dict[str, int]:
     resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
     resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    _enforce_control_plane_service_decision(
+        operation="workspace_scope_data_delete",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="workspace_scope_data",
+        idempotency_key=f"{resolved_workspace_id}:scope_delete",
+        retention_lock=False,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return {
@@ -8936,6 +9516,11 @@ async def update_deployed_agent(
     resolved_workspace_id = str(owner_workspace_id or "").strip()
     if not resolved_id or not resolved_tenant_id or not resolved_workspace_id:
         return None
+    current = await get_deployed_agent_by_id(
+        resolved_id,
+        tenant_id=resolved_tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
     allowed_columns = {
         "name": "name",
         "avatar": "avatar",
@@ -8976,11 +9561,34 @@ async def update_deployed_agent(
             params.append(value)
         parameter_index += 1
     if not set_clauses:
-        return await get_deployed_agent_by_id(
-            resolved_id,
+        return current
+    next_status = str(updates.get("deployment_state") or "").strip().lower()
+    current_status = str((current or {}).get("deployment_state") or "").strip().lower()
+    if next_status and next_status != current_status:
+        _enforce_control_plane_service_decision(
+            operation="status_transition",
             tenant_id=resolved_tenant_id,
-            owner_workspace_id=resolved_workspace_id,
+            workspace_id=resolved_workspace_id,
+            actor_id="system",
+            actor_role="system",
+            record_type="deployed_agent",
+            idempotency_key=f"{resolved_workspace_id}:deployed_agent:status_transition:{resolved_id}:{current_status}:{next_status}",
+            agent_id=resolved_id,
+            current_status=current_status,
+            next_status=next_status,
         )
+    _enforce_control_plane_service_decision(
+        operation="update",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="deployed_agent",
+        idempotency_key=f"{resolved_workspace_id}:deployed_agent:update:{resolved_id}",
+        agent_id=resolved_id,
+        target_status=next_status or "",
+        updated_fields=sorted(str(key) for key in updates.keys()),
+    )
     set_clauses.append("updated_at = NOW()")
     query = f"""
         UPDATE deployed_agents
@@ -9083,6 +9691,19 @@ async def create_agent_trace(
         return None
     resolved_trace_id = str(trace_id or f"trace_{uuid.uuid4().hex[:24]}").strip()
     resolved_started_at = _coerce_timestamptz(started_at) or _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="agent_trace_create",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=resolved_root_agent_id,
+        actor_role="system",
+        record_type="agent_trace",
+        idempotency_key=resolved_trace_id,
+        agent_id=resolved_root_agent_id,
+        run_id=str(run_id or "").strip(),
+        thread_id=str(thread_id or "").strip(),
+        source=resolved_surface,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -9140,6 +9761,18 @@ async def append_agent_trace_event(
         return None
     resolved_event_id = str(event_id or f"tevent_{uuid.uuid4().hex[:24]}").strip()
     resolved_ts = _coerce_timestamptz(ts) or _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="agent_trace_event_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=resolved_agent_id,
+        actor_role="system",
+        record_type="agent_trace_event",
+        idempotency_key=resolved_event_id,
+        agent_id=resolved_agent_id,
+        run_id=str(child_run_id or "").strip(),
+        source=str(event_type or "").strip().lower() or "trace",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -9257,6 +9890,17 @@ async def finish_agent_trace(
     if not resolved_trace_id or not resolved_outcome:
         return None
     resolved_finished_at = _coerce_timestamptz(finished_at) or _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="agent_trace_finish",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="trace-finalizer",
+        actor_role="system",
+        record_type="agent_trace",
+        idempotency_key=resolved_trace_id,
+        target_status=resolved_outcome,
+        source="trace",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -9370,6 +10014,16 @@ async def ensure_workspace_tenant_binding(
         return None
     created_at = _utc_now_ts()
     created_at_ts = int(time.time())
+    _enforce_control_plane_service_decision(
+        operation="workspace_tenant_binding_ensure",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="tenant-binding",
+        actor_role="admin",
+        record_type="workspace_tenant_binding",
+        idempotency_key=f"{resolved_tenant_id}:{resolved_workspace_id}",
+        source="identity",
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             with _LOCAL_IDENTITY_LOCK:
@@ -9427,6 +10081,16 @@ async def remove_workspace_membership(
     resolved_workspace_id = str(workspace_id or "").strip()
     if not resolved_user_id or not resolved_workspace_id:
         return False
+    resolved_tenant_id = await tenant_id_for_workspace(resolved_workspace_id)
+    _enforce_control_plane_service_decision(
+        operation="membership_remove",
+        tenant_id=str(resolved_tenant_id or "").strip(),
+        workspace_id=resolved_workspace_id,
+        actor_id="system",
+        actor_role="admin",
+        target_actor_id=resolved_user_id,
+        record_type="membership",
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             with _LOCAL_IDENTITY_LOCK:
@@ -9460,6 +10124,17 @@ async def update_user_profile(
     next_name = str(display_name or "").strip() or None
     next_avatar_url = str(avatar_url or "").strip() or None
     updated_at = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="user_profile_update",
+        tenant_id="user-profile",
+        workspace_id="user-profile",
+        actor_id=resolved_user_id,
+        actor_role="member",
+        target_actor_id=resolved_user_id,
+        record_type="user_profile",
+        idempotency_key=resolved_user_id,
+        source="profile",
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             with _LOCAL_IDENTITY_LOCK:
@@ -9737,6 +10412,18 @@ async def append_agent_turn_transcript_event(
     if not any(str(item or "").strip() for item in (request_id, trace_id, run_id)):
         return None
     now = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="agent_turn_transcript_event_append",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(run_id or trace_id or request_id or "transcript").strip(),
+        actor_role="system",
+        record_type="agent_turn",
+        idempotency_key=str(trace_id or run_id or request_id or resolved_thread_id).strip(),
+        thread_id=resolved_thread_id,
+        run_id=str(run_id or "").strip(),
+        source="transcript",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             key = _local_agent_thread_key(resolved_tenant_id, resolved_workspace_id, resolved_thread_id)
@@ -9825,6 +10512,18 @@ async def ensure_agent_thread(
     payload_title = str(title or "").strip() or "New chat"
     resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
     resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    _enforce_control_plane_service_decision(
+        operation="agent_thread_ensure",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(owner_user_id or master_agent_install_id or "thread").strip(),
+        actor_role="system",
+        record_type="agent_thread",
+        idempotency_key=token,
+        thread_id=token,
+        agent_id=str(master_agent_install_id or "").strip(),
+        source=str(channel or "web").strip().lower() or "web",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return _local_ensure_agent_thread(
@@ -9889,6 +10588,20 @@ async def upsert_agent_session(
     resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
     resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
     resolved_session_id = str(session_id or "").strip()
+    _enforce_control_plane_service_decision(
+        operation="agent_session_upsert",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str((actor or {}).get("id") if isinstance(actor, dict) else "").strip() or resolved_session_id or "session",
+        actor_role="system",
+        record_type="agent_session",
+        idempotency_key=resolved_session_id,
+        session_id=resolved_session_id,
+        thread_id=str(thread_id or "").strip(),
+        agent_id=str(master_agent_install_id or "").strip(),
+        target_status=str(status or "active").strip().lower() or "active",
+        source=str(channel or "web").strip().lower() or "web",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -9949,12 +10662,27 @@ async def terminate_agent_session(
     tenant_id: str,
     workspace_id: str,
 ) -> None:
-    async with _scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_session_id = str(session_id or "").strip()
+    _enforce_control_plane_service_decision(
+        operation="agent_session_terminate",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="session-terminator",
+        actor_role="system",
+        record_type="agent_session",
+        idempotency_key=resolved_session_id,
+        session_id=resolved_session_id,
+        target_status="terminated",
+        source="session",
+    )
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return
         await connection.execute(
             "UPDATE agent_sessions SET status = 'terminated', updated_at = NOW() WHERE id = $1",
-            str(session_id or "").strip(),
+            resolved_session_id,
         )
 
 
@@ -9983,6 +10711,25 @@ async def upsert_agent_turn(
     resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
     resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
     resolved_thread_id = str(thread_id or "").strip()
+    _enforce_control_plane_service_decision(
+        operation="agent_turn_upsert",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=(
+            str((actor or {}).get("id") if isinstance(actor, dict) else "").strip()
+            or str(active_agent_install_id or "").strip()
+            or str(run_id or "").strip()
+            or "turn"
+        ),
+        actor_role="system",
+        record_type="agent_turn",
+        idempotency_key=resolved_request_id or resolved_turn_id,
+        thread_id=resolved_thread_id,
+        run_id=str(run_id or "").strip(),
+        agent_id=str(active_agent_install_id or "").strip(),
+        target_status=str(status or "completed").strip().lower() or "completed",
+        source=str(role or "assistant").strip().lower() or "assistant",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return _local_upsert_agent_turn(
@@ -10264,6 +11011,26 @@ async def append_agent_channel_event(
     resolved_deployed_agent_id = str(deployed_agent_id or "").strip() or None
     if resolved_deployed_agent_id:
         resolved_metadata["deployed_agent_id"] = resolved_deployed_agent_id
+    _enforce_control_plane_service_decision(
+        operation="agent_channel_event_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str((actor or {}).get("id") if isinstance(actor, dict) else "").strip() or "channel",
+        actor_role="system",
+        record_type="agent_channel_event",
+        idempotency_key=(
+            resolved_message_id
+            or str(parent_event_id or "").strip()
+            or str(run_id or "").strip()
+            or resolved_event_id
+        ),
+        agent_id=resolved_deployed_agent_id or "",
+        thread_id=str(thread_id or "").strip(),
+        run_id=str(run_id or "").strip(),
+        source=str(resolved_channel_key or "channel").strip().lower(),
+        webhook_id=str(resolved_endpoint_key or "").strip(),
+        webhook_signature_valid=True,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -10337,6 +11104,16 @@ async def append_personal_context_event(
     resolved_event_id = str(event_id or f"pctx_{uuid.uuid4().hex[:16]}").strip()
     now_ts = _utc_now_ts()
     resolved_seen_at = _coerce_timestamptz(seen_by_sage_at)
+    _enforce_control_plane_service_decision(
+        operation="personal_context_event_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=resolved_source_app,
+        actor_role="system",
+        record_type="personal_context_event",
+        idempotency_key=f"{resolved_source_app}:{resolved_event_type}:{resolved_entity_id}:{resolved_event_id}",
+        source=resolved_source_app,
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -10404,6 +11181,17 @@ async def append_agent_scheduler_wake_request(
         return None
     resolved_wake_id = str(wake_id or f"wake_{uuid.uuid4().hex[:16]}").strip()
     now_ts = _utc_now_ts()
+    _enforce_scheduler_wake_repository_decision(
+        _scheduler_wake_operation(resolved_trigger_kind),
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        wake_id=resolved_wake_id,
+        trigger_kind=resolved_trigger_kind,
+        status=str(status or "pending").strip().lower() or "pending",
+        policy=policy,
+        payload=payload,
+        owner_approval_provided=not bool(approval_required) or str(status or "").strip().lower() in {"denied", "rejected"},
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -10446,6 +11234,93 @@ async def append_agent_scheduler_wake_request(
     return dict(row) if row is not None else None
 
 
+def _scheduler_policy_value(policy: Optional[Dict[str, Any]], key: str, default: Any) -> Any:
+    if isinstance(policy, dict) and key in policy:
+        return policy.get(key)
+    return default
+
+
+def _scheduler_wake_operation(trigger_kind: str) -> str:
+    token = str(trigger_kind or "").strip().lower()
+    if token == "event_trigger":
+        return "event_trigger"
+    if token == "self_proposed":
+        return "self_proposed_trigger"
+    return "wake_decision"
+
+
+_SCHEDULER_WAKE_REPOSITORY_NEXT_ACTIONS = {
+    "event_trigger": {"schedule_event_trigger"},
+    "self_proposed_trigger": {"schedule_self_proposed_trigger"},
+    "wake_decision": {"trigger_wakeup"},
+    "claim_wake_requests": {"claim_due_wake_requests"},
+    "schedule_retry": {"schedule_retry"},
+    "failure_decision": {"record_scheduler_failure"},
+    "finalize_wake_requests": {"finalize_wake_requests"},
+}
+
+
+def _enforce_scheduler_wake_repository_decision(
+    operation: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    wake_id: str,
+    trigger_kind: str = "",
+    status: str = "",
+    policy: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    candidate_count: int = 0,
+    attempt: int = 0,
+    owner_approval_provided: bool = True,
+) -> Dict[str, Any]:
+    payload_dict = _coerce_dict(payload)
+    request = {
+        "operation": operation,
+        "tenant_id": str(tenant_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip(),
+        "trigger_id": str(wake_id or payload_dict.get("id") or payload_dict.get("event_id") or trigger_kind or operation).strip(),
+        "trigger_kind": str(trigger_kind or payload_dict.get("trigger_kind") or "").strip(),
+        "wake_mode": str(trigger_kind or payload_dict.get("trigger_kind") or "event").strip() or "event",
+        "status": str(status or payload_dict.get("status") or "").strip(),
+        "candidate_count": int(candidate_count or 0),
+        "attempt": int(attempt or 0),
+        "priority": int(payload_dict.get("priority") or 0),
+        "scheduler_enabled": bool(_scheduler_policy_value(policy, "scheduler_enabled", True)),
+        "quiet_hours_start": int(_scheduler_policy_value(policy, "quiet_hours_start", 23) or 23),
+        "quiet_hours_end": int(_scheduler_policy_value(policy, "quiet_hours_end", 7) or 7),
+        "current_hour": datetime.now(timezone.utc).hour,
+        "quiet_hours_override": bool(payload_dict.get("quiet_hours_override")),
+        "max_event_triggers_per_hour": int(_scheduler_policy_value(policy, "max_event_triggers_per_hour", 4) or 4),
+        "max_self_proposed_per_hour": int(_scheduler_policy_value(policy, "max_self_proposed_per_hour", 2) or 2),
+        "max_runtime_seconds": int(_scheduler_policy_value(policy, "max_runtime_seconds", 20) or 20),
+        "battery_percent": int(payload_dict.get("battery_percent") or 100),
+        "minimum_battery_percent": int(_scheduler_policy_value(policy, "minimum_battery_percent", 20) or 20),
+        "network_online": bool(payload_dict.get("network_online", True)),
+        "require_network_online": bool(_scheduler_policy_value(policy, "require_network_online", False)),
+        "require_owner_approval_for_privileged_wakeups": bool(
+            _scheduler_policy_value(policy, "require_owner_approval_for_privileged_wakeups", True)
+        ),
+        "owner_approval_provided": bool(owner_approval_provided),
+        "plan_tier": str(_scheduler_policy_value(policy, "plan_tier", "default") or "default"),
+    }
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "session-scheduler-decision",
+        request,
+    )
+    expected_actions = _SCHEDULER_WAKE_REPOSITORY_NEXT_ACTIONS.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_actions is None:
+        raise RuntimeError(f"unexpected scheduler_wake_repository operation: {operation}")
+    if next_action not in expected_actions:
+        expected_list = ", ".join(sorted(expected_actions))
+        raise RuntimeError(
+            f"unexpected next_action for session-scheduler-decision: {next_action or '<missing>'} "
+            f"(expected {expected_list})"
+        )
+    return decision
+
+
 async def append_agent_secret_access_event(
     *,
     tenant_id: str,
@@ -10476,6 +11351,21 @@ async def append_agent_secret_access_event(
         for item in list(allowed_fields or [])
         if str(item or "").strip()
     ]
+    _enforce_control_plane_service_decision(
+        operation="agent_secret_access_event_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=(
+            str((actor or {}).get("id") if isinstance(actor, dict) else "").strip()
+            or str(run_id or "").strip()
+            or "secret-audit"
+        ),
+        actor_role="system",
+        record_type="agent_secret_access_event",
+        idempotency_key=resolved_event_id,
+        run_id=str(run_id or "").strip(),
+        source="internal",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -10541,6 +11431,22 @@ async def append_agent_egress_event(
         return None
     resolved_event_id = str(event_id or f"eevt_{uuid.uuid4().hex[:16]}").strip()
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="agent_egress_event_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=(
+            str(agent_install_id or "").strip()
+            or str(run_id or "").strip()
+            or "egress-audit"
+        ),
+        actor_role="system",
+        record_type="agent_egress_event",
+        idempotency_key=resolved_event_id,
+        agent_id=str(agent_install_id or "").strip(),
+        run_id=str(run_id or "").strip(),
+        source="network",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -10621,6 +11527,18 @@ async def append_activity_ledger_event(
         if isinstance(item, dict)
     ]
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="activity_ledger_event_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=resolved_actor_id,
+        actor_role="system",
+        record_type="activity_ledger_event",
+        idempotency_key=resolved_event_id,
+        run_id=str(run_id or "").strip(),
+        thread_id=str(thread_id or "").strip(),
+        source=str(channel or "").strip().lower() or "internal",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -10908,6 +11826,13 @@ async def claim_due_agent_scheduler_wake_requests(
     if resolved_due_before is None:
         return []
     now_ts = _utc_now_ts()
+    _enforce_scheduler_wake_repository_decision(
+        "claim_wake_requests",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        wake_id="claim_due_wake_requests",
+        candidate_count=max(1, int(limit or 10)),
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return []
@@ -10967,7 +11892,28 @@ async def update_agent_scheduler_wake_request_status(
             return None
         current_metadata = _coerce_dict(existing.get("metadata"))
         next_metadata = {**current_metadata, **_coerce_dict(metadata_patch)}
-        executed_at = now_ts if str(status or "").strip().lower() in {"executed", "completed", "failed", "skipped", "denied"} else existing.get("executed_at")
+        next_status = str(status or "").strip().lower() or "pending"
+        retry_meta = _coerce_dict(next_metadata.get("retry"))
+        retry_attempt = int(retry_meta.get("retry_attempt") or retry_meta.get("attempt") or 0)
+        if next_status in {"pending", "retry_scheduled"} and retry_meta:
+            scheduler_operation = "schedule_retry"
+        elif next_status in {"failed_permanent"}:
+            scheduler_operation = "failure_decision"
+        else:
+            scheduler_operation = "finalize_wake_requests"
+        _enforce_scheduler_wake_repository_decision(
+            scheduler_operation,
+            tenant_id=resolved_tenant_id,
+            workspace_id=resolved_workspace_id,
+            wake_id=resolved_wake_id,
+            trigger_kind=str(existing.get("trigger_kind") or "").strip(),
+            status=next_status,
+            policy=_coerce_dict(existing.get("policy")),
+            payload=_coerce_dict(existing.get("payload")),
+            candidate_count=1,
+            attempt=retry_attempt,
+        )
+        executed_at = now_ts if next_status in {"executed", "completed", "failed", "skipped", "denied"} else existing.get("executed_at")
         await connection.execute(
             """
             UPDATE agent_scheduler_wake_requests
@@ -10983,7 +11929,7 @@ async def update_agent_scheduler_wake_request_status(
             resolved_wake_id,
             resolved_tenant_id,
             resolved_workspace_id,
-            str(status or "").strip().lower() or "pending",
+            next_status,
             str(denial_reason or "").strip() or None,
             executed_at,
             _to_json(next_metadata, default={}),
@@ -11052,6 +11998,20 @@ async def mark_personal_context_events_seen_by_sage(
     if not mark_all and not normalized_ids:
         return {"status": "ok", "marked_count": 0, "marked_ids": [], "seen_by_sage_at": None}
     resolved_seen_at = _coerce_timestamptz(seen_at) or _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="personal_context_event_seen_update",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="sage",
+        actor_role="system",
+        record_type="personal_context_event",
+        idempotency_key=(
+            f"{resolved_workspace_id}:mark_all:{resolved_seen_at.isoformat()}"
+            if mark_all
+            else f"{resolved_workspace_id}:{','.join(normalized_ids)}:{resolved_seen_at.isoformat()}"
+        ),
+        source="sage",
+    )
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return {"status": "ok", "marked_count": 0, "marked_ids": [], "seen_by_sage_at": None}
@@ -11426,6 +12386,19 @@ async def upsert_security_control_state(
     resolved_status = str(status or "active").strip().lower() or "active"
     resolved_action = str(action or "").strip().lower() or ("enabled" if enabled else "disabled")
     now_ts = _utc_now_ts()
+    _enforce_control_plane_service_decision(
+        operation="security_control_state_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id=str(created_by_user_id or "").strip() or "system",
+        actor_role="system",
+        record_type="security_control_state",
+        idempotency_key=f"{resolved_scope_type}:{resolved_control_kind}:{resolved_scope_key}:{resolved_action}",
+        target_status=resolved_status,
+        scope_type=resolved_scope_type,
+        control_kind=resolved_control_kind,
+        kill_switch_enabled=False,
+    )
 
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
@@ -11680,6 +12653,18 @@ async def upsert_governance_hold(
         for item in list(blocked_operations or [])
         if _normalize_governance_operation(item)
     ]
+    _enforce_control_plane_service_decision(
+        operation="governance_hold_write",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="governance_hold",
+        idempotency_key=f"{normalized_scope_type}:{scope_key}:{normalized_hold_key}:write",
+        target_status=normalized_status,
+        scope_type=normalized_scope_type,
+        retention_lock=False,
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             return None
@@ -11730,6 +12715,19 @@ async def release_governance_hold(
     )
     scope_key = resolved_workspace_id if normalized_scope_type == "workspace" else resolved_tenant_id
     now_ts = _utc_now_ts()
+    resolved_hold_key = _require_scope_token(hold_key, "hold_key")
+    _enforce_control_plane_service_decision(
+        operation="governance_hold_release",
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        actor_id="system",
+        actor_role="system",
+        record_type="governance_hold",
+        idempotency_key=f"{normalized_scope_type}:{scope_key}:{resolved_hold_key}:release",
+        target_status="released",
+        scope_type=normalized_scope_type,
+        retention_lock=False,
+    )
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
             return None
@@ -11747,7 +12745,7 @@ async def release_governance_hold(
             normalized_scope_type,
             scope_key,
             now_ts,
-            _require_scope_token(hold_key, "hold_key"),
+            resolved_hold_key,
         )
     return dict(row) if row is not None else None
 

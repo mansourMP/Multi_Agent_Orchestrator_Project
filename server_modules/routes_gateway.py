@@ -56,6 +56,7 @@ from server_modules import (
     gateway_state_repository,
     hardware_action_broker_service,
     kill_switch_gate,
+    rust_runtime_kernel_client,
     safe_mode_service,
     security_audit_service,
 )
@@ -157,6 +158,170 @@ def _enforce_gateway_safety_gates(
             )
 
 
+def _latest_gateway_session_id(gateway_id: str) -> str:
+    session = gateway_state_repository.get_latest_gateway_session(gateway_id, include_revoked=False)
+    if not isinstance(session, dict):
+        return ""
+    status_value = str(session.get("status") or "").strip().lower()
+    if status_value in {"expired", "revoked"}:
+        return ""
+    return str(session.get("session_id") or "").strip()
+
+
+def _enforce_gateway_service_decision(
+    *,
+    operation: str,
+    gateway_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    actor_id: str,
+    quota_profile: str,
+    capability_id: str = "",
+    run_id: str = "",
+    trace_id: str = "",
+    request_id: str = "",
+    browser_session_id: str = "",
+    approval_provided: bool = False,
+    approval_memory_hit: bool = False,
+    risk_decision: str = "normal",
+    cloud_fallback_enabled: bool = False,
+    cloud_fallback_approved: bool = False,
+) -> Dict[str, Any]:
+    session_id = _latest_gateway_session_id(gateway_id)
+    payload = {
+        "operation": operation,
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "actor_id": actor_id,
+        "gateway_id": gateway_id,
+        "session_id": session_id,
+        "request_id": request_id,
+        "capability_id": capability_id,
+        "run_id": run_id,
+        "trace_id": trace_id,
+        "quota_profile": quota_profile,
+        "risk_level": risk_decision,
+        "policy_decision": "allow",
+        "approval_provided": approval_provided,
+        "approval_memory_hit": approval_memory_hit,
+        "kill_switch_enabled": False,
+        "quota_ok": True,
+        "gateway_registered": True,
+        "session_valid": bool(session_id),
+        "websocket_token_present": True,
+        "protocol_version": GATEWAY_WS_SAFE_SUBPROTOCOL,
+        "frame_valid": True,
+        "payload_present": True,
+        "browser_session_id": browser_session_id,
+        "cloud_fallback_enabled": cloud_fallback_enabled,
+        "cloud_fallback_approved": cloud_fallback_approved,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        detail = str(exc.reason or "rust_gateway_service_denied").strip()
+        raise HTTPException(status_code=409, detail=f"Rust gateway-service gate blocked {operation}: {detail}")
+    expected_next_action = {
+        "tool_execute": "dispatch_gateway_operation",
+        "browser_session": "dispatch_gateway_operation",
+        "browser_action": "dispatch_gateway_operation",
+        "browser_fallback": "dispatch_gateway_operation",
+        "cloud_fallback": "dispatch_gateway_operation",
+        "protocol_route": "dispatch_gateway_operation",
+        "approval_request": "request_gateway_owner_approval",
+        "approval_resolve": "persist_approval_decision",
+        "health_check": "publish_gateway_health",
+    }.get(operation, "allow_gateway_service_operation")
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != expected_next_action:
+        raise HTTPException(
+            status_code=423,
+            detail=(
+                "Rust gateway-service gate returned unexpected next_action for "
+                f"{operation}: {next_action or 'missing'}"
+            ),
+        )
+    return decision
+
+
+def _enforce_gateway_acp_turn_decision(
+    *,
+    workspace_id: str,
+    request_id: str,
+    message: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "acp_turn",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "tenant_id": "default",
+        "request_id": str(request_id or "").strip() or None,
+        "capability_id": "sage.chat",
+        "actor_role": "owner",
+        "api_key_valid": True,
+        "message": str(message or "").strip(),
+        "health_probe": False,
+    }
+    try:
+        decision = rust_runtime_kernel_client.gateway_action_decision(**payload)
+        decision = rust_runtime_kernel_client.enforce_kernel_decision(
+            "gateway-action-decision",
+            decision,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        detail = str(exc.reason or "rust_gateway_acp_turn_denied").strip()
+        raise HTTPException(status_code=409, detail=f"Rust gateway-action gate blocked acp_turn: {detail}")
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "route_acp_turn":
+        raise HTTPException(
+            status_code=423,
+            detail=(
+                "Rust gateway-action gate returned unexpected next_action for "
+                f"acp_turn: {next_action or 'missing'}"
+            ),
+        )
+    return decision
+
+
+def _enforce_gateway_diagnostics_export_decision(
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    actor_role: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "diagnostics_export",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "capability_id": "diagnostics.export",
+        "actor_role": str(actor_role or "").strip() or "viewer",
+    }
+    try:
+        decision = rust_runtime_kernel_client.gateway_action_decision(**payload)
+        decision = rust_runtime_kernel_client.enforce_kernel_decision(
+            "gateway-action-decision",
+            decision,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        detail = str(exc.reason or "rust_gateway_diagnostics_export_denied").strip()
+        raise HTTPException(
+            status_code=409,
+            detail=f"Rust gateway-action gate blocked diagnostics_export: {detail}",
+        )
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "export_diagnostics_bundle":
+        raise HTTPException(
+            status_code=423,
+            detail=(
+                "Rust gateway-action gate returned unexpected next_action for "
+                f"diagnostics_export: {next_action or 'missing'}"
+            ),
+        )
+    return decision
+
+
 def _audit_approval_bypass(
     *,
     gateway_id: str,
@@ -185,6 +350,8 @@ async def _gateway_approval_required_response(
     *,
     registration: Dict[str, Any],
     gateway_id: str,
+    tenant_id: str,
+    actor_id: str,
     capability_id: str,
     arguments: Dict[str, Any],
     run_id: str,
@@ -192,6 +359,21 @@ async def _gateway_approval_required_response(
     request_id: Optional[str],
     risk_decision,
 ) -> JSONResponse:
+    _enforce_gateway_service_decision(
+        operation="approval_request",
+        gateway_id=gateway_id,
+        workspace_id=str(registration.get("workspace_id") or "").strip() or "default",
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        quota_profile=GATEWAY_APPROVAL_ACTION,
+        capability_id=capability_id,
+        run_id=run_id,
+        trace_id=trace_id,
+        request_id=str(request_id or "").strip() or run_id,
+        approval_provided=False,
+        approval_memory_hit=False,
+        risk_decision=str(getattr(risk_decision, "decision", "normal") or "normal").strip() or "normal",
+    )
     approval = await gateway_approval_service.request_gateway_tool_approval(
         registration=registration,
         capability_id=capability_id,
@@ -282,8 +464,12 @@ def _consume_gateway_approval_memory(
     policy_id: str,
     risk_decision,
     payload: Dict[str, Any],
+    run_id: str = "",
+    trace_id: str = "",
+    request_id: str = "",
+    browser_session_id: str = "",
 ):
-    rule = agent_approval_memory_service.consume_matching_approval_memory_rule(
+    rule = agent_approval_memory_service.find_matching_approval_memory_rule(
         workspace_id=workspace_id,
         owner_user_id=actor_user_id,
         capability=risk_decision.capability,
@@ -291,14 +477,40 @@ def _consume_gateway_approval_memory(
         gateway_id=str(registration.get("gateway_id") or "").strip(),
         payload=payload,
     )
-    if rule is not None:
+    if rule is None:
+        return None
+    _enforce_gateway_service_decision(
+        operation="approval_memory_consume",
+        gateway_id=str(registration.get("gateway_id") or "").strip(),
+        workspace_id=workspace_id,
+        tenant_id=tenant_id,
+        actor_id=actor_user_id,
+        quota_profile=GATEWAY_APPROVAL_ACTION,
+        capability_id=str(getattr(risk_decision, "capability", "") or "").strip(),
+        run_id=str(run_id or "").strip(),
+        trace_id=str(trace_id or "").strip(),
+        request_id=str(request_id or "").strip() or str(run_id or "").strip(),
+        browser_session_id=str(browser_session_id or "").strip(),
+        approval_provided=True,
+        approval_memory_hit=True,
+        risk_decision=str(getattr(risk_decision, "decision", "normal") or "normal").strip() or "normal",
+    )
+    consumed = agent_approval_memory_service.consume_matching_approval_memory_rule(
+        workspace_id=workspace_id,
+        owner_user_id=actor_user_id,
+        capability=risk_decision.capability,
+        policy_id=policy_id,
+        gateway_id=str(registration.get("gateway_id") or "").strip(),
+        payload=payload,
+    )
+    if consumed is not None:
         _emit_gateway_approval_memory_used(
             gateway_id=str(registration.get("gateway_id") or "").strip(),
             workspace_id=workspace_id,
             tenant_id=tenant_id,
-            rule=rule,
+            rule=consumed,
         )
-    return rule
+    return consumed
 
 
 def _emit_gateway_risk_decision(
@@ -674,6 +886,21 @@ async def get_agent_computer_policy(
         workspace_id=workspace_id,
         minimum_role="owner",
     )
+    _enforce_gateway_service_decision(
+        operation="gateway_policy_read",
+        gateway_id=str((registration or {}).get("gateway_id") or computer_id).strip(),
+        workspace_id=resolved_workspace_id,
+        tenant_id=workspace_tenant_id(current_user, resolved_workspace_id),
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_WS_CONNECTION,
+        capability_id="agent_computer.policy.read",
+        run_id="gateway-policy-read",
+        trace_id=f"gateway-policy-read:{computer_id}",
+        request_id=f"gateway-policy-read:{computer_id}",
+        approval_provided=True,
+        approval_memory_hit=False,
+        risk_decision="normal",
+    )
     return _agent_computer_policy_response(
         computer_id=computer_id,
         workspace_id=resolved_workspace_id,
@@ -696,6 +923,21 @@ async def validate_agent_computer_policy_route(
         current_user,
         workspace_id=body.workspace_id,
         minimum_role="owner",
+    )
+    _enforce_gateway_service_decision(
+        operation="gateway_policy_write",
+        gateway_id=str((registration or {}).get("gateway_id") or computer_id).strip(),
+        workspace_id=resolved_workspace_id,
+        tenant_id=workspace_tenant_id(current_user, resolved_workspace_id),
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_WS_CONNECTION,
+        capability_id="agent_computer.policy.validate",
+        run_id="gateway-policy-validate",
+        trace_id=f"gateway-policy-validate:{computer_id}",
+        request_id=f"gateway-policy-validate:{computer_id}",
+        approval_provided=True,
+        approval_memory_hit=False,
+        risk_decision="normal",
     )
     candidate = dict(body.policy or {})
     candidate["policy_id"] = str(candidate.get("policy_id") or policy_id).strip() or policy_id
@@ -730,6 +972,21 @@ async def update_agent_computer_policy(
         current_user,
         workspace_id=body.workspace_id,
         minimum_role="owner",
+    )
+    _enforce_gateway_service_decision(
+        operation="gateway_policy_write",
+        gateway_id=str((registration or {}).get("gateway_id") or computer_id).strip(),
+        workspace_id=resolved_workspace_id,
+        tenant_id=workspace_tenant_id(current_user, resolved_workspace_id),
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_WS_CONNECTION,
+        capability_id="agent_computer.policy.write",
+        run_id="gateway-policy-write",
+        trace_id=f"gateway-policy-write:{computer_id}",
+        request_id=f"gateway-policy-write:{computer_id}",
+        approval_provided=True,
+        approval_memory_hit=False,
+        risk_decision="normal",
     )
     candidate = dict(body.policy or {})
     candidate["policy_id"] = str(candidate.get("policy_id") or policy_id).strip() or policy_id
@@ -970,15 +1227,20 @@ async def revoke_gateway_registration(
             user_id=str((current_user or {}).get("user_id") or "").strip() or None,
             reason=str((body or GatewayRegistrationRevokeRequest()).reason or "").strip() or None,
         )
-        revoked_payload["live_connection_shutdown"] = await _shutdown_revoked_live_gateway_connection(
-            gateway_id,
-            reason="registration revoked",
-        )
-        dedicated_workstation_setup_service.mark_dedicated_workstation_revoked(
-            gateway_id=gateway_id,
-            reason=str((body or GatewayRegistrationRevokeRequest()).reason or "").strip() or "Gateway registration revoked.",
-            actor_user_id=str((current_user or {}).get("user_id") or "").strip(),
-        )
+        mutation_plan = dict(revoked_payload.pop("mutation_plan", {}) or {})
+        if mutation_plan.get("shutdown_live_connection", True):
+            revoked_payload["live_connection_shutdown"] = await _shutdown_revoked_live_gateway_connection(
+                gateway_id,
+                reason="registration revoked",
+            )
+        else:
+            revoked_payload["live_connection_shutdown"] = False
+        if mutation_plan.get("mark_dedicated_workstation_revoked", True):
+            dedicated_workstation_setup_service.mark_dedicated_workstation_revoked(
+                gateway_id=gateway_id,
+                reason=str(mutation_plan.get("revocation_reason") or "").strip() or "Gateway registration revoked.",
+                actor_user_id=str((current_user or {}).get("user_id") or "").strip(),
+            )
         return revoked_payload
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1155,6 +1417,9 @@ async def execute_gateway_tool(
             policy_id=gateway_policy.policy_id,
             risk_decision=risk_decision,
             payload=body.arguments,
+            run_id=body.run_id,
+            trace_id=str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id,
+            request_id=str(body.request_id or "").strip() or body.run_id,
         )
     risk_requires_approval = risk_decision.decision == DECISION_APPROVAL_REQUIRED and remembered_approval_rule is None
     requires_owner_approval = requires_owner_approval and remembered_approval_rule is None
@@ -1170,6 +1435,8 @@ async def execute_gateway_tool(
         return await _gateway_approval_required_response(
             registration=registration,
             gateway_id=gateway_id,
+            tenant_id=tenant_id,
+            actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
             capability_id=body.capability_id,
             arguments=body.arguments,
             run_id=body.run_id,
@@ -1177,6 +1444,21 @@ async def execute_gateway_tool(
             request_id=str(body.request_id or "").strip() or None,
             risk_decision=risk_decision,
         )
+    _enforce_gateway_service_decision(
+        operation="tool_execute",
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_TOOL_EXECUTION,
+        capability_id=body.capability_id,
+        run_id=body.run_id,
+        trace_id=str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id,
+        request_id=str(body.request_id or "").strip() or body.run_id,
+        approval_provided=not (requires_owner_approval or risk_requires_approval),
+        approval_memory_hit=remembered_approval_rule is not None,
+        risk_decision=risk_decision.decision,
+    )
     try:
         return await gateway_execution_service.execute_tool_via_gateway(
             gateway_id=gateway_id,
@@ -1268,6 +1550,21 @@ async def resolve_gateway_registration_approval(
     if capability_id.startswith("browser.session."):
         execute_fn = gateway_browser_service.execute_browser_capability_via_gateway
     actor_user_id = str((current_user or {}).get("user_id") or "").strip() or "user"
+    _enforce_gateway_service_decision(
+        operation="approval_resolve",
+        gateway_id=gateway_id,
+        workspace_id=_resolved_workspace_id,
+        tenant_id=str((registration or {}).get("tenant_id") or "default").strip() or "default",
+        actor_id=actor_user_id,
+        quota_profile=GATEWAY_APPROVAL_ACTION,
+        capability_id=capability_id,
+        run_id=str((approval or {}).get("run_id") or "").strip(),
+        trace_id=str((approval or {}).get("trace_id") or "").strip(),
+        request_id=str((approval or {}).get("request_id") or "").strip() or approval_id,
+        approval_provided=True,
+        approval_memory_hit=False,
+        risk_decision="normal",
+    )
     gateway_policy = _gateway_policy_from_registration(registration)
     result = await gateway_approval_service.resolve_gateway_tool_approval(
         registration=registration,
@@ -1409,10 +1706,46 @@ async def start_gateway_browser_session(
             policy_id=gateway_policy.policy_id,
             risk_decision=risk_decision,
             payload=arguments,
+            run_id=body.run_id,
+            trace_id=trace_id,
+            request_id=str(body.request_id or "").strip() or body.run_id,
         )
     browser_start_requires_approval = browser_start_requires_approval and remembered_approval_rule is None
     risk_requires_approval = risk_decision.decision == DECISION_APPROVAL_REQUIRED and remembered_approval_rule is None
+    if (
+        browser_start_requires_approval
+        or risk_requires_approval
+    ):
+        return await _gateway_approval_required_response(
+            registration=registration,
+            gateway_id=gateway_id,
+            tenant_id=tenant_id,
+            actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+            capability_id=gateway_browser_service.BROWSER_SESSION_START_CAPABILITY,
+            arguments=arguments,
+            run_id=body.run_id,
+            trace_id=trace_id,
+            request_id=str(body.request_id or "").strip() or None,
+            risk_decision=risk_decision,
+        )
     if body.allow_cloud_fallback and not gateway_protocol_service.gateway_connection_is_live(gateway_id):
+        _enforce_gateway_service_decision(
+            operation="cloud_fallback",
+            gateway_id=gateway_id,
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+            actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+            quota_profile=GATEWAY_BROWSER_SESSION,
+            capability_id=gateway_browser_service.BROWSER_SESSION_START_CAPABILITY,
+            run_id=body.run_id,
+            trace_id=trace_id,
+            request_id=str(body.request_id or "").strip() or body.run_id,
+            approval_provided=True,
+            approval_memory_hit=remembered_approval_rule is not None,
+            risk_decision=risk_decision.decision,
+            cloud_fallback_enabled=True,
+            cloud_fallback_approved=True,
+        )
         fallback = await gateway_browser_service.build_cloud_browser_fallback_response(
             registration=registration,
             run_id=body.run_id,
@@ -1421,20 +1754,23 @@ async def start_gateway_browser_session(
             reason="Local gateway browser runtime is offline; cloud browser fallback prepared.",
         )
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=fallback)
-    if (
-        browser_start_requires_approval
-        or risk_requires_approval
-    ):
-        return await _gateway_approval_required_response(
-            registration=registration,
-            gateway_id=gateway_id,
-            capability_id=gateway_browser_service.BROWSER_SESSION_START_CAPABILITY,
-            arguments=arguments,
-            run_id=body.run_id,
-            trace_id=trace_id,
-            request_id=str(body.request_id or "").strip() or None,
-            risk_decision=risk_decision,
-        )
+    _enforce_gateway_service_decision(
+        operation="browser_session",
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_BROWSER_SESSION,
+        capability_id=gateway_browser_service.BROWSER_SESSION_START_CAPABILITY,
+        run_id=body.run_id,
+        trace_id=trace_id,
+        request_id=str(body.request_id or "").strip() or body.run_id,
+        approval_provided=not (browser_start_requires_approval or risk_requires_approval),
+        approval_memory_hit=remembered_approval_rule is not None,
+        risk_decision=risk_decision.decision,
+        cloud_fallback_enabled=bool(body.allow_cloud_fallback),
+        cloud_fallback_approved=bool(body.allow_cloud_fallback),
+    )
     try:
         response = await gateway_browser_service.execute_browser_capability_via_gateway(
             gateway_id=gateway_id,
@@ -1453,6 +1789,23 @@ async def start_gateway_browser_session(
     except ValueError as exc:
         detail = str(exc)
         if body.allow_cloud_fallback and "not currently connected" in detail.lower():
+            _enforce_gateway_service_decision(
+                operation="cloud_fallback",
+                gateway_id=gateway_id,
+                workspace_id=resolved_workspace_id,
+                tenant_id=tenant_id,
+                actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+                quota_profile=GATEWAY_BROWSER_SESSION,
+                capability_id=gateway_browser_service.BROWSER_SESSION_START_CAPABILITY,
+                run_id=body.run_id,
+                trace_id=trace_id,
+                request_id=str(body.request_id or "").strip() or body.run_id,
+                approval_provided=True,
+                approval_memory_hit=remembered_approval_rule is not None,
+                risk_decision=risk_decision.decision,
+                cloud_fallback_enabled=True,
+                cloud_fallback_approved=True,
+            )
             fallback = await gateway_browser_service.build_cloud_browser_fallback_response(
                 registration=registration,
                 run_id=body.run_id,
@@ -1559,10 +1912,48 @@ async def execute_gateway_browser_action(
             policy_id=gateway_policy.policy_id,
             risk_decision=risk_decision,
             payload=arguments,
+            run_id=body.run_id,
+            trace_id=trace_id,
+            request_id=str(body.request_id or "").strip() or body.run_id,
+            browser_session_id=browser_session_id,
         )
     browser_action_requires_approval = browser_action_requires_approval and remembered_approval_rule is None
     risk_requires_approval = risk_decision.decision == DECISION_APPROVAL_REQUIRED and remembered_approval_rule is None
+    if (
+        browser_action_requires_approval
+        or risk_requires_approval
+    ):
+        return await _gateway_approval_required_response(
+            registration=registration,
+            gateway_id=gateway_id,
+            tenant_id=tenant_id,
+            actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+            capability_id=gateway_browser_service.BROWSER_SESSION_ACTION_CAPABILITY,
+            arguments=arguments,
+            run_id=body.run_id,
+            trace_id=trace_id,
+            request_id=str(body.request_id or "").strip() or None,
+            risk_decision=risk_decision,
+        )
     if body.allow_cloud_fallback and not gateway_protocol_service.gateway_connection_is_live(gateway_id):
+        _enforce_gateway_service_decision(
+            operation="cloud_fallback",
+            gateway_id=gateway_id,
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+            actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+            quota_profile=GATEWAY_TOOL_EXECUTION,
+            capability_id=gateway_browser_service.BROWSER_SESSION_ACTION_CAPABILITY,
+            run_id=body.run_id,
+            trace_id=trace_id,
+            request_id=str(body.request_id or "").strip() or body.run_id,
+            browser_session_id=browser_session_id,
+            approval_provided=True,
+            approval_memory_hit=remembered_approval_rule is not None,
+            risk_decision=risk_decision.decision,
+            cloud_fallback_enabled=True,
+            cloud_fallback_approved=True,
+        )
         fallback = await gateway_browser_service.build_cloud_browser_fallback_response(
             registration=registration,
             run_id=body.run_id,
@@ -1572,20 +1963,22 @@ async def execute_gateway_browser_action(
             checkpoint=browser_session.get("checkpoint") if isinstance(browser_session.get("checkpoint"), dict) else {},
         )
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=fallback)
-    if (
-        browser_action_requires_approval
-        or risk_requires_approval
-    ):
-        return await _gateway_approval_required_response(
-            registration=registration,
-            gateway_id=gateway_id,
-            capability_id=gateway_browser_service.BROWSER_SESSION_ACTION_CAPABILITY,
-            arguments=arguments,
-            run_id=body.run_id,
-            trace_id=trace_id,
-            request_id=str(body.request_id or "").strip() or None,
-            risk_decision=risk_decision,
-        )
+    _enforce_gateway_service_decision(
+        operation="browser_action",
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_TOOL_EXECUTION,
+        capability_id=gateway_browser_service.BROWSER_SESSION_ACTION_CAPABILITY,
+        run_id=body.run_id,
+        trace_id=trace_id,
+        request_id=str(body.request_id or "").strip() or body.run_id,
+        browser_session_id=browser_session_id,
+        approval_provided=not (browser_action_requires_approval or risk_requires_approval),
+        approval_memory_hit=remembered_approval_rule is not None,
+        risk_decision=risk_decision.decision,
+    )
     try:
         response = await gateway_browser_service.execute_browser_capability_via_gateway(
             gateway_id=gateway_id,
@@ -1604,6 +1997,24 @@ async def execute_gateway_browser_action(
     except ValueError as exc:
         detail = str(exc)
         if body.allow_cloud_fallback and "not currently connected" in detail.lower():
+            _enforce_gateway_service_decision(
+                operation="cloud_fallback",
+                gateway_id=gateway_id,
+                workspace_id=resolved_workspace_id,
+                tenant_id=tenant_id,
+                actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+                quota_profile=GATEWAY_TOOL_EXECUTION,
+                capability_id=gateway_browser_service.BROWSER_SESSION_ACTION_CAPABILITY,
+                run_id=body.run_id,
+                trace_id=trace_id,
+                request_id=str(body.request_id or "").strip() or body.run_id,
+                browser_session_id=browser_session_id,
+                approval_provided=True,
+                approval_memory_hit=remembered_approval_rule is not None,
+                risk_decision=risk_decision.decision,
+                cloud_fallback_enabled=True,
+                cloud_fallback_approved=True,
+            )
             fallback = await gateway_browser_service.build_cloud_browser_fallback_response(
                 registration=registration,
                 run_id=body.run_id,
@@ -1638,7 +2049,24 @@ async def takeover_gateway_browser_session(
         workspace_id=resolved_workspace_id,
         quota_profile=GATEWAY_TOOL_EXECUTION,
     )
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
     trace_id = str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id
+    _enforce_gateway_service_decision(
+        operation="browser_action",
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_TOOL_EXECUTION,
+        capability_id=gateway_browser_service.BROWSER_SESSION_TAKEOVER_CAPABILITY,
+        run_id=body.run_id,
+        trace_id=trace_id,
+        request_id=str(body.request_id or "").strip() or body.run_id,
+        browser_session_id=browser_session_id,
+        approval_provided=True,
+        approval_memory_hit=False,
+        risk_decision="normal",
+    )
     try:
         return await gateway_browser_service.execute_browser_capability_via_gateway(
             gateway_id=gateway_id,
@@ -1677,11 +2105,30 @@ async def resume_gateway_browser_session(
         workspace_id=resolved_workspace_id,
         quota_profile=GATEWAY_BROWSER_SESSION,
     )
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
     trace_id = str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id
     session_metadata = browser_session.get("metadata") if isinstance(browser_session.get("metadata"), dict) else {}
     session_mode = gateway_browser_service.normalize_browser_session_mode(session_metadata.get("browser_session_mode"))
     attach_endpoint_url = str(session_metadata.get("browser_attach_endpoint_url") or "").strip() or None
     if not gateway_protocol_service.gateway_connection_is_live(gateway_id):
+        _enforce_gateway_service_decision(
+            operation="cloud_fallback",
+            gateway_id=gateway_id,
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+            actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+            quota_profile=GATEWAY_BROWSER_SESSION,
+            capability_id=gateway_browser_service.BROWSER_SESSION_RESUME_CAPABILITY,
+            run_id=body.run_id,
+            trace_id=trace_id,
+            request_id=str(body.request_id or "").strip() or body.run_id,
+            browser_session_id=browser_session_id,
+            approval_provided=True,
+            approval_memory_hit=False,
+            risk_decision="normal",
+            cloud_fallback_enabled=True,
+            cloud_fallback_approved=True,
+        )
         fallback = await gateway_browser_service.build_cloud_browser_fallback_response(
             registration=registration,
             run_id=body.run_id,
@@ -1691,6 +2138,22 @@ async def resume_gateway_browser_session(
             checkpoint=browser_session.get("checkpoint") if isinstance(browser_session.get("checkpoint"), dict) else {},
         )
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=fallback)
+    _enforce_gateway_service_decision(
+        operation="browser_session",
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_BROWSER_SESSION,
+        capability_id=gateway_browser_service.BROWSER_SESSION_RESUME_CAPABILITY,
+        run_id=body.run_id,
+        trace_id=trace_id,
+        request_id=str(body.request_id or "").strip() or body.run_id,
+        browser_session_id=browser_session_id,
+        approval_provided=True,
+        approval_memory_hit=False,
+        risk_decision="normal",
+    )
     try:
         response = await gateway_browser_service.execute_browser_capability_via_gateway(
             gateway_id=gateway_id,
@@ -1714,6 +2177,24 @@ async def resume_gateway_browser_session(
     except ValueError as exc:
         detail = str(exc)
         if "not currently connected" in detail.lower():
+            _enforce_gateway_service_decision(
+                operation="cloud_fallback",
+                gateway_id=gateway_id,
+                workspace_id=resolved_workspace_id,
+                tenant_id=tenant_id,
+                actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+                quota_profile=GATEWAY_BROWSER_SESSION,
+                capability_id=gateway_browser_service.BROWSER_SESSION_RESUME_CAPABILITY,
+                run_id=body.run_id,
+                trace_id=trace_id,
+                request_id=str(body.request_id or "").strip() or body.run_id,
+                browser_session_id=browser_session_id,
+                approval_provided=True,
+                approval_memory_hit=False,
+                risk_decision="normal",
+                cloud_fallback_enabled=True,
+                cloud_fallback_approved=True,
+            )
             fallback = await gateway_browser_service.build_cloud_browser_fallback_response(
                 registration=registration,
                 run_id=body.run_id,
@@ -1747,7 +2228,24 @@ async def interrupt_gateway_browser_session(
         workspace_id=resolved_workspace_id,
         quota_profile=GATEWAY_TOOL_EXECUTION,
     )
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
     trace_id = str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id
+    _enforce_gateway_service_decision(
+        operation="browser_action",
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_TOOL_EXECUTION,
+        capability_id=gateway_browser_service.BROWSER_SESSION_INTERRUPT_CAPABILITY,
+        run_id=body.run_id,
+        trace_id=trace_id,
+        request_id=str(body.request_id or "").strip() or body.run_id,
+        browser_session_id=browser_session_id,
+        approval_provided=True,
+        approval_memory_hit=False,
+        risk_decision="normal",
+    )
     try:
         return await gateway_browser_service.execute_browser_capability_via_gateway(
             gateway_id=gateway_id,
@@ -1785,6 +2283,21 @@ async def get_gateway_registration_doctor(
     )
     if resolved_workspace_id != registration_workspace_id:
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
+    _enforce_gateway_service_decision(
+        operation="health_check",
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=workspace_tenant_id(current_user, resolved_workspace_id),
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_WS_CONNECTION,
+        capability_id="gateway.health",
+        run_id="gateway-health",
+        trace_id=f"gateway-health:{gateway_id}",
+        request_id=f"gateway-health:{gateway_id}",
+        approval_provided=True,
+        approval_memory_hit=False,
+        risk_decision="normal",
+    )
     try:
         return gateway_health_service.gateway_doctor_payload(
             gateway_id,
@@ -1811,6 +2324,21 @@ async def interrupt_gateway_tool(
     )
     if resolved_workspace_id != registration_workspace_id:
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
+    _enforce_gateway_service_decision(
+        operation="tool_interrupt",
+        gateway_id=gateway_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=workspace_tenant_id(current_user, resolved_workspace_id),
+        actor_id=str((current_user or {}).get("user_id") or "").strip() or "user",
+        quota_profile=GATEWAY_TOOL_EXECUTION,
+        capability_id="tool.interrupt",
+        run_id=body.run_id,
+        trace_id=str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id,
+        request_id=str(body.request_id or "").strip() or body.run_id,
+        approval_provided=True,
+        approval_memory_hit=False,
+        risk_decision="normal",
+    )
     try:
         return await gateway_execution_service.interrupt_tool_via_gateway(
             gateway_id=gateway_id,
@@ -1899,6 +2427,11 @@ async def acp_turn_endpoint(
     if msg_type == "agent.turn":
         try:
             params = gw_frame.get("params", {})
+            _enforce_gateway_acp_turn_decision(
+                workspace_id=str(workspace_id or params.get("workspace_id", "")).strip(),
+                request_id=str(acp_msg.get("id") or "").strip(),
+                message=str(params.get("message", "")).strip(),
+            )
             result = await handle_sage_chat(
                 workspace_id=str(workspace_id or params.get("workspace_id", "")).strip(),
                 message=str(params.get("message", "")).strip(),
@@ -1993,6 +2526,11 @@ async def export_workspace_diagnostics_endpoint(
         current_user,
         workspace_id,
         minimum_role="viewer",
+    )
+    _enforce_gateway_diagnostics_export_decision(
+        workspace_id=resolved_workspace_id,
+        tenant_id=workspace_tenant_id(current_user, resolved_workspace_id),
+        actor_role=str(current_user.get("role") or "viewer").strip() or "viewer",
     )
     from server_modules.session_diagnostics_service import export_diagnostics_bundle
 

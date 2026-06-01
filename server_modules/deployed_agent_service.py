@@ -28,6 +28,7 @@ from server_modules import provider_catalog_service
 from server_modules import pricing_registry_service
 from server_modules import product_catalog_live_data_service
 from server_modules import runtime_attachment_service
+from server_modules import rust_runtime_kernel_client
 from server_modules import run_state_repository
 from server_modules import session_service
 from server_modules import shop_assistant_revenue_agent_service
@@ -279,6 +280,197 @@ def _deployed_agent_workspace_contract(deployed_agent: Dict[str, Any]) -> Dict[s
 def _normalize_deployment_state(value: Any, *, default: str = "draft") -> str:
     token = str(value or "").strip().lower()
     return token if token in DEPLOYED_AGENT_ALLOWED_STATES else default
+
+
+_DEPLOYED_AGENT_SERVICE_NEXT_ACTIONS = {
+    "telegram_readiness": {"read_telegram_readiness"},
+    "analytics_read": {"read_deployed_agent_analytics"},
+    "admin_dashboard": {"read_deployed_agent_admin_dashboard"},
+    "audit_export": {"export_deployed_agent_audit_logs"},
+    "conversation_list": {"list_deployed_agent_conversations"},
+    "conversation_detail": {"read_deployed_agent_conversation_detail"},
+    "memory_list": {"list_deployed_agent_memory"},
+    "activity_list": {"list_deployed_agent_activity"},
+    "external_user_delete": {"delete_deployed_agent_external_user_data"},
+    "knowledge_verify": {"verify_deployed_agent_knowledge"},
+    "knowledge_upload": {"upload_deployed_agent_knowledge_reference"},
+    "test_turn": {"execute_deployed_agent_test_turn"},
+    "shop_evaluate": {"evaluate_shop_assistant"},
+    "deploy": {"deploy_deployed_agent"},
+    "pause": {"pause_deployed_agent"},
+    "kill": {"kill_deployed_agent"},
+    "recover": {"recover_deployed_agent"},
+    "archive": {"archive_deployed_agent"},
+    "recovery_action": {"apply_deployed_agent_recovery_action"},
+    "runtime_session_kill": {"kill_deployed_agent_runtime_session"},
+    "emergency_stop": {"emergency_stop_workspace_deployed_agents"},
+}
+
+
+def _deployed_agent_service_actor_role(
+    current_user: Optional[Dict[str, Any]],
+    workspace_id: str,
+) -> str:
+    user = dict(current_user or {}) if isinstance(current_user, dict) else {}
+    if not user:
+        return "system"
+    workspace_access = user.get("workspace_access") if isinstance(user.get("workspace_access"), dict) else {}
+    scoped = workspace_access.get(workspace_id) if isinstance(workspace_access.get(workspace_id), dict) else {}
+    role = _normalize_text(scoped.get("role") or user.get("role")).lower()
+    if role in {"owner", "workspace_owner"}:
+        return "owner"
+    if role in {"admin", "workspace_admin", "super_admin"}:
+        return "admin"
+    if role in {"member", "viewer"}:
+        return "member"
+    return "system" if not _normalize_optional_text(user.get("user_id")) else "member"
+
+
+def _deployed_agent_service_owner_access(
+    current_user: Optional[Dict[str, Any]],
+    workspace_id: str,
+) -> bool:
+    return _deployed_agent_service_actor_role(current_user, workspace_id) in {"owner", "admin", "system"}
+
+
+def _enforce_deployed_agent_service_decision(
+    operation: str,
+    deployed_agent: Dict[str, Any],
+    tenant_id: str,
+    workspace_id: str,
+    current_user: Optional[Dict[str, Any]],
+    approval_provided: bool = True,
+    **extra: Any,
+) -> Dict[str, Any]:
+    config = _config_from_record(deployed_agent)
+    metadata = _coerce_dict(deployed_agent.get("metadata"))
+    privacy_snapshot = _coerce_dict(metadata.get("privacy_contract_snapshot"))
+    computer_safety_snapshot = _coerce_dict(metadata.get("computer_safety_contract_snapshot"))
+    actor_role = _deployed_agent_service_actor_role(current_user, workspace_id)
+    payload = {
+        "operation": operation,
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "deployed_agent_id": _normalize_text(deployed_agent.get("id")),
+        "deployment_state": _normalize_deployment_state(deployed_agent.get("deployment_state")),
+        "runtime_target": _normalize_text(config.studio_agent_mode or config.runtime_target),
+        "actor_id": _normalize_optional_text((current_user or {}).get("user_id")) or "system",
+        "actor_role": actor_role,
+        "workspace_access": True,
+        "owner_access": _deployed_agent_service_owner_access(current_user, workspace_id),
+        "entitlement_ok": True,
+        "budget_available": True,
+        "approval_provided": approval_provided,
+        "privacy_contract_complete": _validate_privacy_contract_snapshot(privacy_snapshot),
+        "privacy_contract_accepted": _validate_privacy_contract_acceptance(privacy_snapshot),
+        "computer_safety_contract_complete": _validate_computer_safety_contract_snapshot(computer_safety_snapshot),
+        "required_fields_complete": True,
+        "backing_install_present": bool(_normalize_optional_text(deployed_agent.get("backing_install_id"))),
+        "runtime_eligible": True,
+        "live_channel_configured": True,
+        "active_run_count": 0,
+        **extra,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "deployed-agent-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _normalize_text(exc.reason) or "rust_deployed_agent_service_denied"
+        raise _http_conflict(f"Rust deployed-agent service blocked {operation}: {reason}")
+    expected_actions = _DEPLOYED_AGENT_SERVICE_NEXT_ACTIONS.get(operation)
+    next_action = _normalize_text(decision.get("next_action"))
+    if expected_actions is None:
+        raise _http_conflict(f"Rust deployed-agent service has no next_action contract for {operation}.")
+    if next_action not in expected_actions:
+        expected_list = ", ".join(sorted(expected_actions))
+        raise _http_conflict(
+            f"Rust deployed-agent service returned unexpected next_action for {operation}: "
+            f"{next_action or '<missing>'} (expected {expected_list})"
+        )
+    return decision
+
+
+_DEPLOYED_AGENT_DATA_NEXT_ACTIONS = {
+    "analytics_detail": {"read_deployed_agent_analytics"},
+    "audit_export": {"export_deployed_agent_audit_log"},
+    "list_conversations": {"list_deployed_agent_conversations"},
+    "conversation_detail": {"read_deployed_agent_conversation_detail"},
+    "list_memory": {"list_deployed_agent_memory"},
+    "list_activity": {"list_deployed_agent_activity"},
+    "delete_external_user_data": {"purge_deployed_agent_external_user_data"},
+}
+
+
+def _enforce_deployed_agent_data_decision(
+    operation: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    **extra: Any,
+) -> Dict[str, Any]:
+    actor_role = _deployed_agent_service_actor_role(current_user, workspace_id)
+    payload = {
+        "operation": operation,
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "deployed_agent_id": deployed_agent_id,
+        "actor_role": actor_role,
+        "audit_log_enabled": True,
+        "privacy_delete_enabled": True,
+        "privacy_request_verified": True,
+        "operator_confirmed": True,
+        **extra,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "deployed-data-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = _normalize_text(exc.reason) or "rust_deployed_agent_data_denied"
+        raise _http_conflict(f"Rust deployed-agent data blocked {operation}: {reason}")
+    expected_actions = _DEPLOYED_AGENT_DATA_NEXT_ACTIONS.get(operation)
+    next_action = _normalize_text(decision.get("next_action"))
+    if expected_actions is None:
+        raise _http_conflict(f"Rust deployed-agent data has no next_action contract for {operation}.")
+    if next_action not in expected_actions:
+        expected_list = ", ".join(sorted(expected_actions))
+        raise _http_conflict(
+            f"Rust deployed-agent data returned unexpected next_action for {operation}: "
+            f"{next_action or '<missing>'} (expected {expected_list})"
+        )
+    return decision
+
+
+def _deployed_agent_service_mutation_plan(decision: Dict[str, Any]) -> Dict[str, Any]:
+    plan = decision.get("mutation_plan")
+    return dict(plan) if isinstance(plan, dict) else {}
+
+
+def _deployed_agent_service_target_state(decision: Dict[str, Any], *, default: str) -> str:
+    plan = _deployed_agent_service_mutation_plan(decision)
+    return _normalize_deployment_state(plan.get("target_state"), default=default)
+
+
+def _deployed_agent_service_plan_flag(
+    decision: Dict[str, Any],
+    key: str,
+    *,
+    default: bool = False,
+) -> bool:
+    plan = _deployed_agent_service_mutation_plan(decision)
+    value = plan.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
 
 
 def deployment_state_is_publicly_routable(value: Any) -> bool:
@@ -1617,6 +1809,13 @@ async def verify_deployed_agent_knowledge_retrieval(
     )
     if not isinstance(deployed_agent, dict):
         raise ValueError("Deployed agent not found.")
+    _enforce_deployed_agent_service_decision(
+        "knowledge_verify",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+    )
     config = _config_from_record(deployed_agent)
     sources = [
         summary
@@ -1748,6 +1947,49 @@ def _unique_knowledge_file_path(root: Path, filename: str, content_hash: str) ->
     return root / f"{stem[:120]}-{content_hash[:10]}{suffix}"
 
 
+class DeployedAgentKnowledgeRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_deployed_agent_knowledge_file_write(
+    *,
+    deployed_agent_id: str,
+    workspace_id: str,
+    destination: Path,
+    safe_filename: str,
+    content_hash: str,
+    content_bytes: int,
+) -> None:
+    payload = {
+        "deployed_agent_id": _normalize_text(deployed_agent_id),
+        "workspace_id": _normalize_text(workspace_id),
+        "destination": str(destination),
+        "file_name": str(safe_filename or "").strip(),
+        "content_hash_prefix": str(content_hash or "").strip()[:16],
+        "content_bytes": max(0, int(content_bytes or 0)),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_deployed_agent_knowledge_file",
+            state_class="deployed_agent_knowledge_files",
+            workspace_id=str(payload["workspace_id"]),
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=int(payload["content_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        decision = rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        if str(decision.get("next_action") or "").strip() != "write_deployed_agent_knowledge_file":
+            raise DeployedAgentKnowledgeRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise DeployedAgentKnowledgeRustGateError(exc.reason) from exc
+
+
 async def upload_deployed_agent_knowledge_file(
     *,
     deployed_agent_id: str,
@@ -1771,6 +2013,14 @@ async def upload_deployed_agent_knowledge_file(
     )
     if not isinstance(deployed_agent, dict):
         raise ValueError("Deployed agent not found.")
+    _enforce_deployed_agent_service_decision(
+        "knowledge_upload",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        knowledge_reference_only=True,
+    )
 
     safe_filename = _safe_knowledge_filename(file_name)
     raw_text = str(content_text or "")
@@ -1789,6 +2039,14 @@ async def upload_deployed_agent_knowledge_file(
     ) / relative_root
     root.mkdir(parents=True, exist_ok=True)
     destination = _unique_knowledge_file_path(root, safe_filename, content_hash)
+    _enforce_deployed_agent_knowledge_file_write(
+        deployed_agent_id=deployed_agent_id,
+        workspace_id=resolved_workspace_id,
+        destination=destination,
+        safe_filename=safe_filename,
+        content_hash=content_hash,
+        content_bytes=len(raw_bytes),
+    )
     destination.write_text(raw_text, encoding="utf-8")
     relative_path = destination.relative_to(
         workspace_context.workspace_knowledge_dir(workspace_id=resolved_workspace_id, agent_install_id=None)
@@ -3696,6 +3954,13 @@ async def evaluate_deployed_shop_assistant_customer_question(
     )
     if not isinstance(deployed_agent, dict):
         raise HTTPException(status_code=404, detail="Deployed agent is unavailable.")
+    _enforce_deployed_agent_service_decision(
+        "shop_evaluate",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+    )
     try:
         result = shop_assistant_revenue_agent_service.evaluate_shop_assistant_customer_question(
             deployed_agent,
@@ -4017,6 +4282,13 @@ async def get_deployed_agent_telegram_readiness(
         )
         if not isinstance(deployed_agent, dict):
             raise _http_bad_request("Deployed agent is unavailable.")
+    _enforce_deployed_agent_service_decision(
+        "telegram_readiness",
+        deployed_agent=deployed_agent or {},
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+    )
 
     status_payload = _workspace_telegram_status_payload(resolved_workspace_id)
     connector_options = _workspace_telegram_connector_options(resolved_workspace_id)
@@ -4256,6 +4528,13 @@ async def get_deployed_agent_analytics(
     )
     if not isinstance(deployed_agent, dict):
         return None
+    _enforce_deployed_agent_service_decision(
+        "analytics_read",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+    )
     return await deployed_agent_analytics_service.summarize_deployed_agent_analytics(
         tenant_id=tenant_id,
         workspace_id=resolved_workspace_id,
@@ -4670,6 +4949,17 @@ async def deploy_deployed_agent(
         )
     except ValueError as error:
         raise _http_conflict(str(error)) from error
+    _enforce_deployed_agent_service_decision(
+        operation="deploy",
+        deployed_agent={**existing, "metadata": privacy_metadata},
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        backing_install_present=isinstance(updated_install, dict),
+        live_channel_configured=True,
+        required_fields_complete=True,
+        runtime_eligible=True,
+    )
     next_state = _operational_state_from_record(
         {
             **existing,
@@ -4759,14 +5049,18 @@ async def pause_deployed_agent(
     )
     if not isinstance(deployed_agent, dict):
         return None
-    try:
-        validate_state_transition(deployed_agent.get("deployment_state"), "paused")
-    except ValueError as error:
-        raise _http_conflict(str(error)) from error
+    decision = _enforce_deployed_agent_service_decision(
+        operation="pause",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+    )
+    target_state = _deployed_agent_service_target_state(decision, default="paused")
     next_state = _operational_state_from_record(
         {
             **deployed_agent,
-            "deployment_state": "paused",
+            "deployment_state": target_state,
             "last_paused_at": _utc_now_iso(),
         }
     )
@@ -4774,7 +5068,7 @@ async def pause_deployed_agent(
         deployed_agent_id,
         tenant_id=tenant_id,
         owner_workspace_id=resolved_workspace_id,
-        deployment_state="paused",
+        deployment_state=target_state,
         last_paused_at=next_state.last_paused_at,
         operational_state=_serialized_operational_state(next_state),
     )
@@ -4791,10 +5085,10 @@ async def pause_deployed_agent(
             action="deployed_agent_paused",
             title="Deployed agent paused",
             summary=f"{_normalize_text(paused.get('name'), default='Deployed agent')} was paused.",
-            status="paused",
+            status=target_state,
             payload={
                 "previous_state": _normalize_deployment_state(deployed_agent.get("deployment_state")),
-                "current_state": "paused",
+                "current_state": target_state,
             },
             actor_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
         )
@@ -4826,31 +5120,43 @@ async def kill_deployed_agent(
     )
     if not isinstance(deployed_agent, dict):
         return None
-    try:
-        validate_state_transition(deployed_agent.get("deployment_state"), "suspended")
-    except ValueError as error:
-        raise _http_conflict(str(error)) from error
     actor_user_id = _normalize_optional_text((current_user or {}).get("user_id"))
-    stopped_run_ids = _stop_deployed_agent_live_runs(
+    decision = _enforce_deployed_agent_service_decision(
+        operation="kill",
         deployed_agent=deployed_agent,
-        reason="agent_kill_switch",
-        stopped_by_user_id=actor_user_id,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        approval_provided=True,
+    )
+    target_state = _deployed_agent_service_target_state(decision, default="suspended")
+    stopped_run_ids = (
+        _stop_deployed_agent_live_runs(
+            deployed_agent=deployed_agent,
+            reason="agent_kill_switch",
+            stopped_by_user_id=actor_user_id,
+        )
+        if _deployed_agent_service_plan_flag(decision, "stop_active_runs", default=True)
+        else []
     )
     metadata = _coerce_dict(deployed_agent.get("metadata"))
     now_iso = _utc_now_iso()
-    metadata["kill_switch"] = {
-        "active": True,
-        "scope": "agent",
-        "reason": _normalize_optional_text(reason) or "Owner kill switch activated.",
-        "activated_at": now_iso,
-        "activated_by_user_id": actor_user_id,
-        "stopped_run_ids": stopped_run_ids,
-    }
+    if _deployed_agent_service_plan_flag(decision, "activate_kill_switch", default=True):
+        metadata["kill_switch"] = {
+            "active": True,
+            "scope": "agent",
+            "reason": _normalize_optional_text(reason) or "Owner kill switch activated.",
+            "activated_at": now_iso,
+            "activated_by_user_id": actor_user_id,
+            "stopped_run_ids": stopped_run_ids,
+        }
     next_state = _operational_state_from_record(
         {
             **deployed_agent,
-            "deployment_state": "suspended",
-            "last_paused_at": now_iso,
+            "deployment_state": target_state,
+            "last_paused_at": now_iso
+            if _deployed_agent_service_plan_flag(decision, "set_last_paused_at", default=True)
+            else deployed_agent.get("last_paused_at"),
         }
     )
     killed = await control_plane_repository.update_deployed_agent(
@@ -4858,8 +5164,10 @@ async def kill_deployed_agent(
         tenant_id=tenant_id,
         owner_workspace_id=resolved_workspace_id,
         updates={
-            "deployment_state": "suspended",
-            "last_paused_at": now_iso,
+            "deployment_state": target_state,
+            "last_paused_at": now_iso
+            if _deployed_agent_service_plan_flag(decision, "set_last_paused_at", default=True)
+            else deployed_agent.get("last_paused_at"),
             "metadata": metadata,
             "operational_state": _serialized_operational_state(next_state),
         },
@@ -4872,11 +5180,11 @@ async def kill_deployed_agent(
             action="deployed_agent_killed",
             title="Deployed agent kill switch activated",
             summary=f"{_normalize_text(killed.get('name'), default='Deployed agent')} was suspended by kill switch.",
-            status="suspended",
+            status=target_state,
             payload={
                 "previous_state": _normalize_deployment_state(deployed_agent.get("deployment_state")),
-                "current_state": "suspended",
-                "reason": metadata["kill_switch"]["reason"],
+                "current_state": target_state,
+                "reason": _normalize_optional_text(_coerce_dict(metadata.get("kill_switch")).get("reason")),
                 "stopped_run_ids": stopped_run_ids,
             },
             actor_user_id=actor_user_id,
@@ -4905,13 +5213,18 @@ async def recover_deployed_agent(
     )
     if not isinstance(deployed_agent, dict):
         return None
-    try:
-        next_state = validate_state_transition(deployed_agent.get("deployment_state"), "ready_for_review")
-    except ValueError as error:
-        raise _http_conflict(str(error)) from error
+    decision = _enforce_deployed_agent_service_decision(
+        operation="recover",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        approval_provided=True,
+    )
+    next_state = _deployed_agent_service_target_state(decision, default="ready_for_review")
     metadata = _coerce_dict(deployed_agent.get("metadata"))
     kill_switch = _coerce_dict(metadata.get("kill_switch"))
-    if kill_switch:
+    if kill_switch and _deployed_agent_service_plan_flag(decision, "clear_kill_switch", default=True):
         kill_switch["active"] = False
         kill_switch["cleared_at"] = _utc_now_iso()
         kill_switch["cleared_by_user_id"] = _normalize_optional_text((current_user or {}).get("user_id"))
@@ -4935,7 +5248,7 @@ async def recover_deployed_agent(
             action="deployed_agent_recovered",
             title="Deployed agent recovered",
             summary="Kill switch was cleared and deployment returned to review.",
-            status="ready_for_review",
+            status=next_state,
             payload={
                 "previous_state": _normalize_deployment_state(deployed_agent.get("deployment_state")),
                 "current_state": next_state,
@@ -4967,28 +5280,41 @@ async def archive_deployed_agent(
     )
     if not isinstance(deployed_agent, dict):
         return None
-    try:
-        validate_state_transition(deployed_agent.get("deployment_state"), "archived")
-    except ValueError as error:
-        raise _http_conflict(str(error)) from error
     actor_user_id = _normalize_optional_text((current_user or {}).get("user_id"))
-    stopped_run_ids = _stop_deployed_agent_live_runs(
+    decision = _enforce_deployed_agent_service_decision(
+        operation="archive",
         deployed_agent=deployed_agent,
-        reason="agent_archived",
-        stopped_by_user_id=actor_user_id,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        approval_provided=True,
+    )
+    target_state = _deployed_agent_service_target_state(decision, default="archived")
+    stopped_run_ids = (
+        _stop_deployed_agent_live_runs(
+            deployed_agent=deployed_agent,
+            reason="agent_archived",
+            stopped_by_user_id=actor_user_id,
+        )
+        if _deployed_agent_service_plan_flag(decision, "stop_active_runs", default=True)
+        else []
     )
     metadata = _coerce_dict(deployed_agent.get("metadata"))
     metadata["archived_at"] = _utc_now_iso()
     metadata["archived_by_user_id"] = actor_user_id
     metadata["archive_reason"] = _normalize_optional_text(reason)
-    next_state = _operational_state_from_record({**deployed_agent, "deployment_state": "archived"})
+    next_state = _operational_state_from_record({**deployed_agent, "deployment_state": target_state})
     archived = await control_plane_repository.update_deployed_agent(
         deployed_agent_id,
         tenant_id=tenant_id,
         owner_workspace_id=resolved_workspace_id,
         updates={
-            "deployment_state": "archived",
-            "channels": _disabled_channels(deployed_agent.get("channels")),
+            "deployment_state": target_state,
+            "channels": (
+                _disabled_channels(deployed_agent.get("channels"))
+                if _deployed_agent_service_plan_flag(decision, "disable_channels", default=True)
+                else deployed_agent.get("channels")
+            ),
             "metadata": metadata,
             "operational_state": _serialized_operational_state(next_state),
         },
@@ -5001,7 +5327,7 @@ async def archive_deployed_agent(
             action="deployed_agent_archived",
             title="Deployed agent archived",
             summary=f"{_normalize_text(archived.get('name'), default='Deployed agent')} was archived.",
-            status="archived",
+            status=target_state,
             payload={"stopped_run_ids": stopped_run_ids, "reason": _normalize_optional_text(reason)},
             actor_user_id=actor_user_id,
         )
@@ -5039,6 +5365,15 @@ async def apply_deployed_agent_recovery_action(
     }
     if token not in allowed_actions:
         raise _http_bad_request("Unsupported deployed-agent recovery action.")
+    _enforce_deployed_agent_service_decision(
+        operation="recovery_action",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        recovery_action=token,
+        approval_provided=True,
+    )
     metadata = _coerce_dict(deployed_agent.get("metadata"))
     recovery = _coerce_dict(metadata.get("recovery_controls"))
     now_iso = _utc_now_iso()
@@ -5094,17 +5429,33 @@ async def kill_deployed_agent_runtime_session(
     token = _normalize_text(session_id)
     if not token:
         raise _http_bad_request("Runtime session id is required.")
-    await deployed_agent_virtual_runtime_service.terminate_bound_cloud_runtime_session(
-        session_id=token,
+    session_record = await session_service.get_session(token)
+    session_metadata = _coerce_dict((session_record or {}).get("metadata"))
+    runtime_session_binding = _normalize_text(session_metadata.get("runtime_session_binding")).lower()
+    decision = _enforce_deployed_agent_service_decision(
+        operation="runtime_session_kill",
+        deployed_agent=deployed_agent,
         tenant_id=tenant_id,
         workspace_id=resolved_workspace_id,
-    )
-    await deployed_agent_virtual_runtime_service.terminate_bound_self_hosted_runtime_session(
+        current_user=current_user,
         session_id=token,
-        tenant_id=tenant_id,
-        workspace_id=resolved_workspace_id,
+        runtime_session_binding=runtime_session_binding,
+        approval_provided=True,
     )
-    await session_service.terminate_session(token)
+    if _deployed_agent_service_plan_flag(decision, "terminate_cloud_session"):
+        await deployed_agent_virtual_runtime_service.terminate_bound_cloud_runtime_session(
+            session_id=token,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+    if _deployed_agent_service_plan_flag(decision, "terminate_self_hosted_session"):
+        await deployed_agent_virtual_runtime_service.terminate_bound_self_hosted_runtime_session(
+            session_id=token,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+    if _deployed_agent_service_plan_flag(decision, "terminate_session_record", default=True):
+        await session_service.terminate_session(token)
     await _append_deployed_agent_audit_event(
         tenant_id=tenant_id,
         workspace_id=resolved_workspace_id,
@@ -5147,35 +5498,56 @@ async def emergency_stop_workspace_deployed_agents(
         state = _normalize_deployment_state(deployed_agent.get("deployment_state"))
         if state == "archived":
             continue
-        agent_run_ids = _stop_deployed_agent_live_runs(
+        decision = _enforce_deployed_agent_service_decision(
+            operation="emergency_stop",
             deployed_agent=deployed_agent,
-            reason="workspace_emergency_stop",
-            stopped_by_user_id=actor_user_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            current_user=current_user,
+            approval_provided=True,
         )
+        mutation_plan = _coerce_dict(decision.get("mutation_plan")) if isinstance(decision, dict) else {}
+        stop_reason = _normalize_optional_text(mutation_plan.get("stop_reason")) or "workspace_emergency_stop"
+        target_state = _normalize_deployment_state(mutation_plan.get("target_state") or "suspended")
+        stop_active_runs = bool(mutation_plan.get("stop_active_runs", True))
+        activate_workspace_emergency_stop = bool(
+            mutation_plan.get("activate_workspace_emergency_stop", True)
+        )
+        set_last_paused_at = bool(mutation_plan.get("set_last_paused_at", True))
+        agent_run_ids: List[str] = []
+        if stop_active_runs:
+            agent_run_ids = _stop_deployed_agent_live_runs(
+                deployed_agent=deployed_agent,
+                reason=stop_reason,
+                stopped_by_user_id=actor_user_id,
+            )
         metadata = _coerce_dict(deployed_agent.get("metadata"))
-        metadata["workspace_emergency_stop"] = {
-            "active": True,
-            "reason": _normalize_optional_text(reason) or "Workspace emergency stop activated.",
-            "activated_at": now_iso,
-            "activated_by_user_id": actor_user_id,
-        }
+        if activate_workspace_emergency_stop:
+            metadata["workspace_emergency_stop"] = {
+                "active": True,
+                "reason": _normalize_optional_text(reason) or "Workspace emergency stop activated.",
+                "activated_at": now_iso,
+                "activated_by_user_id": actor_user_id,
+            }
         next_state = _operational_state_from_record(
             {
                 **deployed_agent,
-                "deployment_state": "suspended",
-                "last_paused_at": now_iso,
+                "deployment_state": target_state,
+                "last_paused_at": now_iso if set_last_paused_at else deployed_agent.get("last_paused_at"),
             }
         )
+        updates = {
+            "deployment_state": target_state,
+            "metadata": metadata,
+            "operational_state": _serialized_operational_state(next_state),
+        }
+        if set_last_paused_at:
+            updates["last_paused_at"] = now_iso
         updated = await control_plane_repository.update_deployed_agent(
             _normalize_text(deployed_agent.get("id")),
             tenant_id=tenant_id,
             owner_workspace_id=resolved_workspace_id,
-            updates={
-                "deployment_state": "suspended",
-                "last_paused_at": now_iso,
-                "metadata": metadata,
-                "operational_state": _serialized_operational_state(next_state),
-            },
+            updates=updates,
         )
         if isinstance(updated, dict):
             stopped_agents.append(_normalize_text(updated.get("id")))
@@ -5208,10 +5580,43 @@ async def export_deployed_agent_audit_logs(
     owner_workspace_id: str,
     limit: int = 500,
 ) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    owner_approved = _deployed_agent_service_owner_access(current_user, resolved_workspace_id)
+    _enforce_deployed_agent_service_decision(
+        operation="audit_export",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        approval_provided=owner_approved,
+        audit_export_approval=owner_approved,
+    )
+    _enforce_deployed_agent_data_decision(
+        "audit_export",
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent_id=_normalize_text(deployed_agent.get("id")),
+        current_user=current_user,
+        audit_export_approved=owner_approved,
+    )
     activity = await list_deployed_agent_activity(
         deployed_agent_id=deployed_agent_id,
         current_user=current_user,
-        owner_workspace_id=owner_workspace_id,
+        owner_workspace_id=resolved_workspace_id,
         limit=limit,
         offset=0,
     )
@@ -5249,6 +5654,13 @@ async def list_deployed_agent_conversations(
     )
     if not isinstance(deployed_agent, dict):
         return None
+    _enforce_deployed_agent_service_decision(
+        "conversation_list",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+    )
     safe_limit, safe_offset = _normalize_pagination(limit, offset)
     session_rows = await control_plane_repository.list_deployed_agent_conversation_sessions(
         tenant_id=tenant_id,
@@ -5319,6 +5731,13 @@ async def list_deployed_agent_memory_entries(
     )
     if not isinstance(deployed_agent, dict):
         return None
+    _enforce_deployed_agent_service_decision(
+        "memory_list",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+    )
     safe_limit, safe_offset = _normalize_pagination(limit, offset)
     memory_rows = await control_plane_repository.list_deployed_agent_conversation_memory(
         tenant_id=tenant_id,
@@ -5375,6 +5794,13 @@ async def list_deployed_agent_activity(
     )
     if not isinstance(deployed_agent, dict):
         return None
+    _enforce_deployed_agent_service_decision(
+        "activity_list",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+    )
     safe_limit, safe_offset = _normalize_pagination(limit, offset)
     fetch_limit = min(500, max((safe_limit + safe_offset + 40), (safe_limit * 4)))
     rows = await control_plane_repository.list_activity_ledger_events(
@@ -5440,6 +5866,14 @@ async def get_deployed_agent_conversation_detail(
     )
     if not isinstance(deployed_agent, dict):
         return None
+    _enforce_deployed_agent_service_decision(
+        "conversation_detail",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        session_id=session_id,
+    )
     channel_events = await control_plane_repository.list_deployed_agent_conversation_events(
         tenant_id=tenant_id,
         workspace_id=resolved_workspace_id,
@@ -5620,6 +6054,25 @@ async def delete_deployed_agent_external_user_data(
     resolved_external_user_id = _normalize_text(external_user_id)
     if not resolved_external_user_id:
         raise _http_bad_request("external_user_id is required.")
+    _enforce_deployed_agent_service_decision(
+        operation="external_user_delete",
+        deployed_agent=deployed_agent,
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        external_user_id=resolved_external_user_id,
+        session_id=_normalize_text(session_id) or None,
+        privacy_delete_verified=True,
+    )
+    _enforce_deployed_agent_data_decision(
+        "delete_external_user_data",
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent_id=_normalize_text(deployed_agent.get("id")),
+        current_user=current_user,
+        external_user_id=resolved_external_user_id,
+        channel_key=resolved_channel_key,
+    )
     purge_result = await external_user_privacy_service.get_external_user_privacy_service().purge_deployed_agent_external_user_data(
         tenant_id=tenant_id,
         workspace_id=resolved_workspace_id,

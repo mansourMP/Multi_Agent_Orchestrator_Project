@@ -88,6 +88,7 @@ from server_modules.connectors.s3_connector import (
 from server_modules import agent_action_metering_service
 from server_modules import runtime_config as config
 from server_modules import run_service as run_service
+from server_modules import rust_runtime_kernel_client
 from server_modules.capability_registry import workflow_node_capability_id
 from server_modules import shared as shared
 from server_modules import runtime_common as common
@@ -185,6 +186,276 @@ def _execute_engine_with_timeout(engine: Any, run_id: str, timeout_seconds: int)
     if worker.is_alive():
         result["timed_out"] = True
     return result
+
+def _first_non_empty_string(*values: Any, default: str = "") -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return default
+
+
+def _runtime_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "enabled", "allow", "allowed", "valid", "attached"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled", "deny", "blocked", "invalid", "detached"}:
+        return False
+    return default
+
+
+def _active_runtime_run_count(current_run_id: str) -> int:
+    active_statuses = {"queued", "running", "in_progress", "processing", "waiting_human"}
+    count = 0
+    for run_id, run in runs.items():
+        if str(run_id) == str(current_run_id):
+            continue
+        if not isinstance(run, dict):
+            continue
+        status = str(run.get("status") or "").strip().lower()
+        if status in active_statuses:
+            count += 1
+    return count
+
+
+def _enforce_execution_runtime_decision(
+    run_id: str,
+    *,
+    operation: str,
+    run: Optional[Dict[str, Any]] = None,
+    context: Optional[Dict[str, Any]] = None,
+    engine_name: Optional[str] = None,
+    status: Optional[str] = None,
+    timeout_seconds: Optional[int] = None,
+    workflow_node_id: Optional[str] = None,
+    connector_id: Optional[str] = None,
+    connector_action: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    policy_decision: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    approval_required: Optional[bool] = None,
+    approval_provided: Optional[bool] = None,
+    external_write_requested: Optional[bool] = None,
+    usage_unit_count: Optional[int] = None,
+    metering_enabled: Optional[bool] = None,
+) -> Dict[str, Any]:
+    run_payload = run if isinstance(run, dict) else {}
+    context_payload = context if isinstance(context, dict) else (
+        run_payload.get("context") if isinstance(run_payload.get("context"), dict) else {}
+    )
+    metadata = context_payload.get("metadata") if isinstance(context_payload.get("metadata"), dict) else {}
+    selected_target = selected_execution_target_from_context(context_payload)
+    lease_id = _first_non_empty_string(
+        metadata.get("lease_id"),
+        metadata.get("machine_lease_id"),
+        run_payload.get("lease_id"),
+    )
+    lease_holder_id = _first_non_empty_string(
+        metadata.get("lease_holder_id"),
+        metadata.get("worker_id"),
+        metadata.get("machine_id"),
+        run_payload.get("lease_holder_id"),
+        run_payload.get("worker_id"),
+        run_payload.get("machine_id"),
+    )
+    local_target = selected_target in {EXECUTION_TARGET_LOCAL_COMPANION, "local", "this_device"}
+    lease_required = _runtime_bool(
+        metadata.get("lease_required", run_payload.get("lease_required")),
+        default=local_target and bool(lease_id or lease_holder_id),
+    )
+    lease_valid = _runtime_bool(
+        metadata.get("lease_valid", run_payload.get("lease_valid")),
+        default=bool(lease_id and lease_holder_id),
+    )
+    runtime_attached = _runtime_bool(
+        metadata.get("runtime_attached", metadata.get("local_runtime_attached", run_payload.get("runtime_attached"))),
+        default=(not local_target) or lease_valid,
+    )
+    max_runtime_runs = int(
+        metadata.get("max_runtime_runs")
+        or globals().get("ORION_MAX_RUNTIME_RUNS", 0)
+        or globals().get("ORION_MAX_CONCURRENT_RUNS", 0)
+        or 32
+    )
+    normalized_timeout = int(
+        timeout_seconds
+        or metadata.get("timeout_seconds")
+        or globals().get("ORION_RUN_TIMEOUT_SECONDS", 300)
+        or 300
+    )
+    payload = {
+        "operation": operation,
+        "run_id": str(run_id or "").strip(),
+        "workspace_id": _first_non_empty_string(
+            run_payload.get("workspace_id"),
+            context_payload.get("workspace_id"),
+            metadata.get("workspace_id"),
+            metadata.get("tenant_workspace_id"),
+            default="default",
+        ),
+        "actor_id": _first_non_empty_string(
+            metadata.get("actor_id"),
+            metadata.get("owner_user_id"),
+            metadata.get("user_id"),
+            metadata.get("created_by"),
+            run_payload.get("actor_id"),
+            run_payload.get("owner_user_id"),
+            run_payload.get("user_id"),
+            run_payload.get("created_by"),
+            default="system",
+        ),
+        "parent_run_id": _first_non_empty_string(metadata.get("parent_run_id"), run_payload.get("parent_run_id")),
+        "engine_id": _first_non_empty_string(engine_name, run_payload.get("engine"), metadata.get("engine"), default="orion"),
+        "engine_available": bool(ENGINE_REGISTRY.get(_first_non_empty_string(engine_name, run_payload.get("engine"), default="orion").lower())),
+        "workflow_node_id": str(workflow_node_id or "").strip(),
+        "execution_target": selected_target,
+        "runtime_mode": _first_non_empty_string(metadata.get("runtime_mode"), metadata.get("mode"), default="cloud"),
+        "status": _first_non_empty_string(status, run_payload.get("status"), default="queued"),
+        "timeout_seconds": normalized_timeout,
+        "max_timeout_seconds": int(metadata.get("max_timeout_seconds") or globals().get("ORION_MAX_RUN_TIMEOUT_SECONDS", 7200) or 7200),
+        "active_runtime_runs": _active_runtime_run_count(str(run_id or "")),
+        "max_runtime_runs": max(1, max_runtime_runs),
+        "runtime_attached": runtime_attached,
+        "lease_required": lease_required,
+        "lease_id": lease_id,
+        "lease_holder_id": lease_holder_id,
+        "lease_valid": lease_valid,
+        "kill_switch_enabled": _runtime_bool(metadata.get("kill_switch_enabled"), default=False),
+        "safe_mode_enabled": _runtime_bool(metadata.get("safe_mode_enabled"), default=False),
+        "entitlement_ok": _runtime_bool(metadata.get("entitlement_ok"), default=True),
+        "budget_available": _runtime_bool(metadata.get("budget_available"), default=True),
+        "connector_id": str(connector_id or "").strip(),
+        "connector_action": str(connector_action or "").strip(),
+        "idempotency_key": str(idempotency_key or "").strip(),
+        "policy_decision": str(policy_decision or "allow").strip() or "allow",
+        "risk_level": str(risk_level or "low").strip() or "low",
+        "approval_required": bool(approval_required),
+        "approval_provided": bool(approval_provided),
+        "external_write_requested": bool(external_write_requested),
+        "usage_unit_count": int(usage_unit_count or 0),
+        "metering_enabled": True if metering_enabled is None else bool(metering_enabled),
+    }
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "execution-runtime-decision",
+        payload,
+    )
+    expected_next_actions = {
+        "dispatch_run": "dispatch_runtime_run",
+        "execute_run": "execute_runtime_run",
+        "connector_action": "execute_connector_action",
+        "usage_metering": "record_usage_event",
+        "finalize_run": "finalize_runtime_run",
+    }
+    expected_next_action = expected_next_actions.get(operation)
+    if expected_next_action:
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != expected_next_action:
+            raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
+def _set_run_status_after_execution_runtime_decision(
+    run_id: str,
+    status: str,
+    *,
+    run: Optional[Dict[str, Any]] = None,
+    context: Optional[Dict[str, Any]] = None,
+    engine_name: Optional[str] = None,
+    timeout_seconds: Optional[int] = None,
+) -> None:
+    decision = _enforce_execution_runtime_decision(
+        run_id,
+        operation="finalize_run",
+        run=run,
+        context=context,
+        engine_name=engine_name,
+        status=status,
+        timeout_seconds=timeout_seconds,
+    )
+    normalized_status = str(decision.get("normalized_status") or status).strip().lower() or status
+    set_run_status(run_id, normalized_status)
+
+
+def _normalize_execution_outcome_with_rust(
+    *,
+    exit_code: Optional[int] = None,
+    signal: Optional[str] = None,
+    timed_out: bool = False,
+    cancelled: bool = False,
+    stdout: Optional[str] = None,
+    stderr: Optional[str] = None,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
+    max_preview_bytes: int = 2000,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "timed_out": bool(timed_out),
+        "cancelled": bool(cancelled),
+        "stdout": str(stdout or ""),
+        "stderr": str(stderr or ""),
+        "artifacts": artifacts if isinstance(artifacts, list) else [],
+        "max_preview_bytes": max(1, int(max_preview_bytes or 2000)),
+    }
+    if exit_code is not None:
+        payload["exit_code"] = int(exit_code)
+    if signal:
+        payload["signal"] = str(signal)
+    return rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "execution-outcome",
+        payload,
+    )
+
+
+def _runtime_final_status_from_outcome(outcome: Optional[Dict[str, Any]], fallback: str) -> str:
+    token = str((outcome or {}).get("final_status") or fallback).strip().lower()
+    if token in {"completed", "failed", "timeout", "cancelled"}:
+        return token
+    return str(fallback or "failed").strip().lower() or "failed"
+
+
+def _runtime_outcome_summary(outcome: Optional[Dict[str, Any]], fallback: str) -> str:
+    summary = str((outcome or {}).get("summary") or "").strip()
+    if summary:
+        return summary
+    return str(fallback or "Execution failed.").strip() or "Execution failed."
+
+
+def _runtime_outcome_event(outcome: Optional[Dict[str, Any]], fallback: str) -> str:
+    token = str((outcome or {}).get("event") or fallback).strip()
+    return token or str(fallback or "run_error").strip() or "run_error"
+
+
+def _runtime_outcome_log_level(outcome: Optional[Dict[str, Any]], fallback: str) -> str:
+    token = str((outcome or {}).get("log_level") or fallback).strip().lower()
+    if token in {"info", "warn", "error"}:
+        return token
+    return str(fallback or "error").strip().lower() or "error"
+
+
+def _apply_execution_outcome_record_patch(
+    run: Dict[str, Any],
+    outcome: Optional[Dict[str, Any]],
+    *,
+    preserve_existing_result: bool = False,
+) -> None:
+    if not isinstance(run, dict) or not isinstance(outcome, dict):
+        return
+    patch = outcome.get("record_patch") if isinstance(outcome.get("record_patch"), dict) else {}
+    result_text = str(patch.get("result") or "").strip()
+    if result_text and (not preserve_existing_result or not str(run.get("result") or "").strip()):
+        run["result"] = result_text
+    execution_outcome_patch = patch.get("execution_outcome") if isinstance(patch.get("execution_outcome"), dict) else {}
+    if execution_outcome_patch:
+        existing_result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else {}
+        next_result_data = dict(existing_result_data)
+        next_result_data["execution_outcome"] = execution_outcome_patch
+        run["result_data"] = next_result_data
+
 
 def selected_execution_target_from_context(context: Optional[Dict[str, Any]]) -> str:
     if not isinstance(context, dict):
@@ -4227,6 +4498,8 @@ def _execute_workflow_graph(
                     if variant == "connector_action"
                     else None
                 )
+                tool_approval_provided = False
+                decision = "allow"
                 if variant == "connector_action":
                     _validate_connector_action_request(
                         connector_id=str(config.get("connector") or "").strip(),
@@ -4313,6 +4586,7 @@ def _execute_workflow_graph(
                                 waiting_for_approval=False,
                             )
                             decision = "allow"
+                            tool_approval_provided = True
                         else:
                             update_node_state(
                                 run_id,
@@ -4334,6 +4608,7 @@ def _execute_workflow_graph(
                             )
                             if not approved:
                                 raise RuntimeError(f"Workflow stopped before tool node '{label}'.")
+                            tool_approval_provided = True
                             update_node_state(
                                 run_id,
                                 node_id,
@@ -4440,6 +4715,30 @@ def _execute_workflow_graph(
                         ),
                         "metadata": {"node_id": node_id, "variant": variant},
                     }
+                    _enforce_execution_runtime_decision(
+                        run_id,
+                        operation="connector_action",
+                        context=context,
+                        workflow_node_id=node_id,
+                        connector_id=requested_connector_for_meter,
+                        connector_action=action_id_for_meter,
+                        idempotency_key=connector_meter_event["source_event_id"],
+                        policy_decision=decision or "allow",
+                        approval_required=decision in {"require_confirmation", "approval_required"},
+                        approval_provided=tool_approval_provided,
+                        external_write_requested=action_type_for_meter == "write",
+                    )
+                    _enforce_execution_runtime_decision(
+                        run_id,
+                        operation="usage_metering",
+                        context=context,
+                        workflow_node_id=node_id,
+                        connector_id=requested_connector_for_meter,
+                        connector_action=action_id_for_meter,
+                        idempotency_key=connector_meter_event["source_event_id"],
+                        usage_unit_count=1,
+                        metering_enabled=True,
+                    )
                     agent_action_metering_service.record_started_sync(**connector_meter_event)
                     try:
                         tool_result = _workflow_execute_connector_action(
@@ -5202,6 +5501,14 @@ def run_orion_mission(run_id: str):
     context = run.get("context", {}) if isinstance(run.get("context"), dict) else {}
     clear_run_tool_signature_state(run_id)
 
+    _enforce_execution_runtime_decision(
+        run_id,
+        operation="execute_run",
+        run=run,
+        context=context,
+        engine_name=run.get("engine") or "orion",
+        timeout_seconds=ORION_RUN_TIMEOUT_SECONDS,
+    )
     set_run_status(run_id, "running")
     emit_log(log_queue, "info", "Empyralis run started.", event="run_start", data={"run_id": run_id})
     started_at = time.time()
@@ -5223,6 +5530,13 @@ def run_orion_mission(run_id: str):
             run["result"] = result["result_text"]
             run["result_data"] = result.get("result_data")
             run["usage_masked"] = result["usage_masked"]
+            run["execution_outcome"] = _normalize_execution_outcome_with_rust(
+                exit_code=0,
+                stdout=str(result.get("result_text") or ""),
+                artifacts=(result.get("result_data") or {}).get("artifacts") if isinstance(result.get("result_data"), dict) else [],
+            )
+            _apply_execution_outcome_record_patch(run, run.get("execution_outcome"), preserve_existing_result=True)
+            final_status = _runtime_final_status_from_outcome(run.get("execution_outcome"), "completed")
             usage_accounting = usage_accounting_service.accounting_record_from_snapshot(
                 {
                     "run_id": run_id,
@@ -5242,7 +5556,14 @@ def run_orion_mission(run_id: str):
             run["active_model"] = result.get("active_model")
             run["active_adapter"] = result.get("active_adapter")
             clear_run_tool_signature_state(run_id)
-            set_run_status(run_id, "completed")
+            _set_run_status_after_execution_runtime_decision(
+                run_id,
+                final_status,
+                run=run,
+                context=context,
+                engine_name=run.get("engine") or "orion",
+                timeout_seconds=ORION_RUN_TIMEOUT_SECONDS,
+            )
             run["logs"].put(None)
             return
         except Exception as exc:
@@ -5252,29 +5573,81 @@ def run_orion_mission(run_id: str):
             non_retryable = is_non_retryable_runtime_error(exc)
 
             if "timeout" in raw_message.lower() or "timeout" in message.lower():
-                emit_log(log_queue, "error", message, event="timeout")
+                run["execution_outcome"] = _normalize_execution_outcome_with_rust(
+                    timed_out=True,
+                    stderr=message or raw_message,
+                )
+                _apply_execution_outcome_record_patch(run, run.get("execution_outcome"))
+                final_status = _runtime_final_status_from_outcome(run.get("execution_outcome"), "timeout")
+                emit_log(
+                    log_queue,
+                    _runtime_outcome_log_level(run.get("execution_outcome"), "error"),
+                    _runtime_outcome_summary(run.get("execution_outcome"), message),
+                    event=_runtime_outcome_event(run.get("execution_outcome"), "timeout"),
+                )
                 clear_run_tool_signature_state(run_id)
-                set_run_status(run_id, "timeout")
+                _set_run_status_after_execution_runtime_decision(
+                    run_id,
+                    final_status,
+                    run=run,
+                    context=context,
+                    engine_name=run.get("engine") or "orion",
+                    timeout_seconds=ORION_RUN_TIMEOUT_SECONDS,
+                )
                 run["logs"].put(None)
                 return
 
             if "stopped by human decision" in raw_message.lower() or "stopped by human decision" in message.lower():
-                emit_log(log_queue, "warn", message, event="run_stopped")
+                run["execution_outcome"] = _normalize_execution_outcome_with_rust(
+                    cancelled=True,
+                    stderr=message or raw_message,
+                )
+                _apply_execution_outcome_record_patch(run, run.get("execution_outcome"))
+                final_status = _runtime_final_status_from_outcome(run.get("execution_outcome"), "cancelled")
+                emit_log(
+                    log_queue,
+                    _runtime_outcome_log_level(run.get("execution_outcome"), "warn"),
+                    _runtime_outcome_summary(run.get("execution_outcome"), message),
+                    event=_runtime_outcome_event(run.get("execution_outcome"), "run_stopped"),
+                )
                 clear_run_tool_signature_state(run_id)
-                set_run_status(run_id, "failed")
+                _set_run_status_after_execution_runtime_decision(
+                    run_id,
+                    final_status,
+                    run=run,
+                    context=context,
+                    engine_name=run.get("engine") or "orion",
+                    timeout_seconds=ORION_RUN_TIMEOUT_SECONDS,
+                )
                 run["logs"].put(None)
                 return
 
-            if non_retryable:
+            failure_outcome = _normalize_execution_outcome_with_rust(
+                exit_code=1,
+                stderr=raw_message or message,
+            )
+            run["execution_outcome"] = failure_outcome
+            _apply_execution_outcome_record_patch(run, failure_outcome)
+            rust_retryable = bool(failure_outcome.get("retryable"))
+            final_status = _runtime_final_status_from_outcome(failure_outcome, "failed")
+
+            if non_retryable or not rust_retryable:
                 emit_log(
                     log_queue,
-                    "error",
-                    message,
-                    event="run_error",
+                    _runtime_outcome_log_level(failure_outcome, "error"),
+                    _runtime_outcome_summary(failure_outcome, message),
+                    event=_runtime_outcome_event(failure_outcome, "run_error"),
                     data={"attempt": attempt + 1, "retryable": False, "raw_error": raw_message},
                 )
                 clear_run_tool_signature_state(run_id)
-                set_run_status(run_id, "failed")
+                _set_run_status_after_execution_runtime_decision(
+                    run_id,
+                    final_status,
+                    run=run,
+                    context=context,
+                    engine_name=run.get("engine") or "orion",
+                    timeout_seconds=ORION_RUN_TIMEOUT_SECONDS,
+                )
                 run["logs"].put(None)
                 return
 
@@ -5289,9 +5662,29 @@ def run_orion_mission(run_id: str):
                 backoff = ORION_RETRY_BACKOFF_SECONDS * (2 ** attempt)
                 time.sleep(backoff)
 
-    emit_log(log_queue, "error", friendly_runtime_error_message(last_error or Exception("Unknown runtime failure")), event="run_error")
+    run["execution_outcome"] = _normalize_execution_outcome_with_rust(
+        exit_code=1,
+        stderr=friendly_runtime_error_message(last_error or Exception("Unknown runtime failure")),
+    )
+    _apply_execution_outcome_record_patch(run, run.get("execution_outcome"))
+    emit_log(
+        log_queue,
+        _runtime_outcome_log_level(run.get("execution_outcome"), "error"),
+        _runtime_outcome_summary(
+            run.get("execution_outcome"),
+            friendly_runtime_error_message(last_error or Exception("Unknown runtime failure")),
+        ),
+        event=_runtime_outcome_event(run.get("execution_outcome"), "run_error"),
+    )
     clear_run_tool_signature_state(run_id)
-    set_run_status(run_id, "failed")
+    _set_run_status_after_execution_runtime_decision(
+        run_id,
+        _runtime_final_status_from_outcome(run.get("execution_outcome"), "failed"),
+        run=run,
+        context=context,
+        engine_name=run.get("engine") or "orion",
+        timeout_seconds=ORION_RUN_TIMEOUT_SECONDS,
+    )
     run["logs"].put(None)
 
 
@@ -5345,18 +5738,56 @@ def run_mission(run_id):
         run["memory_trace"] = trace
         emit_log(run["logs"], "warn", "Memory context read failed; continuing without memory.", event="memory_context_error")
 
+    try:
+        _enforce_execution_runtime_decision(
+            run_id,
+            operation="dispatch_run",
+            run=run,
+            context=context,
+            engine_name=engine_name,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        emit_log(run["logs"], "error", friendly_runtime_error_message(exc), event="run_error")
+        try:
+            _set_run_status_after_execution_runtime_decision(
+                run_id,
+                "failed",
+                run=run,
+                context=context,
+                engine_name=engine_name,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception:
+            pass
+        run["logs"].put(None)
+        return
+
     _log_execution_boundary(run["logs"], run_id, "start", timeout_seconds=timeout_seconds)
     try:
         execution_result = _execute_engine_with_timeout(engine, run_id, timeout_seconds)
         if execution_result.get("timed_out"):
+            run["execution_outcome"] = _normalize_execution_outcome_with_rust(
+                timed_out=True,
+                stderr=f"Run exceeded {timeout_seconds}s timeout.",
+            )
+            _apply_execution_outcome_record_patch(run, run.get("execution_outcome"))
+            final_status = _runtime_final_status_from_outcome(run.get("execution_outcome"), "timeout")
             emit_log(
                 run["logs"],
-                "error",
-                f"Run exceeded {timeout_seconds}s timeout.",
-                event="timeout",
+                _runtime_outcome_log_level(run.get("execution_outcome"), "error"),
+                _runtime_outcome_summary(run.get("execution_outcome"), f"Run exceeded {timeout_seconds}s timeout."),
+                event=_runtime_outcome_event(run.get("execution_outcome"), "timeout"),
                 data={"run_id": run_id, "timeout_seconds": timeout_seconds},
             )
-            set_run_status(run_id, "timeout")
+            _set_run_status_after_execution_runtime_decision(
+                run_id,
+                final_status,
+                run=run,
+                context=context,
+                engine_name=engine_name,
+                timeout_seconds=timeout_seconds,
+            )
             _log_execution_boundary(run["logs"], run_id, "end", status="timeout")
             run["logs"].put(None)
             return
@@ -5370,9 +5801,33 @@ def run_mission(run_id):
             trace["updated_at"] = _utc_now_iso()
             run["memory_trace"] = trace
             emit_log(run["logs"], "warn", "Memory write failed after run completion.", event="memory_write_error")
+        if not isinstance(run.get("execution_outcome"), dict):
+            run["execution_outcome"] = _normalize_execution_outcome_with_rust(
+                exit_code=0,
+                stdout=str(run.get("result") or ""),
+                artifacts=(run.get("result_data") or {}).get("artifacts") if isinstance(run.get("result_data"), dict) else [],
+            )
+            _apply_execution_outcome_record_patch(run, run.get("execution_outcome"), preserve_existing_result=True)
         _log_execution_boundary(run["logs"], run_id, "end", status=str(run.get("status") or "completed"))
     except Exception as exc:
-        emit_log(run["logs"], "error", friendly_runtime_error_message(exc), event="run_error")
-        set_run_status(run_id, "failed")
+        run["execution_outcome"] = _normalize_execution_outcome_with_rust(
+            exit_code=1,
+            stderr=friendly_runtime_error_message(exc),
+        )
+        _apply_execution_outcome_record_patch(run, run.get("execution_outcome"))
+        emit_log(
+            run["logs"],
+            _runtime_outcome_log_level(run.get("execution_outcome"), "error"),
+            _runtime_outcome_summary(run.get("execution_outcome"), friendly_runtime_error_message(exc)),
+            event=_runtime_outcome_event(run.get("execution_outcome"), "run_error"),
+        )
+        _set_run_status_after_execution_runtime_decision(
+            run_id,
+            _runtime_final_status_from_outcome(run.get("execution_outcome"), "failed"),
+            run=run,
+            context=context,
+            engine_name=engine_name,
+            timeout_seconds=timeout_seconds,
+        )
         _log_execution_boundary(run["logs"], run_id, "end", status="failed")
         run["logs"].put(None)

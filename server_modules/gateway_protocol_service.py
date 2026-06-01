@@ -24,6 +24,7 @@ from server_modules import (
     gateway_registry_service,
     gateway_state_repository,
     personal_channels_service,
+    rust_runtime_kernel_client,
     session_service,
 )
 from server_modules.kill_switch_gate import assert_not_killed, KillSwitchBlockedError
@@ -51,6 +52,207 @@ class GatewayFrameValidationError(ValueError):
         self.error_code = str(error_code or "invalid_gateway_frame").strip() or "invalid_gateway_frame"
         self.reason = str(reason or "Invalid gateway frame.").strip() or "Invalid gateway frame."
         self.close_code = int(close_code)
+
+
+class GatewayProtocolRustGateError(RuntimeError):
+    pass
+
+
+_GATEWAY_PROTOCOL_REQUEST_NEXT_ACTIONS = {
+    "send_gateway_protocol_request_frame": {"send_gateway_protocol_request_frame"},
+}
+_GATEWAY_PROTOCOL_MESSAGE_NEXT_ACTIONS = {
+    "tool.invoke": "dispatch_tool_invoke",
+    "tool.interrupt": "dispatch_tool_interrupt",
+    "channel.outbound": "dispatch_channel_outbound",
+}
+
+_GATEWAY_SESSION_MUTATION_NEXT_ACTIONS = {
+    "mark_session_connected": {"mark_gateway_session_connected"},
+    "mark_session_disconnected": {"mark_gateway_session_disconnected"},
+    "touch_session": {"touch_gateway_session"},
+}
+
+
+def _payload_size_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value or "").encode("utf-8"))
+
+
+def _enforce_gateway_protocol_request_frame(
+    *,
+    gateway_id: str,
+    session_id: str,
+    message_type: str,
+    frame: Dict[str, Any],
+) -> Dict[str, Any]:
+    scope = frame.get("scope") if isinstance(frame.get("scope"), dict) else {}
+    payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
+    workspace_id = str(scope.get("workspace_id") or payload.get("workspace_id") or "").strip()
+    run_id = str(payload.get("run_id") or "").strip()
+    metadata = {
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "message_type": str(message_type or "").strip(),
+        "frame_id": str(frame.get("id") or "").strip(),
+        "workspace_id": workspace_id,
+        "run_id": run_id,
+        "payload_keys": sorted(str(key) for key in payload.keys())[:80],
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="send_gateway_protocol_request_frame",
+            state_class="gateway_protocol_frames",
+            workspace_id=workspace_id,
+            run_id=run_id,
+            actor_id="system",
+            status="active",
+            payload=metadata,
+            payload_bytes=_payload_size_bytes(frame),
+            workspace_access=True,
+            owner_access=True,
+        )
+        enforced = rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(enforced.get("next_action") or "").strip()
+        allowed_next_actions = _GATEWAY_PROTOCOL_REQUEST_NEXT_ACTIONS["send_gateway_protocol_request_frame"]
+        if next_action not in allowed_next_actions:
+            expected = ", ".join(sorted(allowed_next_actions))
+            raise GatewayProtocolRustGateError(
+                f"unexpected next_action for runtime-state-store-decision: {next_action or '<missing>'} "
+                f"(expected {expected})"
+            )
+        return enforced
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise GatewayProtocolRustGateError(exc.reason) from exc
+
+
+def _enforce_gateway_protocol_message_decision(
+    *,
+    gateway_id: str,
+    session_id: str,
+    workspace_id: str,
+    message_type: str,
+    payload: Dict[str, Any],
+    tool_name: str | None = None,
+) -> Dict[str, Any]:
+    resolved_message_type = str(message_type or "").strip()
+    expected_next_action = _GATEWAY_PROTOCOL_MESSAGE_NEXT_ACTIONS.get(resolved_message_type)
+    if expected_next_action is None:
+        raise GatewayProtocolRustGateError(
+            f"unexpected gateway protocol message_type for Rust gate: {resolved_message_type or '<missing>'}"
+        )
+    rust_payload: Dict[str, Any] = {
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "message_type": resolved_message_type,
+        "authenticated": True,
+        "protocol_version": "gateway.v1",
+        "payload": dict(payload or {}),
+    }
+    resolved_tool_name = str(tool_name or "").strip()
+    if resolved_tool_name:
+        rust_payload["tool_name"] = resolved_tool_name
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-protocol-decision",
+            rust_payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise GatewayProtocolRustGateError(exc.reason) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != expected_next_action:
+        raise GatewayProtocolRustGateError(
+            f"unexpected next_action for gateway-protocol-decision: {next_action or '<missing>'}"
+        )
+    return decision
+
+
+def _enforce_gateway_session_mutation(
+    *,
+    registration: Dict[str, Any] | None,
+    session: Dict[str, Any] | None,
+    operation: str,
+    reason: str | None = None,
+) -> Dict[str, Any]:
+    registration = registration if isinstance(registration, dict) else {}
+    session = session if isinstance(session, dict) else {}
+    gateway_id = str(
+        registration.get("gateway_id")
+        or session.get("gateway_id")
+        or ""
+    ).strip()
+    session_id = str(session.get("session_id") or "").strip()
+    workspace_id = str(
+        registration.get("workspace_id")
+        or session.get("workspace_id")
+        or ""
+    ).strip()
+    tenant_id = str(
+        registration.get("tenant_id")
+        or session.get("tenant_id")
+        or ""
+    ).strip()
+    user_id = str(
+        registration.get("user_id")
+        or session.get("user_id")
+        or ""
+    ).strip()
+    device_id = str(
+        registration.get("device_id")
+        or session.get("device_id")
+        or ""
+    ).strip()
+    status = str(
+        session.get("status")
+        or session.get("session_status")
+        or registration.get("status")
+        or "pending"
+    ).strip() or "pending"
+    metadata = {
+        "gateway_id": gateway_id,
+        "session_id": session_id,
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "device_id": device_id,
+        "reason": str(reason or "").strip(),
+    }
+    try:
+        decision = rust_runtime_kernel_client.gateway_state_decision(
+            operation=operation,
+            gateway_id=gateway_id,
+            session_id=session_id,
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            device_id=device_id,
+            status=status,
+            payload=metadata,
+            is_service=True,
+        )
+        enforced = rust_runtime_kernel_client.enforce_kernel_decision(
+            "gateway-state-decision",
+            decision,
+        )
+        allowed_next_actions = _GATEWAY_SESSION_MUTATION_NEXT_ACTIONS.get(operation)
+        next_action = str(enforced.get("next_action") or "").strip()
+        if allowed_next_actions is None:
+            raise GatewayProtocolRustGateError(f"unexpected gateway session mutation operation: {operation}")
+        if next_action not in allowed_next_actions:
+            expected = ", ".join(sorted(allowed_next_actions))
+            raise GatewayProtocolRustGateError(
+                f"unexpected next_action for gateway-state-decision: {next_action or '<missing>'} "
+                f"(expected {expected})"
+            )
+        return enforced
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise GatewayProtocolRustGateError(exc.reason) from exc
 
 
 class _LiveGatewayConnection:
@@ -91,6 +293,12 @@ class _LiveGatewayConnection:
             "scope": dict(self.scope),
             "payload": dict(payload or {}),
         }
+        _enforce_gateway_protocol_request_frame(
+            gateway_id=self.gateway_id,
+            session_id=self.session_id,
+            message_type=str(message_type or "").strip() or "unknown",
+            frame=frame,
+        )
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Dict[str, Any]] = loop.create_future()
         self._pending_requests[resolved_request_id] = _PendingGatewayRequest(
@@ -200,6 +408,27 @@ async def dispatch_tool_invoke(
     connection = _get_live_connection(gateway_id)
     if connection is None:
         raise ValueError("Gateway is not currently connected.")
+    registration = gateway_state_repository.get_gateway_registration(gateway_id) or {}
+    _enforce_gateway_quota_check(
+        gateway_id=str(gateway_id or "").strip(),
+        session_id=str(connection.session_id or "").strip(),
+        workspace_id=str(workspace_id or "").strip(),
+        tenant_id=str(registration.get("tenant_id") or connection.scope.get("tenant_id") or "").strip(),
+        device_id=str(registration.get("device_id") or "").strip(),
+        request_id=str(request_id or trace_id or run_id or "").strip(),
+        quota_profile="gateway_tool_execution",
+    )
+    _enforce_gateway_tool_execute_protocol_route(
+        gateway_id=str(gateway_id or "").strip(),
+        session_id=str(connection.session_id or "").strip(),
+        workspace_id=str(workspace_id or "").strip(),
+        tenant_id=str(registration.get("tenant_id") or connection.scope.get("tenant_id") or "").strip(),
+        device_id=str(registration.get("device_id") or "").strip(),
+        capability_id=str(capability_id or "").strip(),
+        run_id=str(run_id or "").strip(),
+        trace_id=str(trace_id or "").strip(),
+        request_id=str(request_id or trace_id or run_id or "").strip(),
+    )
     payload = {
         "capability_id": str(capability_id or "").strip(),
         "arguments": dict(arguments or {}),
@@ -211,6 +440,14 @@ async def dispatch_tool_invoke(
         payload["runtime_access_mode"] = str(runtime_access_mode or "").strip()
     if empyralis_approved:
         payload["empyralis_approved"] = True
+    _enforce_gateway_protocol_message_decision(
+        gateway_id=str(gateway_id or "").strip(),
+        session_id=str(connection.session_id or "").strip(),
+        workspace_id=str(workspace_id or "").strip(),
+        message_type="tool.invoke",
+        payload=payload,
+        tool_name=str(capability_id or "").strip(),
+    )
     response = await connection.send_request(
         message_type="tool.invoke",
         payload=payload,
@@ -237,15 +474,44 @@ async def dispatch_tool_interrupt(
     connection = _get_live_connection(gateway_id)
     if connection is None:
         raise ValueError("Gateway is not currently connected.")
+    registration = gateway_state_repository.get_gateway_registration(gateway_id) or {}
+    _enforce_gateway_quota_check(
+        gateway_id=str(gateway_id or "").strip(),
+        session_id=str(connection.session_id or "").strip(),
+        workspace_id=str(workspace_id or "").strip(),
+        tenant_id=str(registration.get("tenant_id") or connection.scope.get("tenant_id") or "").strip(),
+        device_id=str(registration.get("device_id") or "").strip(),
+        request_id=str(request_id or trace_id or run_id or "").strip(),
+        quota_profile="gateway_tool_execution",
+    )
+    _enforce_gateway_tool_interrupt_protocol_route(
+        gateway_id=str(gateway_id or "").strip(),
+        session_id=str(connection.session_id or "").strip(),
+        workspace_id=str(workspace_id or "").strip(),
+        tenant_id=str(registration.get("tenant_id") or connection.scope.get("tenant_id") or "").strip(),
+        device_id=str(registration.get("device_id") or "").strip(),
+        run_id=str(run_id or "").strip(),
+        trace_id=str(trace_id or "").strip(),
+        request_id=str(request_id or trace_id or run_id or "").strip(),
+    )
+    payload = {
+        "run_id": str(run_id or "").strip(),
+        "trace_id": str(trace_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip(),
+        "target_request_id": str(target_request_id or "").strip() or None,
+        "reason": str(reason or "").strip() or None,
+    }
+    _enforce_gateway_protocol_message_decision(
+        gateway_id=str(gateway_id or "").strip(),
+        session_id=str(connection.session_id or "").strip(),
+        workspace_id=str(workspace_id or "").strip(),
+        message_type="tool.interrupt",
+        payload=payload,
+        tool_name="tool.interrupt",
+    )
     response = await connection.send_request(
         message_type="tool.interrupt",
-        payload={
-            "run_id": str(run_id or "").strip(),
-            "trace_id": str(trace_id or "").strip(),
-            "workspace_id": str(workspace_id or "").strip(),
-            "target_request_id": str(target_request_id or "").strip() or None,
-            "reason": str(reason or "").strip() or None,
-        },
+        payload=payload,
         timeout_seconds=timeout_seconds,
         request_id=request_id,
     )
@@ -253,6 +519,303 @@ async def dispatch_tool_interrupt(
         error = dict(response.get("error") or {})
         raise ValueError(str(error.get("message") or "Gateway tool interrupt failed.").strip() or "Gateway tool interrupt failed.")
     return dict(response.get("payload") or {})
+
+
+def _enforce_gateway_channel_protocol_route(
+    *,
+    gateway_id: str,
+    session_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    device_id: str,
+    capability_id: str,
+    request_id: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "protocol_route",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "actor_id": "system",
+        "actor_role": "owner",
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "request_id": str(request_id or "").strip() or None,
+        "capability_id": str(capability_id or "").strip(),
+        "trace_id": str(request_id or "").strip() or None,
+        "quota_profile": "standard",
+        "risk_level": "normal",
+        "policy_decision": "allow",
+        "device_trust_state": "trusted",
+        "protocol_version": "gateway.v1",
+        "approval_provided": True,
+        "approval_memory_hit": False,
+        "kill_switch_enabled": False,
+        "quota_ok": True,
+        "gateway_registered": True,
+        "session_valid": True,
+        "websocket_token_present": True,
+        "frame_valid": True,
+        "payload_present": True,
+        "metadata": {
+            "gateway_id": str(gateway_id or "").strip(),
+            "session_id": str(session_id or "").strip(),
+            "workspace_id": str(workspace_id or "").strip() or "default",
+            "tenant_id": str(tenant_id or "").strip() or "default",
+            "device_id": str(device_id or "").strip() or None,
+        },
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise GatewayProtocolRustGateError(exc.reason) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "dispatch_gateway_operation":
+        raise GatewayProtocolRustGateError(
+            f"unexpected next_action for gateway-service-decision: {next_action or '<missing>'}"
+        )
+    return decision
+
+
+def _enforce_gateway_tool_execute_protocol_route(
+    *,
+    gateway_id: str,
+    session_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    device_id: str,
+    capability_id: str,
+    run_id: str,
+    trace_id: str,
+    request_id: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "tool_execute",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "actor_id": "system",
+        "actor_role": "owner",
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "request_id": str(request_id or "").strip() or None,
+        "capability_id": str(capability_id or "").strip(),
+        "run_id": str(run_id or "").strip(),
+        "trace_id": str(trace_id or "").strip() or None,
+        "quota_profile": "standard",
+        "risk_level": "normal",
+        "policy_decision": "allow",
+        "device_trust_state": "trusted",
+        "protocol_version": "gateway.v1",
+        "approval_provided": True,
+        "approval_memory_hit": False,
+        "kill_switch_enabled": False,
+        "quota_ok": True,
+        "gateway_registered": True,
+        "session_valid": True,
+        "websocket_token_present": True,
+        "frame_valid": True,
+        "payload_present": True,
+        "metadata": {
+            "gateway_id": str(gateway_id or "").strip(),
+            "session_id": str(session_id or "").strip(),
+            "workspace_id": str(workspace_id or "").strip() or "default",
+            "tenant_id": str(tenant_id or "").strip() or "default",
+            "device_id": str(device_id or "").strip() or None,
+        },
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise GatewayProtocolRustGateError(exc.reason) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "dispatch_gateway_operation":
+        raise GatewayProtocolRustGateError(
+            f"unexpected next_action for gateway-service-decision: {next_action or '<missing>'}"
+        )
+    return decision
+
+
+def _enforce_gateway_tool_interrupt_protocol_route(
+    *,
+    gateway_id: str,
+    session_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    device_id: str,
+    run_id: str,
+    trace_id: str,
+    request_id: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "tool_interrupt",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "actor_id": "system",
+        "actor_role": "owner",
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "request_id": str(request_id or "").strip() or None,
+        "capability_id": "tool.interrupt",
+        "run_id": str(run_id or "").strip(),
+        "trace_id": str(trace_id or "").strip() or None,
+        "quota_profile": "standard",
+        "risk_level": "normal",
+        "policy_decision": "allow",
+        "device_trust_state": "trusted",
+        "protocol_version": "gateway.v1",
+        "approval_provided": True,
+        "approval_memory_hit": False,
+        "kill_switch_enabled": False,
+        "quota_ok": True,
+        "gateway_registered": True,
+        "session_valid": True,
+        "websocket_token_present": True,
+        "frame_valid": True,
+        "payload_present": True,
+        "metadata": {
+            "gateway_id": str(gateway_id or "").strip(),
+            "session_id": str(session_id or "").strip(),
+            "workspace_id": str(workspace_id or "").strip() or "default",
+            "tenant_id": str(tenant_id or "").strip() or "default",
+            "device_id": str(device_id or "").strip() or None,
+        },
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise GatewayProtocolRustGateError(exc.reason) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "dispatch_gateway_operation":
+        raise GatewayProtocolRustGateError(
+            f"unexpected next_action for gateway-service-decision: {next_action or '<missing>'}"
+        )
+    return decision
+
+
+def _enforce_gateway_websocket_connect_decision(
+    *,
+    gateway_id: str,
+    session_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    device_id: str,
+    request_id: str,
+    actor_id: str,
+    device_trust_state: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "websocket_connect",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "actor_id": str(actor_id or "").strip() or "system",
+        "actor_role": "owner",
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "request_id": str(request_id or "").strip() or None,
+        "capability_id": "gateway.websocket.connect",
+        "trace_id": str(request_id or "").strip() or None,
+        "quota_profile": "standard",
+        "risk_level": "normal",
+        "policy_decision": "allow",
+        "device_trust_state": str(device_trust_state or "").strip() or "trusted",
+        "protocol_version": "gateway.v1",
+        "approval_provided": True,
+        "approval_memory_hit": False,
+        "kill_switch_enabled": False,
+        "quota_ok": True,
+        "gateway_registered": True,
+        "session_valid": True,
+        "websocket_token_present": True,
+        "frame_valid": True,
+        "payload_present": True,
+        "metadata": {
+            "gateway_id": str(gateway_id or "").strip(),
+            "session_id": str(session_id or "").strip(),
+            "workspace_id": str(workspace_id or "").strip() or "default",
+            "tenant_id": str(tenant_id or "").strip() or "default",
+            "device_id": str(device_id or "").strip() or None,
+        },
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise GatewayProtocolRustGateError(exc.reason) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "allow_gateway_service_operation":
+        raise GatewayProtocolRustGateError(
+            f"unexpected next_action for gateway-service-decision: {next_action or '<missing>'}"
+        )
+    return decision
+
+
+def _enforce_gateway_quota_check(
+    *,
+    gateway_id: str,
+    session_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    device_id: str,
+    request_id: str,
+    quota_profile: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "quota_check",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "actor_id": "system",
+        "actor_role": "owner",
+        "gateway_id": str(gateway_id or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "request_id": str(request_id or "").strip() or None,
+        "capability_id": "gateway.quota.check",
+        "trace_id": str(request_id or "").strip() or None,
+        "quota_profile": str(quota_profile or "").strip() or "standard",
+        "risk_level": "normal",
+        "policy_decision": "allow",
+        "device_trust_state": "trusted",
+        "protocol_version": "gateway.v1",
+        "approval_provided": True,
+        "approval_memory_hit": False,
+        "kill_switch_enabled": False,
+        "quota_ok": True,
+        "gateway_registered": True,
+        "session_valid": True,
+        "websocket_token_present": True,
+        "frame_valid": True,
+        "payload_present": True,
+        "metadata": {
+            "gateway_id": str(gateway_id or "").strip(),
+            "session_id": str(session_id or "").strip(),
+            "workspace_id": str(workspace_id or "").strip() or "default",
+            "tenant_id": str(tenant_id or "").strip() or "default",
+            "device_id": str(device_id or "").strip() or None,
+            "quota_profile": str(quota_profile or "").strip() or "standard",
+        },
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "gateway-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise GatewayProtocolRustGateError(exc.reason) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "allow_gateway_service_operation":
+        raise GatewayProtocolRustGateError(
+            f"unexpected next_action for gateway-service-decision: {next_action or '<missing>'}"
+        )
+    return decision
 
 
 async def dispatch_channel_outbound(
@@ -279,21 +842,49 @@ async def dispatch_channel_outbound(
     connection = _get_live_connection(gateway_id)
     if connection is None:
         raise ValueError("Gateway is not currently connected.")
+    registration = gateway_state_repository.get_gateway_registration(gateway_id) or {}
+    _enforce_gateway_quota_check(
+        gateway_id=str(gateway_id or "").strip(),
+        session_id=str(connection.session_id or "").strip(),
+        workspace_id=str(registration.get("workspace_id") or connection.scope.get("workspace_id") or "").strip(),
+        tenant_id=str(registration.get("tenant_id") or connection.scope.get("tenant_id") or "").strip(),
+        device_id=str(registration.get("device_id") or "").strip(),
+        request_id=str(request_id or idempotency_key or "").strip(),
+        quota_profile=GATEWAY_CHANNEL_OUTBOUND,
+    )
+    _enforce_gateway_channel_protocol_route(
+        gateway_id=str(gateway_id or "").strip(),
+        session_id=str(connection.session_id or "").strip(),
+        workspace_id=str(registration.get("workspace_id") or connection.scope.get("workspace_id") or "").strip(),
+        tenant_id=str(registration.get("tenant_id") or connection.scope.get("tenant_id") or "").strip(),
+        device_id=str(registration.get("device_id") or "").strip(),
+        capability_id=f"{str(channel_key or '').strip()}.send",
+        request_id=str(request_id or idempotency_key or "").strip(),
+    )
+    payload = {
+        "channel_key": str(channel_key or "").strip(),
+        "provider": str(provider or "").strip(),
+        "remote_jid": str(remote_jid or "").strip(),
+        "text": str(text or "").strip(),
+        "idempotency_key": str(idempotency_key or "").strip(),
+        "operation": str(operation or "").strip() or None,
+        "draft_id": str(draft_id or "").strip() or None,
+        "sequence": sequence if sequence is not None else None,
+        "delta": str(delta or ""),
+        "metadata": dict(metadata or {}),
+        "reply_to_external_message_id": str(reply_to_external_message_id or "").strip() or None,
+    }
+    _enforce_gateway_protocol_message_decision(
+        gateway_id=str(gateway_id or "").strip(),
+        session_id=str(connection.session_id or "").strip(),
+        workspace_id=str(registration.get("workspace_id") or connection.scope.get("workspace_id") or "").strip(),
+        message_type="channel.outbound",
+        payload=payload,
+        tool_name=f"{str(channel_key or '').strip()}.send",
+    )
     response = await connection.send_request(
         message_type="channel.outbound",
-        payload={
-            "channel_key": str(channel_key or "").strip(),
-            "provider": str(provider or "").strip(),
-            "remote_jid": str(remote_jid or "").strip(),
-            "text": str(text or "").strip(),
-            "idempotency_key": str(idempotency_key or "").strip(),
-            "operation": str(operation or "").strip() or None,
-            "draft_id": str(draft_id or "").strip() or None,
-            "sequence": sequence if sequence is not None else None,
-            "delta": str(delta or ""),
-            "metadata": dict(metadata or {}),
-            "reply_to_external_message_id": str(reply_to_external_message_id or "").strip() or None,
-        },
+        payload=payload,
         timeout_seconds=timeout_seconds,
         request_id=request_id,
     )
@@ -381,6 +972,77 @@ def _parse_frame(raw_text: str) -> Dict[str, Any]:
             reason="Gateway frame exceeds the maximum allowed nesting depth.",
         )
     return payload
+
+
+def _expected_inbound_gateway_frame_next_action(frame: Dict[str, Any]) -> str:
+    frame_kind = str(frame.get("kind") or "").strip()
+    message_type = _normalized_request_type(frame)
+    if frame_kind == "request" and message_type == "gateway.connect":
+        return "accept_gateway_connect"
+    if frame_kind == "request":
+        return "route_gateway_request"
+    if frame_kind == "response":
+        return "resolve_gateway_response"
+    if frame_kind == "event":
+        return "handle_gateway_event"
+    return "record_gateway_frame"
+
+
+def _enforce_gateway_inbound_frame_decision(
+    *,
+    raw_text: str,
+    frame: Dict[str, Any],
+    seq: Optional[int],
+    ack: Optional[int],
+) -> Dict[str, Any]:
+    payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
+    protocol_version = _connect_frame_protocol_version(frame, payload)
+    try:
+        decision = rust_runtime_kernel_client.gateway_frame_decision(
+            operation="validate_frame",
+            kind=str(frame.get("kind") or "").strip(),
+            type=_normalized_request_type(frame),
+            id=str(frame.get("id") or "").strip(),
+            raw_size_bytes=len(str(raw_text or "").encode("utf-8")),
+            frame_object=True,
+            json_depth=_json_depth(frame),
+            protocol_version=protocol_version,
+            seq=seq,
+            ack=ack,
+        )
+        decision = rust_runtime_kernel_client.enforce_kernel_decision(
+            "gateway-frame-decision",
+            decision,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        result = getattr(exc, "result", None)
+        if not isinstance(result, dict):
+            result = {}
+        error_code = str(
+            result.get("reason")
+            or getattr(exc, "reason", "")
+            or "gateway_frame_denied"
+        ).strip() or "gateway_frame_denied"
+        try:
+            close_code = int(result.get("close_code") or 4408)
+        except (TypeError, ValueError):
+            close_code = 4408
+        raise GatewayFrameValidationError(
+            error_code=error_code,
+            reason=f"Gateway frame rejected by Rust gateway-frame gate: {error_code}.",
+            close_code=close_code,
+        ) from exc
+    expected_next_action = _expected_inbound_gateway_frame_next_action(frame)
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != expected_next_action:
+        raise GatewayFrameValidationError(
+            error_code="gateway_frame_invalid_next_action",
+            reason=(
+                "Gateway frame returned unexpected next_action: "
+                f"{next_action or 'missing'}."
+            ),
+        )
+    return decision
 
 
 def _normalized_request_type(frame: Dict[str, Any]) -> str:
@@ -545,6 +1207,12 @@ async def handle_gateway_websocket(
     try:
         binding = await _validate_gateway_binding(session=session, registration=registration)
     except ValueError as exc:
+        _enforce_gateway_session_mutation(
+            registration=registration,
+            session=session,
+            operation="mark_session_disconnected",
+            reason="binding_validation_failed",
+        )
         gateway_state_repository.mark_gateway_session_disconnected(
             str(session.get("session_id") or "").strip(),
             reason="binding_validation_failed",
@@ -557,15 +1225,41 @@ async def handle_gateway_websocket(
     server_event_seq = 0
     last_client_seq: Optional[int] = None
     disconnected = False
+    _enforce_gateway_quota_check(
+        gateway_id=gateway_id,
+        session_id=session_id,
+        workspace_id=str((registration or {}).get("workspace_id") or "").strip() or "default",
+        tenant_id=str((registration or {}).get("tenant_id") or "").strip() or "default",
+        device_id=str((registration or {}).get("device_id") or "").strip(),
+        request_id=session_id,
+        quota_profile="gateway_ws_connection",
+    )
+    _enforce_gateway_websocket_connect_decision(
+        gateway_id=gateway_id,
+        session_id=session_id,
+        workspace_id=str((registration or {}).get("workspace_id") or "").strip() or "default",
+        tenant_id=str((registration or {}).get("tenant_id") or "").strip() or "default",
+        device_id=str((registration or {}).get("device_id") or "").strip(),
+        request_id=session_id,
+        actor_id=str((registration or {}).get("user_id") or "").strip() or "system",
+        device_trust_state=str((registration or {}).get("device_trust_state") or "").strip() or "trusted",
+    )
     await websocket.accept(subprotocol=accept_subprotocol)
 
     try:
         try:
-            first_frame = _parse_frame(await websocket.receive_text())
+            first_raw_text = await websocket.receive_text()
+            first_frame = _parse_frame(first_raw_text)
             first_seq, first_ack = _normalize_frame_seq_ack(first_frame)
         except GatewayFrameValidationError as exc:
             await websocket.close(code=exc.close_code, reason=exc.reason)
             disconnected = True
+            _enforce_gateway_session_mutation(
+                registration=registration,
+                session=session,
+                operation="mark_session_disconnected",
+                reason=exc.error_code,
+            )
             gateway_state_repository.mark_gateway_session_disconnected(session_id, reason=exc.error_code)
             return
         gateway_state_repository.record_gateway_event(
@@ -588,6 +1282,12 @@ async def handle_gateway_websocket(
             )
             await websocket.close(code=4408, reason="gateway.connect required")
             disconnected = True
+            _enforce_gateway_session_mutation(
+                registration=registration,
+                session=session,
+                operation="mark_session_disconnected",
+                reason="connect_required",
+            )
             gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="connect_required")
             return
         frame_scope = first_frame.get("scope") if isinstance(first_frame.get("scope"), dict) else {}
@@ -601,6 +1301,12 @@ async def handle_gateway_websocket(
             )
             await websocket.close(code=4403, reason="scope mismatch")
             disconnected = True
+            _enforce_gateway_session_mutation(
+                registration=registration,
+                session=session,
+                operation="mark_session_disconnected",
+                reason="scope_mismatch",
+            )
             gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="scope_mismatch")
             return
 
@@ -617,10 +1323,32 @@ async def handle_gateway_websocket(
             )
             await websocket.close(code=4408, reason="unsupported protocol version")
             disconnected = True
+            _enforce_gateway_session_mutation(
+                registration=registration,
+                session=session,
+                operation="mark_session_disconnected",
+                reason="unsupported_protocol_version",
+            )
             gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="unsupported_protocol_version")
             return
+        _enforce_gateway_inbound_frame_decision(
+            raw_text=first_raw_text,
+            frame=first_frame,
+            seq=first_seq,
+            ack=first_ack,
+        )
 
+        _enforce_gateway_session_mutation(
+            registration=registration,
+            session=session,
+            operation="mark_session_connected",
+        )
         gateway_state_repository.mark_gateway_session_connected(session_id)
+        _enforce_gateway_session_mutation(
+            registration=registration,
+            session=session,
+            operation="touch_session",
+        )
         gateway_state_repository.touch_gateway_session(
             session_id=session_id,
             gateway_id=gateway_id,
@@ -714,8 +1442,15 @@ async def handle_gateway_websocket(
 
         while True:
             try:
-                frame = _parse_frame(await websocket.receive_text())
+                raw_text = await websocket.receive_text()
+                frame = _parse_frame(raw_text)
                 frame_seq, frame_ack = _normalize_frame_seq_ack(frame)
+                _enforce_gateway_inbound_frame_decision(
+                    raw_text=raw_text,
+                    frame=frame,
+                    seq=frame_seq,
+                    ack=frame_ack,
+                )
             except GatewayFrameValidationError as exc:
                 await websocket.send_json(
                     _response_frame(
@@ -726,6 +1461,12 @@ async def handle_gateway_websocket(
                 )
                 await websocket.close(code=exc.close_code, reason=exc.reason)
                 disconnected = True
+                _enforce_gateway_session_mutation(
+                    registration=registration,
+                    session=session,
+                    operation="mark_session_disconnected",
+                    reason=exc.error_code,
+                )
                 gateway_state_repository.mark_gateway_session_disconnected(session_id, reason=exc.error_code)
                 break
             if frame_seq is not None and last_client_seq is not None and frame_seq <= last_client_seq:
@@ -740,6 +1481,12 @@ async def handle_gateway_websocket(
                     )
                 )
                 disconnected = True
+                _enforce_gateway_session_mutation(
+                    registration=registration,
+                    session=session,
+                    operation="mark_session_disconnected",
+                    reason="gateway_frame_replayed",
+                )
                 gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="gateway_frame_replayed")
                 await websocket.close(code=4408, reason="gateway frame replay detected")
                 break
@@ -794,6 +1541,11 @@ async def handle_gateway_websocket(
                         )
                     except Exception:
                         pass
+                _enforce_gateway_session_mutation(
+                    registration=registration,
+                    session=session,
+                    operation="touch_session",
+                )
                 gateway_state_repository.touch_gateway_session(
                     session_id=session_id,
                     gateway_id=gateway_id,
@@ -806,6 +1558,11 @@ async def handle_gateway_websocket(
                         asyncio.create_task(
                             _handle_personal_channel_inbound_event(dict(payload)),
                         )
+                    )
+                    _enforce_gateway_session_mutation(
+                        registration=registration,
+                        session=session,
+                        operation="touch_session",
                     )
                     gateway_state_repository.touch_gateway_session(
                         session_id=session_id,
@@ -828,6 +1585,12 @@ async def handle_gateway_websocket(
             try:
                 binding = await _validate_gateway_binding(session=session, registration=registration)
             except ValueError as exc:
+                _enforce_gateway_session_mutation(
+                    registration=registration,
+                    session=session,
+                    operation="mark_session_disconnected",
+                    reason="binding_validation_failed",
+                )
                 gateway_state_repository.mark_gateway_session_disconnected(
                     session_id,
                     reason="binding_validation_failed",
@@ -850,6 +1613,11 @@ async def handle_gateway_websocket(
                 )
                 native_runtime = gateway_inventory_service.sanitize_native_runtime(
                     payload.get("native_runtime")
+                )
+                _enforce_gateway_session_mutation(
+                    registration=registration,
+                    session=session,
+                    operation="touch_session",
                 )
                 gateway_state_repository.touch_gateway_session(
                     session_id=session_id,
@@ -908,6 +1676,11 @@ async def handle_gateway_websocket(
                     gateway_id=gateway_id,
                     registration=registration,
                     payload=payload,
+                )
+                _enforce_gateway_session_mutation(
+                    registration=registration,
+                    session=session,
+                    operation="touch_session",
                 )
                 gateway_state_repository.touch_gateway_session(
                     session_id=session_id,
@@ -973,6 +1746,12 @@ async def handle_gateway_websocket(
                 await websocket.send_json(state_event)
                 continue
             if message_type == "gateway.disconnect":
+                _enforce_gateway_session_mutation(
+                    registration=registration,
+                    session=session,
+                    operation="mark_session_disconnected",
+                    reason=str(payload.get("reason") or "client_disconnect"),
+                )
                 gateway_state_repository.mark_gateway_session_disconnected(
                     session_id,
                     reason=str(payload.get("reason") or "client_disconnect"),
@@ -1006,6 +1785,12 @@ async def handle_gateway_websocket(
                 connection.cache_frame_response(str(frame.get("id") or "").strip(), unsupported_response)
     except WebSocketDisconnect:
         if not disconnected:
+            _enforce_gateway_session_mutation(
+                registration=registration,
+                session=session,
+                operation="mark_session_disconnected",
+                reason="websocket_disconnect",
+            )
             gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="websocket_disconnect")
             await gateway_activity_service.emit_gateway_presence_activity(
                 registration,
@@ -1026,4 +1811,10 @@ async def handle_gateway_websocket(
                 task.cancel()
             await asyncio.gather(*background_tasks, return_exceptions=True)
         if not disconnected:
+            _enforce_gateway_session_mutation(
+                registration=registration,
+                session=session,
+                operation="mark_session_disconnected",
+                reason="socket_closed",
+            )
             gateway_state_repository.mark_gateway_session_disconnected(session_id, reason="socket_closed")

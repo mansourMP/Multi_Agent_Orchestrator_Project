@@ -23,6 +23,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency at runtime
     _BotocoreConfig = None
 
+from server_modules import rust_runtime_kernel_client
 from server_modules.telemetry import record_reliability_latency_sample
 
 
@@ -370,6 +371,97 @@ class ArtifactRecord:
         return {key: value for key, value in payload.items() if value is not None}
 
 
+class ArtifactServiceRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_artifact_record_state_decision(payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    try:
+        payload_bytes = len(
+            json.dumps(
+                normalized_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        )
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="persist_artifact_record",
+            state_class="artifact_records",
+            tenant_id=str(normalized_payload.get("tenant_id") or "default").strip() or "default",
+            workspace_id=str(normalized_payload.get("workspace_id") or "").strip(),
+            run_id=str(normalized_payload.get("run_id") or "").strip(),
+            actor_id="system",
+            status="active",
+            payload=normalized_payload,
+            payload_bytes=payload_bytes,
+            workspace_access=True,
+            owner_access=True,
+        )
+        enforced = rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(enforced.get("next_action") or "").strip()
+        if next_action != "persist_artifact_record":
+            raise ArtifactServiceRustGateError(
+                "unexpected next_action for persist_artifact_record: "
+                f"{next_action or 'missing'}"
+            )
+        return enforced
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise ArtifactServiceRustGateError(exc.reason) from exc
+
+
+def _enforce_artifact_content_file_decision(
+    *,
+    artifact_id: str,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    object_key: str,
+    target: Path,
+    content_bytes: int,
+) -> Dict[str, Any]:
+    payload = {
+        "artifact_id": str(artifact_id or "").strip(),
+        "run_id": str(run_id or "").strip(),
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "workspace_id": str(workspace_id or "").strip(),
+        "object_key": str(object_key or "").strip(),
+        "target": str(target),
+        "content_bytes": max(0, int(content_bytes or 0)),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_artifact_content_file",
+            state_class="artifact_content_files",
+            tenant_id=str(payload["tenant_id"]),
+            workspace_id=str(payload["workspace_id"]),
+            run_id=str(payload["run_id"]),
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=int(payload["content_bytes"]),
+            workspace_access=True,
+            owner_access=True,
+        )
+        enforced = rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(enforced.get("next_action") or "").strip()
+        if next_action != "write_artifact_content_file":
+            raise ArtifactServiceRustGateError(
+                "unexpected next_action for write_artifact_content_file: "
+                f"{next_action or 'missing'}"
+            )
+        return enforced
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise ArtifactServiceRustGateError(exc.reason) from exc
+
+
 def _persist_record(
     record: ArtifactRecord,
     *,
@@ -381,6 +473,7 @@ def _persist_record(
         payload["stored_path"] = str(stored_path.resolve())
     if source_path is not None:
         payload["source_path"] = str(source_path.resolve())
+    _enforce_artifact_record_state_decision(payload)
     _artifact_record_path(record.artifact_id).write_text(
         json.dumps(_json_safe(payload), ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -627,7 +720,17 @@ def store_artifact_bytes(
         return record
 
     target = _artifact_object_path_for_key(object_key, ensure_parent=True)
-    target.write_bytes(bytes(content))
+    content_blob = bytes(content)
+    _enforce_artifact_content_file_decision(
+        artifact_id=artifact_token,
+        run_id=run_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        object_key=object_key,
+        target=target,
+        content_bytes=len(content_blob),
+    )
+    target.write_bytes(content_blob)
     record = _build_artifact_record(
         artifact_id=artifact_token,
         run_id=run_id,

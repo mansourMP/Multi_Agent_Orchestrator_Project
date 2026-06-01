@@ -13,10 +13,17 @@ from server_modules import agent_trace_service
 from server_modules import browser_approval_service
 from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules import run_state_repository
+from server_modules import rust_runtime_kernel_client
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _payload_get(value: Any, key: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(key)
+    return getattr(value, key, None)
 
 
 _APPROVAL_RESOLUTION_GUARD_LOCK = threading.Lock()
@@ -223,6 +230,107 @@ def _run_tenant_id(run: dict[str, Any]) -> str:
     ).strip() or "default"
 
 
+def _rust_actor_role(current_user: Any, fallback: str = "member") -> str:
+    if isinstance(current_user, dict):
+        if bool(current_user.get("is_admin")):
+            return "admin"
+        if str(current_user.get("auth_type") or "").strip().lower() == "api_key":
+            return "system"
+        role = str(current_user.get("role") or "").strip().lower()
+        if role:
+            return role
+    return fallback
+
+
+def _enforce_rust_run_approval_decision(
+    *,
+    operation: str,
+    run_id: str,
+    approval_id: str,
+    run: dict[str, Any],
+    payload: Any = None,
+    pending: dict[str, Any] | None = None,
+    current_user: Any = None,
+    actor_role: str | None = None,
+    prompt: str = "",
+    approval_expired: bool = False,
+    expected_approval_id: str = "",
+    allow_block_result: bool = False,
+) -> dict[str, Any]:
+    expected_next_action_map = {
+        "list_pending": {"list_pending_approvals"},
+        "filter_pending_item": {"include_approval_item", "skip_approval_item"},
+        "get_detail": {"build_approval_detail_response"},
+        "create_request": {"create_or_update_approval_request"},
+        "submit_decision": {"submit_run_decision"},
+        "resolve_approval": {"resolve_run_approval"},
+        "record_resolution": {"record_approval_resolution"},
+    }
+    pending_payload = pending if isinstance(pending, dict) else {}
+    request_payload = _coerce_dict(payload)
+    actor_user_id = str(
+        _payload_get(payload, "actor")
+        or ((current_user or {}).get("user_id") if isinstance(current_user, dict) else "")
+    ).strip() or "user"
+    decision_text = str(
+        _payload_get(payload, "decision")
+        or _payload_get(payload, "resolution")
+        or request_payload.get("decision")
+        or request_payload.get("resolution")
+        or ""
+    ).strip()
+    approval_status = str(
+        pending_payload.get("status")
+        or _payload_get(payload, "approval_status")
+        or _payload_get(payload, "status")
+        or request_payload.get("approval_status")
+        or request_payload.get("status")
+        or ""
+    ).strip()
+    rust_payload = {
+        "operation": operation,
+        "workspace_id": _run_workspace_id(run),
+        "tenant_id": _run_tenant_id(run),
+        "run_id": str(run_id or "").strip(),
+        "approval_id": str(approval_id or "").strip(),
+        "expected_approval_id": str(expected_approval_id or "").strip(),
+        "current_approval_id": str(expected_approval_id or "").strip(),
+        "actor_role": actor_role or _rust_actor_role(current_user),
+        "actor_user_id": actor_user_id,
+        "user_id": actor_user_id,
+        "approvals_enabled": True,
+        "workspace_access_denied": False,
+        "decision": decision_text,
+        "resolution": decision_text,
+        "approval_status": approval_status,
+        "status": approval_status,
+        "prompt": str(prompt or _payload_get(payload, "prompt") or _payload_get(payload, "reason") or _payload_get(payload, "summary") or "").strip(),
+        "reason": str(_payload_get(payload, "reason") or "").strip(),
+        "summary": str(_payload_get(payload, "summary") or "").strip(),
+        "approval_expired": bool(approval_expired),
+        "approval_missing": bool(_payload_get(payload, "approval_missing")),
+        "current_user_required": bool(_payload_get(payload, "current_user_required")),
+        "workspace_not_allowed": bool(_payload_get(payload, "workspace_not_allowed")),
+        "run_owner_access_granted": bool(_payload_get(payload, "run_owner_access_granted")),
+        "owner_user_id": str(_payload_get(payload, "owner_user_id") or "").strip(),
+        "limit": _payload_get(payload, "limit"),
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced("run-approval-decision", rust_payload)
+        expected_next_actions = expected_next_action_map.get(str(operation or "").strip(), set())
+        next_action = str(decision.get("next_action") or "").strip()
+        if expected_next_actions and next_action not in expected_next_actions:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Rust run-approval gate blocked {operation}: unexpected_next_action:{next_action or 'missing'}",
+            )
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        if allow_block_result and isinstance(exc.result, dict):
+            return dict(exc.result)
+        raise HTTPException(status_code=409, detail=f"Rust run-approval gate blocked {operation}: {exc.reason}") from exc
+
+
 def _approval_request_payload_from_run(run_id: str, run: dict[str, Any], pending: dict[str, Any]) -> dict[str, Any]:
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -275,6 +383,16 @@ def _ensure_durable_approval_request(run_id: str, snapshot_run: dict[str, Any], 
     approval_id = str(pending.get("approval_id") or "").strip()
     correlation_id = str(pending.get("correlation_id") or approval_id).strip() or approval_id
     fallback = _approval_request_payload_from_run(run_id, snapshot_run, pending)
+    _enforce_rust_run_approval_decision(
+        operation="create_request",
+        run_id=run_id,
+        approval_id=approval_id,
+        run=snapshot_run,
+        payload=fallback,
+        pending=pending,
+        actor_role="runtime",
+        prompt=str(fallback.get("prompt") or "Approval required.").strip(),
+    )
     try:
         return run_state_repository.sync_create_or_update_approval_request(
             run_id,
@@ -322,6 +440,21 @@ def list_pending_approvals_payload(
         list_pending_approvals_fn = run_state_repository.sync_list_pending_approvals
     if list_live_runs_fn is None:
         list_live_runs_fn = run_state_repository.sync_list_live_runs
+    _enforce_rust_run_approval_decision(
+        operation="list_pending",
+        run_id="",
+        approval_id="",
+        run={
+            "workspace_id": requested_workspace_id or "default",
+            "tenant_id": requested_workspace_id or "default",
+        },
+        payload={
+            "limit": safe_limit,
+            "current_user_required": current_user is not None,
+        },
+        current_user=current_user,
+        actor_role="system" if current_user is None else None,
+    )
 
     def _approval_status_pending(value: Any) -> bool:
         token = str(value or "").strip().lower()
@@ -405,10 +538,10 @@ def list_pending_approvals_payload(
         if not _approval_status_pending(approval.get("status")):
             continue
         approval_workspace_id = str(approval.get("workspace_id") or "default").strip() or "default"
-        if requested_workspace_id and approval_workspace_id != requested_workspace_id:
-            continue
-        if allowed_workspace_ids is not None and approval_workspace_id not in allowed_workspace_ids:
-            continue
+        workspace_not_allowed = bool(
+            (requested_workspace_id and approval_workspace_id != requested_workspace_id)
+            or (allowed_workspace_ids is not None and approval_workspace_id not in allowed_workspace_ids)
+        )
         if callable(workspace_entitlement_payload_fn):
             run_entitlements = workspace_entitlement_payload_fn(entitlement_cache, approval_workspace_id)
             run_capabilities = (
@@ -419,7 +552,24 @@ def list_pending_approvals_payload(
             if not bool(run_capabilities.get("approvals_enabled")):
                 continue
         owner_user_id = str(approval.get("owner_user_id") or "").strip() or None
-        if current_user is not None and not include_all and owner_user_id != request_user_id:
+        filter_decision = _enforce_rust_run_approval_decision(
+            operation="filter_pending_item",
+            run_id=run_id,
+            approval_id=approval_id,
+            run={
+                "workspace_id": approval_workspace_id,
+                "tenant_id": str(approval.get("tenant_id") or approval_workspace_id).strip() or approval_workspace_id,
+            },
+            payload={
+                "approval_status": approval.get("status"),
+                "status": approval.get("status"),
+                "workspace_not_allowed": workspace_not_allowed,
+                "owner_user_id": owner_user_id,
+            },
+            current_user=current_user,
+            actor_role="system" if current_user is None else None,
+        )
+        if str(filter_decision.get("next_action") or "").strip() != "include_approval_item":
             continue
         metadata = approval.get("metadata") if isinstance(approval.get("metadata"), dict) else {}
         email_preview = approval.get("email_preview") if isinstance(approval.get("email_preview"), dict) else None
@@ -480,10 +630,10 @@ def list_pending_approvals_payload(
         if not _approval_status_pending(approval.get("status")):
             continue
         approval_workspace_id = str(approval.get("workspace_id") or "default").strip() or "default"
-        if requested_workspace_id and approval_workspace_id != requested_workspace_id:
-            continue
-        if allowed_workspace_ids is not None and approval_workspace_id not in allowed_workspace_ids:
-            continue
+        workspace_not_allowed = bool(
+            (requested_workspace_id and approval_workspace_id != requested_workspace_id)
+            or (allowed_workspace_ids is not None and approval_workspace_id not in allowed_workspace_ids)
+        )
         if callable(workspace_entitlement_payload_fn):
             run_entitlements = workspace_entitlement_payload_fn(entitlement_cache, approval_workspace_id)
             run_capabilities = (
@@ -494,7 +644,24 @@ def list_pending_approvals_payload(
             if not bool(run_capabilities.get("approvals_enabled")):
                 continue
         owner_user_id = str(approval.get("owner_user_id") or "").strip() or None
-        if current_user is not None and not include_all and owner_user_id != request_user_id:
+        filter_decision = _enforce_rust_run_approval_decision(
+            operation="filter_pending_item",
+            run_id=run_id,
+            approval_id=approval_id,
+            run={
+                "workspace_id": approval_workspace_id,
+                "tenant_id": str(approval.get("tenant_id") or approval_workspace_id).strip() or approval_workspace_id,
+            },
+            payload={
+                "approval_status": approval.get("status"),
+                "status": approval.get("status"),
+                "workspace_not_allowed": workspace_not_allowed,
+                "owner_user_id": owner_user_id,
+            },
+            current_user=current_user,
+            actor_role="system" if current_user is None else None,
+        )
+        if str(filter_decision.get("next_action") or "").strip() != "include_approval_item":
             continue
         metadata = approval.get("metadata") if isinstance(approval.get("metadata"), dict) else {}
         email_preview = approval.get("email_preview") if isinstance(approval.get("email_preview"), dict) else None
@@ -633,14 +800,31 @@ def build_approval_detail_response(
     run_summary = _run_summary_for_approval_detail(run_snapshot_record)
     run_snapshot_source = str(run_snapshot_record.get("source") or "").strip().lower() if isinstance(run_snapshot_record, dict) else ""
     run_payload = run_snapshot_record.get("payload") if isinstance(run_snapshot_record, dict) and isinstance(run_snapshot_record.get("payload"), dict) else None
+    run_owner_access_granted = False
     if run_snapshot_source in {"live", "archive"} and isinstance(run_payload, dict) and callable(enforce_run_owner_access_fn):
-        enforce_run_owner_access_fn(current_user, run_payload)
-    elif not _approval_owned_by_current_user(
-        approval_record,
-        current_user,
-        current_user_is_privileged_fn=current_user_is_privileged_fn,
-    ):
-        raise HTTPException(status_code=403, detail="Approval is owned by another user.")
+        try:
+            enforce_run_owner_access_fn(current_user, run_payload)
+            run_owner_access_granted = True
+        except HTTPException:
+            run_owner_access_granted = False
+    _enforce_rust_run_approval_decision(
+        operation="get_detail",
+        run_id=str(approval_record.get("run_id") or "").strip(),
+        approval_id=approval_token,
+        run={
+            "workspace_id": workspace_id,
+            "tenant_id": str(approval_record.get("tenant_id") or workspace_id).strip() or workspace_id,
+        },
+        payload={
+            "approval_missing": False,
+            "approval_status": approval_record.get("status"),
+            "status": approval_record.get("status"),
+            "owner_user_id": approval_record.get("owner_user_id"),
+            "run_owner_access_granted": run_owner_access_granted,
+        },
+        current_user=current_user,
+        actor_role="system" if current_user is None else None,
+    )
 
     response = dict(approval_record)
     response["workspace_id"] = workspace_id
@@ -843,6 +1027,16 @@ def submit_run_decision(
     escalated = decision_text in escalate_tokens
     rejected = decision_text in reject_tokens or (not approved and not escalated)
     resolution_token = "approved" if approved else "escalated" if escalated else "rejected"
+    if approval_id and isinstance(pending, dict):
+        _enforce_rust_run_approval_decision(
+            operation="submit_decision",
+            run_id=run_id,
+            approval_id=approval_id,
+            run=snapshot_run,
+            payload=payload,
+            pending=pending,
+            current_user=current_user,
+        )
     if approval_id and (
         bool(metadata.get("local_execution_waiting_confirmation"))
         or bool(metadata.get("local_execution_waiting_approval"))
@@ -982,11 +1176,6 @@ def resolve_run_approval(
     if not isinstance(pending, dict):
         raise HTTPException(status_code=409, detail="No pending confirmation for this run.")
     expected = str(pending.get("approval_id") or "").strip()
-    if expected != approval_id:
-        raise HTTPException(status_code=409, detail="approval_id does not match pending confirmation.")
-    pending_status = str(pending.get("status") or "").strip().lower()
-    if pending_status in {"decision_submitted", "resolved", "expired"}:
-        raise HTTPException(status_code=409, detail="Confirmation has already been processed for this run.")
     decision_text = str(payload.decision or "").strip().lower()
     context = snapshot_run.get("context")
     metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
@@ -1011,7 +1200,41 @@ def resolve_run_approval(
     resolution_token = "approved" if approved else "escalated" if escalated else "rejected"
     correlation_id = str(pending.get("correlation_id") or "").strip() or approval_correlation_id(approval_id, run_id=run_id)
     expires_at = parse_utc_ts(pending.get("expires_at"))
-    if expires_at is not None and utc_now() > expires_at:
+    approval_expired = expires_at is not None and utc_now() > expires_at
+    rust_decision = _enforce_rust_run_approval_decision(
+        operation="resolve_approval",
+        run_id=run_id,
+        approval_id=approval_id,
+        run=snapshot_run,
+        payload=payload,
+        pending=pending,
+        current_user=current_user,
+        approval_expired=approval_expired,
+        expected_approval_id=expected,
+        allow_block_result=True,
+    )
+    if str(rust_decision.get("decision") or "").strip().lower() == "block":
+        rust_reason = str(rust_decision.get("reason") or "").strip().lower()
+        if rust_reason == "run_approval_pending_mismatch":
+            raise HTTPException(status_code=409, detail="approval_id does not match pending confirmation.")
+        if rust_reason == "run_approval_already_resolved":
+            raise HTTPException(status_code=409, detail="Confirmation has already been processed for this run.")
+        if rust_reason == "run_approval_expired":
+            pending["status"] = "expired"
+            pending["expired_at"] = utc_now_iso()
+            if isinstance(run, dict):
+                set_pending_confirmation(run, pending)
+            run_state_repository.sync_record_approval_resolution(
+                run_id,
+                approval_id,
+                "expired",
+                "system",
+                correlation_id,
+                note="Confirmation request has already expired.",
+            )
+            raise HTTPException(status_code=409, detail="Confirmation request has already expired.")
+        raise HTTPException(status_code=409, detail=f"Rust run-approval gate blocked resolve_approval: {rust_reason or 'unknown_reason'}")
+    if approval_expired:
         pending["status"] = "expired"
         pending["expired_at"] = utc_now_iso()
         if isinstance(run, dict):
@@ -1226,6 +1449,19 @@ def resolve_standalone_approval(
                     or approval_metadata.get("trace_id")
                     or approval_token
                 ).strip()
+                _enforce_rust_run_approval_decision(
+                    operation="resolve_approval",
+                    run_id=standalone_run_id,
+                    approval_id=approval_token,
+                    run={
+                        **approval_record,
+                        "run_id": standalone_run_id,
+                        "tenant_id": str(approval_metadata.get("tenant_id") or approval_request_payload.get("tenant_id") or "default").strip() or "default",
+                        "workspace_id": str(approval_metadata.get("workspace_id") or approval_request_payload.get("workspace_id") or "default").strip() or "default",
+                    },
+                    payload=payload,
+                    current_user=current_user,
+                )
                 resolved = run_state_repository.sync_resolve_approval_if_pending(
                     standalone_run_id,
                     approval_token,
@@ -1313,6 +1549,15 @@ def resolve_standalone_approval(
             live_run = ensure_live_run_handle(matched_run_id, matched_run)
         if isinstance(live_run, dict):
             live_run["_defer_resume_until_approval_persisted"] = True
+
+        _enforce_rust_run_approval_decision(
+            operation="resolve_approval",
+            run_id=matched_run_id,
+            approval_id=approval_token,
+            run=matched_run,
+            payload=payload,
+            current_user=current_user,
+        )
 
         result = resolve_run_approval_fn(
             matched_run_id,

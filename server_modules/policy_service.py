@@ -8,6 +8,7 @@ from scripts.platform_execution import capability_metadata
 from server_modules.computer_action_safety import evaluate_dangerous_computer_action_policy
 from server_modules.capability_registry import canonical_capability_id
 from server_modules import skills_service
+from server_modules import rust_runtime_kernel_client
 from server_modules import safe_mode_service
 
 
@@ -711,6 +712,222 @@ def _local_execution_dangerous_action_items(
     return items
 
 
+def _rust_capability_for_tool_policy(tool_id: str, *, known_read_only_system_probe: bool = False) -> str:
+    clean_tool_id = _normalize_action_id(tool_id) or str(tool_id or "").strip().lower()
+    if known_read_only_system_probe:
+        return "read_files"
+    mapping = {
+        "shell.execute": "shell_execute",
+        "filesystem.read": "filesystem_read",
+        "filesystem.read_write": "filesystem_read_write",
+        "browser_automation.interactive": "browser_automation_interactive",
+        "send_message": "send_message",
+        "post_message": "post_message",
+        "reply_message": "reply_message",
+        "transfer_funds": "transfer_funds",
+        "connector.action.read": "connector_action_read",
+    }
+    return mapping.get(clean_tool_id, clean_tool_id.replace(".", "_"))
+
+
+def _rust_tool_policy_result(
+    *,
+    tool_id: str,
+    effective_target: str,
+    effective_policy_mode: str,
+    metadata: Dict[str, Any],
+    requested_capability_ids: List[str],
+    workspace_denied_capabilities: set[str],
+    workspace_allowed_capabilities: set[str],
+    workspace_role: str,
+    action_blocked: bool,
+    action_approval_required: bool,
+    uses_capability_path: bool,
+    safe_raw_shell_command: bool,
+    disabled_capability_state: Optional[Dict[str, Any]],
+    unsupported_capability: Optional[Dict[str, Any]],
+    block_cloud_critical: bool,
+    runtime_decision: Optional[Dict[str, Any]],
+    reason: str,
+    classification: Dict[str, Any],
+    known_read_only_system_probe: bool,
+) -> Dict[str, Any]:
+    rust_capability = _rust_capability_for_tool_policy(
+        tool_id,
+        known_read_only_system_probe=known_read_only_system_probe,
+    )
+    action_type = str(classification.get("action_type") or "").strip().lower()
+    policy_payload: Dict[str, Any] = {
+        "policy_id": "runtime-tool-policy",
+        "policy_version": 1,
+        "autonomy_mode": "cautious",
+        "allowed_capabilities": [rust_capability] if (known_read_only_system_probe or action_type == "read") else [],
+        "approval_required_capabilities": [],
+        "blocked_capabilities": [],
+        "domain_allowlist": list(metadata.get("domain_allowlist") or []),
+        "filesystem_scope": list(metadata.get("filesystem_scope") or []),
+        "blocked_filesystem_scope": list(metadata.get("blocked_filesystem_scope") or []),
+    }
+    policy_context = {
+        "tool_id": tool_id,
+        "requested_capability_ids": list(requested_capability_ids or []),
+        "workspace_denied_capabilities": sorted(workspace_denied_capabilities),
+        "workspace_allowed_capabilities": sorted(workspace_allowed_capabilities),
+        "workspace_role": workspace_role,
+        "action_blocked": bool(action_blocked),
+        "action_approval_required": bool(action_approval_required),
+        "uses_capability_path": bool(uses_capability_path),
+        "safe_raw_shell_command": bool(safe_raw_shell_command),
+        "disabled_capability": bool(disabled_capability_state),
+        "unsupported_capability": (
+            unsupported_capability.get("id") if isinstance(unsupported_capability, dict) else None
+        ),
+        "tool_disabled": bool(tool_id in _runtime_policy_module().TOOL_CONTRACTS and not _runtime_policy_module().is_tool_enabled(tool_id)),
+        "cloud_target": bool(effective_target == _runtime_policy_module().EXECUTION_TARGET_CLOUD),
+        "critical": bool(_runtime_policy_module().TOOL_POLICY.is_critical(tool_id)),
+        "block_cloud_critical": bool(block_cloud_critical),
+        "blocked_raw_shell_command": bool(tool_id == "shell.execute" and not safe_raw_shell_command and not uses_capability_path),
+    }
+    runtime_policy_context = {
+        "execution_decision": (
+            str(runtime_decision.get("execution_decision") or "").strip().lower()
+            if isinstance(runtime_decision, dict)
+            else ""
+        ),
+        "reason": (
+            str(runtime_decision.get("reason") or "").strip()
+            if isinstance(runtime_decision, dict)
+            else ""
+        ),
+    }
+    raw_shell_operations = (
+        _runtime_policy_module()._iter_raw_shell_operations(metadata)
+        if tool_id == "shell.execute" and not uses_capability_path
+        else []
+    )
+    rust_execution_plan: Optional[Dict[str, Any]] = None
+    try:
+        if tool_id == "shell.execute" and not uses_capability_path and raw_shell_operations and safe_raw_shell_command:
+            primary_operation = raw_shell_operations[0] if isinstance(raw_shell_operations[0], dict) else {}
+            raw_command = _runtime_policy_module()._raw_shell_command_text(primary_operation)
+            raw_argv = primary_operation.get("argv") if isinstance(primary_operation.get("argv"), list) else None
+            rust_execution_plan = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "execution-plan",
+                {
+                    "command": raw_command,
+                    "argv": raw_argv,
+                    "action_class": str(classification.get("action_type") or classification.get("action_class") or "execute"),
+                    "requested_path": metadata.get("target_path") or metadata.get("path"),
+                    "requested_domain": metadata.get("target_domain") or metadata.get("domain"),
+                },
+                allow_approval_required=True,
+            )
+            plan_decision = str(rust_execution_plan.get("decision") or "").strip().lower()
+            plan_next_action = str(rust_execution_plan.get("next_action") or "").strip()
+            expected_plan_next_action = (
+                "request_tool_execution_approval"
+                if (bool(rust_execution_plan.get("approval_required")) or plan_decision in {"require_approval", "approval_required"})
+                else "allow_tool_execution"
+            )
+            if plan_decision not in {"block", "denied"} and plan_next_action != expected_plan_next_action:
+                return {
+                    "execution_decision": "deny",
+                    "decision": "blocked",
+                    "reason": f"unexpected_next_action:{plan_next_action or 'missing'}",
+                    "rust_authorization": dict(rust_execution_plan),
+                    "rust_execution_plan": dict(rust_execution_plan),
+                }
+        if tool_id == "shell.execute" and not uses_capability_path and raw_shell_operations:
+            primary_operation = raw_shell_operations[0] if isinstance(raw_shell_operations[0], dict) else {}
+            raw_command = _runtime_policy_module()._raw_shell_command_text(primary_operation)
+            raw_argv = primary_operation.get("argv") if isinstance(primary_operation.get("argv"), list) else None
+            decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "authorize-execution",
+                {
+                    "policy": policy_payload,
+                    "command": raw_command,
+                    "argv": raw_argv,
+                    "capability": rust_capability,
+                    "action_class": str(classification.get("action_type") or classification.get("action_class") or "execute"),
+                    "target_summary": raw_command or tool_id,
+                    "requested_domain": metadata.get("target_domain") or metadata.get("domain"),
+                    "requested_path": metadata.get("target_path") or metadata.get("path"),
+                    "payload": {
+                        "tool_id": tool_id,
+                        "target": effective_target,
+                        "policy_mode": effective_policy_mode,
+                        "reason": reason,
+                        "classification": classification,
+                        "policy_context": policy_context,
+                        "runtime_policy_context": runtime_policy_context,
+                    },
+                },
+                allow_approval_required=True,
+            )
+        else:
+            decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "authorize-request",
+                {
+                    "policy": policy_payload,
+                    "capability": rust_capability,
+                    "action_class": str(classification.get("action_type") or classification.get("action_class") or "execute"),
+                    "target_summary": tool_id,
+                    "requested_domain": metadata.get("target_domain") or metadata.get("domain"),
+                    "requested_path": metadata.get("target_path") or metadata.get("path"),
+                    "payload": {
+                        "tool_id": tool_id,
+                        "target": effective_target,
+                        "policy_mode": effective_policy_mode,
+                        "reason": reason,
+                        "classification": classification,
+                        "policy_context": policy_context,
+                        "runtime_policy_context": runtime_policy_context,
+                    },
+                },
+                allow_approval_required=True,
+            )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        decision = dict(exc.decision)
+    rust_decision = str(decision.get("decision") or "").strip().lower()
+    rust_next_action = str(decision.get("next_action") or "").strip()
+    expected_next_action = (
+        "request_tool_execution_approval"
+        if (bool(decision.get("approval_required")) or rust_decision in {"require_approval", "approval_required"})
+        else "allow_tool_execution"
+    )
+    if rust_decision not in {"block", "denied"} and rust_next_action != expected_next_action:
+        return {
+            "execution_decision": "deny",
+            "decision": "blocked",
+            "reason": f"unexpected_next_action:{rust_next_action or 'missing'}",
+            "rust_authorization": dict(decision),
+            "rust_execution_plan": dict(rust_execution_plan) if isinstance(rust_execution_plan, dict) else None,
+        }
+    if rust_decision == "block" or decision.get("ok") is False:
+        return {
+            "execution_decision": "deny",
+            "decision": "blocked",
+            "reason": str(decision.get("reason") or reason or "rust_authorization_blocked").strip(),
+            "rust_authorization": dict(decision),
+            "rust_execution_plan": dict(rust_execution_plan) if isinstance(rust_execution_plan, dict) else None,
+        }
+    if bool(decision.get("approval_required")) or rust_decision in {"require_approval", "approval_required"}:
+        return {
+            "execution_decision": "require_confirmation",
+            "decision": "approval_required",
+            "reason": str(decision.get("reason") or reason or "rust_authorization_requires_approval").strip(),
+            "rust_authorization": dict(decision),
+            "rust_execution_plan": dict(rust_execution_plan) if isinstance(rust_execution_plan, dict) else None,
+        }
+    return {
+        "execution_decision": "allow",
+        "decision": "allow",
+        "reason": str(decision.get("reason") or reason or "rust_authorization_allowed").strip(),
+        "rust_authorization": dict(decision),
+        "rust_execution_plan": dict(rust_execution_plan) if isinstance(rust_execution_plan, dict) else None,
+    }
+
+
 def evaluate_tool_policy_decision(
     tool_id: str,
     trust_mode: str,
@@ -837,7 +1054,9 @@ def evaluate_tool_policy_decision(
             "safe_raw_shell_command": True,
         }
 
-    execution_decision = "allow"
+    policy_blocked = False
+    policy_approval_required = False
+    policy_allowed = False
     reason = "policy_allow_default"
     runtime_decision: Optional[Dict[str, Any]] = None
     disabled_capability_state = next(
@@ -861,13 +1080,13 @@ def evaluate_tool_policy_decision(
     )
 
     if disabled_capability_state:
-        execution_decision = "deny"
+        policy_blocked = True
         reason = "capability_disabled_by_policy_scope"
     elif any(
         capability_id in workspace_denied_capabilities or "*" in workspace_denied_capabilities
         for capability_id in requested_capability_ids
     ):
-        execution_decision = "deny"
+        policy_blocked = True
         reason = "workspace_capability_denied"
     elif (
         workspace_allowed_capabilities
@@ -875,29 +1094,29 @@ def evaluate_tool_policy_decision(
         and any(capability_id not in workspace_allowed_capabilities for capability_id in requested_capability_ids)
         and workspace_role != "owner"
     ):
-        execution_decision = "deny"
+        policy_blocked = True
         reason = "workspace_capability_not_granted"
     elif clean_tool_id in runtime_policy.TOOL_CONTRACTS and not runtime_policy.is_tool_enabled(clean_tool_id):
-        execution_decision = "deny"
+        policy_blocked = True
         reason = "tool_disabled"
     elif unsupported_capability:
-        execution_decision = "deny"
+        policy_blocked = True
         reason = "blocked_unsupported_capability"
     elif uses_raw_command_path and not safe_raw_shell_command:
-        execution_decision = "deny"
+        policy_blocked = True
         reason = "blocked_raw_shell_command"
     elif clean_tool_id in blocked_actions and not uses_capability_path and not safe_raw_shell_command:
-        execution_decision = "deny"
+        policy_blocked = True
         reason = "blocked_by_action_policy"
     elif requires_explicit_approval and not safe_raw_shell_command:
-        execution_decision = "require_confirmation"
+        policy_approval_required = True
         reason = "approval_required_by_action_policy"
     elif (
         effective_target == runtime_policy.EXECUTION_TARGET_CLOUD
         and runtime_policy.TOOL_POLICY.is_critical(clean_tool_id)
         and block_cloud_critical
     ):
-        execution_decision = "deny"
+        policy_blocked = True
         reason = "blocked_cloud_critical"
     else:
         runtime_decision = _runtime_action_policy_decision(
@@ -906,8 +1125,38 @@ def evaluate_tool_policy_decision(
             policy_mode=effective_policy_mode,
             metadata=metadata,
         )
-        execution_decision = str(runtime_decision.get("execution_decision") or "allow").strip().lower() or "allow"
+        runtime_execution_decision = str(runtime_decision.get("execution_decision") or "allow").strip().lower() or "allow"
         reason = str(runtime_decision.get("reason") or "").strip() or reason
+        if runtime_execution_decision == "deny":
+            policy_blocked = True
+        elif runtime_execution_decision == "require_confirmation":
+            policy_approval_required = True
+        else:
+            policy_allowed = True
+
+    rust_policy_result = _rust_tool_policy_result(
+        tool_id=clean_tool_id,
+        effective_target=effective_target,
+        effective_policy_mode=str(effective_policy_mode or ""),
+        metadata=metadata,
+        requested_capability_ids=requested_capability_ids,
+        workspace_denied_capabilities=workspace_denied_capabilities,
+        workspace_allowed_capabilities=workspace_allowed_capabilities,
+        workspace_role=workspace_role,
+        action_blocked=bool(clean_tool_id in blocked_actions and not uses_capability_path and not safe_raw_shell_command),
+        action_approval_required=bool(requires_explicit_approval),
+        uses_capability_path=uses_capability_path,
+        safe_raw_shell_command=safe_raw_shell_command,
+        disabled_capability_state=disabled_capability_state,
+        unsupported_capability=unsupported_capability if isinstance(unsupported_capability, dict) else None,
+        block_cloud_critical=block_cloud_critical,
+        runtime_decision=runtime_decision if isinstance(runtime_decision, dict) else None,
+        reason=reason,
+        classification=classification if isinstance(classification, dict) else {},
+        known_read_only_system_probe=known_read_only_system_probe,
+    )
+    execution_decision = str(rust_policy_result.get("execution_decision") or "allow")
+    reason = str(rust_policy_result.get("reason") or reason)
 
     if (
         execution_decision != "deny"
@@ -973,6 +1222,23 @@ def evaluate_tool_policy_decision(
             metadata.get("policy_scope_precedence") or ["global", "tenant", "workspace", "machine", "capability"]
         ),
         "disabled_capability_state": disabled_capability_state,
+        "rust_authorization": rust_policy_result.get("rust_authorization"),
+        "rust_execution_plan": rust_policy_result.get("rust_execution_plan"),
+        "decision_id": (
+            (rust_policy_result.get("rust_authorization") or {}).get("decision_id")
+            if isinstance(rust_policy_result.get("rust_authorization"), dict)
+            else None
+        ),
+        "rust_execution_plan_command": (
+            "execution-plan"
+            if clean_tool_id == "shell.execute" and uses_raw_command_path and safe_raw_shell_command
+            else None
+        ),
+        "rust_authorization_command": (
+            "authorize-execution"
+            if clean_tool_id == "shell.execute" and uses_raw_command_path
+            else "authorize-request"
+        ),
         "reviewed_approval_required": bool(
             clean_tool_id == "browser_automation.interactive"
             and effective_target == runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION

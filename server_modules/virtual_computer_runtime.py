@@ -14,7 +14,7 @@ from pathlib import PurePosixPath
 from typing import Any, Callable, Dict, List, Optional, Protocol
 from urllib.parse import urlparse
 
-from server_modules import computer_action_safety, external_content_guard, secret_redaction_service
+from server_modules import computer_action_safety, external_content_guard, rust_runtime_kernel_client, secret_redaction_service
 from server_modules.gateway_browser_runtime import GatewayBrowserRuntime
 
 
@@ -1444,10 +1444,12 @@ def _evaluate_malware_scan(
 def _enforce_artifact_policy(
     artifact: Dict[str, Any],
     *,
+    action: str,
     artifact_policy: Dict[str, Any],
     current_total_artifact_bytes: int,
     malware_scan_hook: Optional[Callable[[Dict[str, Any]], Any]],
 ) -> Dict[str, Any]:
+    normalized_action = _token(action).lower()
     enriched = dict(artifact or {})
     artifact_type = _normalize_artifact_type(enriched.get("type"))
     if artifact_type not in VALID_ARTIFACT_TYPES:
@@ -1466,6 +1468,42 @@ def _enforce_artifact_policy(
         malware_scan_hook=malware_scan_hook,
     )
     enriched["malware_scan"] = scan_result
+    path = _token(enriched.get("path"))
+    if not path:
+        suffix_by_type = {
+            "screenshot": ".png",
+            "pdf": ".pdf",
+            "csv": ".csv",
+            "downloaded_file": ".bin",
+            "generated_document": ".txt",
+            "browser_trace": ".zip",
+            "terminal_log": ".log",
+        }
+        artifact_id = _token(enriched.get("artifact_id")) or "artifact"
+        path = f"artifacts/{artifact_id}{suffix_by_type.get(artifact_type, '.bin')}"
+    expected_next_action = {
+        "register": "register_artifact",
+        "read": "read_artifact",
+        "export": "export_artifact",
+    }.get(normalized_action)
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "artifact-policy",
+            {
+                "action": normalized_action,
+                "path": path,
+                "size_bytes": size_bytes,
+                "max_artifact_bytes": int(artifact_policy.get("max_artifact_size_bytes") or 0) or None,
+                "content_type": _token(enriched.get("content_type")) or None,
+                "secret_detected": bool(scan_result.get("secret_detected", False)),
+                "executable": bool(enriched.get("executable", False)),
+            },
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise RuntimeError(str(getattr(exc, "reason", "") or "artifact_blocked_by_rust_policy")) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_next_action and next_action != expected_next_action:
+        raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
     return enriched
 
 
@@ -2804,6 +2842,7 @@ class LocalGatewayVirtualComputerRuntime:
         current_total_size = int(context.get("artifact_total_size_bytes") or 0)
         artifact = _enforce_artifact_policy(
             artifact,
+            action="register",
             artifact_policy=artifact_policy,
             current_total_artifact_bytes=current_total_size,
             malware_scan_hook=self._malware_scan_hook,
@@ -2852,6 +2891,7 @@ class LocalGatewayVirtualComputerRuntime:
             artifact_with_retention.setdefault("expires_at_epoch", now_epoch + float(ttl))
         artifact_with_retention = _enforce_artifact_policy(
             artifact_with_retention,
+            action="export" if _token(payload.get("export_destination")).lower() in {ARTIFACT_EXPORT_LOCAL, ARTIFACT_EXPORT_WORKSPACE} else "read",
             artifact_policy=artifact_policy,
             current_total_artifact_bytes=current_total_size,
             malware_scan_hook=self._malware_scan_hook,
@@ -3668,6 +3708,7 @@ class InMemoryVirtualComputerRuntime:
         current_total_size = int(session.get("artifact_total_size_bytes") or 0)
         artifact = _enforce_artifact_policy(
             artifact,
+            action="register",
             artifact_policy=artifact_policy,
             current_total_artifact_bytes=current_total_size,
             malware_scan_hook=self._malware_scan_hook,
@@ -3740,6 +3781,7 @@ class InMemoryVirtualComputerRuntime:
         artifact_policy = session.get("artifact_policy") if isinstance(session.get("artifact_policy"), dict) else _artifact_policy_from_payload({})
         artifact = _enforce_artifact_policy(
             dict(artifact),
+            action="export" if _token(payload.get("export_destination")).lower() in {ARTIFACT_EXPORT_LOCAL, ARTIFACT_EXPORT_WORKSPACE} else "read",
             artifact_policy=artifact_policy,
             current_total_artifact_bytes=0,
             malware_scan_hook=self._malware_scan_hook,

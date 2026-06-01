@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 import sqlite3
 
+from server_modules import rust_runtime_kernel_client
+
+from server_modules import rust_runtime_kernel_client
+
 # SQLite is retained only for explicit local checkpoint and offline cache
 # concerns. It is not the authoritative server-side source of truth for live
 # runs, approvals, outbox delivery, local claim ownership, or runtime sessions.
@@ -19,10 +23,12 @@ SQLITE_CHECKPOINT_ONLY_STATE_CLASSES = frozenset(
     {
         "local_pending_queue",
         "local_claims",
-        "runtime_registrations",
-        "runtime_sessions",
-        "runtime_session_turns",
-        "channel_events",
+        "live_runs",
+    "runtime_registrations",
+    "runtime_sessions",
+    "runtime_session_turns",
+    "live_runs",
+    "channel_events",
         "chat_stream_state",
         "notifications",
         "notification_devices",
@@ -483,6 +489,91 @@ def _normalize_runtime_session_turn_row(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
+def _runtime_state_payload_bytes(item: Optional[Dict[str, Any]]) -> int:
+    try:
+        return len(json.dumps(item or {}, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
+    except Exception:
+        return 0
+
+
+_RUNTIME_STATE_STORE_NEXT_ACTIONS = {
+    "upsert_runtime_session": {"write_runtime_session"},
+    "delete_runtime_session": {"delete_runtime_session"},
+    "upsert_runtime_session_turn": {"write_runtime_session_turn"},
+    "delete_runtime_session_turn": {"delete_runtime_session_turn"},
+    "upsert_chat_stream_state": {"write_chat_stream_state"},
+    "upsert_live_run": {"write_live_run_state"},
+    "delete_live_run": {"delete_live_run_state"},
+    "append_channel_event": {"append_channel_event"},
+    "checkpoint_snapshot": {"write_checkpoint_snapshot"},
+    "upsert_notification": {"write_notification"},
+    "mark_notification_read": {"mark_notification_read"},
+    "register_notification_device": {"write_notification_device"},
+    "update_notification_delivery": {"write_notification_delivery"},
+    "prune_records": {"prune_state_records"},
+}
+
+
+def _enforce_runtime_state_store_decision(
+    *,
+    operation: str,
+    state_class: str,
+    item: Optional[Dict[str, Any]] = None,
+    run_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    turn_id: Optional[str] = None,
+    runtime_id: Optional[str] = None,
+    notification_id: Optional[str] = None,
+    device_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    status: Optional[str] = None,
+    retention_days: Optional[int] = None,
+    records_requested: Optional[int] = None,
+) -> Dict[str, Any]:
+    request = {
+        "operation": operation,
+        "state_class": state_class,
+        "storage_engine": "local_sqlite",
+        "workspace_id": str((item or {}).get("workspace_id") or "default").strip() or "default",
+        "tenant_id": str((item or {}).get("tenant_id") or "default").strip() or "default",
+        "run_id": str(run_id or (item or {}).get("run_id") or "").strip(),
+        "session_id": str(session_id or (item or {}).get("session_id") or "").strip(),
+        "turn_id": str(turn_id or (item or {}).get("turn_id") or "").strip(),
+        "runtime_id": str(runtime_id or (item or {}).get("runtime_id") or (item or {}).get("worker_id") or "").strip(),
+        "notification_id": str(notification_id or (item or {}).get("id") or "").strip(),
+        "device_id": str(device_id or (item or {}).get("device_id") or "").strip(),
+        "actor_id": str(actor_id or (item or {}).get("reader_key") or (item or {}).get("user_id") or "").strip(),
+        "trace_id": str((item or {}).get("trace_id") or "").strip(),
+        "status": str(status or (item or {}).get("status") or (item or {}).get("state") or "unknown").strip() or "unknown",
+        "payload": bool(item is not None),
+        "payload_bytes": _runtime_state_payload_bytes(item),
+        "durable_runtime_required": False,
+        "durable_pool_available": True,
+        "local_checkpoint_allowed": True,
+        "workspace_access": True,
+        "owner_access": True,
+    }
+    if retention_days is not None:
+        request["retention_days"] = max(1, int(retention_days))
+    if records_requested is not None:
+        request["records_requested"] = max(0, int(records_requested))
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "runtime-state-store-decision",
+        request,
+    )
+    expected_actions = _RUNTIME_STATE_STORE_NEXT_ACTIONS.get(operation)
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_actions is None:
+        raise RuntimeError(f"unexpected runtime_state_store operation: {operation}")
+    if next_action not in expected_actions:
+        expected_list = ", ".join(sorted(expected_actions))
+        raise RuntimeError(
+            f"unexpected next_action for runtime-state-store-decision: {next_action or '<missing>'} "
+            f"(expected {expected_list})"
+        )
+    return decision
+
+
 def upsert_runtime_session(db_path: Path, item: Dict[str, Any]) -> None:
     session_id = str(item.get("session_id") or "").strip()
     if not session_id:
@@ -490,6 +581,13 @@ def upsert_runtime_session(db_path: Path, item: Dict[str, Any]) -> None:
     created_at = str(item.get("created_at") or "").strip() or _utc_now_iso()
     updated_at = str(item.get("updated_at") or "").strip() or created_at
     last_touched_at = str(item.get("last_touched_at") or "").strip() or updated_at
+    _enforce_runtime_state_store_decision(
+        operation="upsert_runtime_session",
+        state_class="runtime_sessions",
+        item=item,
+        session_id=session_id,
+        status=str(item.get("status") or "active"),
+    )
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -579,6 +677,12 @@ def delete_runtime_session(db_path: Path, session_id: str) -> None:
     token = str(session_id or "").strip()
     if not token:
         return
+    _enforce_runtime_state_store_decision(
+        operation="delete_runtime_session",
+        state_class="runtime_sessions",
+        session_id=token,
+        status="closed",
+    )
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM runtime_sessions WHERE session_id = ?", (token,))
         conn.commit()
@@ -598,6 +702,14 @@ def upsert_runtime_session_turn(db_path: Path, item: Dict[str, Any]) -> None:
         _json_blob(final_payload, fallback="{}")
         if isinstance(final_payload, dict)
         else (str(item.get("final_payload_json") or "").strip() or None)
+    )
+    _enforce_runtime_state_store_decision(
+        operation="upsert_runtime_session_turn",
+        state_class="runtime_session_turns",
+        item=item,
+        session_id=session_id,
+        turn_id=turn_id,
+        status=str(item.get("status") or "running"),
     )
     with _connect(db_path) as conn:
         conn.execute(
@@ -696,6 +808,12 @@ def delete_runtime_session_turn(db_path: Path, turn_id: str) -> None:
     token = str(turn_id or "").strip()
     if not token:
         return
+    _enforce_runtime_state_store_decision(
+        operation="delete_runtime_session_turn",
+        state_class="runtime_session_turns",
+        turn_id=token,
+        status="closed",
+    )
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM runtime_session_turns WHERE turn_id = ?", (token,))
         conn.commit()
@@ -714,6 +832,13 @@ def upsert_chat_stream_state(db_path: Path, item: Dict[str, Any]) -> None:
     else:
         raw_payload = str(item.get("final_payload_json") or "").strip()
         final_payload_json = raw_payload or None
+    _enforce_runtime_state_store_decision(
+        operation="upsert_chat_stream_state",
+        state_class="chat_stream_state",
+        item=item,
+        session_id=session_id,
+        status=str(item.get("status") or "active").strip() or "active",
+    )
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -832,6 +957,13 @@ def upsert_live_run_state(db_path: Path, item: Dict[str, Any]) -> None:
     created_at = str(item.get("created_at") or "").strip()
     updated_at = str(item.get("updated_at") or "").strip()
     sort_ts = _parse_ts(updated_at or created_at)
+    _enforce_runtime_state_store_decision(
+        operation="upsert_live_run",
+        state_class="live_runs",
+        item=item,
+        run_id=run_id,
+        status=str(item.get("status") or item.get("state") or "queued"),
+    )
     payload = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
     with _connect(db_path) as conn:
         conn.execute(
@@ -881,6 +1013,33 @@ def delete_live_run_state(db_path: Path, run_id: str) -> None:
     token = str(run_id or "").strip()
     if not token:
         return
+    existing: Optional[Dict[str, Any]] = None
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT run_json
+            FROM live_runs
+            WHERE run_id = ?
+            """,
+            (token,),
+        ).fetchone()
+        if row is not None:
+            raw = row["run_json"]
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                existing = parsed
+    if not isinstance(existing, dict):
+        return
+    _enforce_runtime_state_store_decision(
+        operation="delete_live_run",
+        state_class="live_runs",
+        item=existing,
+        run_id=token,
+        status=str(existing.get("status") or "archived").strip() or "archived",
+    )
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM live_runs WHERE run_id = ?", (token,))
         conn.commit()
@@ -932,6 +1091,7 @@ def mark_stale_chat_stream_sessions_interrupted(
 
 def delete_chat_stream_sessions_older_than(db_path: Path, *, older_than_ts: float) -> int:
     deleted = 0
+    target_session_ids: List[str] = []
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
@@ -946,6 +1106,17 @@ def delete_chat_stream_sessions_older_than(db_path: Path, *, older_than_ts: floa
             session_id = str(row["session_id"] or "").strip()
             if not session_id:
                 continue
+            target_session_ids.append(session_id)
+        if target_session_ids:
+            _enforce_runtime_state_store_decision(
+                operation="prune_records",
+                state_class="chat_stream_state",
+                item={"workspace_id": "default"},
+                status="archived",
+                retention_days=30,
+                records_requested=len(target_session_ids),
+            )
+        for session_id in target_session_ids:
             conn.execute("DELETE FROM chat_stream_state WHERE session_id = ?", (session_id,))
             deleted += 1
         conn.commit()
@@ -959,6 +1130,18 @@ def replace_local_runtime_state(
     claimed_runs: Dict[str, Dict[str, Any]],
     runtime_registrations: Dict[str, Dict[str, Any]],
 ) -> None:
+    _enforce_runtime_state_store_decision(
+        operation="checkpoint_snapshot",
+        state_class="local_app_state",
+        item={
+            "workspace_id": "default",
+            "checkpoint_kind": "local_runtime_state",
+            "pending_count": len(pending_run_ids or []),
+            "claimed_count": len(claimed_runs or {}),
+            "runtime_registration_count": len(runtime_registrations or {}),
+        },
+        status="checkpoint",
+    )
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM local_pending_queue")
         for idx, raw_run_id in enumerate(pending_run_ids):
@@ -1234,6 +1417,13 @@ def append_channel_event(db_path: Path, item: Dict[str, Any], limit: int) -> Non
     ts = str(item.get("ts") or "").strip()
     sort_ts = _parse_ts(ts)
     payload = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+    _enforce_runtime_state_store_decision(
+        operation="append_channel_event",
+        state_class="channel_events",
+        item=item,
+        run_id=str(item.get("run_id") or "").strip() or None,
+        status=str(item.get("event_type") or item.get("action") or "event").strip().lower() or "event",
+    )
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -1278,6 +1468,18 @@ def append_channel_event(db_path: Path, item: Dict[str, Any], limit: int) -> Non
 
 
 def replace_channel_events(db_path: Path, items: List[Dict[str, Any]], limit: int) -> None:
+    first_item = items[0] if items and isinstance(items[0], dict) else {}
+    _enforce_runtime_state_store_decision(
+        operation="checkpoint_snapshot",
+        state_class="channel_events",
+        item={
+            "workspace_id": str(first_item.get("workspace_id") or "default").strip() or "default",
+            "trace_id": str(first_item.get("trace_id") or "").strip(),
+            "checkpoint_kind": "channel_events",
+            "checkpoint_item_count": min(len(items or []), max(1, int(limit))),
+        },
+        status="checkpoint",
+    )
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM channel_events")
         for item in items[: max(1, int(limit))]:
@@ -1394,6 +1596,13 @@ def upsert_notification(db_path: Path, item: Dict[str, Any]) -> None:
     created_at = str(item.get("ts") or item.get("created_at") or "").strip() or _utc_now_iso()
     sort_ts = _parse_ts(created_at)
     payload = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+    _enforce_runtime_state_store_decision(
+        operation="upsert_notification",
+        state_class="notifications",
+        item=item,
+        notification_id=notification_id,
+        status=str(item.get("event_type") or item.get("status") or "notification").strip().lower() or "notification",
+    )
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -1612,6 +1821,19 @@ def mark_notifications_read(
     if not deduped:
         return {"marked_count": 0, "marked_ids": [], "read_at": None}
     read_at = _utc_now_iso()
+    for notification_id in deduped:
+        _enforce_runtime_state_store_decision(
+            operation="mark_notification_read",
+            state_class="notifications",
+            notification_id=notification_id,
+            actor_id=reader_token,
+            item={
+                "tenant_id": str(tenant_id or "").strip(),
+                "workspace_id": str(workspace_id or "").strip(),
+                "reader_key": reader_token,
+            },
+            status="read",
+        )
     with _connect(db_path) as conn:
         for notification_id in deduped:
             row = conn.execute(
@@ -1659,6 +1881,13 @@ def upsert_notification_device(db_path: Path, item: Dict[str, Any]) -> Dict[str,
     payload["provider"] = provider
     payload["status"] = str(item.get("status") or "active").strip().lower() or "active"
     payload["last_registered_at"] = registered_at
+    _enforce_runtime_state_store_decision(
+        operation="register_notification_device",
+        state_class="notification_devices",
+        item=payload,
+        device_id=device_id,
+        status=str(payload.get("status") or "active").strip().lower() or "active",
+    )
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -1792,6 +2021,19 @@ def upsert_notification_delivery(
     device_token = str(device_id or "").strip()
     if not notification_token or not device_token:
         return
+    delivery_item = {
+        "notification_id": notification_token,
+        "device_id": device_token,
+        "status": str(status or "").strip().lower() or "pending",
+    }
+    _enforce_runtime_state_store_decision(
+        operation="update_notification_delivery",
+        state_class="notification_delivery_statuses",
+        item=delivery_item,
+        notification_id=notification_token,
+        device_id=device_token,
+        status=delivery_item["status"],
+    )
     with _connect(db_path) as conn:
         conn.execute(
             """

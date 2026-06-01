@@ -13,6 +13,7 @@ from server_modules import (
     gateway_execution_service,
     gateway_protocol_service,
     gateway_state_repository,
+    rust_runtime_kernel_client,
     runtime_policy,
 )
 
@@ -40,6 +41,116 @@ BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH = "existing_session_attach"
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _enforce_gateway_browser_action_decision(
+    *,
+    registration: Dict[str, Any],
+    capability_id: str,
+    arguments: Optional[Dict[str, Any]],
+    run_id: str,
+    trace_id: str,
+    request_id: Optional[str],
+) -> Dict[str, Any]:
+    operation = ""
+    expected_next_action = ""
+    if capability_id == BROWSER_SESSION_START_CAPABILITY:
+        operation = "browser_session_start"
+        expected_next_action = "start_browser_session"
+    elif capability_id == BROWSER_SESSION_ACTION_CAPABILITY:
+        operation = "browser_action"
+        expected_next_action = "dispatch_browser_action"
+    elif capability_id == BROWSER_SESSION_INTERRUPT_CAPABILITY:
+        operation = "browser_session_stop"
+        expected_next_action = "stop_browser_session"
+    elif capability_id == BROWSER_SESSION_RESUME_CAPABILITY:
+        operation = "browser_session_resume"
+        expected_next_action = "resume_browser_session"
+    elif capability_id == BROWSER_SESSION_TAKEOVER_CAPABILITY:
+        operation = "browser_session_takeover"
+        expected_next_action = "takeover_browser_session"
+    else:
+        return {}
+    payload = {
+        "operation": operation,
+        "workspace_id": str(registration.get("workspace_id") or "").strip() or "default",
+        "tenant_id": str(registration.get("tenant_id") or "").strip() or "default",
+        "gateway_id": str(registration.get("gateway_id") or "").strip(),
+        "run_id": str(run_id or "").strip(),
+        "request_id": str(request_id or "").strip() or None,
+        "trace_id": str(trace_id or "").strip() or None,
+        "capability_id": str(capability_id or "").strip(),
+        "actor_role": "owner",
+        "gateway_connected": True,
+        "risk_decision": "allow",
+        "approval_provided": True,
+    }
+    if capability_id == BROWSER_SESSION_ACTION_CAPABILITY:
+        payload["browser_session_id"] = str((arguments or {}).get("browser_session_id") or "").strip() or None
+    try:
+        decision = rust_runtime_kernel_client.gateway_action_decision(**payload)
+        decision = rust_runtime_kernel_client.enforce_kernel_decision(
+            "gateway-action-decision",
+            decision,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "gateway_browser_action_denied").strip()
+        raise RuntimeError(f"Rust gateway-action gate blocked {operation}: {reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != expected_next_action:
+        raise RuntimeError(
+            f"Rust gateway-action gate returned unexpected next_action for {operation}: "
+            f"{next_action or 'missing'}"
+        )
+    return decision
+
+
+def _enforce_gateway_browser_fallback_decision(
+    *,
+    registration: Dict[str, Any],
+    run_id: str,
+    trace_id: str,
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "browser_session_start",
+        "workspace_id": str(registration.get("workspace_id") or "").strip() or "default",
+        "tenant_id": str(registration.get("tenant_id") or "").strip() or "default",
+        "gateway_id": str(registration.get("gateway_id") or "").strip(),
+        "run_id": str(run_id or "").strip(),
+        "request_id": None,
+        "trace_id": str(trace_id or "").strip() or None,
+        "capability_id": BROWSER_SESSION_START_CAPABILITY,
+        "actor_role": "owner",
+        "gateway_connected": False,
+        "cloud_fallback_available": True,
+        "risk_decision": "allow",
+        "approval_provided": True,
+    }
+    try:
+        decision = rust_runtime_kernel_client.gateway_action_decision(**payload)
+        decision = rust_runtime_kernel_client.enforce_kernel_decision(
+            "gateway-action-decision",
+            decision,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "gateway_browser_fallback_blocked").strip()
+        raise RuntimeError(f"Rust gateway-action gate blocked browser fallback: {reason}") from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "prepare_cloud_browser_fallback":
+        raise RuntimeError(
+            "Rust gateway-action gate returned unexpected next_action for browser fallback: "
+            f"{next_action or 'missing'}"
+        )
+    return decision
+
+
+def _gateway_browser_quota_profile(capability_id: str) -> str:
+    if capability_id in {
+        BROWSER_SESSION_START_CAPABILITY,
+        BROWSER_SESSION_RESUME_CAPABILITY,
+    }:
+        return "gateway_browser_session"
+    return ""
 
 
 def _require_active_gateway_registration(gateway_id: str, *, workspace_id: str = "") -> Dict[str, Any]:
@@ -296,6 +407,11 @@ def build_cloud_browser_fallback(
     reason: str,
     checkpoint: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    _enforce_gateway_browser_fallback_decision(
+        registration=registration,
+        run_id=run_id,
+        trace_id=trace_id,
+    )
     browser_session_id = f"gbsess_fallback_{uuid.uuid4().hex}"
     metadata = _browser_metadata(
         session_profile=session_profile,
@@ -395,6 +511,32 @@ async def execute_browser_capability_via_gateway(
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     registration = _require_active_gateway_registration(gateway_id, workspace_id=workspace_id)
+    _enforce_gateway_browser_action_decision(
+        registration=registration,
+        capability_id=capability_id,
+        arguments=arguments,
+        run_id=run_id,
+        trace_id=trace_id,
+        request_id=request_id,
+    )
+    quota_profile = _gateway_browser_quota_profile(capability_id)
+    if quota_profile:
+        registration_metadata = dict(registration.get("metadata") or {})
+        gateway_execution_service._enforce_gateway_quota_check(
+            gateway_id=str(registration.get("gateway_id") or "").strip(),
+            session_id=str(
+                registration.get("active_session_id")
+                or registration_metadata.get("gateway_session_id")
+                or request_id
+                or run_id
+                or ""
+            ).strip(),
+            workspace_id=str(registration.get("workspace_id") or "").strip(),
+            tenant_id=str(registration.get("tenant_id") or "").strip() or "default",
+            device_id=str(registration.get("device_id") or "").strip(),
+            request_id=str(request_id or run_id or "").strip(),
+            quota_profile=quota_profile,
+        )
     _ws = str(registration.get("workspace_id") or "").strip()
     response = await gateway_execution_service.execute_tool_via_gateway(
         gateway_id=gateway_id,

@@ -12,6 +12,7 @@ from server_modules import (
     approval_contracts,
     channel_lane_contract_service,
     gateway_approval_service,
+    rust_runtime_kernel_client,
     gateway_state_repository,
     personal_channels_service,
     security_audit_service,
@@ -131,6 +132,68 @@ def _emit_personal_channel_audit(
     )
 
 
+def _enforce_personal_channel_approval_request(
+    *,
+    registration: dict,
+    current_user,
+    capability_id: str,
+    run_id: str,
+    trace_id: str,
+    request_id: str,
+) -> dict:
+    metadata = dict(registration.get("metadata") or {})
+    session_id = str(
+        registration.get("active_session_id")
+        or metadata.get("gateway_session_id")
+        or metadata.get("session_id")
+        or ""
+    ).strip()
+    payload = {
+        "operation": "approval_request",
+        "tenant_id": str(registration.get("tenant_id") or "default").strip() or "default",
+        "workspace_id": str(registration.get("workspace_id") or "default").strip() or "default",
+        "actor_id": str((current_user or {}).get("user_id") or "").strip() or "user",
+        "actor_role": str((current_user or {}).get("role") or "").strip() or "member",
+        "gateway_id": str(registration.get("gateway_id") or "").strip(),
+        "session_id": session_id,
+        "request_id": str(request_id or "").strip() or None,
+        "capability_id": str(capability_id or "").strip(),
+        "run_id": str(run_id or "").strip(),
+        "trace_id": str(trace_id or "").strip() or None,
+        "quota_profile": "standard",
+        "risk_level": "critical",
+        "policy_decision": "allow",
+        "device_trust_state": str(registration.get("device_trust_state") or "trusted").strip() or "trusted",
+        "approval_provided": False,
+        "approval_memory_hit": False,
+        "kill_switch_enabled": False,
+        "quota_ok": True,
+        "gateway_registered": True,
+        "session_valid": bool(session_id),
+        "websocket_token_present": True,
+        "frame_valid": True,
+        "payload_present": True,
+    }
+    decision = rust_runtime_kernel_client.gateway_service_decision(**payload)
+    decision_class = str(decision.get("decision") or "").strip()
+    next_action = str(decision.get("next_action") or "").strip()
+    if decision_class == "block":
+        detail = str(decision.get("reason") or "rust_personal_channel_approval_request_denied").strip()
+        raise HTTPException(
+            status_code=409,
+            detail=f"Rust gateway-service gate blocked approval_request: {detail}",
+        )
+    if decision_class != "requires_approval" or next_action != "request_gateway_owner_approval":
+        raise HTTPException(
+            status_code=423,
+            detail=(
+                "Rust gateway-service gate returned unexpected decision/next_action for approval_request: "
+                f"{decision_class or 'missing'} / {next_action or 'missing'}"
+            ),
+        )
+    return decision
+
+
 async def _request_personal_channel_send_approval(
     *,
     action: str,
@@ -147,6 +210,16 @@ async def _request_personal_channel_send_approval(
     governance_metadata = _personal_channel_governance_metadata(action, channel_key)
     if not bool(governance_metadata.get("requires_approval")):
         return None
+    run_id = f"personal-channel-send-{channel_key}-{idempotency_key}"
+    trace_id = f"personal-channel-send-{channel_key}-{idempotency_key}"
+    _enforce_personal_channel_approval_request(
+        registration=registration,
+        current_user=current_user,
+        capability_id=capability_id,
+        run_id=run_id,
+        trace_id=trace_id,
+        request_id=idempotency_key,
+    )
     approval = await gateway_approval_service.request_gateway_tool_approval(
         registration=registration,
         capability_id=capability_id,
@@ -158,8 +231,8 @@ async def _request_personal_channel_send_approval(
             "reply_to_external_message_id": reply_to_external_message_id,
             "source": "manual_api",
         },
-        run_id=f"personal-channel-send-{channel_key}-{idempotency_key}",
-        trace_id=f"personal-channel-send-{channel_key}-{idempotency_key}",
+        run_id=run_id,
+        trace_id=trace_id,
         request_id=idempotency_key,
     )
     _emit_personal_channel_audit(

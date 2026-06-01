@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from server_modules import control_plane_repository
+from server_modules import control_plane_repository, rust_runtime_kernel_client
 
 # Cross-reference: kill_switch_gate is still the lightweight top-level
 # emergency gate for gateway/personal-channel dispatch. This service owns the
@@ -59,6 +60,10 @@ _CHANNEL_INCIDENT_CONTROLS: Dict[str, IncidentControlState] = {}
 _CONNECTOR_INCIDENT_CONTROLS: Dict[str, IncidentControlState] = {}
 
 _DURABLE_CONTROL_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+class SafeModeRustGateError(RuntimeError):
+    pass
 
 
 def _normalize_token(value: Any) -> str:
@@ -251,6 +256,53 @@ def _write_action(*, enabled: bool, metadata: Dict[str, Any]) -> str:
     return "enabled" if enabled else "disabled"
 
 
+def _enforce_security_control_state_decision(
+    *,
+    operation: str,
+    scope: str,
+    enabled: bool,
+    tenant_id: str | None = None,
+    workspace_id: str | None = None,
+    reason: str = "",
+    metadata: Dict[str, Any] | None = None,
+    control_kind: str = "safe_mode",
+    scope_key: str = "",
+) -> Dict[str, Any]:
+    payload = {
+        "scope": _normalize_token(scope),
+        "scope_key": str(scope_key or "").strip(),
+        "enabled": bool(enabled),
+        "tenant_id": _normalize_token(tenant_id),
+        "workspace_id": _normalize_token(workspace_id),
+        "reason": str(reason or "").strip(),
+        "control_kind": _normalize_token(control_kind),
+        "metadata": dict(metadata or {}),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class="security_control_state",
+            tenant_id=payload["tenant_id"],
+            workspace_id=payload["workspace_id"],
+            actor_id=_actor_user_id(payload["metadata"]) or "system",
+            status="active" if enabled else "inactive",
+            payload=payload,
+            payload_bytes=len(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = _normalize_token(decision.get("next_action"))
+        if next_action != _normalize_token(operation):
+            raise SafeModeRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise SafeModeRustGateError(exc.reason) from exc
+
+
 def _persist_security_control_state(
     *,
     scope: str,
@@ -284,6 +336,17 @@ def _persist_security_control_state(
         scope_key = _scoped_key(connector_id, credential_id)
     if not scope_key:
         return None
+    _enforce_security_control_state_decision(
+        operation="upsert_security_control_state",
+        scope=scope_token,
+        enabled=enabled,
+        tenant_id=tenant_token,
+        workspace_id=workspace_token,
+        reason=reason,
+        metadata=metadata_payload,
+        control_kind=control_kind,
+        scope_key=scope_key,
+    )
     try:
         row = _run_coro_sync(
             control_plane_repository.upsert_security_control_state(
@@ -345,6 +408,29 @@ def set_safe_mode(
     tenant_token = _normalize_token(tenant_id)
     workspace_token = _normalize_token(workspace_id)
     machine_token = _normalize_token(machine_id)
+    if tenant_token:
+        scope = "tenant"
+        scope_key = tenant_token
+    elif workspace_token:
+        scope = "workspace"
+        scope_key = workspace_token
+    elif machine_token:
+        scope = "machine"
+        scope_key = machine_token
+    else:
+        scope = "global"
+        scope_key = "global"
+    _enforce_security_control_state_decision(
+        operation="set_safe_mode_state",
+        scope=scope,
+        enabled=state.enabled,
+        tenant_id=tenant_token,
+        workspace_id=workspace_token,
+        reason=state.reason,
+        metadata=state.metadata,
+        control_kind="safe_mode",
+        scope_key=scope_key,
+    )
     with _LOCK:
         if tenant_token:
             if state.enabled:
@@ -686,12 +772,82 @@ def resolve_capability_disable_state(
     if not matched_chain:
         return {"disabled": False, "reason": "", "scope": None, "matched_chain": []}
     matched = matched_chain[-1]
+    rust_payload = {
+        "capability": token,
+        "capability_id": token,
+        "safe_mode_enabled": any(item.get("type") == "safe_mode" for item in matched_chain),
+        "kill_switch_enabled": any(item.get("type") == "kill_switch" for item in matched_chain),
+        "tenant_id": tenant_token or None,
+        "workspace_id": workspace_token or None,
+        "machine_id": machine_token or None,
+        "matched_chain": matched_chain,
+    }
+
+    def _expected_next_action(decision_value: Any) -> str:
+        normalized = _normalize_token(decision_value)
+        if normalized == "allow":
+            return "allow_safe_mode_capability"
+        if normalized == "degrade":
+            return "degrade_safe_mode_capability"
+        if normalized == "block":
+            return "disable_safe_mode_capability"
+        return ""
+
+    def _unexpected_next_action_response(decision: Dict[str, Any], expected: str) -> Dict[str, Any]:
+        rust_scope = str(decision.get("control_scope") or matched.get("scope") or "rust_kernel").strip() or "rust_kernel"
+        rust_type = str(decision.get("control_type") or matched.get("type") or "safe_mode").strip() or "safe_mode"
+        return {
+            "disabled": True,
+            "reason": f"unexpected_next_action:{expected}",
+            "scope": rust_scope,
+            "type": rust_type,
+            "matched_chain": matched_chain,
+            "rust_decision": dict(decision),
+        }
+
+    try:
+        rust_decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "safe-mode-decision",
+            rust_payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        expected_action = _expected_next_action(exc.decision.get("decision"))
+        next_action = str(exc.decision.get("next_action") or "").strip()
+        if expected_action and next_action != expected_action:
+            return _unexpected_next_action_response(exc.decision, expected_action)
+        rust_scope = str(exc.decision.get("control_scope") or matched.get("scope") or "rust_kernel").strip() or "rust_kernel"
+        rust_type = str(exc.decision.get("control_type") or matched.get("type") or "safe_mode").strip() or "safe_mode"
+        rust_reason = str(exc.decision.get("control_reason") or matched.get("reason") or exc.reason or "").strip()
+        return {
+            "disabled": True,
+            "reason": rust_reason,
+            "scope": rust_scope,
+            "type": rust_type,
+            "matched_chain": matched_chain,
+            "rust_decision": dict(exc.decision),
+        }
+    expected_action = _expected_next_action(rust_decision.get("decision"))
+    next_action = str(rust_decision.get("next_action") or "").strip()
+    if expected_action and next_action != expected_action:
+        return _unexpected_next_action_response(rust_decision, expected_action)
+    if rust_decision.get("decision") != "block":
+        return {
+            "disabled": False,
+            "reason": "",
+            "scope": None,
+            "matched_chain": matched_chain,
+            "rust_decision": dict(rust_decision),
+        }
+    rust_scope = str(rust_decision.get("control_scope") or matched.get("scope") or "rust_kernel").strip() or "rust_kernel"
+    rust_type = str(rust_decision.get("control_type") or matched.get("type") or "safe_mode").strip() or "safe_mode"
+    rust_reason = str(rust_decision.get("control_reason") or matched.get("reason") or "").strip()
     return {
         "disabled": True,
-        "reason": str(matched.get("reason") or ""),
-        "scope": matched.get("scope"),
-        "type": matched.get("type"),
+        "reason": rust_reason,
+        "scope": rust_scope,
+        "type": rust_type,
         "matched_chain": matched_chain,
+        "rust_decision": dict(rust_decision),
     }
 
 

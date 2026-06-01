@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from server_modules import rust_runtime_kernel_client
 from server_modules.config_loader import load_runtime_config
 from server_modules.skill_scanner import scan_skill_dir
 
@@ -99,6 +100,43 @@ def _read_json(path: Path) -> Dict[str, Any]:
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class InstalledSkillsRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_installed_skill_registry_state_decision(payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    try:
+        payload_bytes = len(
+            json.dumps(
+                normalized_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        )
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="save_installed_skill_registry",
+            state_class="installed_skill_registry",
+            actor_id="system",
+            status="active",
+            payload=normalized_payload,
+            payload_bytes=payload_bytes,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "save_installed_skill_registry":
+            raise InstalledSkillsRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise InstalledSkillsRustGateError(exc.reason) from exc
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -209,6 +247,7 @@ def save_installed_skill_registry(payload: Dict[str, Any]) -> Dict[str, Any]:
         payload.get("workspace_overrides") if isinstance(payload.get("workspace_overrides"), dict) else {}
     )
     data["updated_at"] = payload.get("updated_at")
+    _enforce_installed_skill_registry_state_decision(data)
     _write_json(installed_skill_registry_file(), data)
     return data
 

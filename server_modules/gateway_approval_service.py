@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import json
 import os
 from typing import Any, Callable, Dict, Optional
 
@@ -10,6 +11,7 @@ from server_modules import (
     gateway_activity_service,
     gateway_execution_service,
     gateway_state_repository,
+    rust_runtime_kernel_client,
     secret_redaction_service,
 )
 from server_modules.capability_registry import canonical_capability_id, resolve_capability
@@ -55,6 +57,115 @@ RISKY_LOCAL_CAPABILITIES = {
     "computer_control.launch_app",
     "computer_control.applescript",
 }
+
+
+class GatewayApprovalRustGateError(RuntimeError):
+    pass
+
+
+def _payload_size_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value or "").encode("utf-8"))
+
+
+def _enforce_gateway_approval_transition(
+    *,
+    operation: str,
+    registration: Dict[str, Any],
+    approval_id: str = "",
+    run_id: str = "",
+    trace_id: str = "",
+    capability_id: str = "",
+    status: str = "",
+    decision: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    normalized_payload = {
+        "gateway_id": str((registration or {}).get("gateway_id") or "").strip(),
+        "device_id": str((registration or {}).get("device_id") or "").strip(),
+        "tenant_id": str((registration or {}).get("tenant_id") or "").strip(),
+        "workspace_id": str((registration or {}).get("workspace_id") or "").strip(),
+        "user_id": str((registration or {}).get("user_id") or "").strip(),
+        "approval_id": str(approval_id or "").strip(),
+        "run_id": str(run_id or "").strip(),
+        "trace_id": str(trace_id or "").strip(),
+        "capability_id": str(capability_id or "").strip(),
+        "status": str(status or "").strip(),
+        "decision": str(decision or "").strip(),
+        "payload": dict(payload or {}),
+    }
+    try:
+        rust_decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class="gateway_approvals",
+            tenant_id=str(normalized_payload["tenant_id"] or "default").strip() or "default",
+            workspace_id=str(normalized_payload["workspace_id"]),
+            run_id=str(normalized_payload["run_id"]),
+            actor_id="system",
+            status=str(status or "active").strip() or "active",
+            payload=normalized_payload,
+            payload_bytes=_payload_size_bytes(normalized_payload),
+            workspace_access=True,
+            owner_access=True,
+        )
+        enforced = rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            rust_decision,
+        )
+        expected_next_action = {
+            "resolve_gateway_tool_approval": "resolve_gateway_tool_approval",
+            "execute_gateway_tool_approval": "execute_gateway_tool_approval",
+        }.get(str(operation or "").strip())
+        next_action = str(enforced.get("next_action") or "").strip()
+        if expected_next_action and next_action != expected_next_action:
+            raise GatewayApprovalRustGateError(
+                "unexpected next_action for "
+                f"{operation or 'operation'}: {next_action or 'missing'}"
+            )
+        return enforced
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise GatewayApprovalRustGateError(exc.reason) from exc
+
+
+def _enforce_gateway_approval_action_decision(
+    *,
+    registration: Dict[str, Any],
+    approval_id: str,
+    run_id: str = "",
+    trace_id: str = "",
+    capability_id: str = "",
+    request_id: str = "",
+    actor_role: str = "owner",
+) -> Dict[str, Any]:
+    try:
+        decision = rust_runtime_kernel_client.gateway_action_decision(
+            operation="approval_resolve",
+            workspace_id=str((registration or {}).get("workspace_id") or "").strip() or "default",
+            tenant_id=str((registration or {}).get("tenant_id") or "").strip() or "default",
+            gateway_id=str((registration or {}).get("gateway_id") or "").strip(),
+            run_id=str(run_id or "").strip() or None,
+            request_id=str(request_id or "").strip() or None,
+            capability_id=str(capability_id or "").strip() or None,
+            approval_id=str(approval_id or "").strip(),
+            actor_role=str(actor_role or "owner").strip() or "owner",
+            gateway_connected=True,
+            approval_provided=True,
+        )
+        enforced = rust_runtime_kernel_client.enforce_kernel_decision(
+            "gateway-action-decision",
+            decision,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise GatewayApprovalRustGateError(exc.reason) from exc
+    next_action = str(enforced.get("next_action") or "").strip()
+    if next_action != "resolve_gateway_approval":
+        raise GatewayApprovalRustGateError(
+            "unexpected next_action for approval_resolve: "
+            f"{next_action or 'missing'}"
+        )
+    return enforced
 
 
 def capability_requires_owner_approval(capability_id: str) -> bool:
@@ -147,6 +258,16 @@ async def request_gateway_tool_approval(
         request_payload["runtime_access_mode"] = str(runtime_access_mode or "").strip()
     if str(runtime_session_binding or "").strip():
         request_payload["runtime_session_binding"] = str(runtime_session_binding or "").strip()
+    _enforce_gateway_approval_transition(
+        operation="create_gateway_tool_approval",
+        registration=registration,
+        run_id=str(run_id or "").strip(),
+        trace_id=str(trace_id or "").strip(),
+        capability_id=str(capability_id or "").strip(),
+        status="pending",
+        decision="requested",
+        payload=request_payload,
+    )
     approval = gateway_state_repository.create_gateway_action_approval(
         gateway_id=str(registration.get("gateway_id") or "").strip(),
         device_id=str(registration.get("device_id") or "").strip(),
@@ -216,6 +337,17 @@ async def resolve_gateway_tool_approval(
         and int(approval.get("retry_count") or 0) > 0
     )
     if retrying_approved_execution and int(approval.get("retry_count") or 0) >= _max_gateway_approval_retries():
+        _enforce_gateway_approval_transition(
+            operation="fail_gateway_tool_approval",
+            registration=registration,
+            approval_id=approval_id,
+            run_id=str(approval.get("run_id") or "").strip(),
+            trace_id=str(approval.get("trace_id") or "").strip(),
+            capability_id=str(approval.get("capability_id") or "").strip(),
+            status="failed",
+            decision="retry_exhausted",
+            payload={"retry_count": int(approval.get("retry_count") or 0)},
+        )
         failed = gateway_state_repository.update_gateway_action_approval_decision(
             approval_id=approval_id,
             gateway_id=gateway_id,
@@ -234,9 +366,29 @@ async def resolve_gateway_tool_approval(
         return {"status": current_status, "approval": approval}
 
     resolved_actor = str(actor or "").strip() or "user"
+    _enforce_gateway_approval_action_decision(
+        registration=registration,
+        approval_id=approval_id,
+        run_id=str(approval.get("run_id") or "").strip(),
+        trace_id=str(approval.get("trace_id") or "").strip(),
+        capability_id=str(approval.get("capability_id") or "").strip(),
+        request_id=str(approval.get("request_id") or "").strip(),
+        actor_role="owner",
+    )
 
     # --- TTL enforcement ---
     if not retrying_approved_execution and _approval_expired(approval, approval_ttl_seconds):
+        _enforce_gateway_approval_transition(
+            operation="expire_gateway_tool_approval",
+            registration=registration,
+            approval_id=approval_id,
+            run_id=str(approval.get("run_id") or "").strip(),
+            trace_id=str(approval.get("trace_id") or "").strip(),
+            capability_id=str(approval.get("capability_id") or "").strip(),
+            status="rejected",
+            decision="expired",
+            payload={"approval_ttl_seconds": int(approval_ttl_seconds or 900)},
+        )
         expired_resolved = gateway_state_repository.resolve_gateway_action_approval_atomic(
             approval_id=approval_id,
             gateway_id=gateway_id,
@@ -268,6 +420,17 @@ async def resolve_gateway_tool_approval(
         resolved = approval
     else:
         # --- Atomic resolution: first writer wins ---
+        _enforce_gateway_approval_transition(
+            operation="resolve_gateway_tool_approval",
+            registration=registration,
+            approval_id=approval_id,
+            run_id=str(approval.get("run_id") or "").strip(),
+            trace_id=str(approval.get("trace_id") or "").strip(),
+            capability_id=str(approval.get("capability_id") or "").strip(),
+            status=normalized_decision,
+            decision=normalized_decision,
+            payload={"actor": resolved_actor, "note_present": bool(note)},
+        )
         resolved = gateway_state_repository.resolve_gateway_action_approval_atomic(
             approval_id=approval_id,
             gateway_id=gateway_id,
@@ -337,12 +500,34 @@ async def resolve_gateway_tool_approval(
     try:
         execution = await execute_fn(**execute_kwargs)
     except (asyncio.TimeoutError, TimeoutError, RuntimeError, ValueError) as exc:
+        _enforce_gateway_approval_transition(
+            operation="fail_gateway_tool_approval",
+            registration=registration,
+            approval_id=approval_id,
+            run_id=str(resolved.get("run_id") or "").strip(),
+            trace_id=str(resolved.get("trace_id") or "").strip(),
+            capability_id=str(resolved.get("capability_id") or "").strip(),
+            status="failed",
+            decision="execution_failed",
+            payload={"error": str(exc)},
+        )
         failed = gateway_state_repository.mark_gateway_action_approval_execution_failed(
             approval_id=approval_id,
             gateway_id=gateway_id,
             error_message=str(exc),
         ) or resolved
         if int(failed.get("retry_count") or 0) >= _max_gateway_approval_retries():
+            _enforce_gateway_approval_transition(
+                operation="fail_gateway_tool_approval",
+                registration=registration,
+                approval_id=approval_id,
+                run_id=str(failed.get("run_id") or "").strip(),
+                trace_id=str(failed.get("trace_id") or "").strip(),
+                capability_id=str(failed.get("capability_id") or "").strip(),
+                status="failed",
+                decision="retry_exhausted",
+                payload={"retry_count": int(failed.get("retry_count") or 0)},
+            )
             exhausted = gateway_state_repository.update_gateway_action_approval_decision(
                 approval_id=approval_id,
                 gateway_id=gateway_id,
@@ -404,6 +589,17 @@ async def resolve_gateway_tool_approval(
             "approval": failed,
         }
 
+    _enforce_gateway_approval_transition(
+        operation="execute_gateway_tool_approval",
+        registration=registration,
+        approval_id=approval_id,
+        run_id=str(resolved.get("run_id") or "").strip(),
+        trace_id=str(resolved.get("trace_id") or "").strip(),
+        capability_id=str(resolved.get("capability_id") or "").strip(),
+        status="executed",
+        decision="executed",
+        payload={"execution_status": str(execution.get("status") if isinstance(execution, dict) else "completed")},
+    )
     executed = gateway_state_repository.mark_gateway_action_approval_executed(
         approval_id=approval_id,
         gateway_id=gateway_id,

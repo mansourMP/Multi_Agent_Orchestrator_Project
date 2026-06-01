@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from server_modules import app_registry_api
 from server_modules import mini_apps_service
 from server_modules import provider_profiles
+from server_modules import rust_runtime_kernel_client
 from server_modules import studio_app_boundary_service
 from server_modules import workspace_context
 
@@ -539,10 +540,7 @@ def _default_state() -> Dict[str, Any]:
 def _safe_read_state(workspace_id: str) -> Dict[str, Any]:
     path = _distribution_state_path(workspace_id)
     if not path.exists():
-        payload = _default_state()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        return payload
+        return _default_state()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -568,15 +566,61 @@ def _read_state_if_exists(workspace_id: str) -> Dict[str, Any]:
 
 def _save_state(workspace_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     path = _distribution_state_path(workspace_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
     normalized = {
         "version": MARKETPLACE_DISTRIBUTION_VERSION,
         "updated_at": _utc_now_iso(),
         "packages": dict(payload.get("packages") or {}),
         "installs": dict(payload.get("installs") or {}),
     }
+    _enforce_marketplace_distribution_state_decision(
+        workspace_id=workspace_id,
+        payload=normalized,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(normalized, indent=2, sort_keys=True), encoding="utf-8")
     return normalized
+
+
+class MarketplaceDistributionRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_marketplace_distribution_state_decision(
+    *,
+    workspace_id: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    try:
+        payload_bytes = len(
+            json.dumps(
+                normalized_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        )
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="save_marketplace_distribution_state",
+            state_class="marketplace_distribution",
+            workspace_id=str(workspace_id or "").strip(),
+            actor_id="system",
+            status="active",
+            payload=normalized_payload,
+            payload_bytes=payload_bytes,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "save_marketplace_distribution_state":
+            raise MarketplaceDistributionRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise MarketplaceDistributionRustGateError(exc.reason) from exc
 
 
 def _normalize_review_state(value: Any) -> str:

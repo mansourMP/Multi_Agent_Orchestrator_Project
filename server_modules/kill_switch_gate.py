@@ -9,6 +9,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, Optional
 
+from server_modules import rust_runtime_kernel_client
+
 _log = logging.getLogger(__name__)
 
 _last_restart_time: float = time.time()
@@ -41,6 +43,52 @@ GATEWAY_KILL_PREFIX = "gateway:"
 
 _KILL_STATE: Dict[str, bool] = {}
 _RESOLVERS: list[Callable[[], Dict[str, bool]]] = []
+
+
+class KillSwitchRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_kill_switch_state_decision(*, operation: str, key: str, active: bool) -> Dict[str, Any]:
+    normalized_key = str(key or "").strip()
+    payload = {
+        "key": normalized_key,
+        "active": bool(active),
+        "scope": _kill_switch_scope(normalized_key),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation=operation,
+            state_class="kill_switches",
+            actor_id="system",
+            status="active" if active else "cleared",
+            payload=payload,
+            payload_bytes=len(json.dumps(payload, sort_keys=True).encode("utf-8")),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != operation:
+            raise KillSwitchRustGateError("unexpected_next_action")
+        return decision
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise KillSwitchRustGateError(exc.reason) from exc
+
+
+def _kill_switch_scope(key: str) -> str:
+    if key == GLOBAL_KILL_KEY:
+        return "global"
+    if key.startswith(WORKSPACE_KILL_PREFIX):
+        return "workspace"
+    if key.startswith(AGENT_KILL_PREFIX):
+        return "agent"
+    if key.startswith(GATEWAY_KILL_PREFIX):
+        return "gateway"
+    return "custom"
 
 
 def _read_kill_switches_from_file() -> Dict[str, bool]:
@@ -85,6 +133,7 @@ def _file_resolver() -> Dict[str, bool]:
 
 
 def set_kill_switch(key: str, *, active: bool = True) -> None:
+    _enforce_kill_switch_state_decision(operation="set_kill_switch", key=key, active=active)
     _KILL_STATE[key] = active
     with _KILL_SWITCH_FILE_LOCK:
         _write_kill_switches_to_file(_KILL_STATE)
@@ -92,6 +141,7 @@ def set_kill_switch(key: str, *, active: bool = True) -> None:
 
 
 def clear_kill_switch(key: str) -> None:
+    _enforce_kill_switch_state_decision(operation="clear_kill_switch", key=key, active=False)
     _KILL_STATE.pop(key, None)
     with _KILL_SWITCH_FILE_LOCK:
         _write_kill_switches_to_file(_KILL_STATE)

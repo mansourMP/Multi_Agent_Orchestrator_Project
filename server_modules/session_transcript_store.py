@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from server_modules.memory_service import save_daily_log
 from server_modules import failure_policy_service, memory_summary_service
+from server_modules import rust_runtime_kernel_client
 from server_modules.error_contracts import STORAGE_READ_FAILURE, STORAGE_WRITE_FAILURE, SEVERITY_WARNING
 
 
@@ -25,6 +26,48 @@ def _normalize_workspace_token(workspace_id: str) -> str:
 def _normalize_agent_token(agent_install_id: str) -> str:
     token = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(agent_install_id or "").strip()).strip("-")
     return token or "install"
+
+
+def _enforce_session_transcript_state_decision(*, payload: Dict[str, Any]) -> Dict[str, Any]:
+    workspace_id = str(payload.get("workspace_id") or "default").strip() or "default"
+    thread_id = str(payload.get("thread_id") or "").strip()
+    try:
+        payload_bytes = len(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    except Exception:
+        payload_bytes = 0
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "runtime-state-store-decision",
+            {
+                "operation": "append_session_transcript",
+                "state_class": "session_transcripts",
+                "storage_engine": "durable_postgres",
+                "tenant_id": workspace_id,
+                "workspace_id": workspace_id,
+                "actor_id": thread_id or "session_transcript_store",
+                "status": "active",
+                "payload": payload,
+                "payload_bytes": payload_bytes,
+                "workspace_access": True,
+                "owner_access": True,
+                "destructive_approval": True,
+            },
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        result = getattr(exc, "result", None)
+        if not isinstance(result, dict):
+            result = {}
+        raise RuntimeError(
+            result.get("reason")
+            or "Rust runtime state store denied session transcript append."
+        ) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if next_action != "append_session_transcript":
+        raise RuntimeError(
+            "Rust runtime state store returned unexpected next_action for "
+            f"session transcript append: {next_action or 'missing'}"
+        )
+    return decision
 
 
 def _transcript_dir(workspace_id: str, agent_install_id: str | None = None) -> Path:
@@ -298,6 +341,7 @@ def save_session_transcript(
         "model": str(model or "").strip() or None,
         "messages": _normalized_transcript_messages([dict(item) for item in messages if isinstance(item, dict)]),
     }
+    _enforce_session_transcript_state_decision(payload=payload)
     with transcript_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 

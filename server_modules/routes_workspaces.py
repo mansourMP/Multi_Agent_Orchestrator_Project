@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from server_modules import auth as auth_module
 from server_modules import control_plane_repository
+from server_modules import rust_runtime_kernel_client
 from server_modules import session_service
 from server_modules import workspace_admin_service
 from server_modules.transparency_settings_service import (
@@ -98,6 +99,101 @@ def _require_workspace_default_route(value: Any, *, workspace_id: Optional[str] 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _control_plane_actor_id(current_user: Any, user: Optional[Dict[str, Any]] = None) -> str:
+    record = user if isinstance(user, dict) else {}
+    if not record:
+        try:
+            record = auth_module.get_authenticated_user_record(current_user)
+        except Exception:
+            record = {}
+    for key in ("id", "user_id", "sub", "email"):
+        token = str(record.get(key) or "").strip()
+        if token:
+            return token
+    if isinstance(current_user, dict):
+        for key in ("user_id", "id", "sub", "email"):
+            token = str(current_user.get(key) or "").strip()
+            if token:
+                return token
+    return "workspace_route"
+
+
+def _control_plane_tenant_id(current_user: Any, workspace_id: str, user: Optional[Dict[str, Any]] = None) -> str:
+    record = user if isinstance(user, dict) else {}
+    for source in (record, current_user if isinstance(current_user, dict) else {}):
+        token = str(source.get("tenant_id") or "").strip()
+        if token:
+            return token
+    try:
+        token = auth_module.workspace_tenant_id(current_user, workspace_id)
+    except Exception:
+        token = ""
+    return str(token or workspace_id or "default").strip()
+
+
+def _enforce_control_plane_route_decision(**payload: Any) -> Dict[str, Any]:
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "control-plane-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        result = getattr(exc, "result", None)
+        if not isinstance(result, dict):
+            result = {}
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": result.get("operation") or payload.get("operation"),
+                "reason": result.get("reason") or str(exc),
+            },
+        ) from exc
+    mutation_plan = _coerce_dict(decision.get("mutation_plan"))
+    operation = str(decision.get("operation") or payload.get("operation") or "").strip()
+    expected_next_actions = {
+        "workspace_create": {"apply_control_plane_write"},
+        "workspace_update": {"apply_control_plane_write"},
+        "transparency_settings_update": {"apply_control_plane_write"},
+        "workspace_routing_update": {"apply_control_plane_write"},
+        "workspace_policy_update": {"apply_control_plane_write"},
+        "sage_tool_policy_update": {"apply_control_plane_write"},
+        "invite_create": {"apply_control_plane_write"},
+        "invite_revoke": {
+            "apply_control_plane_write",
+            "return_existing_control_plane_record",
+        },
+        "secret_reference_write": {"apply_control_plane_write"},
+        "provider_models_refresh": {"apply_control_plane_write"},
+    }.get(operation, {"apply_control_plane_write"})
+    next_action = str(
+        mutation_plan.get("next_action") or decision.get("next_action") or ""
+    ).strip()
+    allow_idempotent_return = operation == "invite_revoke" and next_action == "return_existing_control_plane_record"
+    if mutation_plan.get("apply") is not True and not allow_idempotent_return:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": decision.get("operation") or payload.get("operation"),
+                "reason": decision.get("reason") or "missing_rust_mutation_plan",
+            },
+        )
+    if next_action not in expected_next_actions:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_invalid_next_action",
+                "operation": operation or payload.get("operation"),
+                "reason": (
+                    "Rust control-plane service returned unexpected next_action for "
+                    f"{operation or payload.get('operation')}: {next_action or 'missing'}"
+                ),
+            },
+        )
+    return decision
 
 
 def _workspace_summary_payload(workspace_record: Dict[str, Any]) -> Dict[str, Any]:
@@ -242,6 +338,24 @@ async def create_workspace(
     if not clean_name:
         raise HTTPException(status_code=400, detail="name is required.")
 
+    _enforce_control_plane_route_decision(
+        operation="workspace_create",
+        record_type="workspace",
+        tenant_id=str(body.tenant_id or user.get("tenant_id") or user.get("id") or "default").strip(),
+        workspace_id=f"pending:{str(user.get('id') or '').strip() or clean_name}",
+        actor_id=_control_plane_actor_id(current_user, user),
+        actor_role="owner",
+        target_status=_require_workspace_type(body.workspace_type),
+        idempotency_key=f"workspace_create:{str(user.get('id') or '').strip()}:{clean_name}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
+
     workspace_record = await control_plane_repository.create_workspace_for_user(
         user_id=str(user.get("id") or "").strip(),
         tenant_id=None,
@@ -286,6 +400,24 @@ async def update_workspace(
         updates["setup_completed"] = bool(body.setup_completed)
     if not updates:
         raise HTTPException(status_code=400, detail="At least one workspace profile field must be supplied.")
+
+    _enforce_control_plane_route_decision(
+        operation="workspace_update",
+        record_type="workspace",
+        tenant_id=_control_plane_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_control_plane_actor_id(current_user),
+        actor_role="owner",
+        target_status=str(updates.get("workspace_type") or "active"),
+        idempotency_key=f"workspace_update:{resolved_workspace_id}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
 
     workspace_record = await control_plane_repository.update_workspace_profile(
         resolved_workspace_id,
@@ -402,6 +534,7 @@ async def workspace_ai_route_default_update(
     )
     return await update_workspace_default_ai_route(
         workspace_id=resolved_workspace_id,
+        current_user=current_user,
         route_id=body.route_id or body.routeId,
         kind=body.kind,
         provider=body.provider,
@@ -447,6 +580,23 @@ async def workspace_transparency_settings_update(
         **updates,
         "workspace_id": resolved_workspace_id,
     })
+    _enforce_control_plane_route_decision(
+        operation="transparency_settings_update",
+        record_type="workspace_transparency_settings",
+        tenant_id=_control_plane_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_control_plane_actor_id(current_user),
+        actor_role="owner",
+        target_status="active",
+        idempotency_key=f"transparency_settings_update:{resolved_workspace_id}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     try:
         return put_transparency_settings(next_settings).to_dict()
     except ValueError as error:
@@ -461,8 +611,30 @@ async def workspace_routing_update(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+    )
+    _enforce_control_plane_route_decision(
+        operation="workspace_routing_update",
+        record_type="workspace_routing",
+        tenant_id=_control_plane_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_control_plane_actor_id(current_user),
+        actor_role="owner",
+        target_status="active",
+        idempotency_key=f"workspace_routing_update:{resolved_workspace_id}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     return await workspace_admin_service.update_workspace_routing_payload(
-        workspace_id=workspace_id,
+        workspace_id=resolved_workspace_id,
         current_user=current_user,
         payload=(
             body.model_dump(exclude_none=True)
@@ -489,8 +661,31 @@ async def workspace_member_invites(
     body: WorkspaceInviteRequest,
     current_user=Depends(get_current_user),
 ):
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+    )
+    _enforce_control_plane_route_decision(
+        operation="invite_create",
+        record_type="workspace_invite",
+        tenant_id=_control_plane_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_control_plane_actor_id(current_user),
+        actor_role="owner",
+        target_actor_id=str(body.email or "").strip(),
+        target_status=str(body.role or "member").strip(),
+        idempotency_key=f"invite_create:{resolved_workspace_id}:{str(body.email or '').strip().lower()}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     return await workspace_admin_service.invite_workspace_member(
-        workspace_id=workspace_id,
+        workspace_id=resolved_workspace_id,
         current_user=current_user,
         email=body.email,
         role=body.role,
@@ -503,8 +698,30 @@ async def workspace_member_invite_revoke(
     invite_id: str,
     current_user=Depends(get_current_user),
 ):
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+    )
+    _enforce_control_plane_route_decision(
+        operation="invite_revoke",
+        record_type="workspace_invite",
+        tenant_id=_control_plane_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_control_plane_actor_id(current_user),
+        actor_role="owner",
+        target_status="revoked",
+        idempotency_key=f"invite_revoke:{resolved_workspace_id}:{str(invite_id or '').strip()}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     return await workspace_admin_service.revoke_workspace_invite(
-        workspace_id=workspace_id,
+        workspace_id=resolved_workspace_id,
         current_user=current_user,
         invite_id=invite_id,
     )
@@ -555,8 +772,30 @@ async def workspace_policies_update(
     body: WorkspacePoliciesUpdateRequest,
     current_user=Depends(get_current_user),
 ):
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+    )
+    _enforce_control_plane_route_decision(
+        operation="workspace_policy_update",
+        record_type="workspace_policy",
+        tenant_id=_control_plane_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_control_plane_actor_id(current_user),
+        actor_role="owner",
+        target_status="active",
+        idempotency_key=f"workspace_policy_update:{resolved_workspace_id}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     return await workspace_admin_service.update_workspace_policies_payload(
-        workspace_id=workspace_id,
+        workspace_id=resolved_workspace_id,
         current_user=current_user,
         payload=(
             body.model_dump(exclude_none=True)
@@ -583,8 +822,30 @@ async def workspace_sage_tool_policy_update(
     body: WorkspaceSageToolPolicyUpdateRequest,
     current_user=Depends(get_current_user),
 ):
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+    )
+    _enforce_control_plane_route_decision(
+        operation="sage_tool_policy_update",
+        record_type="sage_tool_policy",
+        tenant_id=_control_plane_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_control_plane_actor_id(current_user),
+        actor_role="owner",
+        target_status="enabled" if bool(body.enabled) else "disabled",
+        idempotency_key=f"sage_tool_policy_update:{resolved_workspace_id}:{str(body.tool or '').strip()}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     return await workspace_admin_service.update_workspace_sage_tool_policy_payload(
-        workspace_id=workspace_id,
+        workspace_id=resolved_workspace_id,
         current_user=current_user,
         tool_key=body.tool,
         enabled=bool(body.enabled),
@@ -617,8 +878,32 @@ async def workspace_provider_credential_delete(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
+    provider_id = str(body.provider or "").strip().lower()
+    _enforce_control_plane_route_decision(
+        operation="secret_reference_write",
+        record_type="provider_credential",
+        tenant_id=_control_plane_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_control_plane_actor_id(current_user),
+        actor_role="owner",
+        target_status="delete",
+        idempotency_key=f"provider_credential_delete:{resolved_workspace_id}:{provider_id}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     return await workspace_admin_service.delete_workspace_provider_credential(
-        workspace_id=workspace_id,
+        workspace_id=resolved_workspace_id,
         current_user=current_user,
         provider=body.provider,
     )
@@ -632,8 +917,32 @@ async def workspace_provider_models_refresh(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
+    clean_provider_id = str(provider_id or "").strip().lower()
+    _enforce_control_plane_route_decision(
+        operation="provider_models_refresh",
+        record_type="provider_models",
+        tenant_id=_control_plane_tenant_id(current_user, resolved_workspace_id),
+        workspace_id=resolved_workspace_id,
+        actor_id=_control_plane_actor_id(current_user),
+        actor_role="owner",
+        target_status=clean_provider_id,
+        idempotency_key=f"provider_models_refresh:{resolved_workspace_id}:{clean_provider_id}",
+        owner_access=True,
+        admin_access=True,
+        workspace_access=True,
+        billing_entitled=True,
+        quota_ok=True,
+        approval_provided=True,
+        owner_approval_provided=True,
+    )
     return await workspace_admin_service.refresh_workspace_provider_models(
-        workspace_id=workspace_id,
+        workspace_id=resolved_workspace_id,
         current_user=current_user,
         provider=provider_id,
     )

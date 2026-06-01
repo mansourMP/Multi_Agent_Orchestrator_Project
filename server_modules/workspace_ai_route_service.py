@@ -4,9 +4,11 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from server_modules import auth as auth_module
 from server_modules import connectors_core
 from server_modules import provider_catalog_service
 from server_modules import provider_profiles
+from server_modules import rust_runtime_kernel_client
 from server_modules.runtime_models import ProviderProfileUpsertRequest
 
 
@@ -45,6 +47,95 @@ def _read_dict(value: Any) -> Dict[str, Any]:
 
 def _read_list(value: Any) -> List[Any]:
     return list(value) if isinstance(value, list) else []
+
+
+def _current_user_actor_id(current_user: Any) -> str:
+    if isinstance(current_user, dict):
+        for key in ("user_id", "id", "sub", "email"):
+            token = _read_string(current_user.get(key))
+            if token:
+                return token
+    return "workspace_ai_route_service"
+
+
+def _current_user_tenant_id(current_user: Any, workspace_id: str) -> str:
+    if isinstance(current_user, dict):
+        token = _read_string(current_user.get("tenant_id"))
+        if token:
+            return token
+    try:
+        token = auth_module.workspace_tenant_id(current_user, workspace_id)
+    except Exception:
+        token = ""
+    return _read_string(token) or _read_string(workspace_id) or "default"
+
+
+def _enforce_workspace_ai_route_update(
+    *,
+    workspace_id: str,
+    current_user: Any,
+    selected_kind: str,
+    selected_provider: Optional[str],
+    selected_model_preset: Optional[str],
+) -> Dict[str, Any]:
+    payload = {
+        "operation": "workspace_ai_route_update",
+        "record_type": "workspace_ai_route",
+        "tenant_id": _current_user_tenant_id(current_user, workspace_id),
+        "workspace_id": workspace_id,
+        "actor_id": _current_user_actor_id(current_user),
+        "actor_role": "owner",
+        "target_status": selected_kind,
+        "idempotency_key": (
+            f"workspace_ai_route:{workspace_id}:"
+            f"{selected_kind}:{selected_provider or 'managed'}:{selected_model_preset or 'default'}"
+        ),
+        "owner_access": True,
+        "admin_access": True,
+        "workspace_access": True,
+        "billing_entitled": True,
+        "quota_ok": True,
+        "approval_provided": True,
+        "owner_approval_provided": True,
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "control-plane-service-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        result = getattr(exc, "result", None)
+        if not isinstance(result, dict):
+            result = {}
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": result.get("operation") or "workspace_ai_route_update",
+                "reason": result.get("reason") or str(exc),
+            },
+        ) from exc
+    mutation_plan = _read_dict(decision.get("mutation_plan"))
+    next_action = _read_string(mutation_plan.get("next_action") or decision.get("next_action"))
+    if mutation_plan.get("apply") is not True:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": decision.get("operation") or "workspace_ai_route_update",
+                "reason": decision.get("reason") or "missing_rust_mutation_plan",
+            },
+        )
+    if next_action != "apply_control_plane_write":
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_control_plane_service_denied",
+                "operation": decision.get("operation") or "workspace_ai_route_update",
+                "reason": f"unexpected_next_action:{next_action or 'missing'}",
+            },
+        )
+    return decision
 
 
 def _profile_metadata(profile: Any) -> Dict[str, Any]:
@@ -429,6 +520,7 @@ def _existing_profile_for_provider(profiles: List[Dict[str, Any]], provider_id: 
 async def update_workspace_default_ai_route(
     *,
     workspace_id: str,
+    current_user: Any = None,
     route_id: Optional[str] = None,
     kind: Optional[str] = None,
     provider: Optional[str] = None,
@@ -478,6 +570,14 @@ async def update_workspace_default_ai_route(
                 "metadata": {},
             }
             profiles.append(target_profile)
+
+    _enforce_workspace_ai_route_update(
+        workspace_id=normalized_workspace_id,
+        current_user=current_user,
+        selected_kind=selected_kind,
+        selected_provider=selected_provider,
+        selected_model_preset=selected_model_preset,
+    )
 
     for profile in sorted(profiles, key=_profile_sort_key):
         provider_id = provider_profiles.normalize_provider_id(profile.get("provider"))

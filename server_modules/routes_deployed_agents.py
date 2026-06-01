@@ -10,6 +10,7 @@ from server_modules import deployed_agent_business_insights_service
 from server_modules import deployed_agent_service
 from server_modules import deployed_agent_test_turn_service
 from server_modules import conversation_memory_policy
+from server_modules import rust_runtime_kernel_client
 from server_modules.deployed_agent_admin_dashboard_service import get_deployed_agent_admin_dashboard_service
 from server_modules.schemas import DeployedAgentTestTurnRequest
 
@@ -121,6 +122,100 @@ def _normalize_deployed_agent_config_input(config: Optional[Dict[str, Any]]) -> 
     return payload
 
 
+def _deployed_agent_route_actor_role(current_user: dict[str, Any], workspace_id: str) -> str:
+    if bool((current_user or {}).get("is_admin")) or bool((current_user or {}).get("auth_admin")):
+        return "admin"
+    try:
+        role = str(auth_module.workspace_role(current_user, workspace_id) or "").strip().lower()
+    except Exception:
+        role = ""
+    return role or "member"
+
+
+def _enforce_deployed_agent_route_decision(
+    *,
+    operation: str,
+    workspace_id: str,
+    current_user: dict[str, Any],
+    deployed_agent_id: Optional[str] = None,
+    deployment_state: Optional[str] = None,
+    runtime_target: Optional[str] = None,
+    session_id: Optional[str] = None,
+    insight_id: Optional[str] = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    resolved_operation = str(operation or "").strip()
+    actor_role = _deployed_agent_route_actor_role(current_user, workspace_id)
+    actor_id = None
+    if isinstance(current_user, dict):
+        actor_id = str(current_user.get("id") or current_user.get("user_id") or "").strip() or None
+    payload = {
+        "operation": resolved_operation,
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "deployed_agent_id": str(deployed_agent_id or "").strip() or None,
+        "deployment_state": str(deployment_state or "").strip() or None,
+        "studio_agent_mode": str(runtime_target or "").strip() or None,
+        "actor_role": actor_role,
+        "actor_id": actor_id,
+        "session_id": str(session_id or "").strip() or None,
+        "insight_id": str(insight_id or "").strip() or None,
+    }
+    for key, value in extra.items():
+        if value is not None:
+            payload[key] = value
+    command = "deployed-agent-decision"
+    expected_next_action = {
+        "create_draft": "create_draft",
+        "list": "read_agent",
+        "read": "read_agent",
+    }.get(resolved_operation)
+    if expected_next_action is None:
+        command = "deployed-agent-service-decision"
+        expected_next_action = {
+            "telegram_readiness": "read_telegram_readiness",
+            "analytics_read": "read_deployed_agent_analytics",
+            "admin_dashboard": "read_deployed_agent_admin_dashboard",
+            "audit_export": "export_deployed_agent_audit_logs",
+            "memory_list": "list_deployed_agent_memory",
+            "activity_list": "list_deployed_agent_activity",
+            "conversation_list": "list_deployed_agent_conversations",
+            "conversation_detail": "read_deployed_agent_conversation_detail",
+            "external_user_delete": "delete_deployed_agent_external_user_data",
+            "knowledge_verify": "verify_deployed_agent_knowledge",
+            "knowledge_upload": "upload_deployed_agent_knowledge_reference",
+            "business_insight_review": "review_deployed_agent_business_insight",
+            "business_insight_apply": "apply_deployed_agent_business_insight",
+            "shop_evaluate": "evaluate_shop_assistant",
+            "test_turn": "execute_deployed_agent_test_turn",
+        }.get(resolved_operation)
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            command,
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "deployed_agent_denied").strip()
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_deployed_agent_denied",
+                "operation": payload["operation"],
+                "reason": reason,
+            },
+        ) from exc
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_next_action and next_action != expected_next_action:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "error": "rust_deployed_agent_invalid_next_action",
+                "operation": payload["operation"],
+                "reason": f"unexpected_next_action:{next_action or 'missing'}",
+            },
+        )
+    return decision
+
+
 @router.post("/deployed-agents")
 async def create_deployed_agent(
     body: DeployedAgentCreateRequest,
@@ -128,6 +223,13 @@ async def create_deployed_agent(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    _enforce_deployed_agent_route_decision(
+        operation="create_draft",
+        workspace_id=body.workspace_id,
+        current_user=current_user,
+        deployment_state="draft",
+        runtime_target=body.runtime_target,
+    )
     try:
         payload = await deployed_agent_service.create_draft_deployed_agent(
             current_user=current_user,
@@ -161,6 +263,12 @@ async def list_deployed_agents(
     deployment_state: Optional[str] = None,
     current_user=Depends(get_current_user),
 ):
+    _enforce_deployed_agent_route_decision(
+        operation="list",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployment_state=deployment_state,
+    )
     return await deployed_agent_service.list_deployed_agents(
         current_user=current_user,
         owner_workspace_id=workspace_id,
@@ -185,6 +293,12 @@ async def get_deployed_agent_analytics(
     workspace_id: str,
     current_user=Depends(get_current_user),
 ):
+    _enforce_deployed_agent_route_decision(
+        operation="analytics_read",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
     payload = await deployed_agent_service.get_deployed_agent_analytics(
         deployed_agent_id=deployed_agent_id,
         current_user=current_user,
@@ -205,6 +319,12 @@ async def get_deployed_agent_admin_dashboard(
     cursor_external_user_id: Optional[str] = None,
     current_user=Depends(get_current_user),
 ):
+    _enforce_deployed_agent_route_decision(
+        operation="admin_dashboard",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
     return await get_deployed_agent_admin_dashboard_service().get_dashboard(
         agent_id=deployed_agent_id,
         workspace_id=workspace_id,
@@ -224,6 +344,12 @@ async def list_deployed_agent_memory_entries(
     offset: int = 0,
     current_user=Depends(get_current_user),
 ):
+    _enforce_deployed_agent_route_decision(
+        operation="memory_list",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
     payload = await deployed_agent_service.list_deployed_agent_memory_entries(
         deployed_agent_id=deployed_agent_id,
         current_user=current_user,
@@ -244,6 +370,12 @@ async def list_deployed_agent_activity(
     offset: int = 0,
     current_user=Depends(get_current_user),
 ):
+    _enforce_deployed_agent_route_decision(
+        operation="activity_list",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
     payload = await deployed_agent_service.list_deployed_agent_activity(
         deployed_agent_id=deployed_agent_id,
         current_user=current_user,
@@ -305,6 +437,13 @@ async def dismiss_deployed_agent_business_insight(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    _enforce_deployed_agent_route_decision(
+        operation="business_insight_review",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+        insight_id=insight_id,
+    )
     return await deployed_agent_business_insights_service.review_owner_business_insight(
         current_user=current_user,
         workspace_id=workspace_id,
@@ -325,6 +464,13 @@ async def archive_deployed_agent_business_insight(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    _enforce_deployed_agent_route_decision(
+        operation="business_insight_review",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+        insight_id=insight_id,
+    )
     return await deployed_agent_business_insights_service.review_owner_business_insight(
         current_user=current_user,
         workspace_id=workspace_id,
@@ -345,6 +491,13 @@ async def apply_deployed_agent_business_insight(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    _enforce_deployed_agent_route_decision(
+        operation="business_insight_apply",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+        insight_id=insight_id,
+    )
     return await deployed_agent_business_insights_service.apply_owner_business_insight(
         current_user=current_user,
         workspace_id=workspace_id,
@@ -360,6 +513,12 @@ async def get_deployed_agent_telegram_readiness(
     deployed_agent_id: Optional[str] = None,
     current_user=Depends(get_current_user),
 ):
+    _enforce_deployed_agent_route_decision(
+        operation="telegram_readiness",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
     try:
         payload = await deployed_agent_service.get_deployed_agent_telegram_readiness(
             current_user=current_user,
@@ -381,6 +540,12 @@ async def get_deployed_agent(
     workspace_id: str,
     current_user=Depends(get_current_user),
 ):
+    _enforce_deployed_agent_route_decision(
+        operation="read",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
     payload = await deployed_agent_service.get_deployed_agent_detail(
         deployed_agent_id=deployed_agent_id,
         current_user=current_user,
@@ -399,6 +564,12 @@ async def verify_deployed_agent_knowledge(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    _enforce_deployed_agent_route_decision(
+        operation="knowledge_verify",
+        workspace_id=body.workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
     try:
         payload = await deployed_agent_service.verify_deployed_agent_knowledge_retrieval(
             deployed_agent_id=deployed_agent_id,
@@ -422,6 +593,12 @@ async def upload_deployed_agent_knowledge_file(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    _enforce_deployed_agent_route_decision(
+        operation="knowledge_upload",
+        workspace_id=body.workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
     try:
         payload = await deployed_agent_service.upload_deployed_agent_knowledge_file(
             deployed_agent_id=deployed_agent_id,
@@ -644,6 +821,13 @@ async def export_deployed_agent_audit_logs(
     limit: int = 500,
     current_user=Depends(get_current_user),
 ):
+    _enforce_deployed_agent_route_decision(
+        operation="audit_export",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+        audit_export_approval=_deployed_agent_route_actor_role(current_user, workspace_id) in {"owner", "admin"},
+    )
     payload = await deployed_agent_service.export_deployed_agent_audit_logs(
         deployed_agent_id=deployed_agent_id,
         current_user=current_user,
@@ -663,6 +847,12 @@ async def list_deployed_agent_conversations(
     offset: int = 0,
     current_user=Depends(get_current_user),
 ):
+    _enforce_deployed_agent_route_decision(
+        operation="conversation_list",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
     payload = await deployed_agent_service.list_deployed_agent_conversations(
         deployed_agent_id=deployed_agent_id,
         current_user=current_user,
@@ -682,6 +872,13 @@ async def get_deployed_agent_conversation_detail(
     workspace_id: str,
     current_user=Depends(get_current_user),
 ):
+    _enforce_deployed_agent_route_decision(
+        operation="conversation_detail",
+        workspace_id=workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+        session_id=session_id,
+    )
     payload = await deployed_agent_service.get_deployed_agent_conversation_detail(
         deployed_agent_id=deployed_agent_id,
         session_id=session_id,
@@ -702,6 +899,15 @@ async def delete_deployed_agent_external_user_data(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    _enforce_deployed_agent_route_decision(
+        operation="external_user_delete",
+        workspace_id=body.workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+        external_user_id=external_user_id,
+        session_id=body.session_id,
+        privacy_delete_verified=True,
+    )
     try:
         payload = await deployed_agent_service.delete_deployed_agent_external_user_data(
             deployed_agent_id=deployed_agent_id,
@@ -729,6 +935,12 @@ async def evaluate_shop_assistant(
     current_user=Depends(get_current_user),
 ):
     auth_module.validate_csrf(request)
+    _enforce_deployed_agent_route_decision(
+        operation="shop_evaluate",
+        workspace_id=body.workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
     try:
         result = await deployed_agent_service.evaluate_deployed_shop_assistant_customer_question(
             deployed_agent_id=deployed_agent_id,
@@ -759,6 +971,12 @@ async def test_turn_deployed_agent(
         minimum_role="viewer",
     )
     tenant_id = auth_module.workspace_tenant_id(current_user, resolved_workspace_id)
+    _enforce_deployed_agent_route_decision(
+        operation="test_turn",
+        workspace_id=resolved_workspace_id,
+        current_user=current_user,
+        deployed_agent_id=deployed_agent_id,
+    )
 
     try:
         result = await deployed_agent_test_turn_service.execute_test_turn(

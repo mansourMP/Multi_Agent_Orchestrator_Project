@@ -10,13 +10,29 @@ import time
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 import uuid
 
-from server_modules import browser_approval_service
+from server_modules import browser_approval_service, rust_runtime_kernel_client
 from server_modules.runtime_state_store import replace_local_runtime_state
 
 
 LOGGER = logging.getLogger(__name__)
 OUTBOX_DELIVERY_RETRY_BACKOFF_SECONDS: tuple[int, ...] = (5, 15, 30, 60, 120)
 OUTBOX_MAX_DELIVERY_ATTEMPTS = len(OUTBOX_DELIVERY_RETRY_BACKOFF_SECONDS)
+
+_OUTBOX_DELIVERY_EXPECTED_NEXT_ACTIONS: dict[str, str] = {
+    "persist_event": "persist_outbox_event",
+    "list_undelivered": "list_undelivered_outbox_events",
+    "claim_due": "claim_due_outbox_events",
+    "patch_payload": "patch_outbox_event_payload",
+    "mark_delivered": "mark_outbox_event_delivered",
+    "record_failure": "record_outbox_delivery_failure",
+    "list_poisoned": "list_poisoned_outbox_events",
+    "delivery_status": "get_outbox_delivery_status",
+}
+
+_RUN_RECORD_OUTBOX_EXPECTED_NEXT_ACTIONS: dict[str, set[str]] = {
+    "emit_transition_outbox": {"emit_run_transition_event", "noop"},
+    "emit_artifact_outbox": {"emit_artifact_created_events", "noop"},
+}
 
 
 @dataclass(slots=True)
@@ -75,11 +91,84 @@ def _build_event_id(event_type: str, idempotency_key: str) -> str:
     return f"{event_type}:{uuid.uuid4().hex}"
 
 
+def _enforce_outbox_delivery_decision(operation: str, **request: Any) -> Dict[str, Any]:
+    payload = {
+        "operation": operation,
+        "event_id": str(request.get("event_id") or "").strip(),
+        "event_type": str(request.get("event_type") or "").strip(),
+        "tenant_id": str(request.get("tenant_id") or "").strip(),
+        "workspace_id": str(request.get("workspace_id") or "").strip(),
+        "run_id": str(request.get("run_id") or "").strip(),
+        "machine_id": str(request.get("machine_id") or "").strip(),
+        "claim_token": str(request.get("claim_token") or "").strip(),
+        "claimed_by": str(request.get("claimed_by") or "").strip(),
+        "limit": int(request.get("limit") or 200),
+        "claim_ttl_seconds": int(request.get("claim_ttl_seconds") or 30),
+        "retry_count": int(request.get("retry_count") or 0),
+        "max_retries": int(request.get("max_retries") or OUTBOX_MAX_DELIVERY_ATTEMPTS),
+        "retry_delay_seconds": request.get("retry_delay_seconds"),
+        "poison": bool(request.get("poison")),
+        "error_text": str(request.get("error_text") or "").strip(),
+        "payload_patch_present": bool(request.get("payload_patch_present")),
+        "repository_read_only": bool(request.get("repository_read_only")),
+    }
+    decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+        "outbox-delivery-decision",
+        payload,
+    )
+    expected_next_action = _OUTBOX_DELIVERY_EXPECTED_NEXT_ACTIONS.get(str(operation or "").strip())
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_next_action and next_action != expected_next_action:
+        raise RuntimeError(f"unexpected next_action: {next_action or 'missing'}")
+    return decision
+
+
+def _enforce_run_record_outbox_decision(operation: str, **request: Any) -> Dict[str, Any]:
+    payload = {
+        "operation": operation,
+        "run_id": str(request.get("run_id") or "").strip(),
+        "tenant_id": str(request.get("tenant_id") or "").strip() or "default",
+        "workspace_id": str(request.get("workspace_id") or "").strip() or "default",
+        "from_state": str(request.get("from_state") or "").strip(),
+        "to_state": str(request.get("to_state") or "").strip(),
+        "artifact_count": int(request.get("artifact_count") or 0),
+        "version": int(request.get("version") or 0),
+    }
+    try:
+        decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
+            "run-record-decision",
+            payload,
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(getattr(exc, "reason", "") or "run_record_denied").strip()
+        raise RuntimeError(f"Rust run-record kernel blocked {operation}: {reason}") from exc
+    expected_actions = _RUN_RECORD_OUTBOX_EXPECTED_NEXT_ACTIONS.get(str(operation or "").strip())
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_actions is None:
+        raise RuntimeError(f"unexpected run_record_outbox operation: {operation}")
+    if next_action not in expected_actions:
+        expected_list = ", ".join(sorted(expected_actions))
+        raise RuntimeError(
+            f"unexpected next_action for run-record-decision: {next_action or 'missing'} "
+            f"(expected {expected_list})"
+        )
+    return decision
+
+
 def _persist_outbox_event(
     event: OutboxEvent,
     *,
     persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
 ) -> None:
+    _enforce_outbox_delivery_decision(
+        "persist_event",
+        event_id=event.event_id,
+        event_type=event.event_type,
+        tenant_id=event.tenant_id,
+        workspace_id=event.workspace_id,
+        run_id=event.run_id,
+        machine_id=event.machine_id,
+    )
     if persist_outbox_event_fn is None:
         try:
             from server_modules import run_state_repository
@@ -234,6 +323,16 @@ def emit_run_transition_event(
     run_token = str(run_id or "").strip()
     from_token = str(from_state or "").strip() or "unknown"
     to_token = str(to_state or "").strip() or "unknown"
+    decision = _enforce_run_record_outbox_decision(
+        "emit_transition_outbox",
+        run_id=run_token,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        from_state=from_token,
+        to_state=to_token,
+    )
+    if str(decision.get("next_action") or "").strip() == "noop":
+        return None
     return emit_runtime_event(
         event_type="run_transition",
         tenant_id=tenant_id,
@@ -272,6 +371,15 @@ def emit_artifact_created_event(
         or f"index:{max(0, int(index))}"
     ).strip()
     artifact_kind = str(artifact_payload.get("kind") or artifact_payload.get("type") or "artifact").strip()
+    decision = _enforce_run_record_outbox_decision(
+        "emit_artifact_outbox",
+        run_id=str(run_id or "").strip(),
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        artifact_count=1,
+    )
+    if str(decision.get("next_action") or "").strip() == "noop":
+        return None
     return emit_runtime_event(
         event_type="artifact_created",
         tenant_id=tenant_id,
@@ -687,6 +795,16 @@ def deliver_due_outbox_events_once(
         claim_kwargs["run_id"] = str(run_id or "").strip()
     if str(event_type or "").strip():
         claim_kwargs["event_type"] = str(event_type or "").strip()
+    _enforce_outbox_delivery_decision(
+        "claim_due",
+        tenant_id=claim_kwargs.get("tenant_id"),
+        workspace_id=claim_kwargs.get("workspace_id"),
+        event_type=claim_kwargs.get("event_type"),
+        run_id=claim_kwargs.get("run_id"),
+        claimed_by=claim_kwargs.get("claimed_by"),
+        claim_ttl_seconds=claim_kwargs.get("claim_ttl_seconds"),
+        limit=claim_kwargs.get("limit"),
+    )
     items = claim_due_outbox_events_fn(**claim_kwargs)
     for item in items or []:
         event = _outbox_event_from_item(item)
@@ -704,6 +822,20 @@ def deliver_due_outbox_events_once(
             retry_delay_seconds = max(1, int(exc.retry_delay_seconds or 1))
             error_message = str(exc or "retry later").strip() or "retry later"
             try:
+                _enforce_outbox_delivery_decision(
+                    "record_failure",
+                    event_id=event.event_id,
+                    event_type=event.event_type,
+                    tenant_id=event.tenant_id,
+                    workspace_id=event.workspace_id,
+                    run_id=event.run_id,
+                    machine_id=event.machine_id,
+                    claim_token=claim_token,
+                    retry_count=event.retry_count,
+                    retry_delay_seconds=retry_delay_seconds,
+                    poison=False,
+                    error_text=error_message,
+                )
                 _record_outbox_delivery_failure_with_claim(
                     record_outbox_delivery_failure_fn,
                     event.event_id,
@@ -723,6 +855,20 @@ def deliver_due_outbox_events_once(
             poison = retry_delay_seconds is None
             error_message = str(exc or "delivery failed").strip() or "delivery failed"
             try:
+                _enforce_outbox_delivery_decision(
+                    "record_failure",
+                    event_id=event.event_id,
+                    event_type=event.event_type,
+                    tenant_id=event.tenant_id,
+                    workspace_id=event.workspace_id,
+                    run_id=event.run_id,
+                    machine_id=event.machine_id,
+                    claim_token=claim_token,
+                    retry_count=event.retry_count,
+                    retry_delay_seconds=retry_delay_seconds,
+                    poison=poison,
+                    error_text=error_message,
+                )
                 _record_outbox_delivery_failure_with_claim(
                     record_outbox_delivery_failure_fn,
                     event.event_id,
@@ -739,6 +885,16 @@ def deliver_due_outbox_events_once(
                 poisoned_ids.append(event.event_id)
             continue
         try:
+            _enforce_outbox_delivery_decision(
+                "mark_delivered",
+                event_id=event.event_id,
+                event_type=event.event_type,
+                tenant_id=event.tenant_id,
+                workspace_id=event.workspace_id,
+                run_id=event.run_id,
+                machine_id=event.machine_id,
+                claim_token=claim_token,
+            )
             marked = _mark_outbox_event_delivered_with_claim(
                 mark_outbox_event_delivered_fn,
                 event.event_id,

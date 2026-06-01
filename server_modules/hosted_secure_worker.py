@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover - non-posix fallback
     resource = None  # type: ignore[assignment]
 
 from server_modules.agent_manifest import AgentManifest
-from server_modules import universal_operator
+from server_modules import rust_runtime_kernel_client, universal_operator
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -58,7 +58,41 @@ def _write_workspace_output(result: Dict[str, Any]) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError:
         pass
+    _enforce_hosted_worker_output_state_decision(target=target, result=result)
     target.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class HostedWorkerRustGateError(RuntimeError):
+    pass
+
+
+def _enforce_hosted_worker_output_state_decision(*, target: Path, result: Dict[str, Any]) -> None:
+    payload = {
+        "output_path": str(target),
+        "status": str(dict(result or {}).get("status") or "").strip(),
+        "keys": sorted(str(key) for key in dict(result or {}).keys()),
+        "byte_size": len(json.dumps(result or {}, ensure_ascii=False, default=str).encode("utf-8")),
+    }
+    try:
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_hosted_worker_output",
+            state_class="hosted_worker_output",
+            actor_id="system",
+            status=payload["status"] or "completed",
+            payload=payload,
+            payload_bytes=len(json.dumps(payload, sort_keys=True).encode("utf-8")),
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_hosted_worker_output":
+            raise HostedWorkerRustGateError("unexpected_next_action")
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        raise HostedWorkerRustGateError(exc.reason) from exc
 
 
 async def _main_async(payload: Dict[str, Any]) -> Dict[str, Any]:

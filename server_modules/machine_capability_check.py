@@ -64,6 +64,30 @@ def _filesystem_probe() -> Dict[str, Any]:
     probe_dir = db_path.parent / "desktop_setup_probe"
     probe_file = probe_dir / "write-test.tmp"
     try:
+        from server_modules import rust_runtime_kernel_client
+
+        payload = {
+            "probe_dir": str(probe_dir),
+            "probe_file": str(probe_file),
+            "payload_bytes": 2,
+        }
+        decision = rust_runtime_kernel_client.runtime_state_store_decision(
+            operation="write_machine_capability_probe_file",
+            state_class="machine_capability_probe",
+            actor_id="system",
+            status="active",
+            payload=payload,
+            payload_bytes=2,
+            workspace_access=True,
+            owner_access=True,
+        )
+        rust_runtime_kernel_client.enforce_kernel_decision(
+            "runtime-state-store-decision",
+            decision,
+        )
+        next_action = str(decision.get("next_action") or "").strip()
+        if next_action != "write_machine_capability_probe_file":
+            raise RuntimeError("unexpected_next_action")
         probe_dir.mkdir(parents=True, exist_ok=True)
         probe_file.write_text("ok", encoding="utf-8")
         contents = probe_file.read_text(encoding="utf-8")

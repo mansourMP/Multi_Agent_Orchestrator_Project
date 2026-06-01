@@ -11,6 +11,7 @@ import uuid
 
 from server_modules import db as runtime_db
 from server_modules import control_plane_repository
+from server_modules import rust_runtime_kernel_client
 from server_modules.runtime_state_store import (
     delete_runtime_session,
     get_runtime_session as get_sqlite_runtime_session,
@@ -61,6 +62,44 @@ def _utc_now_iso() -> str:
 
 def _expires_at_iso(ttl_seconds: int) -> str:
     return (_utc_now() + timedelta(seconds=max(60, int(ttl_seconds or DEFAULT_SESSION_TTL_SECONDS)))).isoformat().replace("+00:00", "Z")
+
+
+def _enforce_session_lifecycle_mutation(
+    operation: str,
+    *,
+    session_record: Dict[str, Any],
+) -> Dict[str, Any]:
+    payload = {
+        "operation": str(operation or "").strip(),
+        "session_id": str(session_record.get("session_id") or "").strip() or None,
+        "status": str(session_record.get("status") or "active").strip() or "active",
+        "preset": "standard",
+        "turn_count": max(0, int(session_record.get("turn_count") or 0)),
+        "age_hours": max(0, int(session_record.get("age_hours") or 0)),
+        "idle_seconds": max(0, int(session_record.get("idle_seconds") or 0)),
+        "max_age_hours": max(1, int(session_record.get("max_age_hours") or 24)),
+        "idle_timeout_seconds": max(1, int(session_record.get("idle_timeout_seconds") or 3600)),
+        "force": False,
+    }
+    try:
+        decision = dict(
+            rust_runtime_kernel_client.run_runtime_kernel_enforced(
+                "session-lifecycle-decision",
+                payload,
+                allow_approval_required=True,
+            )
+        )
+    except rust_runtime_kernel_client.RustKernelDecisionError as exc:
+        reason = str(exc.reason or "session_lifecycle_denied").strip()
+        raise RuntimeError(f"Rust session lifecycle kernel blocked {operation}: {reason}") from exc
+    expected_next_actions = {
+        "create": {"create"},
+        "close": {"close"},
+    }.get(str(operation or "").strip())
+    next_action = str(decision.get("next_action") or "").strip()
+    if expected_next_actions and next_action not in expected_next_actions:
+        raise RuntimeError(f"unexpected_next_action:{next_action or 'missing'}")
+    return decision
 
 
 def _coerce_timestamptz(value: Any) -> Optional[datetime]:
@@ -326,6 +365,16 @@ async def create_session(
     ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
 ) -> str:
     token = str(session_id or "").strip() or uuid.uuid4().hex
+    existing = await get_session(token) if str(session_id or "").strip() else None
+    _enforce_session_lifecycle_mutation(
+        "create",
+        session_record=existing
+        if isinstance(existing, dict)
+        else {
+            "session_id": token if str(session_id or "").strip() else "",
+            "status": "new",
+        },
+    )
     record = _canonical_session_record(
         session_id=token,
         workspace_id=workspace_id,
@@ -662,6 +711,15 @@ async def terminate_session(session_id: str) -> None:
     if not token:
         return None
     existing = await get_session(token)
+    _enforce_session_lifecycle_mutation(
+        "close",
+        session_record=existing
+        if isinstance(existing, dict)
+        else {
+            "session_id": token,
+            "status": "active",
+        },
+    )
     pool = await _ensure_runtime_sessions_table()
     if pool is not None:
         try:

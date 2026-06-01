@@ -432,8 +432,8 @@ function HostedRegisteredAppScreen({ appId, onBack }: { appId: string; onBack: (
       onBack={onBack}
       bottomInset={insets.bottom}
       menuDetails={{
-        historyEmpty: "History will appear after this tool runs.",
-        creditSummary: "Usage will appear after this tool runs.",
+        historyEmpty: "Recent activity will appear after this app runs.",
+        creditSummary: "No usage yet.",
       }}
     >
       <View style={{ gap: 16, paddingTop: 18 }}>
@@ -506,27 +506,21 @@ function summarizeUsage(usage: unknown): string {
 function summarizeAiInvokePolicy(contract: MiniAppContract | null): string[] {
   const policy = contract?.ai_invoke_policy;
   if (!policy) {
-    return ["AI is not granted for this tool."];
+    return ["AI is not enabled for this app."];
   }
   const status = String(policy.consent_status || "").toLowerCase();
-  const rows = [
-    status === "granted" ? "AI permission granted." : "AI permission not granted.",
-    `Payer: ${String(policy.payer || "platform_credits").replace(/_/g, " ")}`,
+  return [
+    status === "granted"
+      ? "AI can run while this app is open."
+      : "AI is not granted for this app yet.",
   ];
-  if (policy.monthly_credit_cap !== undefined && policy.monthly_credit_cap !== null) {
-    rows.push(`Monthly cap: ${Number(policy.monthly_credit_cap).toLocaleString()} credits`);
-  }
-  if (policy.per_invocation_credit_cap !== undefined && policy.per_invocation_credit_cap !== null) {
-    rows.push(`Per run cap: ${Number(policy.per_invocation_credit_cap).toLocaleString()} credits`);
-  }
-  return rows;
 }
 
 function summarizeTrustPolicy(contract: MiniAppContract | null): string[] {
-  const tier = String(contract?.trust_tier || "user_private").replace(/_/g, " ");
-  const background = contract?.background_ai_allowed ? "Background AI allowed." : "AI only while this tool is open.";
-  const runtime = contract?.runtime_access && contract.runtime_access !== "none" ? String(contract.runtime_access) : "No computer or local runtime access.";
-  return [`Trust: ${tier}`, background, runtime];
+  const visibility = contract?.visibility === "unlisted_link" ? "Shareable by private link." : "Private to this workspace.";
+  const background = contract?.background_ai_allowed ? "Can continue approved work in the background." : "Works only while open.";
+  const runtime = contract?.runtime_access && contract.runtime_access !== "none" ? "Uses approved runtime access." : "No computer or device access.";
+  return [visibility, background, runtime];
 }
 
 function modelSummaryFromContract(contract: MiniAppContract | null): string {
@@ -732,63 +726,99 @@ function MiniAppMenuModal({
   const permissions = Array.isArray(contract?.permissions) ? contract.permissions : [];
   const memoryLabel =
     contract?.memory_scope === "none_by_default" || !contract?.memory_scope
-      ? "No Sage memory by default."
+      ? "Memory stays off unless you turn it on."
       : String(contract.memory_scope);
-  const creditLabel = details?.creditSummary || "Usage will appear after this tool runs.";
+  const usageLabel = details?.creditSummary || "No usage yet.";
   const historyItems = details?.historyItems || [];
   const aiPolicyRows = summarizeAiInvokePolicy(contract);
+  const modelLabel = details?.modelSummary || modelSummaryFromContract(contract);
+  const technicalRows = [
+    ...summarizeTrustPolicy(contract),
+    ...(modelLabel && modelLabel !== "Resolved when this tool runs." ? [`Model: ${modelLabel}`] : []),
+  ];
+  const permissionRows = permissions.length
+    ? permissions.map((permission) => String(permission).replace(/^app\./, "").replace(/[._-]+/g, " "))
+    : ["No extra permissions granted."];
   return (
-    <Modal animationType="fade" visible={visible} transparent onRequestClose={onClose}>
+    <Modal animationType="slide" visible={visible} transparent onRequestClose={onClose}>
       <Pressable
         onPress={onClose}
         style={{
           flex: 1,
-          backgroundColor: "rgba(0,0,0,0.28)",
+          backgroundColor: "rgba(0,0,0,0.22)",
           justifyContent: "flex-end",
         }}
       >
         <Pressable
           onPress={(event) => event.stopPropagation()}
           style={{
-            margin: 14,
-            padding: 18,
-            borderRadius: 26,
+            marginHorizontal: 10,
+            marginBottom: 10,
+            maxHeight: "74%",
+            paddingHorizontal: 18,
+            paddingTop: 10,
+            paddingBottom: 18,
+            borderRadius: 34,
             borderWidth: 1,
             borderColor: theme.colors.border,
-            backgroundColor: theme.colors.card,
-            gap: 16,
+            backgroundColor: theme.colors.background,
+            gap: 14,
+            shadowColor: "#000000",
+            shadowOpacity: 0.18,
+            shadowRadius: 30,
+            shadowOffset: { width: 0, height: -10 },
+            elevation: 12,
           }}
         >
+          <View
+            style={{
+              alignSelf: "center",
+              width: 42,
+              height: 5,
+              borderRadius: 999,
+              backgroundColor: theme.colors.border,
+              marginBottom: 6,
+            }}
+          />
           <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={42} />
+            <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={48} />
             <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 18, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
-              <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
-                {contract?.delivery_mode === "hosted" ? "Hosted tool" : "Tool"}
+              <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
+              <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>
+                {contract?.delivery_mode === "hosted" ? "Hosted app" : "Workspace app"}
               </Text>
             </View>
-            <TouchableOpacity onPress={onClose} accessibilityRole="button" accessibilityLabel="Close tool menu">
-              <Ionicons name="close" size={22} color={theme.colors.textSecondary} />
+            <TouchableOpacity
+              onPress={onClose}
+              accessibilityRole="button"
+              accessibilityLabel="Close app menu"
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 19,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: theme.colors.surface,
+              }}
+            >
+              <Ionicons name="close" size={21} color={theme.colors.textSecondary} />
             </TouchableOpacity>
           </View>
 
           <MenuSection
             icon="time-outline"
-            title="History"
-            rows={historyItems.length ? historyItems : [details?.historyEmpty || "History will appear after this tool runs."]}
+            title="Recent activity"
+            rows={historyItems.length ? historyItems : [details?.historyEmpty || "Recent activity will appear after this app runs."]}
           />
           <MenuSection icon="sparkles-outline" title="Memory" rows={[memoryLabel]} />
-          <MenuSection icon="shield-outline" title="Trust" rows={summarizeTrustPolicy(contract)} />
-          <MenuSection icon="hardware-chip-outline" title="Model/provider" rows={[details?.modelSummary || modelSummaryFromContract(contract)]} />
-          <MenuSection icon="wallet-outline" title="Credits" rows={[creditLabel]} />
-          <MenuSection icon="speedometer-outline" title="AI budget" rows={aiPolicyRows} />
-          <MenuSection
-            icon="shield-checkmark-outline"
-            title="Permissions"
-            rows={permissions.length ? permissions : ["No additional tool permissions granted."]}
-          />
+          <MenuSection icon="shield-checkmark-outline" title="Access" rows={technicalRows} />
+          <MenuSection icon="speedometer-outline" title="AI" rows={aiPolicyRows} />
+          <MenuSection icon="wallet-outline" title="Usage" rows={[usageLabel]} />
+          <MenuSection icon="lock-closed-outline" title="Permissions" rows={permissionRows} />
 
-          <SecondaryButton label="Share" onPress={onShare} />
+          <View style={{ flexDirection: "row", gap: 10, paddingTop: 2 }}>
+            <SecondaryButton label="Share app" onPress={onShare} />
+          </View>
         </Pressable>
       </Pressable>
     </Modal>
@@ -806,12 +836,31 @@ function MenuSection({
 }) {
   const theme = useTheme();
   return (
-    <View style={{ flexDirection: "row", gap: 12 }}>
-      <Ionicons name={icon} size={20} color={theme.colors.textSecondary} />
+    <View
+      style={{
+        flexDirection: "row",
+        gap: 12,
+        padding: 12,
+        borderRadius: 18,
+        backgroundColor: theme.colors.surface,
+      }}
+    >
+      <View
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 16,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: theme.colors.card,
+        }}
+      >
+        <Ionicons name={icon} size={18} color={theme.colors.textSecondary} />
+      </View>
       <View style={{ flex: 1, gap: 4 }}>
-        <Text style={{ fontSize: 12, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
+        <Text style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
         {rows.map((row, index) => (
-          <Text key={`${title}-${index}`} style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
+          <Text key={`${title}-${index}`} style={{ fontSize: 12.5, lineHeight: 18, color: theme.colors.textSecondary }}>
             {row}
           </Text>
         ))}

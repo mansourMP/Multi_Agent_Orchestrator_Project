@@ -424,7 +424,7 @@ def register_runtime_run_routes_from_api(
         history_item_matches=server_module._history_item_matches,
         current_user_is_privileged=current_user_is_privileged,
         extract_run_owner_user_id=extract_run_owner_user_id,
-        resolve_workspace_tenant_id=server_module.resolve_workspace_tenant_id,
+        resolve_workspace_tenant_id=deps.resolve_workspace_tenant_id,
         summarize_history_item=summarize_history_item,
         parse_utc_ts=parse_utc_ts,
         build_retry_child_payload=build_retry_child_payload,

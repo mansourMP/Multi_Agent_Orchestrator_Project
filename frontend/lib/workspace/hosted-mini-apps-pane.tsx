@@ -3,66 +3,68 @@
 import Link from 'next/link';
 import type { FormEvent } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import type { LucideIcon } from 'lucide-react';
 import {
   Activity,
   BookOpen,
+  Copy,
+  ExternalLink,
   Globe2,
   LockKeyhole,
   MoreVertical,
   PackageOpen,
   Plus,
+  Save,
+  Sparkles,
+  X,
 } from 'lucide-react';
 
 import { buildCookieAuthHeaders } from '@/lib/auth/csrf';
-import {
-  buildApplicationTabHref,
-  normalizeApplicationSurfaceTabId,
-} from '@/lib/workspace/application-surface-tabs';
 
 import styles from './hosted-mini-apps.module.css';
 
-type HostedMiniAppListItem = {
+type AppCard = {
+  feed_id?: string | null;
+  public_app_id?: string | null;
   app_id: string;
-  label: string;
+  name: string;
   description?: string | null;
   icon_url?: string | null;
-  category?: string | null;
-  runtime_type?: string | null;
-  destination_url?: string | null;
-  platform_route?: string | null;
-  verification_status?: string | null;
-  delivery_mode?: string | null;
-  install_status?: string | null;
-  memory_scope?: string | null;
-  permissions?: string[];
-  bridge_contracts?: Record<string, string[]>;
-  context_envelope?: {
-    default_classes?: string[];
-    optional_classes?: string[];
+  creator?: {
+    label?: string | null;
+    byline?: string | null;
   } | null;
-  hosted_app?: {
-    hosted_url?: string | null;
-    allowed_origins?: string[];
-    embed?: {
-      kind?: string | null;
-    };
-    bridge?: {
-      allowed_contracts?: Record<string, string[]>;
-      denied_by_default?: string[];
-    } | null;
+  visibility?: 'private' | 'public' | string;
+  visibility_label?: string | null;
+  source?: {
+    kind?: string | null;
+    url?: string | null;
+    label?: string | null;
+  } | null;
+  open?: {
+    kind?: 'internal' | 'external' | string;
+    url?: string | null;
+  } | null;
+  details_url?: string | null;
+  installed?: boolean;
+  clone_available?: boolean;
+  settings?: {
+    ai_enabled?: boolean;
+    records_enabled?: boolean;
+    sage_enabled?: boolean;
+    monthly_credit_limit?: number;
+    per_invocation_credit_limit?: number;
   } | null;
 };
 
-type MiniAppListingPayload = {
-  items?: HostedMiniAppListItem[];
+type AppsPayload = {
+  items?: AppCard[];
 };
 
 type OfficialMiniApp = {
   app_id: 'flashcards' | 'calorie_tracking';
   label: string;
-  description: string;
   icon: LucideIcon;
   accent: 'blue' | 'green';
 };
@@ -71,57 +73,107 @@ const OFFICIAL_MINI_APPS: readonly OfficialMiniApp[] = [
   {
     app_id: 'flashcards',
     label: 'Flashcards',
-    description: 'A focused study deck for notes, terms, and quick review.',
     icon: BookOpen,
     accent: 'blue',
   },
   {
     app_id: 'calorie_tracking',
     label: 'Calorie Tracker',
-    description: 'A compact food log with daily totals and lightweight meal history.',
     icon: Activity,
     accent: 'green',
   },
 ];
 
-async function fetchHostedMiniApps(workspaceId: string): Promise<HostedMiniAppListItem[]> {
-  const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps`, {
+async function fetchApps(workspaceId: string): Promise<AppCard[]> {
+  const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/apps`, {
     credentials: 'include',
     headers: buildCookieAuthHeaders('GET', { accept: 'application/json' }),
   });
   if (!response.ok) {
-    throw new Error(`Application listing failed with status ${response.status}.`);
+    throw new Error(`Apps listing failed with status ${response.status}.`);
   }
-  const payload = (await response.json()) as MiniAppListingPayload;
-  const items = Array.isArray(payload.items) ? payload.items : [];
-  return items.filter((item) => item.install_status !== 'removed' && String(item.runtime_type || '').trim().toLowerCase() !== 'link');
+  const payload = (await response.json()) as AppsPayload;
+  return Array.isArray(payload.items) ? payload.items : [];
 }
 
-async function publishMiniApp(
+async function publishApp(
   workspaceId: string,
-  payload: { label: string; destination_url?: string; description?: string; icon_url?: string },
-): Promise<HostedMiniAppListItem> {
-  const response = await fetch(
-    `/api/workspaces/${encodeURIComponent(workspaceId)}/mini-apps/publish`,
-    {
-      method: 'POST',
-      credentials: 'include',
-      headers: buildCookieAuthHeaders('POST', {
-        accept: 'application/json',
-        'content-type': 'application/json',
-      }),
-      body: JSON.stringify(payload),
-    },
-  );
-  const responsePayload = (await response.json().catch(() => null)) as { detail?: unknown } | HostedMiniAppListItem | null;
+  payload: { name: string; description?: string; source_url: string; visibility: 'private' | 'public' },
+): Promise<AppCard> {
+  const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/apps`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: buildCookieAuthHeaders('POST', {
+      accept: 'application/json',
+      'content-type': 'application/json',
+    }),
+    body: JSON.stringify(payload),
+  });
+  const responsePayload = (await response.json().catch(() => null)) as { detail?: unknown } | AppCard | null;
   if (!response.ok) {
     const detail = responsePayload && 'detail' in responsePayload ? responsePayload.detail : null;
     throw new Error(typeof detail === 'string' ? detail : `Publish failed with status ${response.status}.`);
   }
   if (!responsePayload || !('app_id' in responsePayload)) {
-    throw new Error('Publish returned an invalid response.');
+    throw new Error('Publish returned an invalid app.');
   }
-  return responsePayload as HostedMiniAppListItem;
+  return responsePayload as AppCard;
+}
+
+async function updateAppSettings(
+  workspaceId: string,
+  appId: string,
+  payload: {
+    name: string;
+    description: string;
+    source_url: string;
+    visibility: 'private' | 'public';
+    ai_enabled: boolean;
+    records_enabled: boolean;
+    sage_enabled: boolean;
+    monthly_credit_limit: number;
+    per_invocation_credit_limit: number;
+  },
+): Promise<AppCard> {
+  const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/apps/${encodeURIComponent(appId)}/settings`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: buildCookieAuthHeaders('PUT', {
+      accept: 'application/json',
+      'content-type': 'application/json',
+    }),
+    body: JSON.stringify(payload),
+  });
+  const responsePayload = (await response.json().catch(() => null)) as { detail?: unknown } | AppCard | null;
+  if (!response.ok) {
+    const detail = responsePayload && 'detail' in responsePayload ? responsePayload.detail : null;
+    throw new Error(typeof detail === 'string' ? detail : `Settings failed with status ${response.status}.`);
+  }
+  if (!responsePayload || !('app_id' in responsePayload)) {
+    throw new Error('Settings returned an invalid app.');
+  }
+  return responsePayload as AppCard;
+}
+
+async function cloneApp(workspaceId: string, publicAppId: string): Promise<AppCard> {
+  const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/apps/clone`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: buildCookieAuthHeaders('POST', {
+      accept: 'application/json',
+      'content-type': 'application/json',
+    }),
+    body: JSON.stringify({ public_app_id: publicAppId }),
+  });
+  const responsePayload = (await response.json().catch(() => null)) as { detail?: unknown } | AppCard | null;
+  if (!response.ok) {
+    const detail = responsePayload && 'detail' in responsePayload ? responsePayload.detail : null;
+    throw new Error(typeof detail === 'string' ? detail : `Clone failed with status ${response.status}.`);
+  }
+  if (!responsePayload || !('app_id' in responsePayload)) {
+    throw new Error('Clone returned an invalid app.');
+  }
+  return responsePayload as AppCard;
 }
 
 function officialMiniAppFor(appId: string): OfficialMiniApp | null {
@@ -129,10 +181,7 @@ function officialMiniAppFor(appId: string): OfficialMiniApp | null {
 }
 
 function appInitials(label: string): string {
-  const parts = label
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
+  const parts = label.trim().split(/\s+/).filter(Boolean);
   if (!parts.length) {
     return 'A';
   }
@@ -142,40 +191,60 @@ function appInitials(label: string): string {
     .join('');
 }
 
-function appIdFromName(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 48);
-  return `${slug || 'private_app'}_${Date.now().toString(36)}`;
-}
-
 function urlTargetsLocalDevelopment(url: URL): boolean {
   const host = url.hostname.toLowerCase();
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' || host.endsWith('.local');
 }
 
+function appVisibilityLabel(item: AppCard): string {
+  return item.visibility_label || (item.visibility === 'public' ? 'Public' : 'Private');
+}
+
 export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const activeTab = normalizeApplicationSurfaceTabId(searchParams.get('tab') || searchParams.get('applicationTab'));
-  const [items, setItems] = useState<HostedMiniAppListItem[]>([]);
+  const [items, setItems] = useState<AppCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [privateAppName, setPrivateAppName] = useState('');
-  const [privateAppUrl, setPrivateAppUrl] = useState('');
-  const [privateAppIconUrl, setPrivateAppIconUrl] = useState('');
-  const [privateAppError, setPrivateAppError] = useState<string | null>(null);
-  const [privateAppSaving, setPrivateAppSaving] = useState(false);
-  const [privateAppSaved, setPrivateAppSaved] = useState(false);
+  const [createOpen, setCreateOpen] = useState(searchParams.get('tab') === 'my_apps');
+  const [appName, setAppName] = useState('');
+  const [appDescription, setAppDescription] = useState('');
+  const [appUrl, setAppUrl] = useState('');
+  const [visibility, setVisibility] = useState<'private' | 'public'>('private');
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formSuccess, setFormSuccess] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [settingsAppId, setSettingsAppId] = useState<string | null>(null);
+  const [settingsName, setSettingsName] = useState('');
+  const [settingsDescription, setSettingsDescription] = useState('');
+  const [settingsUrl, setSettingsUrl] = useState('');
+  const [settingsVisibility, setSettingsVisibility] = useState<'private' | 'public'>('private');
+  const [settingsAiEnabled, setSettingsAiEnabled] = useState(false);
+  const [settingsRecordsEnabled, setSettingsRecordsEnabled] = useState(true);
+  const [settingsSageEnabled, setSettingsSageEnabled] = useState(false);
+  const [settingsMonthlyLimit, setSettingsMonthlyLimit] = useState('500');
+  const [settingsInvocationLimit, setSettingsInvocationLimit] = useState('50');
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [cloningPublicAppId, setCloningPublicAppId] = useState<string | null>(null);
+
+  const refreshApps = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const nextItems = await fetchApps(workspaceId);
+      setItems(nextItems);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load apps.');
+    } finally {
+      setLoading(false);
+    }
+  }, [workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    void fetchHostedMiniApps(workspaceId)
+    void fetchApps(workspaceId)
       .then((nextItems) => {
         if (!cancelled) {
           setItems(nextItems);
@@ -184,7 +253,7 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load applications.');
+          setError(err instanceof Error ? err.message : 'Failed to load apps.');
           setLoading(false);
         }
       });
@@ -193,270 +262,541 @@ export function HostedMiniAppsPane({ workspaceId }: { workspaceId: string }) {
     };
   }, [workspaceId]);
 
-  const handlePrivateAppSubmit = useCallback(
+  useEffect(() => {
+    if (searchParams.get('tab') === 'my_apps' || searchParams.get('applicationTab') === 'my_apps') {
+      setCreateOpen(true);
+    }
+  }, [searchParams]);
+
+  const handleCreateSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      setPrivateAppError(null);
-      setPrivateAppSaved(false);
-      const name = privateAppName.trim();
-      const rawUrl = privateAppUrl.trim();
-      const rawIconUrl = privateAppIconUrl.trim();
+      setFormError(null);
+      setFormSuccess(null);
+      const name = appName.trim();
+      const description = appDescription.trim();
+      const rawUrl = appUrl.trim();
       if (!name) {
-        setPrivateAppError('Enter an app name.');
+        setFormError('Enter an app name.');
+        return;
+      }
+      if (!description) {
+        setFormError('Enter a short description.');
         return;
       }
       let parsedUrl: URL;
       try {
         parsedUrl = new URL(rawUrl);
       } catch {
-        setPrivateAppError('Enter a valid app URL.');
+        setFormError('Enter a valid app URL.');
         return;
       }
       if (parsedUrl.protocol !== 'https:' && !(process.env.NODE_ENV !== 'production' && urlTargetsLocalDevelopment(parsedUrl))) {
-        setPrivateAppError('Private apps require an HTTPS URL. Localhost is allowed only in development.');
+        setFormError('Apps require an HTTPS URL. Localhost is allowed only in development.');
         return;
       }
-      let parsedIconUrl: URL | null = null;
-      if (rawIconUrl) {
-        try {
-          parsedIconUrl = new URL(rawIconUrl);
-        } catch {
-          setPrivateAppError('Enter a valid icon URL.');
-          return;
-        }
-        if (parsedIconUrl.protocol !== 'https:' && !(process.env.NODE_ENV !== 'production' && urlTargetsLocalDevelopment(parsedIconUrl))) {
-          setPrivateAppError('Private app icons require HTTPS. Localhost is allowed only in development.');
-          return;
-        }
-      }
-      setPrivateAppSaving(true);
+      setSaving(true);
       try {
-        const created = await publishMiniApp(workspaceId, {
-          label: name,
-          destination_url: parsedUrl.toString(),
-          description: '',
-          icon_url: parsedIconUrl?.toString() || undefined,
+        const created = await publishApp(workspaceId, {
+          name,
+          description,
+          source_url: parsedUrl.toString(),
+          visibility,
         });
         setItems((current) => [created, ...current.filter((item) => item.app_id !== created.app_id)]);
-        setPrivateAppName('');
-        setPrivateAppUrl('');
-        setPrivateAppIconUrl('');
-        setPrivateAppSaved(true);
-        router.replace(buildApplicationTabHref(workspaceId, 'installed', searchParams));
+        setAppName('');
+        setAppDescription('');
+        setAppUrl('');
+        setVisibility('private');
+        setCreateOpen(false);
+        setFormSuccess('App published.');
       } catch (err) {
-        setPrivateAppError(err instanceof Error ? err.message : 'Could not create this application.');
+        setFormError(err instanceof Error ? err.message : 'Could not publish this app.');
       } finally {
-        setPrivateAppSaving(false);
+        setSaving(false);
       }
     },
-    [privateAppIconUrl, privateAppName, privateAppUrl, router, searchParams, workspaceId],
+    [appDescription, appName, appUrl, visibility, workspaceId],
   );
 
-  const content = useMemo(() => {
-    if (activeTab === 'my_apps') {
-      return (
-        <section className={styles.privateAppPanel} aria-label="Private applications">
-          <div className={styles.privateAppIntro}>
-            <div className={styles.emptyIcon}>
-              <Globe2 aria-hidden="true" />
-            </div>
-            <div className={styles.emptyCopyBlock}>
-              <p className={styles.emptyTitle}>Publish an application</p>
-              <p className={styles.emptyCopy}>Enter a name and URL. Your app goes live instantly — no review, no config. Add scoped permissions later if needed.</p>
-            </div>
-          </div>
-          <form className={styles.privateAppForm} onSubmit={handlePrivateAppSubmit}>
-            <label className={styles.fieldLabel}>
-              App name
-              <input
-                className={styles.textInput}
-                value={privateAppName}
-                onChange={(event) => {
-                  setPrivateAppName(event.target.value);
-                  setPrivateAppError(null);
-                  setPrivateAppSaved(false);
-                }}
-                placeholder="Customer portal"
-                autoComplete="off"
-              />
-            </label>
-            <label className={styles.fieldLabel}>
-              App URL
-              <input
-                className={styles.textInput}
-                value={privateAppUrl}
-                onChange={(event) => {
-                  setPrivateAppUrl(event.target.value);
-                  setPrivateAppError(null);
-                  setPrivateAppSaved(false);
-                }}
-                placeholder="https://apps.example.com/customer-portal"
-                autoComplete="off"
-              />
-            </label>
-            <label className={styles.fieldLabel}>
-              Icon URL
-              <input
-                className={styles.textInput}
-                value={privateAppIconUrl}
-                onChange={(event) => {
-                  setPrivateAppIconUrl(event.target.value);
-                  setPrivateAppError(null);
-                  setPrivateAppSaved(false);
-                }}
-                placeholder="https://apps.example.com/icon.png"
-                autoComplete="off"
-              />
-            </label>
-            {privateAppError ? <p className={styles.formError}>{privateAppError}</p> : null}
-            {privateAppSaved ? <p className={styles.formSuccess}>Private app added.</p> : null}
-            <div className={styles.actionRow}>
-              <button type="submit" className={styles.primaryAction} disabled={privateAppSaving}>
-                <Plus aria-hidden="true" />
-                {privateAppSaving ? 'Adding...' : 'Add app'}
-              </button>
-              <button
-                type="button"
-                className={styles.secondaryAction}
-                onClick={() => router.replace(buildApplicationTabHref(workspaceId, 'installed', searchParams))}
-              >
-                Back to apps
-              </button>
-            </div>
-          </form>
-        </section>
-      );
-    }
+  const openSettings = useCallback((item: AppCard) => {
+    setSettingsAppId(item.app_id);
+    setSettingsName(item.name || item.app_id);
+    setSettingsDescription(item.description || '');
+    setSettingsUrl(item.source?.url || '');
+    setSettingsVisibility(item.visibility === 'public' ? 'public' : 'private');
+    setSettingsAiEnabled(Boolean(item.settings?.ai_enabled));
+    setSettingsRecordsEnabled(item.settings?.records_enabled !== false);
+    setSettingsSageEnabled(Boolean(item.settings?.sage_enabled));
+    setSettingsMonthlyLimit(String(item.settings?.monthly_credit_limit ?? 500));
+    setSettingsInvocationLimit(String(item.settings?.per_invocation_credit_limit ?? 50));
+    setSettingsError(null);
+  }, []);
 
-    if (loading) {
-      return <div className={styles.emptyState}>Loading applications...</div>;
-    }
-    if (error) {
-      return <div className={`${styles.emptyState} ${styles.error}`}>Applications could not refresh. Try again when ready.</div>;
-    }
-    if (!items.length) {
-      return (
-        <section className={styles.installedEmpty} aria-label="Applications">
-          <div className={styles.commandPanel}>
-            <div className={styles.commandIcon}>
-              <PackageOpen aria-hidden="true" />
-            </div>
-            <div className={styles.commandCopy}>
-              <p className={styles.commandKicker}>Apps</p>
-              <h2 className={styles.commandTitle}>No applications yet</h2>
-              <p className={styles.commandText}>Browse apps or create a private workspace app.</p>
-            </div>
-            <div className={styles.actionRow}>
-              <button
-                type="button"
-                className={styles.primaryAction}
-                onClick={() => router.push(`/w/${encodeURIComponent(workspaceId)}/applications/store`)}
-              >
-                <Globe2 aria-hidden="true" />
-                Browse apps
-              </button>
-              <button
-                type="button"
-                className={styles.secondaryAction}
-                onClick={() => router.replace(buildApplicationTabHref(workspaceId, 'my_apps', searchParams))}
-              >
-                <Plus aria-hidden="true" />
-                Create app
-              </button>
-            </div>
-          </div>
-        </section>
-      );
-    }
-    return (
-      <section className={styles.appsSection} aria-label="Applications">
-        <div className={styles.appsToolbar}>
-          <div>
+  const closeSettings = useCallback(() => {
+    setSettingsAppId(null);
+    setSettingsError(null);
+  }, []);
+
+  const handleSettingsSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!settingsAppId) {
+        return;
+      }
+      const name = settingsName.trim();
+      const description = settingsDescription.trim();
+      const rawUrl = settingsUrl.trim();
+      if (!name) {
+        setSettingsError('Enter an app name.');
+        return;
+      }
+      if (!description) {
+        setSettingsError('Enter a short description.');
+        return;
+      }
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(rawUrl);
+      } catch {
+        setSettingsError('Enter a valid app URL.');
+        return;
+      }
+      if (parsedUrl.protocol !== 'https:' && !(process.env.NODE_ENV !== 'production' && urlTargetsLocalDevelopment(parsedUrl))) {
+        setSettingsError('Apps require an HTTPS URL. Localhost is allowed only in development.');
+        return;
+      }
+      const monthlyLimit = Number(settingsMonthlyLimit);
+      const invocationLimit = Number(settingsInvocationLimit);
+      if (!Number.isInteger(monthlyLimit) || monthlyLimit < 0 || !Number.isInteger(invocationLimit) || invocationLimit < 0) {
+        setSettingsError('Credit limits must be zero or higher.');
+        return;
+      }
+      setSettingsSaving(true);
+      setSettingsError(null);
+      try {
+        const updated = await updateAppSettings(workspaceId, settingsAppId, {
+          name,
+          description,
+          source_url: parsedUrl.toString(),
+          visibility: settingsVisibility,
+          ai_enabled: settingsAiEnabled,
+          records_enabled: settingsRecordsEnabled,
+          sage_enabled: settingsSageEnabled,
+          monthly_credit_limit: monthlyLimit,
+          per_invocation_credit_limit: invocationLimit,
+        });
+        setItems((current) => current.map((item) => (item.installed !== false && item.app_id === updated.app_id ? updated : item)));
+        setSettingsAppId(null);
+      } catch (err) {
+        setSettingsError(err instanceof Error ? err.message : 'Could not save settings.');
+      } finally {
+        setSettingsSaving(false);
+      }
+    },
+    [
+      settingsAiEnabled,
+      settingsAppId,
+      settingsDescription,
+      settingsInvocationLimit,
+      settingsMonthlyLimit,
+      settingsName,
+      settingsRecordsEnabled,
+      settingsSageEnabled,
+      settingsUrl,
+      settingsVisibility,
+      workspaceId,
+    ],
+  );
+
+  const handleCloneApp = useCallback(
+    async (publicAppId: string) => {
+      setCloningPublicAppId(publicAppId);
+      setError(null);
+      try {
+        const cloned = await cloneApp(workspaceId, publicAppId);
+        setItems((current) => [
+          cloned,
+          ...current.filter((item) => item.public_app_id !== publicAppId && item.app_id !== cloned.app_id),
+        ]);
+        void refreshApps();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Could not clone this app.');
+      } finally {
+        setCloningPublicAppId(null);
+      }
+    },
+    [refreshApps, workspaceId],
+  );
+
+  const renderedItems = useMemo(() => items, [items]);
+  const settingsApp = useMemo(
+    () => renderedItems.find((item) => item.app_id === settingsAppId && item.installed !== false) || null,
+    [renderedItems, settingsAppId],
+  );
+
+  return (
+    <main className={styles.shell}>
+      <section className={styles.appsFeedShell} aria-label="Apps">
+        <header className={styles.appsFeedHeader}>
+          <div className={styles.appsFeedTitleBlock}>
             <p className={styles.commandKicker}>Apps</p>
-            <h2 className={styles.sectionTitle}>Applications</h2>
+            <h1 className={styles.appsFeedTitle}>Apps</h1>
           </div>
           <div className={styles.actionRow}>
-            <button
-              type="button"
-              className={styles.secondaryAction}
-              onClick={() => router.push(`/w/${encodeURIComponent(workspaceId)}/applications/store`)}
-            >
+            <Link className={styles.secondaryAction} href={`/w/${encodeURIComponent(workspaceId)}/marketplace`}>
               <Globe2 aria-hidden="true" />
-              Browse apps
-            </button>
+              Discover
+            </Link>
             <button
               type="button"
               className={styles.primaryAction}
-              onClick={() => router.replace(buildApplicationTabHref(workspaceId, 'my_apps', searchParams))}
+              onClick={() => {
+                setCreateOpen((current) => !current);
+                setFormError(null);
+                setFormSuccess(null);
+              }}
             >
               <Plus aria-hidden="true" />
-              Create app
+              Create
             </button>
           </div>
-        </div>
-        <div className={styles.grid}>
-          {items.map((item) => {
-            const officialApp = officialMiniAppFor(item.app_id);
-            const Icon = officialApp?.icon || PackageOpen;
-            const accent = officialApp?.accent || 'neutral';
-            const internalHref = `/w/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(item.app_id)}`;
-            const detailsHref = `${internalHref}?details=1`;
-            const launcherContent = (
-              <>
+        </header>
+
+        {createOpen ? (
+          <section className={styles.createAppPanel} aria-label="Create an app">
+            <div className={styles.createAppIntro}>
+              <div className={styles.emptyIcon}>
+                <Sparkles aria-hidden="true" />
+              </div>
+              <div className={styles.emptyCopyBlock}>
+                <p className={styles.emptyTitle}>Create an app</p>
+              </div>
+            </div>
+            <form className={styles.privateAppForm} onSubmit={handleCreateSubmit}>
+              <div className={styles.formGrid}>
+                <label className={styles.fieldLabel}>
+                  Name
+                  <input
+                    className={styles.textInput}
+                    value={appName}
+                    onChange={(event) => {
+                      setAppName(event.target.value);
+                      setFormError(null);
+                      setFormSuccess(null);
+                    }}
+                    placeholder="Budget Tracker"
+                    autoComplete="off"
+                  />
+                </label>
+                <label className={styles.fieldLabel}>
+                  Website
+                  <input
+                    className={styles.textInput}
+                    value={appUrl}
+                    onChange={(event) => {
+                      setAppUrl(event.target.value);
+                      setFormError(null);
+                      setFormSuccess(null);
+                    }}
+                    placeholder="https://apps.example.com/budget"
+                    autoComplete="off"
+                  />
+                </label>
+              </div>
+              <label className={styles.fieldLabel}>
+                Description
+                <textarea
+                  className={styles.textArea}
+                  value={appDescription}
+                  onChange={(event) => {
+                    setAppDescription(event.target.value);
+                    setFormError(null);
+                    setFormSuccess(null);
+                  }}
+                  placeholder="Track daily expenses and monthly spending patterns."
+                  rows={3}
+                />
+              </label>
+              <fieldset className={styles.visibilityField}>
+                <legend>Visibility</legend>
+                <div className={styles.visibilityToggle}>
+                  <button
+                    type="button"
+                    className={visibility === 'private' ? styles.visibilityOptionActive : styles.visibilityOption}
+                    onClick={() => setVisibility('private')}
+                  >
+                    <LockKeyhole aria-hidden="true" />
+                    Private
+                  </button>
+                  <button
+                    type="button"
+                    className={visibility === 'public' ? styles.visibilityOptionActive : styles.visibilityOption}
+                    onClick={() => setVisibility('public')}
+                  >
+                    <Globe2 aria-hidden="true" />
+                    Public
+                  </button>
+                </div>
+              </fieldset>
+              {formError ? <p className={styles.formError}>{formError}</p> : null}
+              {formSuccess ? <p className={styles.formSuccess}>{formSuccess}</p> : null}
+              <div className={styles.actionRow}>
+                <button type="submit" className={styles.primaryAction} disabled={saving}>
+                  <Plus aria-hidden="true" />
+                  {saving ? 'Publishing...' : 'Publish'}
+                </button>
+                <button type="button" className={styles.secondaryAction} onClick={() => setCreateOpen(false)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </section>
+        ) : null}
+
+        {settingsApp ? (
+          <section className={styles.settingsPanel} aria-label="App settings">
+            <div className={styles.settingsHeader}>
+              <div>
+                <p className={styles.commandKicker}>Settings</p>
+                <h2 className={styles.settingsTitle}>{settingsApp.name || settingsApp.app_id}</h2>
+              </div>
+              <button type="button" className={styles.iconButton} onClick={closeSettings} aria-label="Close settings">
+                <X aria-hidden="true" />
+              </button>
+            </div>
+            <form className={styles.privateAppForm} onSubmit={handleSettingsSubmit}>
+              <div className={styles.formGrid}>
+                <label className={styles.fieldLabel}>
+                  Name
+                  <input
+                    className={styles.textInput}
+                    value={settingsName}
+                    onChange={(event) => {
+                      setSettingsName(event.target.value);
+                      setSettingsError(null);
+                    }}
+                    autoComplete="off"
+                  />
+                </label>
+                <label className={styles.fieldLabel}>
+                  Website
+                  <input
+                    className={styles.textInput}
+                    value={settingsUrl}
+                    onChange={(event) => {
+                      setSettingsUrl(event.target.value);
+                      setSettingsError(null);
+                    }}
+                    autoComplete="off"
+                  />
+                </label>
+              </div>
+              <label className={styles.fieldLabel}>
+                Description
+                <textarea
+                  className={styles.textArea}
+                  value={settingsDescription}
+                  onChange={(event) => {
+                    setSettingsDescription(event.target.value);
+                    setSettingsError(null);
+                  }}
+                  rows={3}
+                />
+              </label>
+              <div className={styles.settingsGrid}>
+                <fieldset className={styles.visibilityField}>
+                  <legend>Visibility</legend>
+                  <div className={styles.visibilityToggle}>
+                    <button
+                      type="button"
+                      className={settingsVisibility === 'private' ? styles.visibilityOptionActive : styles.visibilityOption}
+                      onClick={() => setSettingsVisibility('private')}
+                    >
+                      <LockKeyhole aria-hidden="true" />
+                      Private
+                    </button>
+                    <button
+                      type="button"
+                      className={settingsVisibility === 'public' ? styles.visibilityOptionActive : styles.visibilityOption}
+                      onClick={() => setSettingsVisibility('public')}
+                    >
+                      <Globe2 aria-hidden="true" />
+                      Public
+                    </button>
+                  </div>
+                </fieldset>
+                <label className={styles.fieldLabel}>
+                  Monthly credits
+                  <input
+                    className={styles.textInput}
+                    value={settingsMonthlyLimit}
+                    inputMode="numeric"
+                    onChange={(event) => {
+                      setSettingsMonthlyLimit(event.target.value);
+                      setSettingsError(null);
+                    }}
+                  />
+                </label>
+                <label className={styles.fieldLabel}>
+                  Per use credits
+                  <input
+                    className={styles.textInput}
+                    value={settingsInvocationLimit}
+                    inputMode="numeric"
+                    onChange={(event) => {
+                      setSettingsInvocationLimit(event.target.value);
+                      setSettingsError(null);
+                    }}
+                  />
+                </label>
+              </div>
+              <div className={styles.toggleList}>
+                <label className={styles.toggleRow}>
+                  <input
+                    type="checkbox"
+                    checked={settingsAiEnabled}
+                    onChange={(event) => setSettingsAiEnabled(event.target.checked)}
+                  />
+                  <span>Can use AI</span>
+                </label>
+                <label className={styles.toggleRow}>
+                  <input
+                    type="checkbox"
+                    checked={settingsRecordsEnabled}
+                    onChange={(event) => setSettingsRecordsEnabled(event.target.checked)}
+                  />
+                  <span>Can save data</span>
+                </label>
+                <label className={styles.toggleRow}>
+                  <input
+                    type="checkbox"
+                    checked={settingsSageEnabled}
+                    onChange={(event) => setSettingsSageEnabled(event.target.checked)}
+                  />
+                  <span>Can talk to Sage</span>
+                </label>
+              </div>
+              {settingsError ? <p className={styles.formError}>{settingsError}</p> : null}
+              <div className={styles.actionRow}>
+                <button type="submit" className={styles.primaryAction} disabled={settingsSaving}>
+                  <Save aria-hidden="true" />
+                  {settingsSaving ? 'Saving...' : 'Save'}
+                </button>
+                <button type="button" className={styles.secondaryAction} onClick={closeSettings}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </section>
+        ) : null}
+
+        {loading ? <div className={styles.emptyState}>Loading apps...</div> : null}
+        {error ? (
+          <div className={`${styles.emptyState} ${styles.error}`}>
+            <p className={styles.emptyTitle}>Apps could not refresh.</p>
+            <button type="button" className={styles.secondaryAction} onClick={() => { void refreshApps(); }}>
+              Try again
+            </button>
+          </div>
+        ) : null}
+        {!loading && !error && !renderedItems.length ? (
+          <section className={styles.installedEmpty} aria-label="Apps">
+            <div className={styles.commandPanel}>
+              <div className={styles.commandIcon}>
+                <PackageOpen aria-hidden="true" />
+              </div>
+              <div className={styles.commandCopy}>
+                <p className={styles.commandKicker}>Apps</p>
+                <h2 className={styles.commandTitle}>No apps yet</h2>
+                <p className={styles.commandText}>Create the first app for this workspace.</p>
+              </div>
+              <button type="button" className={styles.primaryAction} onClick={() => setCreateOpen(true)}>
+                <Plus aria-hidden="true" />
+                Create
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {!loading && !error && renderedItems.length ? (
+          <div className={styles.feedGrid}>
+            {renderedItems.map((item) => {
+              const name = item.name || item.app_id;
+              const officialApp = officialMiniAppFor(item.app_id);
+              const Icon = officialApp?.icon || PackageOpen;
+              const accent = officialApp?.accent || 'neutral';
+              const openUrl = item.open?.url || `/w/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(item.app_id)}`;
+              const byline = item.creator?.byline || `by ${item.creator?.label || 'this workspace'}`;
+              const installed = item.installed !== false;
+              const publicAppId = item.public_app_id || '';
+              const cloning = publicAppId ? cloningPublicAppId === publicAppId : false;
+              const cardIcon = (
                 <span className={`${styles.appIcon} ${styles[`appIcon_${accent}`]}`}>
                   {item.icon_url ? (
                     <img src={item.icon_url} alt="" />
                   ) : officialApp ? (
                     <Icon aria-hidden="true" />
                   ) : (
-                    <span>{appInitials(item.label)}</span>
+                    <span>{appInitials(name)}</span>
                   )}
                 </span>
-                <span className={styles.appName}>{item.label}</span>
-              </>
-            );
-            return (
-              <article key={item.app_id} className={styles.appTile}>
-                <Link
-                  className={styles.appLauncher}
-                  href={internalHref}
-                  aria-label={`Open ${item.label}`}
-                >
-                  {launcherContent}
-                </Link>
-                <Link
-                  className={styles.appDetailAction}
-                  href={detailsHref}
-                  aria-label={`Details for ${item.label}`}
-                >
-                  <MoreVertical aria-hidden="true" />
-                </Link>
-              </article>
-            );
-          })}
-        </div>
+              );
+              const openLabel = `Open ${name}`;
+              return (
+                <article key={item.feed_id || item.app_id} className={styles.feedCard}>
+                  <div className={styles.feedCardHeader}>
+                    {cardIcon}
+                    <div className={styles.feedCardTitleBlock}>
+                      <h2 className={styles.feedCardTitle}>{name}</h2>
+                      <p className={styles.feedCardByline}>{byline}</p>
+                    </div>
+                    {installed ? (
+                      <button
+                        type="button"
+                        className={styles.appDetailAction}
+                        onClick={() => openSettings(item)}
+                        aria-label={`Settings for ${name}`}
+                      >
+                        <MoreVertical aria-hidden="true" />
+                      </button>
+                    ) : null}
+                  </div>
+                  <p className={styles.feedCardDescription}>{item.description || 'No description yet.'}</p>
+                  <div className={styles.feedCardMeta}>
+                    <span>{appVisibilityLabel(item)}</span>
+                    <span>{item.source?.label || 'App'}</span>
+                  </div>
+                  <div className={styles.feedCardActions}>
+                    {item.clone_available && publicAppId ? (
+                      <button
+                        type="button"
+                        className={styles.linkButton}
+                        onClick={() => {
+                          void handleCloneApp(publicAppId);
+                        }}
+                        disabled={cloning}
+                      >
+                        <Copy aria-hidden="true" />
+                        {cloning ? 'Cloning...' : 'Clone'}
+                      </button>
+                    ) : item.open?.kind === 'external' ? (
+                      <a className={styles.linkButton} href={openUrl} target="_blank" rel="noreferrer" aria-label={openLabel}>
+                        Open
+                        <ExternalLink aria-hidden="true" />
+                      </a>
+                    ) : (
+                      <Link className={styles.linkButton} href={openUrl} aria-label={openLabel}>
+                        Open
+                      </Link>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
       </section>
-    );
-  }, [
-    activeTab,
-    error,
-    handlePrivateAppSubmit,
-    items,
-    loading,
-    privateAppError,
-    privateAppIconUrl,
-    privateAppName,
-    privateAppSaved,
-    privateAppSaving,
-    privateAppUrl,
-    router,
-    searchParams,
-    workspaceId,
-  ]);
-
-  return (
-    <main className={styles.shell}>
-      {content}
     </main>
   );
 }

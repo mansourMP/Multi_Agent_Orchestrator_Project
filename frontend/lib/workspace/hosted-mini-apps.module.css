@@ -86,6 +86,296 @@
   gap: var(--app-space-5);
 }
 
+.appsFeedShell {
+  display: grid;
+  gap: var(--app-space-5);
+}
+
+.appsFeedHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-4);
+}
+
+.appsFeedTitleBlock {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.appsFeedTitle {
+  margin: 0;
+  color: var(--app-text-primary);
+  font-family: var(--app-font-heading);
+  font-size: 24px;
+  font-weight: var(--app-weight-bold);
+  letter-spacing: 0;
+  line-height: 1.1;
+}
+
+.createAppPanel,
+.settingsPanel {
+  display: grid;
+  gap: var(--app-space-4);
+  max-width: 980px;
+  padding: var(--app-space-5);
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 62%, transparent);
+  border-radius: 8px;
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
+}
+
+.settingsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-4);
+}
+
+.settingsHeader > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.settingsTitle {
+  margin: 0;
+  overflow: hidden;
+  color: var(--app-text-primary);
+  font-family: var(--app-font-heading);
+  font-size: 20px;
+  font-weight: var(--app-weight-bold);
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settingsGrid {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.3fr) minmax(140px, 0.7fr) minmax(140px, 0.7fr);
+  gap: var(--app-space-3);
+  align-items: end;
+}
+
+.toggleList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.toggleRow {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 8px;
+  background: var(--app-surface-panel);
+  color: var(--app-text-primary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+}
+
+.toggleRow input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--app-text-primary);
+}
+
+.iconButton {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 8px;
+  background: var(--app-bg-panel-elevated);
+  color: var(--app-text-secondary);
+  cursor: pointer;
+}
+
+.iconButton svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.1;
+}
+
+.createAppIntro {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--app-space-4);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--app-space-3);
+}
+
+.textArea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: var(--app-radius-md);
+  background: var(--app-bg-panel-elevated);
+  color: var(--app-text-primary);
+  font: inherit;
+  font-weight: var(--app-weight-medium);
+  line-height: 1.45;
+  outline: none;
+}
+
+.textArea:focus {
+  border-color: var(--app-border-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-accent-soft) 64%, transparent);
+}
+
+.visibilityField {
+  min-width: 0;
+  display: grid;
+  gap: var(--app-space-2);
+  padding: 0;
+  border: 0;
+}
+
+.visibilityField legend {
+  padding: 0;
+  color: var(--app-text-primary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+}
+
+.visibilityToggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  width: min(100%, 320px);
+  padding: 3px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 8px;
+  background: var(--app-surface-inset);
+}
+
+.visibilityOption,
+.visibilityOptionActive {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-text-secondary);
+  font: inherit;
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+  cursor: pointer;
+}
+
+.visibilityOptionActive {
+  background: var(--app-bg-panel-elevated);
+  color: var(--app-text-primary);
+  box-shadow: var(--app-shadow-soft);
+}
+
+.visibilityOption svg,
+.visibilityOptionActive svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2.1;
+}
+
+.feedGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
+  gap: var(--app-space-4);
+  align-items: stretch;
+}
+
+.feedCard {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(58px, auto) auto auto;
+  gap: var(--app-space-3);
+  padding: var(--app-space-4);
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 62%, transparent);
+  border-radius: 8px;
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
+}
+
+.feedCardHeader {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--app-space-3);
+}
+
+.feedCardTitleBlock {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.feedCardTitle {
+  margin: 0;
+  overflow: hidden;
+  color: var(--app-text-primary);
+  font-size: var(--app-font-15);
+  font-weight: var(--app-weight-bold);
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feedCardByline,
+.feedCardDescription {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-12);
+  line-height: 1.45;
+}
+
+.feedCardDescription {
+  display: -webkit-box;
+  overflow: hidden;
+  min-height: 52px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.feedCardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.feedCardMeta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 6px;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-11);
+}
+
+.feedCardActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 .appsToolbar {
   display: flex;
   align-items: center;
@@ -225,13 +515,17 @@
   border-radius: 8px;
   background: color-mix(in srgb, var(--app-bg-panel-elevated) 92%, transparent);
   color: var(--app-text-secondary);
+  cursor: pointer;
   opacity: 0;
+  padding: 0;
   box-shadow: var(--app-shadow-soft);
   transition: opacity 140ms ease, background 140ms ease, color 140ms ease;
 }
 
 .appTile:hover .appDetailAction,
-.appTile:focus-within .appDetailAction {
+.appTile:focus-within .appDetailAction,
+.feedCard:hover .appDetailAction,
+.feedCard:focus-within .appDetailAction {
   opacity: 1;
 }
 
@@ -325,13 +619,28 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   min-height: 40px;
   padding: 0 16px;
   border: 1px solid var(--app-border-strong);
   border-radius: 8px;
   background: var(--app-bg-panel-elevated);
   color: var(--app-text-primary);
+  font: inherit;
   font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.linkButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.linkButton svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.1;
 }
 
 .linkSecondary {
@@ -486,6 +795,7 @@
   font: inherit;
   font-weight: 650;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .primaryAction:disabled,
@@ -517,6 +827,25 @@
 .primaryAction:hover,
 .secondaryAction:hover {
   transform: translateY(-1px);
+}
+
+@media (max-width: 720px) {
+  .appsFeedHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .feedGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .installedEmpty {

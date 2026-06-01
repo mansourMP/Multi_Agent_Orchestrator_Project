@@ -10,7 +10,7 @@ import { WorkstationArtifactsPane } from '@/lib/workspace/workstation-artifacts-
 import { WorkstationChatPane } from '@/lib/workspace/workstation-chat-pane';
 import { WorkstationDeployedAgentsPane } from '@/lib/workspace/workstation-deployed-agents-pane';
 import { WorkstationSageWorkCenterPane } from '@/lib/workspace/workstation-sage-heartbeat-pane';
-import { MarketplacePane } from '@/lib/marketplace/marketplace-pane';
+import { DiscoveryPane } from '@/lib/discovery/discovery-pane';
 import { WorkstationNotificationsPane } from '@/lib/workspace/workstation-notifications-pane';
 import { WorkstationRunsPane } from '@/lib/workspace/workstation-runs-pane';
 import { WorkstationSageConnectorsPane } from '@/lib/workspace/workstation-sage-connectors-pane';
@@ -91,7 +91,7 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   },
   marketplace: {
     destinationId: 'marketplace',
-    render: () => <MarketplacePane />,
+    render: () => <DiscoveryPane />,
   },
   applications: {
     destinationId: 'applications',

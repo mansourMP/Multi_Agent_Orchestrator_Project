@@ -217,6 +217,7 @@ class AuthHardeningTests(unittest.TestCase):
                 "ORION_JWT_SECRET": "j" * 40,
                 "EMPYRALIS_SECRETS_BROKER_SECRET": "s" * 40,
                 "EMPYRALIS_TOOL_BROKER_SECRET": "t" * 40,
+                "EMPYRALIS_MINI_APP_SHARE_SECRET": "m" * 40,
             },
             clear=True,
         ):

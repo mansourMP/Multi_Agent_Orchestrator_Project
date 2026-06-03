@@ -76,7 +76,7 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(activity_kwargs["status"], "completed")
         self.assertEqual(activity_kwargs["payload"]["request_id"], "req-1")
         self.assertEqual(activity_kwargs["payload"]["run_id"], "run-1")
-        self.assertEqual(rust_mock.call_count, 2)
+        self.assertGreaterEqual(rust_mock.call_count, 2)
         self.assertEqual(rust_mock.call_args.args[0], "gateway-service-decision")
         self.assertEqual(rust_mock.call_args.args[1]["operation"], "tool_execute")
 

@@ -32,6 +32,14 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     direct: true,
   },
   {
+    id: 'hardware',
+    label: 'Hardware',
+    iconName: 'waypoints',
+    defaultRouteId: 'hardware',
+    childRouteIds: ['hardware'],
+    direct: true,
+  },
+  {
     id: 'gateway',
     label: 'Agent Computer',
     iconName: 'waypoints',
@@ -65,6 +73,7 @@ export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = {
   studio: 'Agents',
   marketplace: 'Discover',
   applications: 'Applications',
+  hardware: 'Hardware',
   gateway: 'Agent Computer',
   settings: 'Settings',
 };
@@ -249,6 +258,13 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     segment: 'applications',
     destinationId: 'applications',
     requiredCapabilities: ['workspace_admin_enabled'],
+    web: {},
+  },
+  {
+    id: 'hardware',
+    label: 'Hardware',
+    segment: 'hardware',
+    destinationId: 'hardware',
     web: {},
   },
   {

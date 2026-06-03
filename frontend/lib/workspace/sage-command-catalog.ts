@@ -61,11 +61,11 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
   {
     id: 'tools',
     slash: '/tools',
-    title: 'Connections',
-    description: 'Show connected hardware, apps, and routes.',
+    title: 'Sage connections',
+    description: 'Open Sage app connections, personal channels, and Agent Computer setup.',
     actionKind: 'open_tools',
     icon: Puzzle,
-    keywords: ['connections', 'hardware', 'apps', 'routes'],
+    keywords: ['connections', 'agent computer', 'apps', 'channels'],
   },
   {
     id: 'runtime',
@@ -74,7 +74,7 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     description: 'Check which AI path Sage will use and where to manage it.',
     actionKind: 'open_runtime',
     icon: Cpu,
-    keywords: ['target', 'provider', 'agent computer', 'cloud', 'deployment'],
+    keywords: ['target', 'provider', 'agent computer', 'cloud', 'routing'],
   },
   {
     id: 'doctor',
@@ -123,7 +123,7 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
   {
     id: 'integrations',
     title: 'Connections',
-    description: 'Open apps, AI accounts, Agent Computer, and developer tool connections.',
+    description: 'Open Sage apps, AI accounts, Agent Computer, and reviewed extensions.',
     routeId: 'integrations',
     icon: LayoutGrid,
     keywords: ['connect', 'apps', 'providers', 'channels', 'services'],

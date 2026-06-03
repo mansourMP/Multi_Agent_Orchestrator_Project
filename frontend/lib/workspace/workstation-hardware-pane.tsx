@@ -1,0 +1,1249 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { Cloud, Copy, Monitor, Plus, Server, X } from 'lucide-react';
+import { toDataURL } from 'qrcode';
+
+import { AppButton, joinClassNames } from '@/lib/ui/primitives';
+import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
+
+type HardwareKind = 'local_companion' | 'self_hosted_business_node' | 'cloud_computer';
+type HardwareStatus = 'Connected' | 'Offline' | 'Needs approval' | 'Unavailable';
+type HardwareTab = 'this_device' | 'other_computers' | 'ssh_server';
+type ConnectOptionId = 'this_device' | 'other_computer' | 'ssh_server';
+
+type HardwareAttachment = {
+  kind: HardwareKind;
+  name: string;
+  status: string;
+  online: boolean;
+  healthy: boolean;
+  trustStatus: string;
+  reason: string;
+  capabilities: string[];
+};
+
+type HardwareTarget = {
+  kind: HardwareKind;
+  name: string;
+  status: string;
+  online: boolean;
+  healthy: boolean;
+  reason: string;
+  capabilities: string[];
+};
+
+type HardwareCard = {
+  kind: HardwareKind;
+  title: string;
+  typeLabel: string;
+  name: string;
+  description: string;
+  status: HardwareStatus;
+  actionLabel: 'Connect' | 'Reconnect' | 'Approve' | 'Manage';
+  reason: string;
+  capabilities: string[];
+  known: boolean;
+};
+
+type PairingIntentRecord = {
+  pairing_token?: string | null;
+  display_name?: string | null;
+  platform?: string | null;
+  expires_at?: string | null;
+  metadata?: unknown;
+};
+
+type TrayLocalStatus = {
+  ok?: boolean;
+  connected?: boolean;
+  session_verified?: boolean;
+  heartbeat_fresh?: boolean;
+  session_status?: string;
+  state?: string;
+  supervisor_running?: boolean;
+  gateway_running?: boolean;
+  error?: string | null;
+};
+
+type HardwareCapabilityCheck = {
+  name: 'screen_recording' | 'accessibility' | 'filesystem' | string;
+  status: 'granted' | 'denied' | 'unknown' | 'unsupported' | string;
+};
+
+type HardwareCapabilityPayload = {
+  available?: boolean;
+  gateway_id?: string | null;
+  checks?: HardwareCapabilityCheck[];
+};
+
+type HardwareActivityEvent = {
+  id?: string | null;
+  type?: string;
+  gateway_id?: string | null;
+  capability?: string | null;
+  status?: 'completed' | 'failed' | string;
+  duration_ms?: number;
+  timestamp?: string | null;
+};
+
+type SshAuthMode = 'password' | 'ssh_key';
+
+const TRAY_STATUS_URL = 'http://127.0.0.1:7790/status';
+const TRAY_CONNECT_URL = 'http://127.0.0.1:7790/connect';
+const AGENT_DOWNLOAD_URL = 'https://empyralis.io/downloads/empyralis-agent/macos/Empyralis-Agent.dmg';
+
+const HARDWARE_KINDS: Array<{
+  kind: HardwareKind;
+  title: string;
+  typeLabel: string;
+  description: string;
+}> = [
+  {
+    kind: 'local_companion',
+    title: 'This device',
+    typeLabel: 'Local computer',
+    description: 'This computer is not connected yet.',
+  },
+  {
+    kind: 'self_hosted_business_node',
+    title: 'Server/VPS',
+    typeLabel: 'Remote server',
+    description: 'Connect a server or VPS with the Agent Computer gateway.',
+  },
+  {
+    kind: 'cloud_computer',
+    title: 'Cloud Computer',
+    typeLabel: 'Managed cloud runtime',
+    description: 'A hosted computer reserved for workspace execution when enabled.',
+  },
+];
+
+const HARDWARE_TABS: Array<{ id: HardwareTab; label: string }> = [
+  { id: 'this_device', label: 'This device' },
+  { id: 'other_computers', label: 'Other computers' },
+  { id: 'ssh_server', label: 'SSH / Server' },
+];
+
+const KIND_ID_ALIASES: Record<HardwareKind, string[]> = {
+  local_companion: ['local_companion', 'user_device_gateway', 'this_device'],
+  self_hosted_business_node: ['self_hosted_business_node', 'self_hosted_node', 'self_host_runtime', 'server_vps'],
+  cloud_computer: ['cloud_computer', 'sage_cloud_computer', 'empyralis_cloud_computer'],
+};
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readString(record: Record<string, unknown> | null, ...keys: string[]): string {
+  if (!record) {
+    return '';
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
+function readBoolean(record: Record<string, unknown> | null, ...keys: string[]): boolean {
+  if (!record) {
+    return false;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+  }
+  return false;
+}
+
+function readStringArray(record: Record<string, unknown> | null, ...keys: string[]): string[] {
+  if (!record) {
+    return [];
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()));
+    }
+  }
+  return [];
+}
+
+function normalizeKind(value: string): HardwareKind | null {
+  const normalized = value.trim().toLowerCase();
+  if (KIND_ID_ALIASES.local_companion.includes(normalized)) {
+    return 'local_companion';
+  }
+  if (KIND_ID_ALIASES.self_hosted_business_node.includes(normalized)) {
+    return 'self_hosted_business_node';
+  }
+  if (KIND_ID_ALIASES.cloud_computer.includes(normalized)) {
+    return 'cloud_computer';
+  }
+  return null;
+}
+
+function normalizeAttachment(value: unknown): HardwareAttachment | null {
+  const record = readRecord(value);
+  const kind = normalizeKind(readString(record, 'kind', 'runtime_kind', 'target_kind', 'attachment_kind', 'attachmentKind'));
+  if (!record || !kind) {
+    return null;
+  }
+  return {
+    kind,
+    name: readString(record, 'display_name', 'name', 'label', 'hostname') || HARDWARE_KINDS.find((item) => item.kind === kind)?.title || 'Computer',
+    status: readString(record, 'status', 'state', 'health_status'),
+    online: readBoolean(record, 'online', 'is_online', 'connected'),
+    healthy: readBoolean(record, 'healthy', 'is_healthy', 'gateway_healthy'),
+    trustStatus: readString(record, 'trust_status', 'trustStatus', 'approval_status'),
+    reason: readString(record, 'status_reason', 'statusReason', 'reason', 'message', 'last_error'),
+    capabilities: readStringArray(record, 'capabilities', 'advertised_capabilities'),
+  };
+}
+
+function normalizeAttachments(payload: unknown): HardwareAttachment[] {
+  if (Array.isArray(payload)) {
+    return payload.map(normalizeAttachment).filter((item): item is HardwareAttachment => Boolean(item));
+  }
+  const record = readRecord(payload);
+  const candidates = record?.attachments ?? record?.items ?? record?.runtime_attachments ?? record?.results;
+  return Array.isArray(candidates)
+    ? candidates.map(normalizeAttachment).filter((item): item is HardwareAttachment => Boolean(item))
+    : [];
+}
+
+function normalizeTarget(value: unknown): HardwareTarget | null {
+  const record = readRecord(value);
+  if (!record) {
+    return null;
+  }
+  const rawKind = readString(record, 'kind', 'runtime_kind', 'target_kind');
+  const rawId = readString(record, 'id', 'target_id', 'canonical_id', 'canonicalId');
+  const kind =
+    normalizeKind(rawKind) ??
+    (Object.entries(KIND_ID_ALIASES).find(([, aliases]) => aliases.includes(rawId))?.[0] as HardwareKind | undefined) ??
+    null;
+  if (!kind) {
+    return null;
+  }
+  const targetSelection = readRecord(record.target_selection ?? record.targetSelection);
+  return {
+    kind,
+    name: readString(record, 'public_label', 'label', 'name', 'display_name') || HARDWARE_KINDS.find((item) => item.kind === kind)?.title || 'Computer',
+    status: readString(record, 'status', 'state', 'health_status'),
+    online: readBoolean(record, 'online', 'is_online', 'connected'),
+    healthy: readBoolean(record, 'healthy', 'is_healthy', 'gateway_healthy'),
+    reason: readString(record, 'status_reason', 'reason', 'message') || readString(targetSelection, 'reason', 'status_reason', 'message'),
+    capabilities: readStringArray(record, 'capabilities', 'advertised_capabilities'),
+  };
+}
+
+function classifyStatus(attachment: HardwareAttachment | null, target: HardwareTarget | null, kind: HardwareKind): HardwareStatus {
+  if (!attachment && !target) {
+    return kind === 'local_companion' ? 'Offline' : 'Unavailable';
+  }
+  const statusText = `${attachment?.status ?? ''} ${attachment?.trustStatus ?? ''} ${attachment?.reason ?? ''} ${target?.status ?? ''} ${target?.reason ?? ''}`.toLowerCase();
+  if (statusText.includes('approval') || statusText.includes('pending')) {
+    return 'Needs approval';
+  }
+  if ((attachment?.online && attachment.healthy) || (target?.online && target.healthy)) {
+    return 'Connected';
+  }
+  if (
+    statusText.includes('revoked') ||
+    statusText.includes('unavailable') ||
+    statusText.includes('disabled') ||
+    statusText.includes('unsupported') ||
+    statusText.includes('missing') ||
+    statusText.includes('not enabled')
+  ) {
+    return 'Unavailable';
+  }
+  return 'Offline';
+}
+
+function actionForStatus(status: HardwareStatus): HardwareCard['actionLabel'] {
+  if (status === 'Connected') {
+    return 'Manage';
+  }
+  if (status === 'Needs approval') {
+    return 'Approve';
+  }
+  if (status === 'Offline') {
+    return 'Reconnect';
+  }
+  return 'Connect';
+}
+
+function publicHardwareReason(rawReason: string, status: HardwareStatus, workspaceId: string, kind: HardwareKind): string {
+  const normalized = rawReason.trim().toLowerCase();
+  if (!normalized) {
+    if (kind === 'local_companion' && status === 'Offline') {
+      return 'This device is not connected yet.';
+    }
+    return '';
+  }
+  if (normalized.includes('workspace')) {
+    return `This computer is paired to another workspace. Reconnect it to ${workspaceId}.`;
+  }
+  if (normalized.includes('gateway_offline') || normalized.includes('offline')) {
+    return 'Empyralis cannot use this computer right now.';
+  }
+  if (normalized.includes('not_configured') || normalized.includes('missing') || normalized.includes('unavailable')) {
+    return status === 'Unavailable'
+      ? 'This computer option is not available for this workspace.'
+      : 'This computer needs setup before Empyralis can use it.';
+  }
+  return rawReason.replace(/[_-]+/g, ' ');
+}
+
+function buildCard(
+  metadata: (typeof HARDWARE_KINDS)[number],
+  attachment: HardwareAttachment | null,
+  target: HardwareTarget | null,
+  workspaceId: string,
+): HardwareCard {
+  const status = classifyStatus(attachment, target, metadata.kind);
+  const rawReason = attachment?.reason || target?.reason || '';
+  const reason = publicHardwareReason(rawReason, status, workspaceId, metadata.kind);
+  return {
+    kind: metadata.kind,
+    title: metadata.title,
+    typeLabel: metadata.typeLabel,
+    name: attachment?.name || target?.name || metadata.title,
+    description: reason || metadata.description,
+    status,
+    actionLabel: actionForStatus(status),
+    reason,
+    capabilities: attachment?.capabilities.length ? attachment.capabilities : target?.capabilities ?? [],
+    known: Boolean(attachment || target) || metadata.kind === 'local_companion',
+  };
+}
+
+function detectHardwarePlatform(): string {
+  if (typeof navigator === 'undefined') {
+    return 'unknown';
+  }
+  const token = `${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`.toLowerCase();
+  if (token.includes('mac')) {
+    return 'macos';
+  }
+  if (token.includes('win')) {
+    return 'windows';
+  }
+  if (token.includes('linux')) {
+    return 'linux';
+  }
+  return 'unknown';
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function gatewayApiUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_ORION_API_URL || process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_PLATFORM_URL || '';
+  if (configured.trim()) {
+    return configured.replace(/\/+$/, '');
+  }
+  if (typeof window !== 'undefined') {
+    return window.location.origin;
+  }
+  return '';
+}
+
+function readPairingIntent(payload: unknown): PairingIntentRecord | null {
+  const record = readRecord(payload);
+  const intent = readRecord(record?.intent) ?? record;
+  if (!intent) {
+    return null;
+  }
+  const pairingToken = readString(intent, 'pairing_token', 'token');
+  if (!pairingToken) {
+    return null;
+  }
+  return {
+    pairing_token: pairingToken,
+    display_name: readString(intent, 'display_name', 'displayName', 'name'),
+    platform: readString(intent, 'platform'),
+    expires_at: readString(intent, 'expires_at', 'expiresAt'),
+    metadata: intent.metadata,
+  };
+}
+
+function pairingCommand(intent: PairingIntentRecord, workspaceId: string, option: ConnectOptionId): string {
+  const pairingToken = String(intent.pairing_token ?? '').trim();
+  const displayName = String(intent.display_name ?? '').trim();
+  const apiUrl = gatewayApiUrl();
+  if (!pairingToken) {
+    return 'Pairing token unavailable. Create a new hardware connection.';
+  }
+  if (!apiUrl) {
+    return 'Computer connector API URL unavailable. Set NEXT_PUBLIC_ORION_API_URL or NEXT_PUBLIC_API_URL before pairing.';
+  }
+  const installCommand = option === 'ssh_server'
+    ? 'scripts/agent_computer.sh service-install --system'
+    : 'scripts/agent_computer.sh install';
+  return [
+    'cd "$(git rev-parse --show-toplevel)"',
+    `export EMPYRALIS_GATEWAY_API_URL=${shellQuote(apiUrl)}`,
+    `export EMPYRALIS_GATEWAY_PAIRING_TOKEN=${shellQuote(pairingToken)}`,
+    displayName ? `export EMPYRALIS_GATEWAY_DISPLAY_NAME=${shellQuote(displayName)}` : '',
+    workspaceId ? `export EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID=${shellQuote(workspaceId)}` : '',
+    'scripts/agent_computer.sh stop',
+    installCommand,
+    'scripts/agent_computer.sh start',
+  ].filter(Boolean).join('\n');
+}
+
+function setupLink(intent: PairingIntentRecord, workspaceId: string): string {
+  const pairingToken = String(intent.pairing_token ?? '').trim();
+  if (!pairingToken) {
+    return '';
+  }
+  const params = new URLSearchParams({ token: pairingToken, ws: workspaceId });
+  return `https://empyralis.io/setup?${params.toString()}`;
+}
+
+function trayStatusConnected(status: TrayLocalStatus | null): boolean {
+  return trayProcessConnected(status) && status?.session_verified === true;
+}
+
+function trayProcessConnected(status: TrayLocalStatus | null): boolean {
+  return Boolean(
+    status?.connected ||
+    status?.gateway_running ||
+    status?.supervisor_running ||
+    status?.state === 'connected' ||
+    status?.state === 'active',
+  );
+}
+
+function normalizeCapabilityChecks(payload: HardwareCapabilityPayload | null): HardwareCapabilityCheck[] {
+  if (!payload?.available || !Array.isArray(payload.checks)) {
+    return [];
+  }
+  return payload.checks
+    .map((item) => ({
+      name: String(item?.name || '').trim(),
+      status: String(item?.status || 'unknown').trim().toLowerCase(),
+    }))
+    .filter((item) => item.name && item.status !== 'unsupported');
+}
+
+function capabilityLabel(name: string): string {
+  if (name === 'screen_recording') {
+    return 'Screen recording';
+  }
+  if (name === 'accessibility') {
+    return 'Accessibility';
+  }
+  if (name === 'filesystem') {
+    return 'File access';
+  }
+  return name;
+}
+
+function capabilityFixTarget(name: string): string {
+  if (name === 'screen_recording') {
+    return 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
+  }
+  if (name === 'accessibility') {
+    return 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
+  }
+  return '';
+}
+
+function hardwareActivityLabel(capability: string | null | undefined): string {
+  const normalized = String(capability || '').trim();
+  if (!normalized) {
+    return 'Hardware action';
+  }
+  return normalized
+    .replace(/[._-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function timeAgo(timestamp: string | null | undefined): string {
+  const parsed = timestamp ? Date.parse(timestamp) : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    return 'just now';
+  }
+  const deltaSeconds = Math.max(0, Math.round((Date.now() - parsed) / 1000));
+  if (deltaSeconds < 5) {
+    return 'just now';
+  }
+  if (deltaSeconds < 60) {
+    return `${deltaSeconds}s ago`;
+  }
+  const minutes = Math.floor(deltaSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  return `${Math.floor(minutes / 60)}h ago`;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+async function fetchJsonWithTimeout<T>(url: string, init: RequestInit = {}, timeoutMs = 500): Promise<T> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Request failed with ${response.status}`);
+    }
+    return await response.json() as T;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function writeClipboardText(text: string): Promise<boolean> {
+  if (!text) {
+    return false;
+  }
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the legacy copy path.
+  }
+  if (typeof document === 'undefined') {
+    return false;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  let copied = false;
+  try {
+    copied = document.execCommand('copy');
+  } finally {
+    document.body.removeChild(textarea);
+  }
+  return copied;
+}
+
+export function WorkstationHardwarePane() {
+  const { bootstrap } = useWorkspaceBoundary();
+  const services = useWorkspaceServices();
+  const [attachments, setAttachments] = useState<HardwareAttachment[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedKind, setExpandedKind] = useState<HardwareKind | null>(null);
+  const [activeTab, setActiveTab] = useState<HardwareTab>('this_device');
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [selectedConnectOption, setSelectedConnectOption] = useState<ConnectOptionId>('this_device');
+  const [pairingIntentState, setPairingIntentState] = useState<PairingIntentRecord | null>(null);
+  const [otherSetupIntent, setOtherSetupIntent] = useState<PairingIntentRecord | null>(null);
+  const [setupQrDataUrl, setSetupQrDataUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [localConnectBusy, setLocalConnectBusy] = useState(false);
+  const [remoteConnectBusy, setRemoteConnectBusy] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [copiedTarget, setCopiedTarget] = useState<'setup' | 'command' | null>(null);
+  const [trayStatus, setTrayStatus] = useState<TrayLocalStatus | null>(null);
+  const [capabilityChecks, setCapabilityChecks] = useState<HardwareCapabilityCheck[]>([]);
+  const [hardwareActivity, setHardwareActivity] = useState<HardwareActivityEvent[]>([]);
+  const [trayDetected, setTrayDetected] = useState<boolean | null>(null);
+  const [trayChecking, setTrayChecking] = useState(false);
+  const [localConnectError, setLocalConnectError] = useState<string | null>(null);
+  const [remoteExpanded, setRemoteExpanded] = useState(false);
+  const [remoteError, setRemoteError] = useState<string | null>(null);
+  const [manualCommandOpen, setManualCommandOpen] = useState(false);
+  const [sshHost, setSshHost] = useState('');
+  const [sshPort, setSshPort] = useState('22');
+  const [sshUsername, setSshUsername] = useState('');
+  const [sshAuthMode, setSshAuthMode] = useState<SshAuthMode>('password');
+  const [sshPassword, setSshPassword] = useState('');
+  const [sshKey, setSshKey] = useState('');
+  const workspaceRecord = readRecord(bootstrap.workspace);
+  const workspaceId = readString(workspaceRecord, 'id', 'workspace_id') || 'ws-1';
+  const workspaceLabel = workspaceId || readString(workspaceRecord, 'label', 'name') || 'this workspace';
+
+  async function refreshHardwareAttachments(): Promise<void> {
+    try {
+      const payload = await services.client.listRuntimeAttachments();
+      setAttachments(normalizeAttachments(payload));
+      setError(null);
+    } catch {
+      setAttachments([]);
+      setError('Hardware status is unavailable right now.');
+    }
+  }
+
+  async function refreshHardwareCapabilities(): Promise<void> {
+    try {
+      const payload = await fetchJsonWithTimeout<HardwareCapabilityPayload>(
+        `/api/gateway/hardware/capabilities?workspace_id=${encodeURIComponent(workspaceId)}`,
+        { method: 'GET' },
+        5_000,
+      );
+      setCapabilityChecks(normalizeCapabilityChecks(payload));
+    } catch {
+      setCapabilityChecks([]);
+    }
+  }
+
+  useEffect(() => {
+    let active = true;
+    setError(null);
+    services.client
+      .listRuntimeAttachments()
+      .then((payload) => {
+        if (!active) {
+          return;
+        }
+        setAttachments(normalizeAttachments(payload));
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+        setAttachments([]);
+        setError('Hardware status is unavailable right now.');
+      });
+    return () => {
+      active = false;
+    };
+  }, [services.client]);
+
+  useEffect(() => {
+    void detectTrayAgent();
+  }, []);
+
+  useEffect(() => {
+    if (!connectOpen) {
+      return;
+    }
+    void detectTrayAgent();
+  }, [connectOpen]);
+
+  useEffect(() => {
+    if (!trayStatusConnected(trayStatus)) {
+      setCapabilityChecks([]);
+      return;
+    }
+    void refreshHardwareCapabilities();
+  }, [trayStatus?.connected, trayStatus?.session_verified, workspaceId]);
+
+  useEffect(() => {
+    if (!trayStatusConnected(trayStatus) || typeof EventSource === 'undefined') {
+      setHardwareActivity([]);
+      return;
+    }
+    const source = new EventSource(`/api/gateway/hardware/activity/stream?workspace_id=${encodeURIComponent(workspaceId)}`);
+    const handleHardwareAction = (event: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(event.data) as HardwareActivityEvent;
+        const eventId = String(payload.id || `${payload.gateway_id || 'gateway'}:${payload.capability || 'action'}:${payload.timestamp || Date.now()}`);
+        setHardwareActivity((current) => {
+          const next = [
+            { ...payload, id: eventId },
+            ...current.filter((item) => String(item.id || '') !== eventId),
+          ];
+          return next.slice(0, 5);
+        });
+      } catch {
+        // Ignore malformed stream frames.
+      }
+    };
+    source.addEventListener('hardware_action', handleHardwareAction as EventListener);
+    return () => {
+      source.removeEventListener('hardware_action', handleHardwareAction as EventListener);
+      source.close();
+    };
+  }, [trayStatus?.connected, trayStatus?.session_verified, workspaceId]);
+
+  const targets = useMemo(
+    () => (bootstrap.runtime.runtimeTargets ?? []).map(normalizeTarget).filter((item): item is HardwareTarget => Boolean(item)),
+    [bootstrap.runtime.runtimeTargets],
+  );
+
+  const cards = useMemo(
+    () =>
+      HARDWARE_KINDS.map((metadata) => {
+        const attachment = attachments.find((item) => item.kind === metadata.kind) ?? null;
+        const target = targets.find((item) => item.kind === metadata.kind) ?? null;
+        return buildCard(metadata, attachment, target, workspaceLabel);
+      }),
+    [attachments, targets, workspaceLabel],
+  );
+
+  const localCard = cards.find((card) => card.kind === 'local_companion') ?? null;
+  const serverCard = cards.find((card) => card.kind === 'self_hosted_business_node') ?? null;
+  const cloudCard = cards.find((card) => card.kind === 'cloud_computer') ?? null;
+  const connectedCount = cards.filter((card) => card.status === 'Connected').length;
+  const visibleCards = useMemo(() => {
+    if (activeTab === 'this_device') {
+      return localCard ? [localCard] : [];
+    }
+    if (activeTab === 'ssh_server') {
+      return serverCard && serverCard.known && serverCard.status !== 'Unavailable' ? [serverCard] : [];
+    }
+    return cards.filter((card) => (
+      card.kind !== 'local_companion'
+      && card.kind !== 'self_hosted_business_node'
+      && card.known
+      && card.status !== 'Unavailable'
+    ));
+  }, [activeTab, cards, localCard, serverCard]);
+  const cloudEnabled = Boolean(cloudCard && cloudCard.known && cloudCard.status !== 'Unavailable');
+  const command = otherSetupIntent ? pairingCommand(otherSetupIntent, workspaceId, 'other_computer') : pairingIntentState ? pairingCommand(pairingIntentState, workspaceId, selectedConnectOption) : '';
+  const generatedSetupLink = otherSetupIntent ? setupLink(otherSetupIntent, workspaceId) : '';
+
+  useEffect(() => {
+    let active = true;
+    if (!generatedSetupLink) {
+      setSetupQrDataUrl(null);
+      return;
+    }
+    toDataURL(generatedSetupLink, {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 168,
+      color: {
+        dark: '#f4f4f5',
+        light: '#00000000',
+      },
+    })
+      .then((dataUrl) => {
+        if (active) {
+          setSetupQrDataUrl(dataUrl);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setSetupQrDataUrl(null);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [generatedSetupLink]);
+
+  function emptyCopy(): string {
+    if (activeTab === 'this_device') {
+      return 'This device is not connected yet.';
+    }
+    if (activeTab === 'ssh_server') {
+      return 'No server or VPS is connected to this workspace.';
+    }
+    return 'No other computers are connected to this workspace.';
+  }
+
+  function optionPlatform(option: ConnectOptionId): string | undefined {
+    if (option === 'ssh_server') {
+      return 'linux';
+    }
+    if (option === 'this_device') {
+      const detected = detectHardwarePlatform();
+      return detected === 'unknown' ? undefined : detected;
+    }
+    return undefined;
+  }
+
+  async function createPairingIntent(optionOverride?: ConnectOptionId): Promise<PairingIntentRecord | null> {
+    const option = optionOverride ?? selectedConnectOption;
+    setSelectedConnectOption(option);
+    setBusy(true);
+    setError(null);
+    setStatusMessage(null);
+    setCopiedTarget(null);
+    try {
+      const payload = await services.client.requestJson<unknown>({
+        path: '/api/gateway/pairings/intents',
+        init: {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            display_name: option === 'ssh_server'
+              ? 'Server/VPS'
+              : option === 'other_computer'
+                ? 'Other computer'
+                : 'This device',
+            platform: optionPlatform(option),
+            runtime_access_mode: 'default_guarded',
+            autonomous_agent_setup_warning_acknowledged: false,
+          }),
+        },
+      });
+      const intent = readPairingIntent(payload);
+      if (!intent) {
+        throw new Error('Pairing token was not returned.');
+      }
+      setPairingIntentState(intent);
+      return intent;
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not create a hardware pairing token.');
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function detectTrayAgent() {
+    setTrayChecking(true);
+    setLocalConnectError(null);
+    try {
+      const status = await fetchJsonWithTimeout<TrayLocalStatus>(TRAY_STATUS_URL, { method: 'GET' }, 500);
+      setTrayStatus(status);
+      setTrayDetected(Boolean(status?.ok ?? true));
+    } catch {
+      setTrayStatus(null);
+      setTrayDetected(false);
+    } finally {
+      setTrayChecking(false);
+    }
+  }
+
+  async function pollTrayConnection(): Promise<TrayLocalStatus | null> {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      await wait(2_000);
+      try {
+        const status = await fetchJsonWithTimeout<TrayLocalStatus>(TRAY_STATUS_URL, { method: 'GET' }, 1_500);
+        setTrayStatus(status);
+        if (trayStatusConnected(status)) {
+          return status;
+        }
+      } catch {
+        setTrayStatus(null);
+      }
+    }
+    return null;
+  }
+
+  async function connectThisMac() {
+    setLocalConnectBusy(true);
+    setLocalConnectError(null);
+    setStatusMessage(null);
+    try {
+      const response = await fetchJsonWithTimeout<TrayLocalStatus & { error?: string }>(TRAY_CONNECT_URL, { method: 'POST' }, 30_000);
+      if (response.ok === false) {
+        throw new Error(response.error || 'Could not connect this Mac.');
+      }
+      setTrayStatus(response);
+      const connectedStatus = trayStatusConnected(response) ? response : await pollTrayConnection();
+      if (!connectedStatus) {
+        setLocalConnectError('Connection timed out');
+        return;
+      }
+      setConnectOpen(false);
+      await refreshHardwareAttachments();
+      await refreshHardwareCapabilities();
+    } catch (connectError) {
+      setLocalConnectError(connectError instanceof Error ? connectError.message : 'Connection timed out');
+    } finally {
+      setLocalConnectBusy(false);
+    }
+  }
+
+  async function connectRemoteServer() {
+    setRemoteConnectBusy(true);
+    setRemoteError(null);
+    setStatusMessage(null);
+    const intent = await createPairingIntent('ssh_server');
+    if (!intent) {
+      setRemoteConnectBusy(false);
+      return;
+    }
+    try {
+      await services.client.requestJson<unknown>({
+        path: '/api/gateway/pairings/ssh',
+        init: {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            pairing_token: intent.pairing_token,
+            host: sshHost.trim(),
+            port: Number.parseInt(sshPort, 10) || 22,
+            username: sshUsername.trim(),
+            auth_mode: sshAuthMode,
+            password: sshAuthMode === 'password' ? sshPassword : undefined,
+            ssh_key: sshAuthMode === 'ssh_key' ? sshKey : undefined,
+          }),
+        },
+      });
+      setStatusMessage('Remote server connection started.');
+      await refreshHardwareAttachments();
+    } catch (sshError) {
+      setRemoteError(sshError instanceof Error ? sshError.message : 'Remote server connection failed.');
+    } finally {
+      setRemoteConnectBusy(false);
+    }
+  }
+
+  async function createOtherComputerSetupLink() {
+    setOtherSetupIntent(null);
+    setManualCommandOpen(false);
+    const intent = await createPairingIntent('other_computer');
+    if (intent) {
+      setOtherSetupIntent(intent);
+      setStatusMessage('Setup link created.');
+    }
+  }
+
+  function showCopied(target: 'setup' | 'command') {
+    setCopiedTarget(target);
+    window.setTimeout(() => {
+      setCopiedTarget((current) => current === target ? null : current);
+    }, 1_500);
+  }
+
+  async function copySetupLink() {
+    if (await writeClipboardText(generatedSetupLink)) {
+      showCopied('setup');
+    }
+  }
+
+  async function copyCommand() {
+    if (await writeClipboardText(command)) {
+      showCopied('command');
+    }
+  }
+
+  function openConnect(option: ConnectOptionId, mode: 'choose' | 'direct' = 'choose') {
+    setSelectedConnectOption(option);
+    setConnectOpen(true);
+    setPairingIntentState(null);
+    setOtherSetupIntent(null);
+    setStatusMessage(null);
+    setLocalConnectError(null);
+    setRemoteError(null);
+    setCopiedTarget(null);
+    setRemoteExpanded(option === 'ssh_server');
+    setManualCommandOpen(false);
+    void mode;
+  }
+
+  function handleCardAction(card: HardwareCard) {
+    if (card.status === 'Connected') {
+      setExpandedKind(expandedKind === card.kind ? null : card.kind);
+      return;
+    }
+    openConnect(card.kind === 'self_hosted_business_node' ? 'ssh_server' : 'this_device', 'direct');
+  }
+
+  return (
+    <section className="workstation-hardware-pane" aria-label="Hardware">
+      <div className="workstation-hardware-page">
+        <header className="workstation-hardware-page__header">
+          <div>
+            <h1>Hardware</h1>
+            <p>The computers Empyralis can use.</p>
+          </div>
+          <AppButton
+            tone="secondary"
+            type="button"
+            onClick={() => openConnect(activeTab === 'ssh_server' ? 'ssh_server' : 'this_device', 'choose')}
+          >
+            <Plus size={15} strokeWidth={2} aria-hidden="true" />
+            <span>Connect</span>
+          </AppButton>
+        </header>
+
+        <nav className="workstation-hardware-tabs" aria-label="Hardware connection type">
+          {HARDWARE_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              className={joinClassNames(
+                'workstation-shell-panel__nav-row',
+                activeTab === tab.id && 'workstation-shell-panel__nav-row--active',
+              )}
+              aria-current={activeTab === tab.id ? 'page' : undefined}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        <section className="workstation-hardware-section" aria-label="Computers Empyralis can use">
+          <header className="workstation-hardware-section__header">
+            <div>
+              <h2>Computers Empyralis can use</h2>
+              <p>{connectedCount ? `${connectedCount} connected` : 'No usable computer is connected to this workspace.'}</p>
+            </div>
+            {cloudEnabled ? <span className="workstation-hardware-section__badge">Cloud enabled</span> : null}
+          </header>
+
+          {error ? <p className="workstation-hardware-section__notice">{error}</p> : null}
+
+          <div className="workstation-hardware-list">
+            {visibleCards.length ? visibleCards.map((card) => {
+              const Icon = card.kind === 'local_companion' ? Monitor : card.kind === 'cloud_computer' ? Cloud : Server;
+              const expanded = expandedKind === card.kind;
+              return (
+                <article key={card.kind} className="workstation-hardware-row">
+                  <span className="workstation-hardware-row__icon" aria-hidden="true">
+                    <Icon size={18} strokeWidth={1.9} />
+                  </span>
+                  <div className="workstation-hardware-row__copy">
+                    <h3>{card.name}</h3>
+                    <p>{card.description}</p>
+                    {card.kind === 'local_companion' && trayStatusConnected(trayStatus) && capabilityChecks.length ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', color: 'var(--color-text-muted)', fontSize: '0.78rem' }}>
+                        {capabilityChecks.map((check) => {
+                          const fixTarget = capabilityFixTarget(check.name);
+                          return (
+                            <span key={check.name} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                              <span className={joinClassNames('workstation-hardware-row__status-dot', check.status === 'granted' && 'is-connected', check.status === 'denied' && 'is-offline')} />
+                              <span>{capabilityLabel(check.name)}</span>
+                              <span>{check.status === 'granted' ? '✓' : check.status === 'denied' ? '✗' : '—'}</span>
+                              {check.status === 'denied' && fixTarget ? (
+                                <button className="workstation-hardware-inline-link" type="button" onClick={() => window.open(fixTarget)}>
+                                  Fix →
+                                </button>
+                              ) : null}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    {card.kind === 'local_companion' && trayStatusConnected(trayStatus) ? (
+                      <div className="workstation-hardware-activity" aria-live="polite">
+                        <div className="workstation-hardware-activity__header">Recent activity</div>
+                        {hardwareActivity.length ? (
+                          <div className="workstation-hardware-activity__list">
+                            {hardwareActivity.map((item) => (
+                              <div key={String(item.id || `${item.capability}:${item.timestamp}`)} className="workstation-hardware-activity__item">
+                                <span>{hardwareActivityLabel(item.capability)}</span>
+                                <span className={joinClassNames('workstation-hardware-activity__status', item.status === 'failed' && 'is-failed')}>
+                                  {item.status === 'failed' ? 'failed' : 'completed'}
+                                </span>
+                                <span>{timeAgo(item.timestamp)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="workstation-hardware-activity__empty">No activity yet</p>
+                        )}
+                      </div>
+                    ) : null}
+                    {expanded ? (
+                      <dl className="workstation-hardware-row__diagnostics">
+                        <div>
+                          <dt>Type</dt>
+                          <dd>{card.typeLabel}</dd>
+                        </div>
+                        <div>
+                          <dt>Capabilities</dt>
+                          <dd>{card.capabilities.length ? card.capabilities.join(', ') : 'None advertised'}</dd>
+                        </div>
+                        <div>
+                          <dt>Reason</dt>
+                          <dd>{card.reason || 'No diagnostic reason reported.'}</dd>
+                        </div>
+                      </dl>
+                    ) : null}
+                  </div>
+                  <span className={joinClassNames('workstation-hardware-row__status', `is-${card.status.toLowerCase().replace(/\s+/g, '-')}`)}>
+                    <span className={joinClassNames('workstation-hardware-row__status-dot', `is-${card.status.toLowerCase().replace(/\s+/g, '-')}`)} />
+                    <span className="workstation-hardware-row__status-text">{card.status}</span>
+                  </span>
+                  <AppButton tone="secondary" type="button" onClick={() => handleCardAction(card)}>
+                    {card.actionLabel}
+                  </AppButton>
+                </article>
+              );
+            }) : (
+              <div className="workstation-hardware-empty">
+                <p>{emptyCopy()}</p>
+                <AppButton
+                  tone="secondary"
+                  type="button"
+                  onClick={() => openConnect(activeTab === 'ssh_server' ? 'ssh_server' : 'this_device', 'direct')}
+                >
+                  Connect
+                </AppButton>
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      {connectOpen ? (
+        <div className="workstation-hardware-sheet" role="dialog" aria-modal="true" aria-label="Connect hardware">
+          <button className="workstation-hardware-sheet__scrim" type="button" aria-label="Close connect hardware" onClick={() => setConnectOpen(false)} />
+          <section className="workstation-hardware-sheet__panel">
+            <header className="workstation-hardware-sheet__header">
+              <div>
+                <h2>{trayDetected ? 'Connect via Empyralis Agent' : 'Connect a computer'}</h2>
+                <p>Empyralis controls the paired computer through Agent Computer.</p>
+              </div>
+              <button className="workstation-hardware-sheet__close" type="button" onClick={() => setConnectOpen(false)} aria-label="Close">
+                <X size={17} strokeWidth={2} />
+              </button>
+            </header>
+
+            <div className="workstation-hardware-connect-stack">
+              <article className={joinClassNames('workstation-hardware-connect-card', trayDetected && 'is-active')}>
+                <div className="workstation-hardware-connect-card__main">
+                  <div>
+                    <h3>This Mac</h3>
+                    <p>Install Agent Computer and connect automatically</p>
+                  </div>
+                  <div className="workstation-hardware-connect-card__actions">
+                    {trayDetected ? (
+                      <AppButton tone="primary" type="button" onClick={() => void connectThisMac()} disabled={localConnectBusy}>
+                        {localConnectBusy ? <span className="workstation-hardware-spinner" aria-hidden="true" /> : null}
+                        {localConnectBusy ? 'Connecting' : 'Connect'}
+                      </AppButton>
+                    ) : (
+                      <>
+                        <AppButton tone="secondary" type="button" onClick={() => window.open(AGENT_DOWNLOAD_URL, '_blank', 'noopener,noreferrer')}>
+                          Download Agent
+                        </AppButton>
+                        <span className="workstation-hardware-connect-card__hint">Already installed? Open it and try again.</span>
+                        <button
+                          className="workstation-hardware-inline-link"
+                          type="button"
+                          onClick={() => void detectTrayAgent()}
+                          disabled={trayChecking}
+                        >
+                          {trayChecking ? 'Checking…' : 'Retry detection'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {localConnectError ? <p className="workstation-hardware-connect-card__error">{localConnectError}</p> : null}
+                {trayStatus?.error ? <p className="workstation-hardware-connect-card__error">{trayStatus.error}</p> : null}
+                {trayProcessConnected(trayStatus) && !trayStatusConnected(trayStatus) ? (
+                  <p className="workstation-hardware-connect-card__note">Connecting...</p>
+                ) : null}
+              </article>
+
+              <article className={joinClassNames('workstation-hardware-connect-card', remoteExpanded && 'is-active')}>
+                <div className="workstation-hardware-connect-card__main">
+                  <div>
+                    <h3>Remote server</h3>
+                    <p>Linux VPS or cloud machine via SSH</p>
+                  </div>
+                  <AppButton tone="secondary" type="button" onClick={() => setRemoteExpanded((expanded) => !expanded)}>
+                    Configure
+                  </AppButton>
+                </div>
+                {remoteExpanded ? (
+                  <div className="workstation-hardware-ssh-form">
+                    <label className="app-form-field">
+                      <span className="app-form-field__label">Host</span>
+                      <input className="app-field" type="text" value={sshHost} onChange={(event) => setSshHost(event.target.value)} placeholder="server.example.com" />
+                    </label>
+                    <label className="app-form-field">
+                      <span className="app-form-field__label">Port</span>
+                      <input className="app-field" type="number" min="1" max="65535" value={sshPort} onChange={(event) => setSshPort(event.target.value)} />
+                    </label>
+                    <label className="app-form-field">
+                      <span className="app-form-field__label">Username</span>
+                      <input className="app-field" type="text" value={sshUsername} onChange={(event) => setSshUsername(event.target.value)} placeholder="ubuntu" />
+                    </label>
+                    <div className="workstation-hardware-auth-toggle" role="group" aria-label="SSH authentication">
+                      <button className={joinClassNames(sshAuthMode === 'password' && 'is-active')} type="button" onClick={() => setSshAuthMode('password')}>
+                        Password
+                      </button>
+                      <button className={joinClassNames(sshAuthMode === 'ssh_key' && 'is-active')} type="button" onClick={() => setSshAuthMode('ssh_key')}>
+                        SSH Key
+                      </button>
+                    </div>
+                    {sshAuthMode === 'password' ? (
+                      <label className="app-form-field">
+                        <span className="app-form-field__label">Password</span>
+                        <input className="app-field" type="password" value={sshPassword} onChange={(event) => setSshPassword(event.target.value)} />
+                      </label>
+                    ) : (
+                      <label className="app-form-field">
+                        <span className="app-form-field__label">SSH key</span>
+                        <textarea className="app-textarea" value={sshKey} onChange={(event) => setSshKey(event.target.value)} rows={5} />
+                      </label>
+                    )}
+                    <AppButton tone="secondary" type="button" onClick={() => void connectRemoteServer()} disabled={remoteConnectBusy}>
+                      {remoteConnectBusy ? <span className="workstation-hardware-spinner" aria-hidden="true" /> : null}
+                      {remoteConnectBusy ? 'Connecting' : 'Connect'}
+                    </AppButton>
+                    {remoteError ? <p className="workstation-hardware-connect-card__error">{remoteError}</p> : null}
+                  </div>
+                ) : null}
+              </article>
+
+              <article className={joinClassNames('workstation-hardware-connect-card', otherSetupIntent && 'is-active')}>
+                <div className="workstation-hardware-connect-card__main">
+                  <div>
+                    <h3>Another computer</h3>
+                    <p>Any Mac, Windows, or Linux machine on your network</p>
+                  </div>
+                  <AppButton tone="secondary" type="button" onClick={() => void createOtherComputerSetupLink()} disabled={busy}>
+                    {busy ? 'Creating…' : 'Get setup link'}
+                  </AppButton>
+                </div>
+                {generatedSetupLink ? (
+                  <div className="workstation-hardware-setup-link">
+                    <div className="workstation-hardware-setup-link__row">
+                      <code>{generatedSetupLink}</code>
+                      <AppButton tone="secondary" type="button" onClick={() => void copySetupLink()}>
+                        <Copy size={14} strokeWidth={2} aria-hidden="true" />
+                        {copiedTarget === 'setup' ? 'Copied' : 'Copy'}
+                      </AppButton>
+                    </div>
+                    <div className="workstation-hardware-qr-placeholder">
+                      {setupQrDataUrl ? (
+                        <img src={setupQrDataUrl} alt="Setup QR code" />
+                      ) : (
+                        <span>QR code unavailable</span>
+                      )}
+                    </div>
+                    <button className="workstation-hardware-inline-link" type="button" onClick={() => setManualCommandOpen((open) => !open)}>
+                      {manualCommandOpen ? 'Hide manual command ↑' : 'Show manual command ↓'}
+                    </button>
+                    {manualCommandOpen && command ? (
+                      <div className="workstation-hardware-command">
+                        <div className="workstation-hardware-command__header">
+                          <span>Manual command</span>
+                          <button type="button" onClick={() => void copyCommand()}>
+                            <Copy size={14} strokeWidth={2} aria-hidden="true" />
+                            {copiedTarget === 'command' ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+                        <pre><code>{command}</code></pre>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </article>
+            </div>
+
+            {statusMessage ? <p className="workstation-hardware-section__notice">{statusMessage}</p> : null}
+          </section>
+        </div>
+      ) : null}
+    </section>
+  );
+}

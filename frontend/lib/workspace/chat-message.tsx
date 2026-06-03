@@ -65,7 +65,7 @@ function effectiveProviderLabel(metadata: Record<string, unknown>): string {
   const billingSource = String(metadata.billing_source ?? contextUsed?.billing_source ?? '').trim();
   const aiLabel = String(metadata.ai_label ?? contextUsed?.ai_label ?? '').trim();
   if (billingSource === 'empyralis_credits' && aiLabel) {
-    return `${aiLabel} · Empyralis credits`;
+    return `${aiLabel} · Workspace AI`;
   }
   const provider = String(
     metadata.effective_provider
@@ -288,7 +288,7 @@ export const ChatMessage = memo(({
       || lowerText.includes('selected provider')
       || lowerText.includes('selected for chat')
       || lowerText.includes('local-only')
-      ? 'Choose Empyralis credits, add an AI model key, or connect a computer.'
+      ? 'Choose Workspace AI, add an AI model key, or connect a computer.'
       : text;
     return (
       <article

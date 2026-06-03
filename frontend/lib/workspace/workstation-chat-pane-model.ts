@@ -1308,7 +1308,7 @@ export function providerRouteSuffix(provider: ProviderCatalogRecord | null | und
   const runtimeSource = readString(provider.runtime_active_source).toLowerCase();
 
   if (providerId === 'openai-codex') {
-    return 'This Device';
+    return 'Agent Computer';
   }
   if (runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
     return 'Subscription';
@@ -1336,25 +1336,25 @@ export function providerPathLabel(provider: ProviderCatalogRecord | null | undef
   const providerLabel = readString(provider.label) || readString(provider.id);
 
   if (providerId === 'ollama') {
-    return 'This Device · Ollama local';
+    return 'Agent Computer · Ollama local';
   }
   if (providerId === 'openai-codex') {
-    return 'Agent Computer · This Device';
+    return 'Agent Computer';
   }
   if (runtimeSource.endsWith('cli') || defaultAuthMode === 'oauth_token') {
-    return 'This Device';
+    return 'Agent Computer';
   }
   if (providerId === 'ollama_cloud') {
     return 'Ollama Cloud';
   }
   if (credentialPlane === 'platform_runtime') {
-    return 'Empyralis credits';
+    return 'Workspace AI';
   }
   if (credentialPlane === 'workspace_connection') {
     return 'Your AI account';
   }
   if (provider.local_only === true || credentialPlane === 'local_runtime') {
-    return 'This Device';
+    return 'Agent Computer';
   }
   return providerLabel || null;
 }
@@ -1389,13 +1389,13 @@ export function providerFailureMessageForProvider(provider: ProviderCatalogRecor
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs a connected computer in Connections. Use Empyralis credits, connect a computer, or connect your own AI account.`;
+    return `${providerLabel} needs a connected computer in Connections. Use Workspace AI, connect a computer, or connect your own AI account.`;
   }
   if (credentialPlane === 'workspace_connection') {
     return 'Your AI account needs attention. Check the connection, quota, or selected model in Connections.';
   }
   if (credentialPlane === 'platform_runtime') {
-    return 'Empyralis credits are active, but the hosted AI model is temporarily unavailable. Try again or switch model.';
+    return 'Workspace AI is active, but the hosted AI model is temporarily unavailable. Try again or switch model.';
   }
   return 'The selected AI model is not available right now. Switch model or open Connections.';
 }
@@ -1417,7 +1417,7 @@ export function providerFailureActionsForProvider(
     return [
       { label: 'Open Connections', target: 'integrations' },
       { label: 'Choose AI Model', target: 'integrations' },
-      { label: 'Use Empyralis credits', target: 'integrations' },
+      { label: 'Use Workspace AI', target: 'integrations' },
     ];
   }
   const creditsOrKey = normalized.includes('api key')
@@ -1427,7 +1427,7 @@ export function providerFailureActionsForProvider(
     || credentialPlane === 'workspace_connection';
   if (creditsOrKey) {
     return [
-      { label: 'Manage credits', target: 'integrations' },
+      { label: 'View usage', target: 'integrations' },
       { label: 'Connect AI account', target: 'integrations' },
       { label: 'Choose AI Model', target: 'integrations' },
     ];
@@ -1484,7 +1484,7 @@ export function modelOptionDisplayLabel(
   providerRecord: ProviderCatalogRecord | null,
 ): string {
   if (option.uiSection === 'empyralis' && EMPYRALIS_TIER_SET.has(readString(option.id).toLowerCase())) {
-    return `${option.label} · Empyralis credits`;
+    return `${option.label} · Workspace AI`;
   }
   if (
     option.uiSection === 'local_ai'
@@ -1587,7 +1587,7 @@ export function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
       return [];
     }
     const routePathLabel = routeKind === 'local_ai'
-      ? 'This Device'
+      ? 'Agent Computer'
       : routeKind === 'my_ai_account'
         ? 'My AI Account'
         : 'My API Key';
@@ -1804,14 +1804,14 @@ export function buildPreRunCostEstimate({
 
   const detail = detailParts.length > 0
     ? `Includes ${detailParts.join(' + ')}`
-    : 'No hosted AI credits expected for this route';
+    : 'No hosted AI usage expected for this route';
 
   if (!readString(draft) && warnings.length === 0) {
     return null;
   }
 
   return {
-    estimateLabel: `Estimated: ~${Math.max(0, Math.round(totalCredits))} credits`,
+    estimateLabel: `Estimated workspace AI usage: ~${Math.max(0, Math.round(totalCredits))}`,
     detail,
     warnings,
   };
@@ -2228,34 +2228,34 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
   if (!local.online) {
     return {
       tone: 'warning',
-      title: 'This Device is offline',
+      title: 'Agent Computer is offline',
       meta: `${preferredLabel} remains active`,
-      body: local.statusReason || 'Sage will stay in cloud mode until This Device reconnects.',
+      body: local.statusReason || 'Sage will stay in cloud mode until Agent Computer reconnects.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: `${agentComputerLabel} · This Device · ${local.statusLabel ?? 'Offline'}`,
+      localPill: `${agentComputerLabel} · ${local.statusLabel ?? 'Offline'}`,
     };
   }
 
   if (!local.healthy) {
     return {
       tone: 'warning',
-      title: 'This Device needs attention',
+      title: 'Agent Computer needs attention',
       meta: `${preferredLabel} remains active`,
       body: local.statusReason || 'Sage will avoid computer work until the connection is healthy again.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
-      localPill: `${agentComputerLabel} · This Device · ${local.statusLabel ?? 'Needs attention'}`,
+      localPill: `${agentComputerLabel} · ${local.statusLabel ?? 'Needs attention'}`,
     };
   }
 
   return {
     tone: 'success',
-    title: 'This Device is ready',
+    title: 'Agent Computer is ready',
     meta: `${agentComputerLabel} · ${local.sampleAttachmentLabel ?? local.label} · Default Guarded`,
     body: local.supportsFullAccess
-      ? 'Sage still uses cloud execution for ordinary turns. Device work starts in Default Guarded mode, and dedicated hardware can be switched to Autonomous Full Access during setup.'
-      : 'Sage still uses cloud execution for ordinary turns. Device work starts in Default Guarded mode on This Device.',
+      ? 'Sage still uses cloud execution for ordinary turns. Agent Computer work starts in Default Guarded mode, and dedicated hardware can be switched to Autonomous Full Access during setup.'
+      : 'Sage still uses cloud execution for ordinary turns. Agent Computer work starts in Default Guarded mode.',
     preferredPill: `${preferredLabel} · ${preferredStatus}`,
-    localPill: `${agentComputerLabel} · This Device · ${local.statusLabel ?? 'Ready'}`,
+    localPill: `${agentComputerLabel} · ${local.statusLabel ?? 'Ready'}`,
   };
 }
 
@@ -2306,8 +2306,8 @@ export function classifyStatusNotice(message: string): {
   if (isGatewayBrowserMessage(message)) {
     return {
       tone: 'warning',
-      title: 'This Device browser needed',
-      body: 'Localhost pages, signed-in sites, and private browser sessions stay on This Device. Open Connections to manage device access.',
+      title: 'Agent Computer browser needed',
+      body: 'Localhost pages, signed-in sites, and private browser sessions stay on Agent Computer. Open Connections to manage access.',
       requiresLocalAccess: true,
       actionTarget: 'integrations',
       actionLabel: 'Open Connections',
@@ -2316,11 +2316,21 @@ export function classifyStatusNotice(message: string): {
   if (isLocalCompanionGateMessage(message)) {
     return {
       tone: 'warning',
-      title: 'This Device attention needed',
+      title: 'Agent Computer attention needed',
       body: message,
       requiresLocalAccess: true,
       actionTarget: 'integrations',
       actionLabel: 'Open Connections',
+    };
+  }
+  if (/^sage (setup check|status)/i.test(message)) {
+    return {
+      tone: 'neutral',
+      title: 'Sage readiness',
+      body: message,
+      requiresLocalAccess: false,
+      actionTarget: 'gateway',
+      actionLabel: 'Open Agent Computer',
     };
   }
   if (/^turn submitted/i.test(message)) {
@@ -2339,7 +2349,7 @@ export function classifyStatusNotice(message: string): {
       title: 'AI model attention needed',
       body: /api key|credential/i.test(message)
         ? 'Check your AI model key or quota in Connections.'
-        : 'Choose Empyralis credits, add an AI model key, or connect a computer.',
+        : 'Choose Workspace AI, add an AI model key, or connect a computer.',
       requiresLocalAccess: false,
       actionTarget: 'integrations',
       actionLabel: 'Open Connections',

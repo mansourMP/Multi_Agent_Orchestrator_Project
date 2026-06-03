@@ -191,6 +191,18 @@ export function HostedMiniAppSurface({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   useEffect(() => {
+    const previousMode = document.body.getAttribute('data-workstation-app-surface');
+    document.body.setAttribute('data-workstation-app-surface', 'open');
+    return () => {
+      if (previousMode) {
+        document.body.setAttribute('data-workstation-app-surface', previousMode);
+      } else {
+        document.body.removeAttribute('data-workstation-app-surface');
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -402,7 +414,7 @@ export function HostedMiniAppSurface({
   const detailItems = useMemo(() => {
     const normalizedRuntime = String(runtimeType || 'community').trim().toLowerCase();
     const items = [
-      { label: 'Runtime type', value: humanizeToken(normalizedRuntime || 'community') },
+      { label: 'Surface', value: manifest?.hosted_app?.hosted_url ? 'Live app' : 'Draft app' },
       { label: 'Category', value: manifest?.category || 'Applications' },
     ];
     if (normalizedRuntime === 'community') {
@@ -420,10 +432,12 @@ export function HostedMiniAppSurface({
     return items;
   }, [manifest, runtimeType]);
 
-  const appLabel = manifest?.label || appId;
-  const appDescription = manifest?.description || 'This application runs inside an isolated embedded surface.';
+  const appLabel = manifest?.label || humanizeToken(appId);
+  const appDescription =
+    manifest?.description || 'This app is in the workspace. Add a live surface when it is ready to run.';
   const appHref = `/w/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}`;
   const appsHref = `/w/${encodeURIComponent(workspaceId)}/applications`;
+  const missingHostedManifest = Boolean(error && /status 404/i.test(error));
 
   if (loading) {
     return (
@@ -433,7 +447,7 @@ export function HostedMiniAppSurface({
     );
   }
 
-  if (error) {
+  if (error && !missingHostedManifest) {
     return (
       <main className={styles.shell}>
         <div className={`${styles.empty} ${styles.error}`}>Application could not load. Try again when ready.</div>
@@ -441,10 +455,27 @@ export function HostedMiniAppSurface({
     );
   }
 
-  if (!manifest?.hosted_app?.hosted_url) {
+  if (missingHostedManifest || !manifest?.hosted_app?.hosted_url) {
     return (
       <main className={styles.shell}>
-        <div className={styles.empty}>This app does not expose a hosted entrypoint.</div>
+        <header className={styles.frameHeader}>
+          <div className={styles.header}>
+            <span className={`${styles.appIcon} ${styles.appIcon_neutral}`} aria-hidden="true">
+              {manifest?.icon_url ? <img src={manifest.icon_url} alt="" /> : <span>{appInitials(appLabel)}</span>}
+            </span>
+            <div>
+              <p className={styles.eyebrow}>Application</p>
+              <h1 className={styles.title}>{appLabel}</h1>
+              <p className={styles.copy}>{appDescription}</p>
+            </div>
+          </div>
+          <div className={styles.linkRow}>
+            <Link className={styles.linkSecondary} href={appsHref}>
+              Apps
+            </Link>
+          </div>
+        </header>
+        <div className={styles.empty}>This app is ready as a workspace app. Add a live surface when it should run.</div>
       </main>
     );
   }

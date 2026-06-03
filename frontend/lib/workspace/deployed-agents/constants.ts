@@ -107,9 +107,9 @@ export const STUDIO_AI_SOURCE_OPTIONS: ReadonlyArray<{
   },
   {
     value: 'subscription_passthrough',
-    label: 'Enterprise gateway',
-    title: 'Use an enterprise gateway',
-    hint: 'Reserved for workspace-approved gateways such as LiteLLM, Azure OpenAI, Bedrock, or Vertex AI.',
+    label: 'Approved gateway',
+    title: 'Use an approved gateway',
+    hint: 'Reserved for workspace-approved AI gateways such as LiteLLM, Azure OpenAI, Bedrock, or Vertex AI.',
   },
 ];
 
@@ -168,8 +168,8 @@ export const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
     value: 'hosted_hardware_pool',
     label: 'Agent Computer - Cloud Computer',
     supplier: 'empyralis',
-    hint: 'Hosted Agent Computer with Gateway and Supervisor in an isolated session.',
-    capabilities: 'Gateway and Supervisor on an isolated cloud computer.',
+    hint: 'Hosted Agent Computer with managed connection and governed execution in an isolated session.',
+    capabilities: 'Managed connection and governed execution on an isolated cloud computer.',
     runsWhere: 'Isolated cloud computer managed by Empyralis.',
     privacy: 'Medium. Session activity can be logged for safety and audit.',
     costRisk: 'High.',
@@ -180,8 +180,8 @@ export const STUDIO_RUNTIME_OPTIONS: ReadonlyArray<{
     value: 'customer_local',
     label: 'Agent Computer - This Device',
     supplier: 'customer',
-    hint: 'Connected hardware runtime on a trusted device.',
-    capabilities: 'Gateway and Supervisor on a connected computer.',
+    hint: 'Connected Agent Computer on a trusted device.',
+    capabilities: 'Managed connection and governed execution on a connected computer.',
     runsWhere: 'A connected computer registered to this workspace.',
     privacy: 'Very high data locality, with host-device trust responsibility.',
     costRisk: 'Medium.',
@@ -453,10 +453,10 @@ export const SPECIALIST_CONNECTOR_CARDS: ReadonlyArray<{
   },
   {
     id: 'tool_server',
-    label: 'Tool server',
+    label: 'Action server',
     image: '/brand-assets/generic/api.svg?v=3',
     connectorIds: ['mcp_server'],
-    capabilityTags: ['MCP', 'Custom tools'],
+    capabilityTags: ['MCP', 'Custom actions'],
   },
 ];
 

@@ -8,6 +8,7 @@ export type WorkspaceNavDestinationId =
   | 'studio'
   | 'marketplace'
   | 'applications'
+  | 'hardware'
   | 'gateway'
   | 'settings';
 
@@ -27,6 +28,7 @@ export type WorkspaceRouteId =
   | 'deploy'
   | 'marketplace'
   | 'applications'
+  | 'hardware'
   | 'gateway'
   | 'gatewayApprovals'
   | 'gatewayActivity'

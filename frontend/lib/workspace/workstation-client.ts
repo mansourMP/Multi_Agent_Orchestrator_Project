@@ -361,6 +361,7 @@ export type ConnectedExternalAgentRecord = Record<string, unknown> & {
   manifest_projection?: Record<string, unknown> | null;
   surface_sections?: Record<string, unknown>[] | null;
   object_types?: string[] | null;
+  external_sub_agents?: Record<string, unknown>[] | null;
   protocols?: Record<string, unknown>[] | null;
   local_connector?: Record<string, unknown> | null;
   manifest?: Record<string, unknown> | null;
@@ -913,6 +914,8 @@ export type WorkstationClientPaths = {
   deployedAgentConversationDetail: (deployedAgentId: string, sessionId: string) => string;
   deployedAgentExternalUserDelete: (deployedAgentId: string, externalUserId: string) => string;
   marketplaceAgents: (filters?: { category?: string | null; costTier?: string | null; limit?: number; offset?: number }) => string;
+  discoveryFeed: (options?: { filter?: string | null }) => string;
+  discoveryAdopt: (feedItemId: string) => string;
   marketplacePackages: (options?: { kind?: string | null; runtimeType?: string | null; includeReviewQueue?: boolean }) => string;
   studioTemplates: string;
   marketplaceProviderRegister: string;
@@ -1348,6 +1351,12 @@ export type WorkstationClient = {
     limit?: number;
     offset?: number;
   }) => Promise<Record<string, unknown>>;
+  listDiscoveryFeed: (options?: {
+    filter?: string | null;
+  }) => Promise<Record<string, unknown>>;
+  adoptDiscoveryItem: (options: {
+    feedItemId: string;
+  }) => Promise<Record<string, unknown> | null>;
   listMarketplacePackages: (options?: {
     kind?: string | null;
     runtimeType?: string | null;
@@ -1746,6 +1755,12 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
         limit: filters.limit,
         offset: filters.offset,
       })}`,
+    discoveryFeed: (options = {}) =>
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/discovery/feed${buildQueryString({
+        filter: options.filter,
+      })}`,
+    discoveryAdopt: (feedItemId) =>
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/discovery/items/${encodeURIComponent(feedItemId)}/adopt`,
     marketplacePackages: (options = {}) =>
       `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/packages${buildQueryString({
         kind: options.kind,
@@ -3722,6 +3737,20 @@ export function createWorkstationClient(
         path: paths.marketplacePackages({ kind, runtimeType, includeReviewQueue }),
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    listDiscoveryFeed: ({ filter = null } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.discoveryFeed({ filter }),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    adoptDiscoveryItem: ({ feedItemId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.discoveryAdopt(feedItemId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
     listMarketplaceAppSubmissions: () =>
       requestJson<Record<string, unknown>>({
         path: paths.marketplaceAppSubmissions,

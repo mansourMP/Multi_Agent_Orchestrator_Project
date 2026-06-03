@@ -87,9 +87,11 @@ import {
 } from './utils';
 
 type CreateAgentKind = 'native' | 'external';
+type ExternalConnectionMode = 'public_https' | 'agent_computer';
 
 type ExternalProviderKind =
   | 'openclaw'
+  | 'nemoclaw'
   | 'custom_http'
   | 'hermes'
   | 'mcp'
@@ -99,6 +101,8 @@ type ExternalProviderKind =
 type ExternalAgentFormState = {
   name: string;
   providerKind: ExternalProviderKind;
+  connectionMode: ExternalConnectionMode;
+  agentComputerId: string;
   baseUrl: string;
   manifestUrl: string;
   chatUrl: string;
@@ -110,16 +114,19 @@ type ExternalAgentFormState = {
 
 const EXTERNAL_PROVIDER_OPTIONS: Array<{ value: ExternalProviderKind; label: string; hint: string }> = [
   { value: 'openclaw', label: 'OpenClaw', hint: 'Use this for OpenClaw-style local or remote agent runtimes.' },
+  { value: 'hermes', label: 'Hermes', hint: 'Use this for Hermes-compatible agent runtimes.' },
+  { value: 'nemoclaw', label: 'NemoClaw', hint: 'Use this for NemoClaw-compatible agent runtimes.' },
   { value: 'custom_http', label: 'Custom HTTPS agent', hint: 'Use this for a provider-neutral external agent manifest.' },
   { value: 'mcp', label: 'MCP server', hint: 'Use this for a governed remote MCP capability surface.' },
   { value: 'a2a', label: 'A2A agent', hint: 'Use this for Agent-to-Agent compatible runtimes.' },
-  { value: 'hermes', label: 'Hermes', hint: 'Use this for Hermes-compatible agent runtimes.' },
   { value: 'custom', label: 'Other', hint: 'Use this when the provider is not listed yet.' },
 ];
 
 const EMPTY_EXTERNAL_AGENT_FORM: ExternalAgentFormState = {
-  name: '',
+  name: 'OpenClaw assistant',
   providerKind: 'openclaw',
+  connectionMode: 'agent_computer',
+  agentComputerId: '',
   baseUrl: '',
   manifestUrl: '',
   chatUrl: '',
@@ -149,6 +156,126 @@ function buildExternalAgentEndpoints(form: ExternalAgentFormState): Record<strin
   return endpoints;
 }
 
+function localRuntimeBaseUrl(providerKind: ExternalProviderKind, explicitBaseUrl: string): string {
+  const value = explicitBaseUrl.trim();
+  if (value) {
+    return value;
+  }
+  if (providerKind === 'openclaw') {
+    return 'http://127.0.0.1:18789';
+  }
+  return '';
+}
+
+function runtimeAttachmentOptionId(item: RuntimeAttachmentSnapshot): string {
+  return item.attachmentId || item.runtimeProfileId || item.runtimeNodeId;
+}
+
+function runtimeAttachmentDisplayKey(item: RuntimeAttachmentSnapshot): string {
+  return `${readString(item.label, 'Agent Computer').trim().toLowerCase()}::${readString(item.nodeKind, item.attachmentKind).trim().toLowerCase()}`;
+}
+
+function runtimeAttachmentRank(item: RuntimeAttachmentSnapshot): number {
+  return (item.online ? 2 : 0) + (item.healthy ? 1 : 0);
+}
+
+function dedupeRuntimeAttachmentOptions(items: RuntimeAttachmentSnapshot[]): RuntimeAttachmentSnapshot[] {
+  const byDisplayKey = new Map<string, RuntimeAttachmentSnapshot>();
+  for (const item of items) {
+    const displayKey = runtimeAttachmentDisplayKey(item);
+    const current = byDisplayKey.get(displayKey);
+    if (!current || runtimeAttachmentRank(item) > runtimeAttachmentRank(current)) {
+      byDisplayKey.set(displayKey, item);
+    }
+  }
+  return Array.from(byDisplayKey.values());
+}
+
+function agentComputerProxyReady(item: RuntimeAttachmentSnapshot): boolean {
+  return item.online && item.healthy && item.capabilities.includes('external_agent_proxy');
+}
+
+function agentComputerReadinessLabel(item: RuntimeAttachmentSnapshot): string {
+  if (!item.online) {
+    return 'Offline';
+  }
+  if (!item.healthy) {
+    return 'Needs attention';
+  }
+  if (!item.capabilities.includes('external_agent_proxy')) {
+    return 'Local bridge unavailable';
+  }
+  return 'Ready';
+}
+
+function localExternalProviderReadinessLabel(providerKind: ExternalProviderKind): string {
+  if (providerKind === 'openclaw') {
+    return 'OpenClaw can use the selected Agent Computer bridge without exposing a local URL.';
+  }
+  if (providerKind === 'hermes' || providerKind === 'nemoclaw') {
+    return 'Adapter slot only. Configure the local adapter on the selected Agent Computer before connecting.';
+  }
+  return 'Configure the local adapter on the selected Agent Computer before connecting.';
+}
+
+function buildLocalExternalAgentManifest(
+  form: ExternalAgentFormState,
+  agentComputerId: string,
+  manifest: Record<string, unknown>,
+): Record<string, unknown> {
+  const baseUrl = localRuntimeBaseUrl(form.providerKind, form.baseUrl);
+  const healthUrl = form.providerKind === 'openclaw' && baseUrl
+    ? `${baseUrl.replace(/\/+$/, '')}/health`
+    : '';
+  const endpoints: Record<string, string> = {};
+  if (baseUrl) {
+    endpoints.base_url = baseUrl;
+  }
+  if (healthUrl) {
+    endpoints.health_url = healthUrl;
+  }
+  if (form.chatUrl.trim()) {
+    endpoints.chat_url = form.chatUrl.trim();
+  }
+  const capabilities = Array.from(new Set([
+    ...((Array.isArray(manifest.capabilities) ? manifest.capabilities : []) as string[]),
+    'health',
+    ...(form.chatUrl.trim() ? ['chat'] : []),
+  ]));
+  return {
+    ...manifest,
+    provider_kind: externalAgentProviderKindForCreate(form.providerKind),
+    protocols: Array.isArray(manifest.protocols) ? manifest.protocols : [{ kind: form.providerKind, version: '1' }],
+    capabilities,
+    endpoints: {
+      ...endpoints,
+      ...(readRecord(manifest.endpoints) as Record<string, string>),
+    },
+    local_connector: {
+      required: true,
+      mode: 'agent_computer_proxy',
+      reason: 'Local runtime stays on the selected Agent Computer.',
+      agent_computer_id: agentComputerId,
+      agent_computer_capability: 'external_agent_proxy',
+    },
+    surface_sections: Array.isArray(manifest.surface_sections)
+      ? manifest.surface_sections
+      : healthUrl
+        ? [{
+            id: 'runtime_status',
+            title: 'Runtime status',
+            description: 'Health reported through the selected Agent Computer.',
+            category: 'configuration',
+            priority: 10,
+            display_kind: 'key_value',
+            icon: 'key_value',
+            capability_required: 'health',
+            data_endpoint_ref: 'health_url',
+          }]
+        : [],
+  };
+}
+
 function parseExternalAgentManifestJson(value: string): Record<string, unknown> {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -159,6 +286,26 @@ function parseExternalAgentManifestJson(value: string): Record<string, unknown> 
     throw new Error('Manifest JSON must be a JSON object.');
   }
   return parsed as Record<string, unknown>;
+}
+
+function externalAgentProviderKindForCreate(providerKind: ExternalProviderKind): string {
+  return ['custom_http', 'mcp', 'a2a'].includes(providerKind) ? 'custom' : providerKind;
+}
+
+function externalAgentManifestForCreate(
+  providerKind: ExternalProviderKind,
+  manifest: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!['custom_http', 'mcp', 'a2a'].includes(providerKind)) {
+    return manifest;
+  }
+  if (Array.isArray(manifest.protocols) || readString(manifest.protocol)) {
+    return manifest;
+  }
+  return {
+    ...manifest,
+    protocols: [{ kind: providerKind, version: '1' }],
+  };
 }
 
 export interface AgentWizardProps {
@@ -227,14 +374,27 @@ export function AgentWizard({
 
   const selfHostedNodeOptions = useMemo(
     () => runtimeAttachments
-      .filter((item) => item.runtimeProfileId)
+      .filter((item) => item.attachmentKind === 'self_hosted_business_node' && item.runtimeProfileId)
       .sort((left, right) => left.label.localeCompare(right.label)),
+    [runtimeAttachments],
+  );
+
+  const agentComputerOptions = useMemo(
+    () => dedupeRuntimeAttachmentOptions(
+      runtimeAttachments
+        .filter((item) => item.attachmentKind === 'local_companion' || item.capabilities.includes('external_agent_proxy')),
+    ).sort((left, right) => left.label.localeCompare(right.label)),
     [runtimeAttachments],
   );
 
   const selectedSelfHostedNode = useMemo(
     () => selfHostedNodeOptions.find((item) => item.runtimeProfileId === wizardState.selfHostedRuntimeProfileId) ?? null,
     [selfHostedNodeOptions, wizardState.selfHostedRuntimeProfileId],
+  );
+
+  const selectedAgentComputer = useMemo(
+    () => agentComputerOptions.find((item) => runtimeAttachmentOptionId(item) === externalAgentForm.agentComputerId) ?? null,
+    [agentComputerOptions, externalAgentForm.agentComputerId],
   );
 
   const selfHostedWizardNodeBlocker = useMemo(() => {
@@ -379,15 +539,39 @@ export function AgentWizard({
         setWizardErrorMessage(error instanceof Error ? error.message : 'Manifest JSON is invalid.');
         return;
       }
+      const selectedAgentComputerId = externalAgentForm.agentComputerId.trim();
+      if (externalAgentForm.connectionMode === 'agent_computer' && !selectedAgentComputerId) {
+        setWizardErrorMessage('Choose an Agent Computer before connecting a local runtime.');
+        return;
+      }
+      if (externalAgentForm.connectionMode === 'agent_computer' && selectedAgentComputer && !agentComputerProxyReady(selectedAgentComputer)) {
+        setWizardErrorMessage(`Selected Agent Computer is not ready: ${agentComputerReadinessLabel(selectedAgentComputer)}.`);
+        return;
+      }
+      if (
+        externalAgentForm.connectionMode === 'agent_computer'
+        && externalAgentForm.providerKind !== 'openclaw'
+        && !localRuntimeBaseUrl(externalAgentForm.providerKind, externalAgentForm.baseUrl)
+        && !externalAgentForm.chatUrl.trim()
+      ) {
+        setWizardErrorMessage('Configure this provider on the selected Agent Computer before connecting it.');
+        return;
+      }
+      const manifestForCreate = externalAgentForm.connectionMode === 'agent_computer'
+        ? buildLocalExternalAgentManifest(externalAgentForm, selectedAgentComputerId, manifest)
+        : externalAgentManifestForCreate(externalAgentForm.providerKind, manifest);
+      const endpointsForCreate = externalAgentForm.connectionMode === 'agent_computer'
+        ? buildExternalAgentEndpoints({ ...externalAgentForm, manifestUrl: '', eventsUrl: '', artifactsUrl: '' })
+        : buildExternalAgentEndpoints(externalAgentForm);
 
       setIsSubmittingWizard(true);
       setWizardErrorMessage(null);
       try {
         const created = await services.client.createConnectedExternalAgent({
           name,
-          providerKind: externalAgentForm.providerKind,
-          endpoints: buildExternalAgentEndpoints(externalAgentForm),
-          manifest,
+          providerKind: externalAgentProviderKindForCreate(externalAgentForm.providerKind),
+          endpoints: endpointsForCreate,
+          manifest: manifestForCreate,
           secretRef: externalAgentForm.secretRef.trim() || null,
         });
         const createdRecord = readRecord(created) as ConnectedExternalAgentRecord;
@@ -486,11 +670,11 @@ export function AgentWizard({
         return;
       }
       if (!stateForSave.upgradeCtaLabel.trim()) {
-        setWizardErrorMessage('Add an upgrade CTA label when a daily message limit is enabled.');
+        setWizardErrorMessage('Add a limit help label when a daily message limit is enabled.');
         return;
       }
       if (!stateForSave.upgradeCtaUrl.trim()) {
-        setWizardErrorMessage('Add an upgrade CTA URL when a daily message limit is enabled.');
+        setWizardErrorMessage('Add a limit help URL when a daily message limit is enabled.');
         return;
       }
     }
@@ -609,9 +793,11 @@ export function AgentWizard({
   return (
     <CommandSheet
       open={open}
-      title={mode === 'create' ? 'Create your agent' : 'Edit Business Agent'}
+      title={isExternalCreate ? 'Connect external agent' : mode === 'create' ? 'Create your agent' : 'Edit Business Agent'}
       description={
-        mode === 'create'
+        isExternalCreate
+          ? 'Register a hosted agent or connect a local runtime through a paired Agent Computer.'
+          : mode === 'create'
           ? 'Name it, describe the job, then connect knowledge, apps, and channels later.'
           : 'Adjust the worker profile, knowledge, customer channel, and safety behavior.'
       }
@@ -701,15 +887,43 @@ export function AgentWizard({
                 disabled={isSubmittingWizard}
                 onClick={() => setCreateAgentKind('external')}
               >
-                <strong>External</strong>
-                <span>OpenClaw, MCP, A2A</span>
+                <strong>External runtime</strong>
+                <span>Connect hosted or local agent systems</span>
               </button>
             </div>
             {isExternalCreate ? (
               <div className="deployed-agents-wizard__quickstart">
                 <p className="deployed-agents-wizard__connection-note">
-                  Public HTTPS endpoints work now. Local/private agents use Agent Computer.
+                  Connect a hosted agent by HTTPS, or route a local agent runtime through a paired Agent Computer.
                 </p>
+                <div className="deployed-agents-wizard__kind-switch" role="group" aria-label="External connection path">
+                  <button
+                    type="button"
+                    className={joinClassNames(
+                      'deployed-agents-wizard__kind-option',
+                      externalAgentForm.connectionMode === 'agent_computer' && 'deployed-agents-wizard__kind-option--selected',
+                    )}
+                    aria-pressed={externalAgentForm.connectionMode === 'agent_computer'}
+                    disabled={isSubmittingWizard}
+                    onClick={() => setExternalAgentField('connectionMode', 'agent_computer')}
+                  >
+                    <strong>Local runtime on Agent Computer</strong>
+                    <span>Use this when the runtime lives on your hardware and Empyralis should connect through the paired Agent Computer.</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={joinClassNames(
+                      'deployed-agents-wizard__kind-option',
+                      externalAgentForm.connectionMode === 'public_https' && 'deployed-agents-wizard__kind-option--selected',
+                    )}
+                    aria-pressed={externalAgentForm.connectionMode === 'public_https'}
+                    disabled={isSubmittingWizard}
+                    onClick={() => setExternalAgentField('connectionMode', 'public_https')}
+                  >
+                    <strong>Hosted runtime</strong>
+                    <span>A public HTTPS agent with manifest endpoints.</span>
+                  </button>
+                </div>
                 <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                   <FormField label="Agent name">
                     <FormInput
@@ -718,7 +932,7 @@ export function AgentWizard({
                       placeholder="OpenClaw assistant"
                     />
                   </FormField>
-                  <FormField label="Provider">
+                  <FormField label="External agent type">
                     <FormSelect
                       value={externalAgentForm.providerKind}
                       onChange={(event) => setExternalAgentField('providerKind', event.currentTarget.value as ExternalProviderKind)}
@@ -731,25 +945,67 @@ export function AgentWizard({
                     </FormSelect>
                   </FormField>
                 </FormGrid>
-                <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                  <FormField label="Base URL">
-                    <FormInput
-                      value={externalAgentForm.baseUrl}
-                      onChange={(event) => setExternalAgentField('baseUrl', event.currentTarget.value)}
-                      placeholder="https://agent.example.com"
+                {externalAgentForm.connectionMode === 'agent_computer' ? (
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField
+                      label="Agent Computer"
+                      hint="The selected Agent Computer must be online, trusted, approved, and ready for local external agents."
+                    >
+                      <FormSelect
+                        value={externalAgentForm.agentComputerId}
+                        onChange={(event) => setExternalAgentField('agentComputerId', event.currentTarget.value)}
+                      >
+                        <option value="">Choose Agent Computer</option>
+                        {agentComputerOptions.map((computer) => (
+                          <option
+                            key={runtimeAttachmentOptionId(computer)}
+                            value={runtimeAttachmentOptionId(computer)}
+                            disabled={!agentComputerProxyReady(computer)}
+                          >
+                            {computer.label} · {agentComputerReadinessLabel(computer)}
+                          </option>
+                        ))}
+                      </FormSelect>
+                    </FormField>
+                    <FormReadout
+                      label="Runtime bridge"
+                      value={agentComputerOptions.length > 0 ? 'Agent Computer bridge' : 'No paired Agent Computer available'}
                     />
-                  </FormField>
-                  <FormField label="Manifest URL">
-                    <FormInput
-                      value={externalAgentForm.manifestUrl}
-                      onChange={(event) => setExternalAgentField('manifestUrl', event.currentTarget.value)}
-                      placeholder="https://agent.example.com/.well-known/agent-manifest.json"
+                    <FormReadout
+                      label="Runtime readiness"
+                      value={localExternalProviderReadinessLabel(externalAgentForm.providerKind)}
                     />
-                  </FormField>
-                </FormGrid>
+                  </FormGrid>
+                ) : (
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Base URL">
+                      <FormInput
+                        value={externalAgentForm.baseUrl}
+                        onChange={(event) => setExternalAgentField('baseUrl', event.currentTarget.value)}
+                        placeholder="https://agent.example.com"
+                      />
+                    </FormField>
+                    <FormField label="Manifest URL">
+                      <FormInput
+                        value={externalAgentForm.manifestUrl}
+                        onChange={(event) => setExternalAgentField('manifestUrl', event.currentTarget.value)}
+                        placeholder="https://agent.example.com/.well-known/agent-manifest.json"
+                      />
+                    </FormField>
+                  </FormGrid>
+                )}
                 <details className="deployed-agents-wizard__advanced">
-                  <summary>More settings</summary>
+                  <summary>{externalAgentForm.connectionMode === 'agent_computer' ? 'Advanced local diagnostics' : 'More settings'}</summary>
                   <div className="deployed-agents-wizard__advanced-body">
+                    {externalAgentForm.connectionMode === 'agent_computer' ? (
+                      <FormField label="Local adapter address" hint="Advanced diagnostics only. This address is reached by the selected Agent Computer, never by the browser or cloud server.">
+                        <FormInput
+                          value={externalAgentForm.baseUrl}
+                          onChange={(event) => setExternalAgentField('baseUrl', event.currentTarget.value)}
+                          placeholder={externalAgentForm.providerKind === 'openclaw' ? 'Use default OpenClaw adapter' : 'Local adapter address'}
+                        />
+                      </FormField>
+                    ) : null}
                     <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                       <FormField label="Chat endpoint" hint="Optional public HTTPS chat endpoint.">
                         <FormInput
@@ -1150,7 +1406,7 @@ export function AgentWizard({
               <StateBanner
                 tone="neutral"
                 title="Draft review"
-                detail="This is the pre-launch checklist. Create the Business Agent, test it privately, then deploy from the detail panel."
+                detail="This is the pre-launch checklist. Create the Business Agent, test it inside Studio, then deploy from the detail panel."
               />
               <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                 <FormReadout label="Template" value={selectedStudioTemplate.title} />
@@ -1292,9 +1548,9 @@ export function AgentWizard({
                         ))}
                       </FormSelect>
                     </FormField>
-                    <FormReadout label="Node health" value={selfHostedNodeHealthLabel(selectedSelfHostedNode)} />
-                    <FormReadout label="Heartbeat" value={selectedSelfHostedNode?.heartbeatAt ? formatRelativeTime(selectedSelfHostedNode.heartbeatAt) : 'n/a'} />
-                    <FormReadout label="Capabilities" value={selectedSelfHostedNode?.capabilities.length ? selectedSelfHostedNode.capabilities.join(', ') : 'n/a'} />
+                    <FormReadout label="Server health" value={selfHostedNodeHealthLabel(selectedSelfHostedNode)} />
+                    <FormReadout label="Last status update" value={selectedSelfHostedNode?.heartbeatAt ? formatRelativeTime(selectedSelfHostedNode.heartbeatAt) : 'n/a'} />
+                    <FormReadout label="Available controls" value={selectedSelfHostedNode?.capabilities.length ? `${selectedSelfHostedNode.capabilities.length} available` : 'n/a'} />
                   </FormGrid>
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                     <FormField label="Privacy contract" hint="Required before a Server/VPS Business Agent can be saved.">
@@ -1464,15 +1720,15 @@ export function AgentWizard({
                   </FormField>
                 </FormGrid>
                 <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-                  <FormReadout label="AI model provider state" value={humanizeToken(selectedProviderCatalog?.state, isLoadingProviderCatalog ? 'Loading' : 'Unknown')} />
+                  <FormReadout label="AI route state" value={humanizeToken(selectedProviderCatalog?.state, isLoadingProviderCatalog ? 'Loading' : 'Unknown')} />
                   <FormReadout label="Privacy profile" value={selectedProviderCatalog?.privacyPosture || 'n/a'} />
                   <FormReadout label="Information limit" value={formatContextWindow(selectedProviderModelCatalog?.contextWindowTokens)} />
                 </FormGrid>
                 <FormReadout
-                  label="Capabilities"
+                  label="AI route features"
                   value={
-                    selectedProviderModelCatalog?.capabilityLabels.join(', ')
-                    || selectedProviderCatalog?.capabilityLabels.join(', ')
+                    selectedProviderModelCatalog?.capabilityLabels.map((label) => humanizeToken(label, label)).join(', ')
+                    || selectedProviderCatalog?.capabilityLabels.map((label) => humanizeToken(label, label)).join(', ')
                     || 'No capability labels yet'
                   }
                 />
@@ -1496,18 +1752,18 @@ export function AgentWizard({
                 </FormField>
               </FormGrid>
               <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                <FormField label="Upgrade CTA label" hint="Required when message limits are active.">
+                <FormField label="Limit help label" hint="Required when message limits are active.">
                   <FormInput
                     value={wizardState.upgradeCtaLabel}
                     onChange={(event) => setWizardField('upgradeCtaLabel', event.currentTarget.value)}
                     placeholder="Continue on Empyralis"
                   />
                 </FormField>
-                <FormField label="Upgrade CTA URL" hint="Where limited users go when they need more messages.">
+                <FormField label="Limit help URL" hint="Where limited users go when they need help or more messages.">
                   <FormInput
                     value={wizardState.upgradeCtaUrl}
                     onChange={(event) => setWizardField('upgradeCtaUrl', event.currentTarget.value)}
-                    placeholder="https://app.empyralis.com/upgrade"
+                    placeholder="https://app.empyralis.com/help"
                   />
                 </FormField>
               </FormGrid>

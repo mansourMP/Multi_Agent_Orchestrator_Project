@@ -294,7 +294,7 @@ const DEFAULT_HOSTED_SAGE_AI: HostedSageAiSnapshot = {
   planAllowsHostedAi: false,
   policy: 'disabled',
   reason: 'policy_disabled',
-  message: 'Credits are not active yet. Add credits or connect your own AI account.',
+  message: 'Workspace AI is not active yet. Configure workspace AI or connect your own AI account.',
   monthlyCapUsd: 0,
   monthlyCostUsd: 0,
   monthlyRemainingUsd: 0,
@@ -404,7 +404,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/brand-assets/channels/telegram.svg?v=3',
     connectorIds: ['telegram_bot'],
     capabilityTags: ['Customer chat', 'Bot replies'],
-    summary: 'Telegram bot deployments live in the Studio/business lane. They are separate from your personal Telegram on Connected Computer.',
+    summary: 'Telegram bot deployments live in the Studio/business lane. They are separate from your personal Telegram on Agent Computer.',
     setupHint: 'Connect a Telegram bot in Studio when deployed specialists need a cloud-managed channel.',
     surfaceScope: 'studio_only',
   },
@@ -463,7 +463,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     label: 'Linear',
     image: '/brand-assets/apps/linear.svg?v=3',
     connectorIds: ['linear'],
-    capabilityTags: ['Issues', 'Projects'],
+    capabilityTags: ['Issues', 'Work tracking'],
     summary: 'Linear lets Sage read, create, and update issue work when connected.',
     setupHint: 'Connect Linear when Sage should help with product and engineering task flow.',
     surfaceScope: 'all',
@@ -754,39 +754,39 @@ function defaultPersonalChannelDraft(channel: PersonalCommunicationChannel): Per
     password: '',
     recipient: '',
     text: channel === 'telegram'
-      ? 'Empyralis Telegram test from Connected Computer.'
-      : 'Empyralis WhatsApp test from Connected Computer.',
+      ? 'Empyralis Telegram test from Agent Computer.'
+      : 'Empyralis WhatsApp test from Agent Computer.',
   };
 }
 
 function describeHostedSageAi(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord | null): string {
   if (hostedSageAi.allowed && hostedProviderCard) {
-    return `${hostedAiTierLabel(hostedProviderCard)} · Empyralis credits · ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left`;
+    return `${hostedAiTierLabel(hostedProviderCard)} · Workspace AI · ${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} monthly usage left`;
   }
   if (hostedSageAi.allowed) {
-    return `${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left · hosted runtime not configured`;
+    return `${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} monthly usage left · hosted model not configured`;
   }
   if (hostedSageAi.reason === 'owner_approval_required') {
-    return 'Credits need workspace owner approval before use.';
+    return 'Workspace AI needs workspace owner approval before use.';
   }
   if (hostedSageAi.reason === 'cap_reached') {
-    return '0 credits left this month. Add credits or connect your own AI account.';
+    return 'Workspace AI monthly usage is exhausted. Connect your own AI account or adjust workspace usage.';
   }
   if (hostedSageAi.monthlyCreditCap > 0) {
-    return `${formatCredits(Math.max(0, hostedSageAi.monthlyCreditsRemaining))} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left`;
+    return `${formatCredits(Math.max(0, hostedSageAi.monthlyCreditsRemaining))} / ${formatCredits(hostedSageAi.monthlyCreditCap)} monthly usage left`;
   }
-  return 'Credits are not active yet. Add credits or connect your own AI account.';
+  return 'Workspace AI is not active yet. Configure workspace AI or connect your own AI account.';
 }
 
 function hostedCreditUsageLabel(hostedSageAi: HostedSageAiSnapshot): string {
   if (hostedSageAi.monthlyCreditCap <= 0) {
-    return 'No credit cap configured';
+    return 'No workspace AI limit configured';
   }
-  return `${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} credits left`;
+  return `${formatCredits(hostedSageAi.monthlyCreditsRemaining)} / ${formatCredits(hostedSageAi.monthlyCreditCap)} monthly usage left`;
 }
 
 function hostedProviderDetailLabel(hostedSageAi: HostedSageAiSnapshot, hostedProviderCard: ProviderCardRecord): string {
-  return `${hostedAiTierLabel(hostedProviderCard)} · Empyralis credits · ${hostedCreditUsageLabel(hostedSageAi)}`;
+  return `${hostedAiTierLabel(hostedProviderCard)} · Workspace AI · ${hostedCreditUsageLabel(hostedSageAi)}`;
 }
 
 function fallbackProviderCatalog(): ProviderSnapshot[] {
@@ -954,7 +954,7 @@ function providerIsLocalOnly(record: ProviderCardRecord | null): boolean {
 
 function providerPickerStatusLabel(record: ProviderCardRecord, localCompanionOnline: boolean): string {
   if (providerNeedsGateway(record.provider.id) && !localCompanionOnline) {
-    return 'Connect the selected computer';
+    return 'Connect the selected Agent Computer';
   }
   return record.connected ? 'Connected' : 'Not configured';
 }
@@ -1017,10 +1017,10 @@ function providerPathLabel(record: ProviderCardRecord): string {
   const activeSource = readString(record.provider.activeSource).toLowerCase();
 
   if (providerId === 'ollama') {
-    return 'Connected Computer';
+    return 'Agent Computer';
   }
   if (providerId === 'openai-codex' || activeSource.includes('cli') || defaultAuthMode === 'oauth_token') {
-    return 'Connected Computer';
+    return 'Agent Computer';
   }
   if (providerId === 'ollama_cloud') {
     return 'Ollama Cloud';
@@ -1032,7 +1032,7 @@ function providerPathLabel(record: ProviderCardRecord): string {
     || activeSource.includes('platform')
     || activeSource.includes('hosted')
   ) {
-    return 'Empyralis credits';
+    return 'Workspace AI';
   }
   if (
     credentialPlane === 'workspace_connection'
@@ -1043,7 +1043,7 @@ function providerPathLabel(record: ProviderCardRecord): string {
     return 'Your AI account';
   }
   if (record.provider.localOnly === true || credentialPlane === 'local_runtime') {
-    return 'Connected Computer';
+    return 'Agent Computer';
   }
   return record.label;
 }
@@ -1067,7 +1067,7 @@ function providerActiveSummaryLabel(
     return 'No AI model active';
   }
   if (activeProviderCard === hostedProviderCard && !explicitSelectedProfile) {
-    return `${hostedAiTierLabel(activeProviderCard)} through Empyralis credits`;
+    return `${hostedAiTierLabel(activeProviderCard)} through Workspace AI`;
   }
   return `${activeProviderCard.label} through ${providerPathLabel(activeProviderCard)}`;
 }
@@ -1156,7 +1156,7 @@ function describeProviderCard(record: ProviderCardRecord, localCompanionOnline: 
   const modelLabel = providerActiveModelLabel(record);
   const authMode = readString(record.profile?.auth_mode).replace(/_/g, ' ');
   if (record.provider.id === 'ollama' && !localCompanionOnline) {
-    return `${pathLabel} · Connect the selected computer first`;
+    return `${pathLabel} · Connect the selected Agent Computer first`;
   }
   if (record.connected) {
     if (modelLabel && modelLabel !== 'No model selected') {
@@ -1174,7 +1174,7 @@ function describeProviderCard(record: ProviderCardRecord, localCompanionOnline: 
     return `${pathLabel} · Ready`;
   }
   if (record.provider.id === 'ollama') {
-    return localCompanionOnline ? `${pathLabel} · Browse local models` : `${pathLabel} · Needs the selected computer`;
+    return localCompanionOnline ? `${pathLabel} · Browse local models` : `${pathLabel} · Needs the selected Agent Computer`;
   }
   if (record.provider.modelsError) {
     return `${pathLabel} · Needs model refresh`;
@@ -1191,10 +1191,10 @@ function providerRouteBadge(record: ProviderCardRecord): { label: string; tone: 
   const activeSource = readString(record.provider.activeSource).toLowerCase();
 
   if (providerId === 'openai-codex' || defaultAuthMode === 'oauth_token' || activeSource.includes('cli')) {
-    return { label: 'The selected computer', tone: 'local' };
+    return { label: 'The selected Agent Computer', tone: 'local' };
   }
   if (providerId === 'ollama' || record.provider.localOnly || credentialPlane === 'local_runtime') {
-    return { label: 'The selected computer', tone: 'local' };
+    return { label: 'The selected Agent Computer', tone: 'local' };
   }
   if (
     credentialPlane === 'platform_runtime'
@@ -1228,9 +1228,9 @@ function providerStatusPresentation(
     };
   }
   if (record.status === 'connected') {
-    if (pathLabel === 'Empyralis credits') {
+    if (pathLabel === 'Workspace AI') {
       return {
-        label: 'Credits ready',
+        label: 'Workspace AI ready',
         className: 'sage-unified-card__status--connected',
         showDot: true,
       };
@@ -1242,9 +1242,9 @@ function providerStatusPresentation(
         showDot: true,
       };
     }
-    if (pathLabel.startsWith('Connected Computer')) {
+    if (pathLabel.startsWith('Agent Computer')) {
       return {
-        label: 'Ready on the selected computer',
+        label: 'Ready on the selected Agent Computer',
         className: 'sage-unified-card__status--connected',
         showDot: true,
       };
@@ -1281,7 +1281,7 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Connect computer',
       statusTone: 'warning',
       detail: 'Connect a computer so Empyralis can run on selected hardware.',
-      summary: 'Connected Computer brings Gateway and Supervisor online for this workspace.',
+      summary: 'Agent Computer brings hardware connection and governed local execution online for this workspace.',
       nextStep: 'Open computer setup and connect the selected hardware.',
     };
   }
@@ -1291,16 +1291,16 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: 'Connected Computer is connected and ready.',
-      summary: 'Gateway is online and Supervisor is ready for governed hardware work.',
+      detail: 'Agent Computer is connected and ready.',
+      summary: 'Agent Computer connection and local execution are ready for governed hardware work.',
       nextStep: null,
     };
   }
   return {
     statusLabel: 'Needs attention',
     statusTone: 'danger',
-    detail: 'Connected Computer needs attention before Sage can use it.',
-    summary: 'Reconnect the selected computer to restore browser and personal app access.',
+    detail: 'Agent Computer needs attention before Sage can use it.',
+    summary: 'Reconnect the selected Agent Computer to restore browser and personal app access.',
     nextStep: 'Open computer setup to reconnect.',
   };
 }
@@ -1317,7 +1317,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Connect computer',
       statusTone: 'warning',
       detail: 'Connect a computer before Sage can use your browser.',
-      summary: 'Your signed-in browser stays on the selected computer and only runs when you ask.',
+      summary: 'Your signed-in browser stays on the selected Agent Computer and only runs when you ask.',
       nextStep: 'Connect a computer first.',
     };
   }
@@ -1326,8 +1326,8 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Needs attention',
       statusTone: 'danger',
-      detail: 'Connected Computer needs attention before browser use is available.',
-      summary: 'Signed-in sites stay unavailable until the selected computer reconnects.',
+      detail: 'Agent Computer needs attention before browser use is available.',
+      summary: 'Signed-in sites stay unavailable until the selected Agent Computer reconnects.',
       nextStep: 'Open computer setup to reconnect first.',
     };
   }
@@ -1348,7 +1348,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Approval needed',
       statusTone: 'warning',
       detail: 'Your browser is waiting for approval.',
-      summary: 'Sage needs approval before using signed-in browser pages on Connected Computer.',
+      summary: 'Sage needs approval before using signed-in browser pages on Agent Computer.',
       nextStep: 'Open computer setup to review browser approvals.',
     };
   }
@@ -1356,10 +1356,10 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: 'Your signed-in browser is ready on the selected computer.',
+      detail: 'Your signed-in browser is ready on the selected Agent Computer.',
       summary: readString(
         browserAttachRecord.summary,
-        'Sage is ready to use your existing signed-in browser session on the selected computer.',
+        'Sage is ready to use your existing signed-in browser session on the selected Agent Computer.',
       ),
       nextStep: 'Open computer setup to review browser access.',
     };
@@ -1378,7 +1378,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Needs attention',
       statusTone: 'warning',
       detail: readString(browserAttachRecord.summary, 'Your browser is not ready yet.'),
-      summary: 'Sage still needs a reachable browser session on the selected computer before it can use private sites.',
+      summary: 'Sage still needs a reachable browser session on the selected Agent Computer before it can use private sites.',
       nextStep: 'Open computer setup to finish browser access.',
     };
   }
@@ -1386,8 +1386,8 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: 'Your browser is ready on the selected computer.',
-      summary: `${readString(browserRecord.summary, 'Browser access is ready on the selected computer.')} Signed-in pages stay on Connected Computer.`,
+      detail: 'Your browser is ready on the selected Agent Computer.',
+      summary: `${readString(browserRecord.summary, 'Browser access is ready on the selected Agent Computer.')} Signed-in pages stay on Agent Computer.`,
       nextStep: 'Open computer setup to review browser access.',
     };
   }
@@ -1396,7 +1396,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       statusLabel: 'Not connected',
       statusTone: 'neutral',
       detail: 'No browser session is active yet.',
-      summary: 'Connected Computer is online. Start browser access only when you want Sage to use signed-in pages.',
+      summary: 'Agent Computer is online. Start browser access only when you want Sage to use signed-in pages.',
       nextStep: 'Open computer setup to start browser access.',
     };
   }
@@ -1404,7 +1404,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
     statusLabel: 'Needs attention',
     statusTone: status === 'warn' ? 'warning' : 'danger',
     detail: readString(browserRecord.summary, 'Browser access needs attention.'),
-    summary: 'Browser approvals stay on Connected Computer.',
+    summary: 'Browser approvals stay on Agent Computer.',
     nextStep: 'Open computer setup to resolve browser access.',
   };
 }
@@ -1420,7 +1420,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
   ownershipLabel: string;
   channel: PersonalCommunicationChannel;
 } {
-  const ownershipSummary = 'Stays on Connected Computer. This is your personal WhatsApp, not a business account.';
+  const ownershipSummary = 'Stays on Agent Computer. This is your personal WhatsApp, not a business account.';
   const lastActivityLabel = latestPersonalChannelActivity(gateway, payload);
   if (!gateway) {
     return {
@@ -1456,7 +1456,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: linkedLabel ? `${linkedLabel} is linked on Connected Computer.` : 'Your WhatsApp is linked on Connected Computer.',
+      detail: linkedLabel ? `${linkedLabel} is linked on Agent Computer.` : 'Your WhatsApp is linked on Agent Computer.',
       summary: `${ownershipSummary} Sage can reply through your personal WhatsApp when you ask.`,
       nextStep: null,
       connectedIdentity: linkedLabel || 'Linked WhatsApp account',
@@ -1482,7 +1482,7 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
     return {
       statusLabel: 'Reconnecting',
       statusTone: 'warning',
-      detail: 'WhatsApp is reconnecting on Connected Computer.',
+      detail: 'WhatsApp is reconnecting on Agent Computer.',
       summary: ownershipSummary,
       nextStep: 'Reconnect from this card if it does not recover.',
       connectedIdentity: linkedLabel || null,
@@ -1515,7 +1515,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
   ownershipLabel: string;
   channel: PersonalCommunicationChannel;
 } {
-  const ownershipSummary = 'Stays on Connected Computer. This is your personal Telegram.';
+  const ownershipSummary = 'Stays on Agent Computer. This is your personal Telegram.';
   const lastActivityLabel = latestPersonalChannelActivity(gateway, payload);
   if (!gateway) {
     return {
@@ -1550,7 +1550,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
     return {
       statusLabel: 'Connected',
       statusTone: 'connected',
-      detail: linkedLabel ? `${linkedLabel} is linked on Connected Computer.` : 'Your Telegram is linked on Connected Computer.',
+      detail: linkedLabel ? `${linkedLabel} is linked on Agent Computer.` : 'Your Telegram is linked on Agent Computer.',
       summary: `${ownershipSummary} Sage can reply through your personal Telegram when you ask.`,
       nextStep: null,
       connectedIdentity: linkedLabel || 'Linked Telegram account',
@@ -1576,7 +1576,7 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
     return {
       statusLabel: 'Reconnecting',
       statusTone: 'warning',
-      detail: 'Telegram is reconnecting on Connected Computer.',
+      detail: 'Telegram is reconnecting on Agent Computer.',
       summary: ownershipSummary,
       nextStep: 'Reconnect from this card if it does not recover.',
       connectedIdentity: linkedLabel || null,
@@ -2036,7 +2036,7 @@ export function WorkstationSageConnectorsPane({
         ? `${backupProviderCard.label} stays available as ${providerPathLabel(backupProviderCard)}.`
         : 'Connect Gemini, OpenAI, or Anthropic when you want a backup hosted provider.',
       configLabel: 'Provider configuration',
-      configDetail: 'Connect another AI account or use a model on Connected Computer.',
+      configDetail: 'Connect another AI account or use a model on Agent Computer.',
     };
   }, [activeProviderCard, backupProviderCard, explicitSelectedProfile, hostedProviderCard, hostedSageAi, localCompanionOnline]);
 
@@ -2050,7 +2050,7 @@ export function WorkstationSageConnectorsPane({
     if (hostedProviderCard || hostedSageAi.planAllowsHostedAi) {
       sections.push({
         id: 'hosted',
-        label: 'Empyralis credits',
+        label: 'Workspace AI',
         items: hostedProviderCard ? [hostedProviderCard] : [],
       });
     }
@@ -2062,7 +2062,7 @@ export function WorkstationSageConnectorsPane({
     if (localItems.length > 0) {
       sections.push({
         id: 'local',
-        label: 'Connected Computer',
+        label: 'Agent Computer',
         items: localItems,
       });
     }
@@ -2094,7 +2094,7 @@ export function WorkstationSageConnectorsPane({
     const imessage = summarizePlannedIMessagePersonalState(personalChannelSurfaceByKey.get('imessage_personal'));
     const wechat = summarizeWeChatPersonalState(personalChannelSurfaceByKey.get('wechat_personal'));
     return [
-      { id: 'device', label: 'Connected Computer', image: '/brand-assets/generic/computer.svg?v=3', ...device },
+      { id: 'device', label: 'Agent Computer', image: '/brand-assets/generic/computer.svg?v=3', ...device },
       { id: 'browser', label: 'Use my browser', image: '/brand-assets/generic/browser.svg?v=3', ...browser },
       { id: 'telegram_personal', label: 'Your Telegram', image: '/brand-assets/channels/telegram.svg?v=3', ...telegram },
       { id: 'whatsapp_personal', label: 'Your WhatsApp', image: '/brand-assets/channels/whatsapp.svg?v=3', ...whatsapp },
@@ -2122,16 +2122,16 @@ export function WorkstationSageConnectorsPane({
       cards.push({
         ...device,
         id: 'computer_gateway',
-        label: 'Connected Computer',
+        label: 'Agent Computer',
         detail: device.statusTone === 'connected'
-          ? 'Connected. Gateway and Supervisor are online for this workspace.'
-          : 'Connect once. The selected computer becomes the hardware runtime for Empyralis.',
+          ? 'Connected. Hardware connection and governed local execution are online for this workspace.'
+          : 'Connect once. The selected Agent Computer becomes the hardware runtime for Empyralis.',
         summary: device.statusTone === 'connected'
-          ? 'Connected Computer is the hardware layer for Empyralis. Policy and approvals stay in the platform.'
+          ? 'Agent Computer is the hardware layer for Empyralis. Policy and approvals stay in the platform.'
           : 'No capability picking here. Connect a computer and Empyralis gets the hardware runtime by default.',
         nextStep: device.statusTone === 'connected'
           ? 'Connected. Manage or revoke it only when needed.'
-          : 'Connect the selected computer to bring Gateway and Supervisor online.',
+          : 'Connect the selected Agent Computer to bring hardware connection and governed local execution online.',
         actionLabel: device.statusTone === 'connected' ? 'Manage computer' : 'Connect a computer',
         actionTarget: 'computer',
       });
@@ -2209,7 +2209,7 @@ export function WorkstationSageConnectorsPane({
       summary: record.summary,
       nextStep: record.nextStep,
       actionLabel: record.channel ? 'Setup details' : record.statusTone === 'connected' ? 'Review connection' : 'Set up',
-      secondaryActionLabel: record.channel ? 'Connected Computer settings' : null,
+      secondaryActionLabel: record.channel ? 'Agent Computer settings' : null,
       actionTarget: 'gateway',
       channel: record.channel ?? null,
     };
@@ -2287,7 +2287,7 @@ export function WorkstationSageConnectorsPane({
         id: 'connections',
         label: 'Connections',
         description: 'Connected hardware and runtime links for this workspace.',
-        detail: 'Gateway, Supervisor, and app connections.',
+        detail: 'Agent Computer connection, local execution, and app connections.',
         countLabel: connectedComputer ? 'Connected' : 'Setup',
         statusTone: connectedComputer ? 'connected' : 'warning',
       });
@@ -2697,7 +2697,7 @@ export function WorkstationSageConnectorsPane({
 
   async function handlePersonalChannelSetup(channel: PersonalCommunicationChannel): Promise<void> {
     if (!selectedGatewayId) {
-      setError('Connect the selected computer before setting up a personal channel.');
+      setError('Connect the selected Agent Computer before setting up a personal channel.');
       return;
     }
     const draft = channelDrafts[channel];
@@ -2747,8 +2747,8 @@ export function WorkstationSageConnectorsPane({
       });
       await refreshAfterMutation(
         channel === 'telegram'
-          ? 'Telegram setup requested on Connected Computer.'
-          : 'WhatsApp pairing requested on Connected Computer.',
+          ? 'Telegram setup requested on Agent Computer.'
+          : 'WhatsApp pairing requested on Agent Computer.',
       );
     } catch (setupError) {
       setError(setupError instanceof Error ? setupError.message : 'Personal Channels setup failed.');
@@ -2759,7 +2759,7 @@ export function WorkstationSageConnectorsPane({
 
   async function handlePersonalChannelTest(channel: PersonalCommunicationChannel): Promise<void> {
     if (!selectedGatewayId) {
-      setError('Connect the selected computer before sending a personal channel test.');
+      setError('Connect the selected Agent Computer before sending a personal channel test.');
       return;
     }
     const draft = channelDrafts[channel];
@@ -2788,8 +2788,8 @@ export function WorkstationSageConnectorsPane({
       });
       await refreshAfterMutation(
         channel === 'telegram'
-          ? 'Telegram test sent through Connected Computer.'
-          : 'WhatsApp test sent through Connected Computer.',
+          ? 'Telegram test sent through Agent Computer.'
+          : 'WhatsApp test sent through Agent Computer.',
       );
     } catch (testError) {
       setError(testError instanceof Error ? testError.message : 'Personal Channels test failed.');
@@ -2888,7 +2888,7 @@ export function WorkstationSageConnectorsPane({
       case 'ollama_cloud':
         return 'Ollama Cloud API';
       case 'ollama':
-        return 'Ollama on Connected Computer';
+        return 'Ollama on Agent Computer';
       default:
         return `${record.label} API`;
     }
@@ -3151,7 +3151,7 @@ export function WorkstationSageConnectorsPane({
             ) : (
               <div className="sage-unified-expand__text">
                 {localCompanionOnline
-                  ? 'Connected Computer can use available Ollama models from the selected computer.'
+                  ? 'Agent Computer can use available Ollama models from the selected Agent Computer.'
                   : 'Connect a computer to use Ollama.'}
               </div>
             )}
@@ -3233,7 +3233,7 @@ export function WorkstationSageConnectorsPane({
         </div>
         {channel === 'whatsapp' ? (
           <>
-            <FormField label="WhatsApp phone number" hint="Used only by Connected Computer for pairing.">
+            <FormField label="WhatsApp phone number" hint="Used only by Agent Computer for pairing.">
               <FormInput
                 value={channelDraft.phoneNumber}
                 placeholder="8618657105303"
@@ -3250,7 +3250,7 @@ export function WorkstationSageConnectorsPane({
           </>
         ) : (
           <>
-            <FormField label="Telegram app ID" hint="Used only for controlled Telegram setup on Connected Computer.">
+            <FormField label="Telegram app ID" hint="Used only for controlled Telegram setup on Agent Computer.">
               <FormInput
                 value={channelDraft.apiId}
                 placeholder="123456"
@@ -3264,7 +3264,7 @@ export function WorkstationSageConnectorsPane({
                 onChange={(event) => updateChannelDraft('telegram', { apiHash: event.currentTarget.value })}
               />
             </FormField>
-            <FormField label="Phone number" hint="Used by Telegram login on Connected Computer.">
+            <FormField label="Phone number" hint="Used by Telegram login on Agent Computer.">
               <FormInput
                 value={channelDraft.phoneNumber}
                 placeholder="+8618657105303"
@@ -3293,7 +3293,7 @@ export function WorkstationSageConnectorsPane({
             </FormField>
           </>
         )}
-        <FormField label="Test message" hint="Sends from Connected Computer as a controlled test.">
+        <FormField label="Test message" hint="Sends from Agent Computer as a controlled test.">
           <FormInput
             value={channelDraft.text}
             onChange={(event) => updateChannelDraft(channel, { text: event.currentTarget.value })}
@@ -3353,7 +3353,7 @@ export function WorkstationSageConnectorsPane({
               {`${record.statusLabel} · ${record.connectedIdentity || 'Not linked'} · ${record.lastActivityLabel || 'No activity yet'}`}
             </div>
             <div className="sage-unified-expand__tag-row">
-              <span className="sage-unified-expand__tag">Runs on Connected Computer</span>
+              <span className="sage-unified-expand__tag">Runs on Agent Computer</span>
               <span className="sage-unified-expand__tag">Personal Channels</span>
               {record.id === 'whatsapp_personal' ? (
                 <span className="sage-unified-expand__tag">Not a business account</span>
@@ -3399,7 +3399,7 @@ export function WorkstationSageConnectorsPane({
                 openWorkspaceRoute('gateway');
               }}
             >
-              {showChannelActions ? 'Connected Computer settings' : 'Revoke access'}
+              {showChannelActions ? 'Agent Computer settings' : 'Revoke access'}
             </AppButton>
           ) : null}
           <button
@@ -3535,8 +3535,8 @@ export function WorkstationSageConnectorsPane({
               </p>
             </div>
           </div>
-          <div className="sage-computer-connect__capabilities" aria-label="Hardware runtime components">
-            {['Gateway', 'Supervisor'].map((label) => (
+          <div className="sage-computer-connect__capabilities" aria-label="Agent Computer components">
+            {['Connection', 'Local execution'].map((label) => (
               <span key={label}>{label}</span>
             ))}
           </div>
@@ -3556,7 +3556,7 @@ export function WorkstationSageConnectorsPane({
           </div>
           <details className="sage-computer-connect__config">
             <summary>Connection details</summary>
-            <p>Connection details are only for reconnecting, revoking, or debugging the selected computer. Normal users should only need the connect button.</p>
+            <p>Connection details are only for reconnecting, revoking, or debugging the selected Agent Computer. Normal users should only need the connect button.</p>
           </details>
         </div>
       </CommandSheet>
@@ -3667,12 +3667,12 @@ export function WorkstationSageConnectorsPane({
       : record.provider.id === 'ollama_cloud'
         ? 'Ollama Cloud'
         : record.provider.id === 'ollama'
-          ? 'Ollama on Connected Computer'
+          ? 'Ollama on Agent Computer'
           : record.label;
     const detailLabel = sectionId === 'hosted'
       ? hostedProviderDetailLabel(hostedSageAi, record)
       : isLocalSection
-        ? (localCompanionOnline ? 'Connected Computer · Uses the Ollama models available here' : 'Connected Computer · Connect the selected computer first')
+        ? (localCompanionOnline ? 'Agent Computer · Uses the Ollama models available here' : 'Agent Computer · Connect the selected Agent Computer first')
       : record.provider.id === 'ollama_cloud'
         ? `${providerPickerStatusLabel(record, localCompanionOnline)} · Ollama Cloud`
         : `${providerPickerStatusLabel(record, localCompanionOnline)} · ${providerPathLabel(record)}`;
@@ -3698,7 +3698,7 @@ export function WorkstationSageConnectorsPane({
             <span className="sage-provider-picker__detail">{detailLabel}</span>
           </div>
           {isHostedSection ? (
-            <span className="sage-provider-picker__pill">Use credits</span>
+            <span className="sage-provider-picker__pill">Use Workspace AI</span>
           ) : null}
           <span className={joinClassNames('sage-provider-picker__status-dot', pickerConnected && 'sage-provider-picker__status-dot--connected')} aria-hidden="true" />
           {isActive ? <Check size={14} strokeWidth={2} aria-hidden="true" /> : null}
@@ -3789,7 +3789,7 @@ export function WorkstationSageConnectorsPane({
           <div className="sage-ai-credit-card">
             <div className="sage-ai-credit-card__header">
               <span>
-                <span className="sage-ai-credit-card__eyebrow">Empyralis credits</span>
+                <span className="sage-ai-credit-card__eyebrow">Workspace AI</span>
                 <strong>{aiProviderSummary.creditsLabel}</strong>
               </span>
               <span className={joinClassNames('sage-ai-provider-card__status', hostedSageAi.allowed && 'sage-ai-provider-card__status--connected')}>
@@ -3809,7 +3809,7 @@ export function WorkstationSageConnectorsPane({
             <div className="sage-ai-credit-card__footer">
               <span>{aiProviderSummary.creditsDetail}</span>
               <AppButton type="button" tone="ghost" onClick={openBillingSettings}>
-                Manage credits
+                View usage
               </AppButton>
             </div>
           </div>
@@ -3819,7 +3819,7 @@ export function WorkstationSageConnectorsPane({
               {activeProviderCard ? (
                 <BrandLogo
                   id={activeProviderCard.id}
-                  label={activeProviderCard === hostedProviderCard && !explicitSelectedProfile ? 'Empyralis credits' : activeProviderCard.label}
+                  label={activeProviderCard === hostedProviderCard && !explicitSelectedProfile ? 'Workspace AI' : activeProviderCard.label}
                   src={activeProviderCard.image}
                   failedLogos={failedLogos}
                   onError={markLogoFailed}
@@ -4049,7 +4049,7 @@ export function WorkstationSageConnectorsPane({
         {renderExternalCollection(
           showPersonalSurface ? 'Personal Messaging' : 'Business Channels',
           showPersonalSurface
-            ? 'Personal channels stay on Connected Computer. Business/customer channels stay separate.'
+            ? 'Personal channels stay on Agent Computer. Business/customer channels stay separate.'
             : 'Studio channels are customer-facing and separate from Sage personal channels.',
           channelCards,
           'No messaging connectors are available for this surface yet.',
@@ -4365,7 +4365,7 @@ export function WorkstationSageConnectorsPane({
                   <div className="sage-provider-picker__empty">
                     <span>{describeHostedSageAi(hostedSageAi, null)}</span>
                     <button type="button" onClick={openBillingSettings}>
-                      Manage credits
+                      View usage
                     </button>
                   </div>
                 ) : null}

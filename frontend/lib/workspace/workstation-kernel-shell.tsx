@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { ArrowLeft, BookOpen, Bot, Brain, ChevronRight, Compass, Cpu, LayoutGrid, Link2, ListTodo, Menu, MessageSquare, Package, Plus, Wrench } from 'lucide-react';
+import { ArrowLeft, BookOpen, Bot, Brain, ChevronRight, Compass, Cpu, FolderOpen, LayoutGrid, Link2, ListTodo, Menu, MessageSquare, Monitor, Package, Plus, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { logout } from '@/lib/auth/auth-client';
@@ -21,7 +21,10 @@ import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
 import type { ConnectedExternalAgentRecord, DeployedAgentRecord } from '@/lib/workspace/workstation-client';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
-import { emitWorkstationChatThreadSelected } from '@/lib/workspace/workstation-chat-thread-events';
+import {
+  emitWorkstationChatNewThreadRequested,
+  emitWorkstationChatThreadSelected,
+} from '@/lib/workspace/workstation-chat-thread-events';
 import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
 import type { RuntimeAttachmentSnapshot, SpecialistOverlayTabId } from '@/lib/workspace/deployed-agents/types';
 import {
@@ -30,12 +33,16 @@ import {
 } from '@/lib/workspace/deployed-agents/constants';
 import {
   studioPaneCache,
+  studioAgentDisplayName,
   subscribeStudioPaneCache,
 } from '@/lib/workspace/deployed-agents/utils';
 import {
   activeThreadStorageKey,
   persistActiveThread,
 } from '@/lib/workspace/workstation-chat-pane-model';
+import {
+  resolveExternalProviderBadge,
+} from '@/lib/workspace/deployed-agents/external-agent-provider-badges';
 import {
   buildWorkspaceRouteHref,
   getWorkspaceNavRouteDefinition,
@@ -49,12 +56,13 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
   gateway: [],
   marketplace: ['marketplace'],
   applications: ['applications'],
+  hardware: [],
   settings: ['settings'],
 };
 
 type ShellSectionId = WorkspaceNavDestinationId;
 
-type PrimaryShellTabId = Extract<WorkspaceNavDestinationId, 'sage' | 'studio' | 'marketplace' | 'applications'>;
+type PrimaryShellTabId = Extract<WorkspaceNavDestinationId, 'sage' | 'studio' | 'marketplace' | 'applications' | 'hardware'>;
 
 const SHELL_PRIMARY_TABS: readonly {
   id: PrimaryShellTabId;
@@ -66,6 +74,21 @@ const SHELL_PRIMARY_TABS: readonly {
   { id: 'studio', label: 'Studio', routeId: 'studio', icon: LayoutGrid },
   { id: 'marketplace', label: 'Discover', routeId: 'marketplace', icon: Compass },
   { id: 'applications', label: 'Apps', routeId: 'applications', icon: Package },
+  { id: 'hardware', label: 'Hardware', routeId: 'hardware', icon: Monitor },
+];
+
+type SettingsPanelSectionId = 'account' | 'appearance' | 'usage' | 'billing' | 'privacy' | 'transparency';
+
+const SETTINGS_PANEL_ITEMS: readonly {
+  id: SettingsPanelSectionId;
+  label: string;
+}[] = [
+  { id: 'account', label: 'Account' },
+  { id: 'appearance', label: 'Appearance' },
+  { id: 'usage', label: 'Usage' },
+  { id: 'billing', label: 'Limits' },
+  { id: 'privacy', label: 'Privacy & Safety' },
+  { id: 'transparency', label: 'Transparency' },
 ];
 
 const DISCOVER_FILTERS: readonly {
@@ -73,9 +96,12 @@ const DISCOVER_FILTERS: readonly {
   label: string;
   filter: MarketplaceTitlebarFilter;
 }[] = [
+  { id: 'marketplace', label: 'All', filter: 'all' },
   { id: 'marketplace', label: 'Agent templates', filter: 'agent_template' },
-  { id: 'marketplace', label: 'Skills', filter: 'skill' },
+  { id: 'marketplace', label: 'Tools', filter: 'tools' },
+  { id: 'marketplace', label: 'Apps', filter: 'apps' },
   { id: 'marketplace', label: 'MCP', filter: 'connector' },
+  { id: 'marketplace', label: 'Skills', filter: 'skill' },
   { id: 'marketplace', label: 'Bundles', filter: 'bundle' },
 ];
 
@@ -107,13 +133,16 @@ const SAGE_SETUP_NAV_ITEMS: readonly {
   section: string;
   icon: LucideIcon;
 }[] = [
-  { id: 'ai-runtime', label: 'AI & Runtime', section: 'ai-runtime', icon: Cpu },
+  { id: 'ai-runtime', label: 'AI setup', section: 'ai-runtime', icon: Cpu },
   { id: 'connections', label: 'Connections', section: 'connections', icon: Link2 },
-  { id: 'plugins', label: 'Plugins', section: 'plugins', icon: Wrench },
+  { id: 'plugins', label: 'Actions', section: 'plugins', icon: Wrench },
 ];
 
 const MARKETPLACE_TITLEBAR_FILTERS = [
+  { id: 'all', label: 'All' },
   { id: 'agent_template', label: 'Agent templates' },
+  { id: 'tools', label: 'Tools' },
+  { id: 'apps', label: 'Apps' },
   { id: 'skill', label: 'Skills' },
   { id: 'connector', label: 'MCP' },
   { id: 'bundle', label: 'Bundles' },
@@ -124,11 +153,14 @@ type MarketplaceTitlebarFilter = typeof MARKETPLACE_TITLEBAR_FILTERS[number]['id
 function normalizeMarketplaceTitlebarFilter(value: string | null): MarketplaceTitlebarFilter {
   return MARKETPLACE_TITLEBAR_FILTERS.some((filter) => filter.id === value)
     ? value as MarketplaceTitlebarFilter
-    : 'agent_template';
+    : 'all';
 }
 
 function buildMarketplaceCategoryHref(workspaceId: string, filter: MarketplaceTitlebarFilter): string {
   const baseHref = buildWorkspaceRouteHref(workspaceId, 'marketplace');
+  if (filter === 'all') {
+    return baseHref;
+  }
   return `${baseHref}?category=${encodeURIComponent(filter)}`;
 }
 
@@ -165,7 +197,7 @@ type ChatHistoryItem = {
   occurredAt: string | null;
 };
 
-type AssistantProjectLink = {
+type SageContextGroupLink = {
   id: string;
   label: string;
   detail: string;
@@ -178,9 +210,9 @@ type PanelStackLevel =
   | 'assistant'
   | 'studio'
   | 'discover'
+  | 'settings'
   | `agent:${string}`
-  | `external-agent:${string}`
-  | `agent-computer:${string}`;
+  | `external-agent:${string}`;
 
 type PanelTransitionDirection = 'forward' | 'back';
 
@@ -190,11 +222,6 @@ const AGENT_DETAIL_NAV_ITEMS: readonly {
   id: AgentDetailPanelTabId;
   label: string;
 }[] = NATIVE_SPECIALIST_OVERLAY_TABS;
-
-const AGENT_COMPUTER_DETAIL_NAV_ITEMS: readonly {
-  id: AgentDetailPanelTabId;
-  label: string;
-}[] = [{ id: 'overview', label: 'Overview' }];
 
 const PANEL_COLLAPSED_STORAGE_KEY = 'panel_collapsed';
 
@@ -227,9 +254,9 @@ const MOBILE_DESTINATION_NAV: readonly {
   icon: LucideIcon;
 }[] = [
   { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot },
-  { id: 'studio', label: 'Agents', defaultRouteId: 'studio', icon: LayoutGrid },
+  { id: 'studio', label: 'Studio', defaultRouteId: 'studio', icon: LayoutGrid },
   { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
-  { id: 'applications', label: 'Applications', defaultRouteId: 'applications', icon: Package },
+  { id: 'applications', label: 'Apps', defaultRouteId: 'applications', icon: Package },
 ];
 
 function readString(value: unknown, fallback = ''): string {
@@ -260,6 +287,7 @@ function buildStudioAgentHref(
   const params = new URLSearchParams(searchParams.toString());
   params.set('agent', agentId);
   params.delete('externalAgent');
+  params.delete('externalSubAgent');
   params.delete('agentComputer');
   params.delete('studioFilter');
   params.delete('tab');
@@ -279,6 +307,7 @@ function buildStudioAgentTabHref(
   params.set('agent', agentId);
   params.set('tab', tabId);
   params.delete('externalAgent');
+  params.delete('externalSubAgent');
   params.delete('agentComputer');
   params.delete('studioFilter');
   params.delete('studioTab');
@@ -294,6 +323,26 @@ function buildStudioExternalAgentHref(
 ): string {
   const params = new URLSearchParams(searchParams.toString());
   params.set('externalAgent', externalAgentId);
+  params.delete('agent');
+  params.delete('externalSubAgent');
+  params.delete('agentComputer');
+  params.delete('studioFilter');
+  params.delete('tab');
+  params.delete('studioTab');
+  params.delete('createAgent');
+  const query = params.toString();
+  return `${buildWorkspaceRouteHref(workspaceId, 'studio')}${query ? `?${query}` : ''}`;
+}
+
+function buildStudioExternalSubAgentHref(
+  workspaceId: string,
+  searchParams: { toString: () => string },
+  externalAgentId: string,
+  externalSubAgentId: string,
+): string {
+  const params = new URLSearchParams(searchParams.toString());
+  params.set('externalAgent', externalAgentId);
+  params.set('externalSubAgent', externalSubAgentId);
   params.delete('agent');
   params.delete('agentComputer');
   params.delete('studioFilter');
@@ -349,11 +398,9 @@ function normalizeExternalAgentDetailTab(
 function studioSelectionLevelFromQuery({
   selectedAgentId,
   selectedExternalAgentId,
-  selectedAgentComputerId,
 }: {
   selectedAgentId: string | null;
   selectedExternalAgentId: string | null;
-  selectedAgentComputerId: string | null;
 }): PanelStackLevel | null {
   if (selectedAgentId) {
     return `agent:${selectedAgentId}`;
@@ -361,21 +408,15 @@ function studioSelectionLevelFromQuery({
   if (selectedExternalAgentId) {
     return `external-agent:${selectedExternalAgentId}`;
   }
-  if (selectedAgentComputerId) {
-    return `agent-computer:${selectedAgentComputerId}`;
-  }
   return null;
 }
 
-function studioObjectLevelKind(level: PanelStackLevel): 'agent' | 'external-agent' | 'agent-computer' | null {
+function studioObjectLevelKind(level: PanelStackLevel): 'agent' | 'external-agent' | null {
   if (level.startsWith('agent:')) {
     return 'agent';
   }
   if (level.startsWith('external-agent:')) {
     return 'external-agent';
-  }
-  if (level.startsWith('agent-computer:')) {
-    return 'agent-computer';
   }
   return null;
 }
@@ -409,6 +450,10 @@ function externalAgentHasObjectTypeToken(agent: ConnectedExternalAgentRecord | n
     ? agent.object_types.map((item) => readString(item).toLowerCase()).filter(Boolean)
     : [];
   return objectTypes.some((value) => tokens.some((token) => value.includes(token)));
+}
+
+function externalSubAgentsFor(agent: ConnectedExternalAgentRecord | null): Record<string, unknown>[] {
+  return readRecordArray(agent?.external_sub_agents).filter((item) => readString(item.id || item.external_id));
 }
 
 function externalAgentHasArtifacts(agent: ConnectedExternalAgentRecord | null): boolean {
@@ -470,21 +515,24 @@ function readRuntimeAttachmentId(computer: RuntimeAttachmentSnapshot): string {
   );
 }
 
-function buildStudioAgentComputerHref(
-  workspaceId: string,
-  searchParams: { toString: () => string },
-  agentComputerId: string,
-): string {
-  const params = new URLSearchParams(searchParams.toString());
-  params.set('agentComputer', agentComputerId);
-  params.delete('agent');
-  params.delete('externalAgent');
-  params.delete('studioFilter');
-  params.delete('tab');
-  params.delete('studioTab');
-  params.delete('createAgent');
-  const query = params.toString();
-  return `${buildWorkspaceRouteHref(workspaceId, 'studio')}${query ? `?${query}` : ''}`;
+function runtimeAttachmentDisplayKey(computer: RuntimeAttachmentSnapshot): string {
+  return `${readString(computer.label, 'Agent Computer').trim().toLowerCase()}::${readString(computer.nodeKind, computer.attachmentKind).trim().toLowerCase()}`;
+}
+
+function runtimeAttachmentRank(computer: RuntimeAttachmentSnapshot): number {
+  return (computer.online ? 2 : 0) + (computer.healthy ? 1 : 0);
+}
+
+function dedupeRuntimeAttachmentsForDisplay(computers: readonly RuntimeAttachmentSnapshot[]): RuntimeAttachmentSnapshot[] {
+  const byDisplayKey = new Map<string, RuntimeAttachmentSnapshot>();
+  for (const computer of computers) {
+    const displayKey = runtimeAttachmentDisplayKey(computer);
+    const current = byDisplayKey.get(displayKey);
+    if (!current || runtimeAttachmentRank(computer) > runtimeAttachmentRank(current)) {
+      byDisplayKey.set(displayKey, computer);
+    }
+  }
+  return Array.from(byDisplayKey.values());
 }
 
 function normalizeThreadItems(payload: unknown): ThreadRecord[] {
@@ -586,6 +634,8 @@ function MainAgentMobileHistoryList({
   onNavigate: () => void;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [items, setItems] = useState<ChatHistoryItem[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(() => readActiveThreadId(workspaceId));
   const [isLoading, setIsLoading] = useState(false);
@@ -626,10 +676,8 @@ function MainAgentMobileHistoryList({
   };
 
   const createThread = () => {
-    const threadId = `thread-${Date.now()}`;
-    persistActiveThread(workspaceId, threadId);
-    emitWorkstationChatThreadSelected({ workspaceId, threadId });
-    setActiveThreadId(threadId);
+    emitWorkstationChatNewThreadRequested({ workspaceId });
+    setActiveThreadId(null);
     onNavigate();
     router.push(chatHref);
   };
@@ -672,8 +720,9 @@ function MainAgentMobileHistoryList({
 function AssistantPanelContent({
   chatHref,
   client,
+  activeRouteId,
   navigationItems,
-  projectLinks,
+  contextLinks,
   setupItems,
   workspaceId,
 }: {
@@ -681,17 +730,20 @@ function AssistantPanelContent({
   client: {
     listThreads: (options?: { includeTurns?: boolean; limit?: number }) => Promise<Record<string, unknown>>;
   };
+  activeRouteId: WorkspaceRouteId | null;
   navigationItems: readonly SageContextLink[];
-  projectLinks: readonly AssistantProjectLink[];
+  contextLinks: readonly SageContextGroupLink[];
   setupItems: readonly SageContextLink[];
   workspaceId: string;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [items, setItems] = useState<ChatHistoryItem[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(() => readActiveThreadId(workspaceId));
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -727,13 +779,13 @@ function AssistantPanelContent({
   };
 
   const createThread = () => {
-    const threadId = `thread-${Date.now()}`;
-    persistActiveThread(workspaceId, threadId);
-    emitWorkstationChatThreadSelected({ workspaceId, threadId });
-    setActiveThreadId(threadId);
+    emitWorkstationChatNewThreadRequested({ workspaceId });
+    setActiveThreadId(null);
     router.push(chatHref);
   };
   const sidebarItems = useMemo(() => [...navigationItems, ...setupItems], [navigationItems, setupItems]);
+  const currentHref = `${pathname ?? ''}${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
+  void contextLinks;
 
   return (
     <div className="workstation-shell-panel__assistant" data-workstation-shell-panel-content="assistant">
@@ -747,23 +799,31 @@ function AssistantPanelContent({
         <span>New chat</span>
       </button>
       <nav className="workstation-shell-panel__assistant-nav" aria-label="Assistant utilities">
-        {sidebarItems.map((item) => (
-          <Link
-            key={item.id}
-            href={item.href ?? buildWorkspaceRouteHref(workspaceId, item.routeId)}
-            prefetch
-            title={item.label}
-            className="workstation-shell-panel__assistant-link"
-          >
-            <item.icon size={14} aria-hidden="true" />
-            <span>{item.label}</span>
-          </Link>
-        ))}
+        {sidebarItems.map((item) => {
+          const href = item.href ?? buildWorkspaceRouteHref(workspaceId, item.routeId);
+          const active = item.href ? href === currentHref : item.routeId === activeRouteId;
+          return (
+            <Link
+              key={item.id}
+              href={href}
+              prefetch
+              aria-current={active ? 'page' : undefined}
+              title={item.label}
+              className={joinClassNames(
+                'workstation-shell-panel__assistant-link',
+                active && 'workstation-shell-panel__assistant-link--active',
+              )}
+            >
+              <item.icon size={14} aria-hidden="true" />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
       </nav>
       <section className="workstation-shell-panel__projects" aria-label="Projects">
         <button
           type="button"
-          className="workstation-shell-panel__projects-toggle"
+          className="workstation-shell-panel__projects-heading"
           aria-expanded={projectsOpen}
           onClick={() => setProjectsOpen((current) => !current)}
         >
@@ -773,30 +833,18 @@ function AssistantPanelContent({
               'workstation-shell-panel__projects-chevron',
               projectsOpen && 'workstation-shell-panel__projects-chevron--open',
             )}
-            size={15}
+            size={14}
             aria-hidden="true"
           />
         </button>
         {projectsOpen ? (
           <div className="workstation-shell-panel__projects-list">
-            {projectLinks.map((project) => {
-              const ProjectIcon = project.icon;
-              return (
-                <Link
-                  key={project.id}
-                  href={project.href}
-                  prefetch
-                  title={project.label}
-                  className="workstation-shell-panel__project-row"
-                >
-                  <ProjectIcon size={14} aria-hidden="true" />
-                  <span>
-                    <strong>{project.label}</strong>
-                    <small>{project.detail}</small>
-                  </span>
-                </Link>
-              );
-            })}
+            <Link href={chatHref} prefetch title="Current project" className="workstation-shell-panel__project-row">
+              <FolderOpen size={14} aria-hidden="true" />
+              <span>
+                <strong>Current project</strong>
+              </span>
+            </Link>
           </div>
         ) : null}
       </section>
@@ -836,30 +884,26 @@ type SageContextLink = {
 function StudioPanelContent({
   agents,
   connectedExternalAgents,
-  agentComputers,
   selectedAgentId,
   selectedExternalAgentId,
-  selectedAgentComputerId,
+  selectedExternalSubAgentId,
   isAgentListPriming,
   isAgentListUnavailable,
   searchParams,
   onPushAgentDetail,
   onPushExternalAgentDetail,
-  onPushAgentComputerDetail,
   workspaceId,
 }: {
   agents: readonly DeployedAgentRecord[];
   connectedExternalAgents: readonly ConnectedExternalAgentRecord[];
-  agentComputers: readonly RuntimeAttachmentSnapshot[];
   selectedAgentId: string | null;
   selectedExternalAgentId: string | null;
-  selectedAgentComputerId: string | null;
+  selectedExternalSubAgentId: string | null;
   isAgentListPriming: boolean;
   isAgentListUnavailable: boolean;
   searchParams: { toString: () => string };
   onPushAgentDetail: (agentId: string) => void;
   onPushExternalAgentDetail: (agentId: string) => void;
-  onPushAgentComputerDetail: (computerId: string) => void;
   workspaceId: string;
 }) {
   const router = useRouter();
@@ -871,7 +915,7 @@ function StudioPanelContent({
     }
     return true;
   }), [agents]);
-  const visibleStudioObjectCount = visibleAgents.length + connectedExternalAgents.length + agentComputers.length;
+  const visibleStudioObjectCount = visibleAgents.length + connectedExternalAgents.length;
 
   const openNativeAgent = (agentId: string) => {
     if (!agentId) {
@@ -892,10 +936,14 @@ function StudioPanelContent({
           <div className="workstation-shell-panel__state">No agents loaded</div>
         ) : (
           <>
+            {visibleAgents.length > 0 ? (
+              <div className="workstation-shell-panel__build-section-label">Native Agents</div>
+            ) : null}
             {visibleAgents.map((agent) => {
               const agentId = readString(agent.id);
               const state = readString(agent.deployment_state, 'draft');
               const stateLabel = humanizeAgentState(state);
+              const displayName = studioAgentDisplayName(agent, agentId || 'Agent');
               return (
                 <button
                   key={agentId}
@@ -908,55 +956,84 @@ function StudioPanelContent({
                   onClick={() => openNativeAgent(agentId)}
                 >
                   <span className={joinClassNames('workstation-shell-panel__agent-dot', `workstation-shell-panel__agent-dot--${agentStatusTone(state)}`)} aria-hidden="true" />
-                  <span className="workstation-shell-panel__build-row-label">{readString(agent.name, agentId || 'Agent')}</span>
+                  <span className="workstation-shell-panel__build-row-label">{displayName}</span>
                   {state.toLowerCase() === 'draft' ? (
                     <span className="workstation-shell-panel__build-badge">{stateLabel}</span>
                   ) : null}
                 </button>
               );
             })}
+            {connectedExternalAgents.length > 0 ? (
+              <div className="workstation-shell-panel__build-section-label">Connected Agents</div>
+            ) : null}
             {connectedExternalAgents.map((agent) => {
               const agentId = readString(agent.id);
               const state = readString(agent.connection_state ?? agent.status, 'connected');
+              const providerBadge = resolveExternalProviderBadge(agent.provider_kind);
+              const subAgents = externalSubAgentsFor(agent);
+              const configuredName = readString(agent.name ?? agent.label);
+              const displayName = subAgents.length > 0 && configuredName.toLowerCase() === providerBadge.label.toLowerCase()
+                ? `${providerBadge.label} Agents`
+                : readString(configuredName, agentId || `${providerBadge.label} Agents`);
               return (
-                <button
-                  key={`external-${agentId}`}
-                  type="button"
-                  className={joinClassNames(
-                    'workstation-shell-panel__build-row',
-                    selectedExternalAgentId === agentId && 'workstation-shell-panel__build-row--active',
-                  )}
-                  aria-current={selectedExternalAgentId === agentId ? 'page' : undefined}
-                  onClick={() => {
-                    onPushExternalAgentDetail(agentId);
-                    router.push(buildStudioExternalAgentHref(workspaceId, searchParams, agentId));
-                  }}
-                >
-                  <span className={joinClassNames('workstation-shell-panel__agent-dot', `workstation-shell-panel__agent-dot--${agentStatusTone(state)}`)} aria-hidden="true" />
-                  <span className="workstation-shell-panel__build-row-label">{readString(agent.name ?? agent.label, agentId || 'Connected agent')}</span>
-                </button>
-              );
-            })}
-            {agentComputers.map((computer) => {
-              const computerId = readRuntimeAttachmentId(computer);
-              const state = computer.online ? 'online' : readString(computer.status, 'offline');
-              return (
-                <button
-                  key={`computer-${computerId}`}
-                  type="button"
-                  className={joinClassNames(
-                    'workstation-shell-panel__build-row',
-                    selectedAgentComputerId === computerId && 'workstation-shell-panel__build-row--active',
-                  )}
-                  aria-current={selectedAgentComputerId === computerId ? 'page' : undefined}
-                  onClick={() => {
-                    onPushAgentComputerDetail(computerId);
-                    router.push(buildStudioAgentComputerHref(workspaceId, searchParams, computerId));
-                  }}
-                >
-                  <span className={joinClassNames('workstation-shell-panel__agent-dot', `workstation-shell-panel__agent-dot--${agentStatusTone(state)}`)} aria-hidden="true" />
-                  <span className="workstation-shell-panel__build-row-label">{readString(computer.label, computerId || 'Computer')}</span>
-                </button>
+                <div key={`external-${agentId}`} className="workstation-shell-panel__external-family">
+                  <button
+                    type="button"
+                    className={joinClassNames(
+                      'workstation-shell-panel__build-row',
+                      selectedExternalAgentId === agentId && !selectedExternalSubAgentId && 'workstation-shell-panel__build-row--active',
+                    )}
+                    aria-current={selectedExternalAgentId === agentId && !selectedExternalSubAgentId ? 'page' : undefined}
+                    onClick={() => {
+                      onPushExternalAgentDetail(agentId);
+                      router.push(buildStudioExternalAgentHref(workspaceId, searchParams, agentId));
+                    }}
+                  >
+                    <span className={joinClassNames('workstation-shell-panel__agent-dot', `workstation-shell-panel__agent-dot--${agentStatusTone(state)}`)} aria-hidden="true" />
+                    <span className="workstation-shell-panel__build-row-identity">
+                      <span className="workstation-shell-panel__build-row-label">{displayName}</span>
+                      <span className="studio-agents-nav__provider-badge workstation-shell-panel__provider-badge" title={`${providerBadge.label} connected agent`}>
+                        {providerBadge.imageSrc ? (
+                          <img src={providerBadge.imageSrc} alt="" aria-hidden="true" />
+                        ) : (
+                          <span>{providerBadge.initials}</span>
+                        )}
+                      </span>
+                    </span>
+                  </button>
+                  {subAgents.length > 0 ? (
+                    <div className="workstation-shell-panel__external-child-list" role="group" aria-label={`${displayName} sub-agents`}>
+                      {subAgents.map((subAgent) => {
+                        const subAgentId = readString(subAgent.id || subAgent.external_id);
+                        const subAgentName = readString(subAgent.name ?? subAgent.label ?? subAgent.title, subAgentId || 'External sub-agent');
+                        const subAgentStatus = readString(subAgent.status);
+                        const selected = selectedExternalAgentId === agentId && selectedExternalSubAgentId === subAgentId;
+                        return (
+                          <button
+                            key={`${agentId}:${subAgentId}`}
+                            type="button"
+                            className={joinClassNames(
+                              'workstation-shell-panel__build-row',
+                              'workstation-shell-panel__build-row--external-child',
+                              selected && 'workstation-shell-panel__build-row--active',
+                            )}
+                            aria-current={selected ? 'page' : undefined}
+                            onClick={() => {
+                              onPushExternalAgentDetail(agentId);
+                              router.push(buildStudioExternalSubAgentHref(workspaceId, searchParams, agentId, subAgentId));
+                            }}
+                          >
+                            <span className="workstation-shell-panel__external-child-rail" aria-hidden="true" />
+                            <span className="workstation-shell-panel__build-row-label">{subAgentName}</span>
+                            {subAgentStatus ? (
+                              <span className="workstation-shell-panel__build-badge">{humanizeAgentState(subAgentStatus)}</span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
               );
             })}
           </>
@@ -1007,36 +1084,113 @@ function DiscoverPanelContent({
 }
 
 function RootPanelContent({
+  activeDestinationId,
   onOpenAssistant,
   onOpenApps,
   onOpenStudio,
   onOpenDiscover,
+  onOpenHardware,
 }: {
+  activeDestinationId: WorkspaceNavDestinationId;
   onOpenAssistant: () => void;
   onOpenApps: () => void;
   onOpenStudio: () => void;
   onOpenDiscover: () => void;
+  onOpenHardware: () => void;
 }) {
+  const sageActive = activeDestinationId === 'sage';
+  const studioActive = activeDestinationId === 'studio';
+  const discoverActive = activeDestinationId === 'marketplace';
+  const appsActive = activeDestinationId === 'applications';
+  const hardwareActive = activeDestinationId === 'hardware';
+
   return (
     <nav className="workstation-shell-panel__root-nav" aria-label="Workspace sections" data-workstation-shell-panel-content="root">
-      <button type="button" className="workstation-shell-panel__nav-row" onClick={onOpenAssistant}>
+      <button
+        type="button"
+        className={joinClassNames('workstation-shell-panel__nav-row', sageActive && 'workstation-shell-panel__nav-row--active')}
+        aria-current={sageActive ? 'page' : undefined}
+        onClick={onOpenAssistant}
+      >
         <Bot size={15} aria-hidden="true" />
         <span>Sage</span>
       </button>
-      <button type="button" className="workstation-shell-panel__nav-row" onClick={onOpenStudio}>
+      <button
+        type="button"
+        className={joinClassNames('workstation-shell-panel__nav-row', studioActive && 'workstation-shell-panel__nav-row--active')}
+        aria-current={studioActive ? 'page' : undefined}
+        onClick={onOpenStudio}
+      >
         <LayoutGrid size={15} aria-hidden="true" />
         <span>Studio</span>
         <ChevronRight size={14} aria-hidden="true" />
       </button>
-      <button type="button" className="workstation-shell-panel__nav-row" onClick={onOpenDiscover}>
+      <button
+        type="button"
+        className={joinClassNames('workstation-shell-panel__nav-row', discoverActive && 'workstation-shell-panel__nav-row--active')}
+        aria-current={discoverActive ? 'page' : undefined}
+        onClick={onOpenDiscover}
+      >
         <Compass size={15} aria-hidden="true" />
         <span>Discover</span>
         <ChevronRight size={14} aria-hidden="true" />
       </button>
-      <button type="button" className="workstation-shell-panel__nav-row" onClick={onOpenApps}>
+      <button
+        type="button"
+        className={joinClassNames('workstation-shell-panel__nav-row', appsActive && 'workstation-shell-panel__nav-row--active')}
+        aria-current={appsActive ? 'page' : undefined}
+        onClick={onOpenApps}
+      >
         <Package size={15} aria-hidden="true" />
         <span>Apps</span>
       </button>
+      <button
+        type="button"
+        className={joinClassNames('workstation-shell-panel__nav-row', hardwareActive && 'workstation-shell-panel__nav-row--active')}
+        aria-current={hardwareActive ? 'page' : undefined}
+        onClick={onOpenHardware}
+      >
+        <Monitor size={15} aria-hidden="true" />
+        <span>Hardware</span>
+      </button>
+    </nav>
+  );
+}
+
+function buildSettingsSectionHref(settingsHref: string, sectionId: SettingsPanelSectionId): string {
+  return `${settingsHref}${settingsHref.includes('?') ? '&' : '?'}section=${encodeURIComponent(sectionId)}`;
+}
+
+function isSettingsPanelSectionId(value: string | null): value is SettingsPanelSectionId {
+  return SETTINGS_PANEL_ITEMS.some((item) => item.id === value);
+}
+
+function SettingsPanelContent({
+  activeSection,
+  settingsHref,
+}: {
+  activeSection: string | null;
+  settingsHref: string;
+}) {
+  const selectedSection = isSettingsPanelSectionId(activeSection) ? activeSection : 'account';
+  return (
+    <nav className="workstation-shell-panel__build" aria-label="Settings sections" data-workstation-shell-panel-content="settings">
+      <div className="workstation-shell-panel__build-list">
+        {SETTINGS_PANEL_ITEMS.map((item) => (
+          <Link
+            key={item.id}
+            href={buildSettingsSectionHref(settingsHref, item.id)}
+            prefetch
+            aria-current={selectedSection === item.id ? 'page' : undefined}
+            className={joinClassNames(
+              'workstation-shell-panel__plain-link',
+              selectedSection === item.id && 'workstation-shell-panel__plain-link--active',
+            )}
+          >
+            {item.label}
+          </Link>
+        ))}
+      </div>
     </nav>
   );
 }
@@ -1145,16 +1299,27 @@ function accountInitialForLabel(value: string): string {
   return normalized ? normalized.charAt(0).toUpperCase() : 'A';
 }
 
+function workspaceRoleLabel(value: unknown): string {
+  const normalized = readString(value, 'member').toLowerCase();
+  if (normalized === 'owner') {
+    return 'Owner';
+  }
+  if (normalized === 'admin') {
+    return 'Admin';
+  }
+  return 'Member';
+}
+
 function ShellAccountBlock({
   displayName,
   email,
-  planLabel,
+  roleLabel,
   creditsHref,
   settingsHref,
 }: {
   displayName: string;
   email: string;
-  planLabel: string;
+  roleLabel: string;
   creditsHref: string;
   settingsHref: string;
 }) {
@@ -1243,7 +1408,7 @@ function ShellAccountBlock({
           <strong>{displayName}</strong>
           <span>{email}</span>
         </span>
-        <span className="workstation-shell-account__plan">{planLabel}</span>
+        <span className="workstation-shell-account__plan">{roleLabel}</span>
       </button>
     </div>
   );
@@ -1283,6 +1448,7 @@ export function WorkstationKernelShell({
       || activeDestinationId === 'gateway'
       || activeDestinationId === 'marketplace'
       || activeDestinationId === 'applications'
+      || activeDestinationId === 'hardware'
     ) {
       return activeDestinationId;
     }
@@ -1291,42 +1457,41 @@ export function WorkstationKernelShell({
   const workspaceLabel = bootstrap.workspace.label;
   const chatHref = routeManifest.routeIndex.chat?.href ?? buildWorkspaceRouteHref(workspaceId, 'chat');
   const settingsHref = routeManifest.routeIndex.settings?.href ?? buildWorkspaceRouteHref(workspaceId, 'settings');
+  const hardwareHref = routeManifest.routeIndex.hardware?.href ?? buildWorkspaceRouteHref(workspaceId, 'hardware');
   const creditsHref = `${settingsHref}${settingsHref.includes('?') ? '&' : '?'}section=billing`;
   const studioHref = routeManifest.routeIndex.studio?.href ?? buildWorkspaceRouteHref(workspaceId, 'studio');
   const marketplaceHref = routeManifest.routeIndex.marketplace?.href ?? buildWorkspaceRouteHref(workspaceId, 'marketplace');
   const accountEmail = readString(bootstrap.account.email, 'Account');
   const accountDisplayName = readString(bootstrap.account.displayName, accountEmail);
-  const accountPlanLabel = readString(bootstrap.entitlements.label, readString(bootstrap.entitlements.plan, 'Plan'));
+  const accountRoleLabel = workspaceRoleLabel(bootstrap.membership.role);
   const studioCache = useMemo(
     () => studioPaneCache.get(workspaceId),
     [studioCacheRevision, workspaceId],
   );
   const studioAgents = studioCache?.agents ?? [];
   const studioConnectedExternalAgents = studioCache?.connectedExternalAgents ?? [];
-  const studioAgentComputers = studioCache?.runtimeAttachments ?? [];
   const selectedStudioAgentId = activeDestinationId === 'studio' ? readString(searchParams.get('agent')) || null : null;
   const selectedStudioExternalAgentId = activeDestinationId === 'studio' ? readString(searchParams.get('externalAgent')) || null : null;
-  const selectedStudioAgentComputerId = activeDestinationId === 'studio' ? readString(searchParams.get('agentComputer')) || null : null;
+  const selectedStudioExternalSubAgentId = activeDestinationId === 'studio' ? readString(searchParams.get('externalSubAgent')) || null : null;
   const latestPanelLevel = panelStack[panelStack.length - 1] ?? 'root';
   const activeStudioAgentId = selectedStudioAgentId ?? (latestPanelLevel.startsWith('agent:') ? latestPanelLevel.slice('agent:'.length) : null);
   const activeStudioExternalAgentId = selectedStudioExternalAgentId ?? (latestPanelLevel.startsWith('external-agent:') ? latestPanelLevel.slice('external-agent:'.length) : null);
-  const activeStudioAgentComputerId = selectedStudioAgentComputerId ?? (latestPanelLevel.startsWith('agent-computer:') ? latestPanelLevel.slice('agent-computer:'.length) : null);
   const activeStudioAgent = activeStudioAgentId
     ? studioAgents.find((agent) => readString(agent.id) === activeStudioAgentId) ?? null
     : null;
   const activeStudioExternalAgent = activeStudioExternalAgentId
     ? studioConnectedExternalAgents.find((agent) => readString(agent.id) === activeStudioExternalAgentId) ?? null
     : null;
-  const activeStudioAgentComputer = activeStudioAgentComputerId
-    ? studioAgentComputers.find((computer) => readRuntimeAttachmentId(computer) === activeStudioAgentComputerId) ?? null
+  const activeStudioExternalSubAgent = activeStudioExternalAgent && selectedStudioExternalSubAgentId
+    ? externalSubAgentsFor(activeStudioExternalAgent).find((subAgent) => readString(subAgent.id || subAgent.external_id) === selectedStudioExternalSubAgentId) ?? null
     : null;
   const activeStudioAgentName = activeStudioAgent
     ? readString(activeStudioAgent.name, activeStudioAgentId ?? 'Agent')
-    : activeStudioExternalAgent
+    : activeStudioExternalSubAgent
+      ? readString(activeStudioExternalSubAgent.name ?? activeStudioExternalSubAgent.label ?? activeStudioExternalSubAgent.title, selectedStudioExternalSubAgentId ?? 'External sub-agent')
+      : activeStudioExternalAgent
       ? readString(activeStudioExternalAgent.name ?? activeStudioExternalAgent.label, activeStudioExternalAgentId ?? 'Connected agent')
-      : activeStudioAgentComputer
-        ? readString(activeStudioAgentComputer.label, activeStudioAgentComputerId ?? 'Agent Computer')
-        : activeStudioAgentId ?? activeStudioExternalAgentId ?? activeStudioAgentComputerId ?? 'Agent';
+      : activeStudioAgentId ?? activeStudioExternalAgentId ?? 'Agent';
   const activeExternalAgentDetailTabs = useMemo(
     () => visibleExternalAgentDetailTabs(activeStudioExternalAgent),
     [activeStudioExternalAgent],
@@ -1354,68 +1519,40 @@ export function WorkstationKernelShell({
     icon: item.icon,
     href: `${buildWorkspaceRouteHref(workspaceId, 'integrations')}?section=${encodeURIComponent(item.section)}`,
   })), [workspaceId]);
-  const sageProjectLinks = useMemo<AssistantProjectLink[]>(() => {
-    const links: AssistantProjectLink[] = [{
-      id: 'studio-agents',
-      label: 'Agent Studio',
-      detail: 'Build and manage agents',
-      href: studioHref,
-      icon: LayoutGrid,
-    }];
-    studioAgents
-      .filter((agent) => {
-        const agentId = readString(agent.id);
-        const state = readString(agent.deployment_state, 'draft').toLowerCase();
-        return Boolean(agentId) && !['archived', 'deleted', 'removed'].includes(state);
-      })
-      .slice(0, 6)
-      .forEach((agent) => {
-        const agentId = readString(agent.id);
-        links.push({
-          id: `agent:${agentId}`,
-          label: readString(agent.name, agentId || 'Agent'),
-          detail: 'Studio agent',
-          href: buildStudioAgentHref(workspaceId, searchParams, agentId),
-          icon: Bot,
-        });
-      });
-    studioConnectedExternalAgents.slice(0, 4).forEach((agent) => {
-      const agentId = readString(agent.id);
-      if (!agentId) {
-        return;
-      }
+  const sageContextLinks = useMemo<SageContextGroupLink[]>(() => {
+    const links: SageContextGroupLink[] = [];
+    const chatRoute = routeManifest.routeIndex.chat;
+    if (chatRoute) {
       links.push({
-        id: `external-agent:${agentId}`,
-        label: readString(agent.name ?? agent.label, agentId || 'Connected agent'),
-        detail: 'Connected agent',
-        href: buildStudioExternalAgentHref(workspaceId, searchParams, agentId),
-        icon: Link2,
-      });
-    });
-    studioAgentComputers.slice(0, 4).forEach((computer) => {
-      const computerId = readRuntimeAttachmentId(computer);
-      if (!computerId) {
-        return;
-      }
-      links.push({
-        id: `agent-computer:${computerId}`,
-        label: readString(computer.label, computerId || 'Agent Computer'),
-        detail: 'Agent Computer',
-        href: buildStudioAgentComputerHref(workspaceId, searchParams, computerId),
-        icon: Cpu,
-      });
-    });
-    if (links.length === 1) {
-      links.push({
-        id: 'agent-templates',
-        label: 'Agent templates',
-        detail: 'Discover starting points',
-        href: buildMarketplaceCategoryHref(workspaceId, 'agent_template'),
-        icon: Compass,
+        id: 'sage-conversation',
+        label: 'Sage conversation',
+        detail: 'Talk with the main agent',
+        href: chatRoute.href,
+        icon: MessageSquare,
       });
     }
-    return links.slice(0, 10);
-  }, [searchParams, studioAgentComputers, studioAgents, studioConnectedExternalAgents, studioHref, workspaceId]);
+    const tasksRoute = routeManifest.routeIndex.tasks;
+    if (tasksRoute) {
+      links.push({
+        id: 'sage-plans',
+        label: 'Plans and tasks',
+        detail: 'Tasks Sage is helping with',
+        href: tasksRoute.href,
+        icon: ListTodo,
+      });
+    }
+    const memoryRoute = routeManifest.routeIndex.memory;
+    if (memoryRoute) {
+      links.push({
+        id: 'sage-context',
+        label: 'Context',
+        detail: 'Memory and facts Sage can use',
+        href: memoryRoute.href,
+        icon: Brain,
+      });
+    }
+    return links;
+  }, [routeManifest.routeIndex.chat, routeManifest.routeIndex.memory, routeManifest.routeIndex.tasks]);
   const contextRoutes = useMemo(() => {
     if (activeDestinationId === 'sage') {
       return [];
@@ -1467,7 +1604,6 @@ export function WorkstationKernelShell({
     const selectedStudioObjectLevel = studioSelectionLevelFromQuery({
       selectedAgentId: selectedStudioAgentId,
       selectedExternalAgentId: selectedStudioExternalAgentId,
-      selectedAgentComputerId: selectedStudioAgentComputerId,
     });
     setPanelTransitionDirection(selectedStudioObjectLevel ? 'forward' : 'back');
     setPanelStack((current) => {
@@ -1477,7 +1613,7 @@ export function WorkstationKernelShell({
       }
       return currentLevel === 'studio' ? current : ['studio'];
     });
-  }, [activeDestinationId, selectedStudioAgentComputerId, selectedStudioAgentId, selectedStudioExternalAgentId]);
+  }, [activeDestinationId, selectedStudioAgentId, selectedStudioExternalAgentId]);
 
   const isContextRouteActive = (routeId: WorkspaceRouteId): boolean => {
     if (routeId === activeRouteId) {
@@ -1488,15 +1624,17 @@ export function WorkstationKernelShell({
     }
     return false;
   };
-  const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('category'));
+  const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('filter') ?? searchParams.get('category'));
   const activeDiscoverFilter = marketplaceFilter;
+  const activeSettingsSection = searchParams.get('section');
   const activePanelDestinationId: WorkspaceNavDestinationId = activeDestinationId;
   const activePrimaryTabId: PrimaryShellTabId | null = SHELL_PRIMARY_TABS.some((tab) => tab.id === activePanelDestinationId)
     ? activePanelDestinationId as PrimaryShellTabId
     : null;
   const panelLevel = panelStack[panelStack.length - 1] ?? 'root';
+  const visiblePanelLevel: PanelStackLevel = activeDestinationId === 'settings' ? 'settings' : panelLevel;
   const studioAgentDetailActive = activeDestinationId === 'studio' && Boolean(
-    selectedStudioAgentId || selectedStudioExternalAgentId || selectedStudioAgentComputerId,
+    selectedStudioAgentId || selectedStudioExternalAgentId,
   );
   const pushPanelLevel = (level: PanelStackLevel) => {
     setPanelTransitionDirection('forward');
@@ -1516,6 +1654,12 @@ export function WorkstationKernelShell({
     router.push(buildWorkspaceRouteHref(workspaceId, 'studio'));
   };
   const handlePanelBack = () => {
+    if (activeDestinationId === 'settings') {
+      setPanelTransitionDirection('back');
+      setPanelStack(['root']);
+      router.push(chatHref);
+      return;
+    }
     if (studioObjectLevelKind(panelLevel)) {
       clearStudioObjectSelection();
       return;
@@ -1538,11 +1682,24 @@ export function WorkstationKernelShell({
     replacePanelStack(['root']);
     router.push(buildWorkspaceRouteHref(workspaceId, 'applications'));
   };
+  const openHardwarePanel = () => {
+    replacePanelStack(['root']);
+    router.push(hardwareHref);
+  };
+  useEffect(() => {
+    if (activeDestinationId !== 'settings') {
+      return;
+    }
+    setPanelTransitionDirection('forward');
+    setPanelStack(['settings']);
+  }, [activeDestinationId]);
   const titlebarNavigation = activeDestinationId === 'sage'
     ? null
     : activeDestinationId === 'marketplace'
       ? null
     : activeDestinationId === 'studio'
+      ? null
+    : activeDestinationId === 'settings'
       ? null
     : activeDestinationId === 'applications'
       ? APPLICATION_TITLEBAR_TABS.map((tab) => (
@@ -1644,14 +1801,16 @@ export function WorkstationKernelShell({
         ) : null}
 
         {!panelCollapsed ? (
-        <div className="workstation-shell-left-panel__inner" data-panel-level={panelLevel}>
+        <div className="workstation-shell-left-panel__inner" data-panel-level={visiblePanelLevel}>
           <ShellPanelHeader
-            level={panelLevel}
-            title={panelLevel === 'studio'
+            level={visiblePanelLevel}
+            title={visiblePanelLevel === 'studio'
               ? 'Studio'
-              : panelLevel === 'discover'
+              : visiblePanelLevel === 'discover'
               ? 'Discover'
-              : studioObjectLevelKind(panelLevel)
+              : visiblePanelLevel === 'settings'
+              ? 'Settings'
+              : studioObjectLevelKind(visiblePanelLevel)
               ? activeStudioAgentName
               : 'Empyralis'}
             onBack={handlePanelBack}
@@ -1659,77 +1818,73 @@ export function WorkstationKernelShell({
           />
 
           <div
-            key={panelLevel}
+            key={visiblePanelLevel}
             className="workstation-shell-left-panel__content"
             data-panel-direction={panelTransitionDirection}
           >
-            {panelLevel === 'root' ? (
+            {visiblePanelLevel === 'root' ? (
               <RootPanelContent
+                activeDestinationId={activeDestinationId}
                 onOpenAssistant={openAssistantPanel}
                 onOpenApps={openApplicationsPanel}
                 onOpenStudio={openStudioPanel}
                 onOpenDiscover={openDiscoverPanel}
+                onOpenHardware={openHardwarePanel}
               />
-            ) : panelLevel === 'assistant' ? (
+            ) : visiblePanelLevel === 'assistant' ? (
               <AssistantPanelContent
                 chatHref={chatHref}
                 client={services.client}
+                activeRouteId={activeRouteId}
                 navigationItems={sageSidebarLinks}
-                projectLinks={sageProjectLinks}
+                contextLinks={sageContextLinks}
                 setupItems={sageSetupLinks}
                 workspaceId={workspaceId}
               />
-            ) : panelLevel === 'studio' ? (
+            ) : visiblePanelLevel === 'studio' ? (
               <StudioPanelContent
                 agents={studioAgents}
                 connectedExternalAgents={studioConnectedExternalAgents}
-                agentComputers={studioAgentComputers}
                 selectedAgentId={selectedStudioAgentId}
                 selectedExternalAgentId={selectedStudioExternalAgentId}
-                selectedAgentComputerId={selectedStudioAgentComputerId}
+                selectedExternalSubAgentId={selectedStudioExternalSubAgentId}
                 isAgentListPriming={isStudioAgentListPriming}
                 isAgentListUnavailable={isStudioAgentListUnavailable}
                 searchParams={searchParams}
                 onPushAgentDetail={(agentId) => pushPanelLevel(`agent:${agentId}`)}
                 onPushExternalAgentDetail={(agentId) => pushPanelLevel(`external-agent:${agentId}`)}
-                onPushAgentComputerDetail={(computerId) => pushPanelLevel(`agent-computer:${computerId}`)}
                 workspaceId={workspaceId}
               />
-            ) : panelLevel === 'discover' ? (
+            ) : visiblePanelLevel === 'discover' ? (
               <DiscoverPanelContent
                 activeFilter={activeDiscoverFilter}
                 workspaceId={workspaceId}
               />
-            ) : panelLevel.startsWith('agent:') ? (
+            ) : visiblePanelLevel === 'settings' ? (
+              <SettingsPanelContent
+                activeSection={activeSettingsSection}
+                settingsHref={settingsHref}
+              />
+            ) : visiblePanelLevel.startsWith('agent:') ? (
               <StudioObjectDetailPanelContent
                 activeTab={activeAgentDetailTab}
                 items={AGENT_DETAIL_NAV_ITEMS}
                 buildHref={(tabId) => buildStudioAgentTabHref(
                   workspaceId,
                   searchParams,
-                  panelLevel.slice('agent:'.length),
+                  visiblePanelLevel.slice('agent:'.length),
                   tabId,
                 )}
               />
-            ) : panelLevel.startsWith('external-agent:') ? (
+            ) : visiblePanelLevel.startsWith('external-agent:') ? (
               <StudioObjectDetailPanelContent
                 activeTab={activeExternalAgentDetailTab}
                 items={activeExternalAgentDetailTabs}
                 buildHref={(tabId) => buildStudioExternalAgentTabHref(
                   workspaceId,
                   searchParams,
-                  panelLevel.slice('external-agent:'.length),
+                  visiblePanelLevel.slice('external-agent:'.length),
                   tabId,
-                )}
-              />
-            ) : panelLevel.startsWith('agent-computer:') ? (
-              <StudioObjectDetailPanelContent
-                activeTab="overview"
-                items={AGENT_COMPUTER_DETAIL_NAV_ITEMS}
-                buildHref={() => buildStudioAgentComputerHref(
-                  workspaceId,
-                  searchParams,
-                  panelLevel.slice('agent-computer:'.length),
                 )}
               />
             ) : (
@@ -1743,7 +1898,7 @@ export function WorkstationKernelShell({
             <ShellAccountBlock
               displayName={accountDisplayName}
               email={accountEmail}
-              planLabel={accountPlanLabel}
+              roleLabel={accountRoleLabel}
               creditsHref={creditsHref}
               settingsHref={settingsHref}
             />
@@ -1777,13 +1932,14 @@ export function WorkstationKernelShell({
               <>
                 <WorkstationHardwareStatus
                   runtimeTargets={bootstrap.runtime.runtimeTargets}
-                  settingsHref={settingsHref}
+                  hardwareHref={hardwareHref}
                 />
                 {activeDestinationId === 'studio' ? (
                   <Link
                     href={buildStudioCreateAgentHref(workspaceId, searchParams)}
                     className="workstation-titlebar__link"
                     title="Add Business Agent"
+                    aria-label="Add agent"
                   >
                     <Plus size={16} aria-hidden="true" />
                     <span>Add agent</span>

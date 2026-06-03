@@ -2,8 +2,9 @@
   box-sizing: border-box;
   min-height: 0;
   height: 100%;
-  padding: var(--app-space-6);
+  padding: var(--app-space-6) clamp(28px, 4vw, 56px);
   overflow: auto;
+  overflow-x: hidden;
   background: var(--app-bg-page);
   color: var(--app-text-primary);
 }
@@ -75,8 +76,8 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 128px));
-  gap: 26px 22px;
+  grid-template-columns: repeat(auto-fill, minmax(86px, 104px));
+  gap: 18px 16px;
   align-items: start;
   justify-content: start;
 }
@@ -84,6 +85,419 @@
 .appsSection {
   display: grid;
   gap: var(--app-space-5);
+}
+
+.launcherSection {
+  display: grid;
+  gap: var(--app-space-3);
+}
+
+.launcherSectionHeader {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+}
+
+.launcherSectionHeader > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.launcherSectionHeader span {
+  min-width: 28px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 999px;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-11);
+  font-weight: var(--app-weight-semibold);
+}
+
+.appsFeedShell {
+  display: grid;
+  gap: var(--app-space-3);
+  max-width: 880px;
+  margin-left: clamp(20px, 2.6vw, 40px);
+  margin-right: auto;
+}
+
+.appsFeedHeader {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--app-space-4);
+  min-height: 40px;
+}
+
+.appsFeedTitleBlock {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.appsFeedTitle {
+  margin: 0;
+  color: var(--app-text-primary);
+  font-family: var(--app-font-heading);
+  font-size: 24px;
+  font-weight: var(--app-weight-bold);
+  letter-spacing: 0;
+  line-height: 1.1;
+}
+
+.launcherCreateButton {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 68%, transparent);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--app-text-primary);
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.launcherCreateButton:hover,
+.launcherCreateButton:focus-visible {
+  border-color: var(--app-border-strong);
+  background: var(--app-bg-panel-elevated);
+}
+
+.launcherCreateButton svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.2;
+}
+
+.createAppPanel,
+.settingsPanel {
+  box-sizing: border-box;
+  width: min(100%, 980px);
+  min-width: 0;
+  display: grid;
+  gap: var(--app-space-4);
+  max-width: 980px;
+  padding: var(--app-space-5);
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 62%, transparent);
+  border-radius: 8px;
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
+  overflow: hidden;
+}
+
+.settingsPanel {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  align-content: start;
+  padding: clamp(28px, 4vw, 64px) clamp(28px, 7vw, 112px);
+  border: 0;
+  border-radius: 0;
+  background:
+    radial-gradient(circle at 78% 16%,
+      color-mix(in srgb, var(--app-bg-panel-elevated) 70%, transparent) 0,
+      transparent 34%),
+    var(--app-bg-page);
+  box-shadow: none;
+  overflow: auto;
+}
+
+.settingsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-4);
+}
+
+.settingsHeader > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.settingsTitle {
+  margin: 0;
+  overflow: hidden;
+  color: var(--app-text-primary);
+  font-family: var(--app-font-heading);
+  font-size: 20px;
+  font-weight: var(--app-weight-bold);
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settingsGrid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr);
+  gap: var(--app-space-3);
+  align-items: end;
+}
+
+.blueprintSummary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--app-space-3);
+  padding: var(--app-space-3);
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--app-surface-inset) 58%, transparent);
+}
+
+.publicationActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 8px;
+  background: var(--app-bg-panel-elevated);
+}
+
+.statusPill {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-surface-inset) 72%, transparent);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-11);
+  font-weight: var(--app-weight-semibold);
+}
+
+.toggleList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.toggleRow {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 8px;
+  background: var(--app-surface-panel);
+  color: var(--app-text-primary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+}
+
+.toggleRow input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--app-text-primary);
+}
+
+.iconButton {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 8px;
+  background: var(--app-bg-panel-elevated);
+  color: var(--app-text-secondary);
+  cursor: pointer;
+}
+
+.iconButton svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.1;
+}
+
+.createAppIntro {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--app-space-4);
+}
+
+.formGrid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--app-space-3);
+}
+
+.textArea {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: var(--app-radius-md);
+  background: var(--app-bg-panel-elevated);
+  color: var(--app-text-primary);
+  font: inherit;
+  font-weight: var(--app-weight-medium);
+  line-height: 1.45;
+  outline: none;
+}
+
+.textArea:focus {
+  border-color: var(--app-border-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-accent-soft) 64%, transparent);
+}
+
+.visibilityField {
+  min-width: 0;
+  display: grid;
+  gap: var(--app-space-2);
+  padding: 0;
+  border: 0;
+}
+
+.visibilityField legend {
+  padding: 0;
+  color: var(--app-text-primary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+}
+
+.visibilityToggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  width: min(100%, 320px);
+  padding: 3px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 8px;
+  background: var(--app-surface-inset);
+}
+
+.visibilityOption,
+.visibilityOptionActive {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-text-secondary);
+  font: inherit;
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+  cursor: pointer;
+}
+
+.visibilityOptionActive {
+  background: var(--app-bg-panel-elevated);
+  color: var(--app-text-primary);
+  box-shadow: var(--app-shadow-soft);
+}
+
+.visibilityOption svg,
+.visibilityOptionActive svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2.1;
+}
+
+.feedGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
+  gap: var(--app-space-4);
+  align-items: stretch;
+}
+
+.feedCard {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(58px, auto) auto auto;
+  gap: var(--app-space-3);
+  padding: var(--app-space-4);
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 62%, transparent);
+  border-radius: 8px;
+  background: var(--app-bg-panel);
+  box-shadow: var(--app-shadow-panel);
+}
+
+.feedCardHeader {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--app-space-3);
+}
+
+.feedCardTitleBlock {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.feedCardTitle {
+  margin: 0;
+  overflow: hidden;
+  color: var(--app-text-primary);
+  font-size: var(--app-font-15);
+  font-weight: var(--app-weight-bold);
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feedCardByline,
+.feedCardDescription {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-12);
+  line-height: 1.45;
+}
+
+.feedCardDescription {
+  display: -webkit-box;
+  overflow: hidden;
+  min-height: 52px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.feedCardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.feedCardMeta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 6px;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-11);
+}
+
+.feedCardActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .appsToolbar {
@@ -116,12 +530,12 @@
 
 .appLauncher {
   min-width: 0;
-  min-height: 112px;
+  min-height: 92px;
   display: grid;
   justify-items: center;
   align-content: start;
-  gap: 10px;
-  padding: 8px 6px;
+  gap: 7px;
+  padding: 6px 4px;
   border: 0;
   border-radius: 8px;
   color: var(--app-text-primary);
@@ -131,10 +545,8 @@
 }
 
 .appLauncher:hover .appIcon {
-  opacity: 0.92;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 44%, transparent),
-    0 14px 28px color-mix(in srgb, var(--app-text-primary) 14%, transparent);
+  opacity: 0.9;
+  box-shadow: none;
 }
 
 .appLauncher:focus-visible .appIcon {
@@ -143,27 +555,25 @@
 }
 
 .appIcon {
-  width: 76px;
-  height: 76px;
+  width: 60px;
+  height: 60px;
   display: grid;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 64%, transparent);
-  border-radius: 18px;
+  border-radius: 14px;
   background:
     linear-gradient(180deg,
       color-mix(in srgb, var(--app-bg-panel-elevated) 92%, white 8%),
       color-mix(in srgb, var(--app-surface-inset) 42%, var(--app-bg-panel) 58%));
   color: var(--app-text-primary);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 44%, transparent),
-    0 12px 24px color-mix(in srgb, var(--app-text-primary) 12%, transparent);
+  box-shadow: none;
   overflow: hidden;
   transition: opacity 140ms ease, box-shadow 140ms ease, outline-color 140ms ease;
 }
 
 .appIcon svg {
-  width: 31px;
-  height: 31px;
+  width: 25px;
+  height: 25px;
   stroke-width: 1.9;
 }
 
@@ -175,7 +585,7 @@
 }
 
 .appIcon > span {
-  font-size: var(--app-font-20);
+  font-size: var(--app-font-17);
   font-weight: var(--app-weight-bold);
   letter-spacing: 0;
 }
@@ -205,33 +615,32 @@
   width: 100%;
   overflow: hidden;
   color: var(--app-text-primary);
-  font-size: var(--app-font-13);
+  font-size: var(--app-font-12);
   font-weight: var(--app-weight-semibold);
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.appStatus {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-11);
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .appDetailAction {
-  position: absolute;
-  top: 2px;
-  right: 8px;
-  z-index: 1;
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--app-border-muted) 56%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--app-bg-panel-elevated) 92%, transparent);
-  color: var(--app-text-secondary);
-  opacity: 0;
-  box-shadow: var(--app-shadow-soft);
-  transition: opacity 140ms ease, background 140ms ease, color 140ms ease;
+  display: none;
 }
 
 .appTile:hover .appDetailAction,
-.appTile:focus-within .appDetailAction {
+.appTile:focus-within .appDetailAction,
+.feedCard:hover .appDetailAction,
+.feedCard:focus-within .appDetailAction {
   opacity: 1;
 }
 
@@ -325,13 +734,28 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   min-height: 40px;
   padding: 0 16px;
   border: 1px solid var(--app-border-strong);
   border-radius: 8px;
   background: var(--app-bg-panel-elevated);
   color: var(--app-text-primary);
+  font: inherit;
   font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.linkButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.linkButton svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.1;
 }
 
 .linkSecondary {
@@ -402,11 +826,17 @@
 }
 
 .privateAppForm {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   display: grid;
   gap: var(--app-space-3);
 }
 
 .fieldLabel {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   display: grid;
   gap: var(--app-space-2);
   color: var(--app-text-primary);
@@ -415,6 +845,9 @@
 }
 
 .textInput {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   width: 100%;
   min-height: 46px;
   padding: 0 14px;
@@ -486,6 +919,7 @@
   font: inherit;
   font-weight: 650;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .primaryAction:disabled,
@@ -517,6 +951,33 @@
 .primaryAction:hover,
 .secondaryAction:hover {
   transform: translateY(-1px);
+}
+
+@media (max-width: 720px) {
+  .shell {
+    padding: var(--app-space-4);
+  }
+
+  .appsFeedShell {
+    margin-left: 0;
+  }
+
+  .appsFeedHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .feedGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .installedEmpty {
@@ -943,5 +1404,61 @@
 
   .frame {
     min-height: 64vh;
+  }
+}
+
+/* Focused application settings layer.
+   This intentionally stays on the Applications surface: the launcher remains
+   the base view, while per-app settings become a temporary focused layer. */
+.settingsPanel {
+  --apps-left-rail-space: clamp(18rem, 30vw, 29rem);
+  position: fixed;
+  z-index: 80;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--apps-left-rail-space);
+  transform: none;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  overflow: auto;
+  align-content: start;
+  padding: clamp(2rem, 4vw, 4rem);
+  border: 0;
+  border-radius: 0;
+  background: var(--app-bg-page);
+  box-shadow: none;
+}
+
+.settingsPanel::-webkit-scrollbar {
+  width: 0.5rem;
+}
+
+.settingsPanel::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(35, 31, 25, 0.18);
+}
+
+@media (max-width: 720px) {
+  .settingsPanel {
+    --apps-left-rail-space: 0px;
+    left: 0;
+    width: auto;
+    max-width: none;
+    max-height: none;
+    padding: 1.25rem;
+    border-radius: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .blueprintSummary {
+    grid-template-columns: 1fr;
+  }
+
+  .publicationActions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

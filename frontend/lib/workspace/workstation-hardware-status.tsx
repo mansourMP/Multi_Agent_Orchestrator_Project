@@ -193,15 +193,15 @@ function hardwareLabelForAttachment(attachment: HardwareAttachment): string {
 
   const os = inferredOsForAttachment(attachment);
   if (os === 'darwin') {
-    return 'This Mac';
+    return 'Agent Computer';
   }
   if (os === 'win32' || os.includes('windows')) {
-    return 'Windows PC';
+    return 'Agent Computer';
   }
   if (os.includes('linux')) {
-    return 'Linux';
+    return 'Agent Computer';
   }
-  return 'This Device';
+  return 'Agent Computer';
 }
 
 function iconForAttachment(attachment: HardwareAttachment | null, target: WorkspaceBootstrapRuntimeTarget | null): LucideIcon {
@@ -300,6 +300,9 @@ function topbarStateLabel(summary: HardwareSummary): string {
 }
 
 function lowerHardwareLabel(label: string): string {
+  if (label === 'Agent Computer') {
+    return 'Agent Computer';
+  }
   if (label === 'This Mac') {
     return 'this Mac';
   }
@@ -311,23 +314,23 @@ function lowerHardwareLabel(label: string): string {
 
 function hardwareUsageMessage(summary: HardwareSummary): string {
   if (summary.status === 'online') {
-    return `Empyralis is using ${lowerHardwareLabel(summary.label)} through Gateway and Supervisor.`;
+    return `Empyralis is using ${lowerHardwareLabel(summary.label)} through Agent Computer connection and local execution.`;
   }
   if (summary.status === 'degraded') {
-    return `${summary.label} is connected, but Gateway or Supervisor needs attention.`;
+    return `${summary.label} is connected, but its connection or local execution needs attention.`;
   }
   if (summary.status === 'offline') {
-    return `${summary.label} is connected to this workspace, but Gateway and Supervisor are not available right now.`;
+    return `${summary.label} is connected to this workspace, but its connection and local execution are not available right now.`;
   }
-  return summary.detail || 'Computer status is managed by Gateway and Supervisor.';
+  return summary.detail || 'Computer status is managed by Agent Computer connection and local execution.';
 }
 
 export function WorkstationHardwareStatus({
   runtimeTargets,
-  settingsHref,
+  hardwareHref,
 }: {
   runtimeTargets: WorkspaceBootstrapRuntimeTarget[];
-  settingsHref: string;
+  hardwareHref: string;
 }) {
   const services = useWorkspaceServices();
   const [attachments, setAttachments] = useState<HardwareAttachment[]>([]);
@@ -389,7 +392,6 @@ export function WorkstationHardwareStatus({
     () => buildSummary(selectedAttachment, selectedTarget, error),
     [error, selectedAttachment, selectedTarget],
   );
-  const settingsUrl = `${settingsHref}${settingsHref.includes('?') ? '&' : '?'}section=devices`;
   const StatusIcon = summary.icon;
   const stateLabel = topbarStateLabel(summary);
 
@@ -411,8 +413,6 @@ export function WorkstationHardwareStatus({
       >
         <span className="workstation-hardware-status__dot" aria-hidden="true" />
         <StatusIcon size={14} aria-hidden="true" />
-        <span className="workstation-hardware-status__label">{summary.label}</span>
-        <span className="workstation-hardware-status__state">{stateLabel}</span>
       </button>
 
       {open ? (
@@ -444,12 +444,12 @@ export function WorkstationHardwareStatus({
           {error ? <p className="workstation-hardware-status__notice">{error}</p> : null}
 
           <Link
-            href={settingsUrl}
+            href={hardwareHref}
             className="workstation-hardware-status__settings"
             onClick={() => setOpen(false)}
           >
             <Settings size={14} aria-hidden="true" />
-            <span>Agent Computer settings</span>
+            <span>Manage hardware</span>
           </Link>
         </section>
       ) : null}

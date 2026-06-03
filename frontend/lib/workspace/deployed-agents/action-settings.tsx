@@ -29,7 +29,7 @@ export function AgentActionCapabilitySections({
         <div className="studio-actions__summary-copy">
           <span>Allowed actions</span>
           <strong>{readySkills.length} workflows ready</strong>
-          <p>Playbooks are the customer-facing workflows. Tools are the permissions those workflows can call.</p>
+          <p>Playbooks are the customer-facing workflows. Action permissions decide which systems those workflows can use.</p>
         </div>
         <div className="studio-actions__summary-stats" aria-label="Action readiness">
           <div>
@@ -42,7 +42,7 @@ export function AgentActionCapabilitySections({
           </div>
           <div>
             <strong>{selectedToolIds.length}</strong>
-            <span>Tools on</span>
+            <span>Actions on</span>
           </div>
         </div>
       </div>
@@ -75,10 +75,10 @@ export function AgentActionCapabilitySections({
           })}
         </div>
       </section>
-      <section className="studio-actions__section" aria-label="Tool permissions">
+      <section className="studio-actions__section" aria-label="Action permissions">
         <div className="studio-actions__section-head">
           <div>
-            <span>Tools</span>
+            <span>Actions</span>
             <strong>Actions this Business Agent is allowed to use</strong>
           </div>
           <div className="studio-actions__section-head-actions">
@@ -86,7 +86,7 @@ export function AgentActionCapabilitySections({
             {onOpenIntegrations ? (
               <button type="button" className="studio-actions__link-button" onClick={onOpenIntegrations}>
                 <Plus aria-hidden="true" />
-                Add tool
+                Add action
               </button>
             ) : null}
           </div>

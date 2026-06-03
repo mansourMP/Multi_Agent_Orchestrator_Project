@@ -1,21 +1,32 @@
 'use client';
 
 import Link from 'next/link';
-import { CSSProperties, ReactNode, useLayoutEffect, useRef, useState } from 'react';
-import gsap from 'gsap';
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import Lenis from 'lenis';
+import { ReactLenis, useLenis } from 'lenis/react';
 import {
-  Bot,
-  Compass,
+  Activity,
+  Brain,
+  Cloud,
+  CodeXml,
   Cpu,
-  Layers,
-  Network,
-  Package,
+  Database,
+  FileStack,
+  Globe2,
+  LockKeyhole,
+  Mail,
+  MessageCircle,
   PlugZap,
+  Server,
   ShieldCheck,
+  Smartphone,
+  SquareTerminal,
   Workflow,
+  type LucideIcon,
 } from 'lucide-react';
+
+type SceneKey = 'origin' | 'channels' | 'agents' | 'execution' | 'memory' | 'governance';
 
 type LandingClientProps = {
   accountHref: string;
@@ -25,243 +36,353 @@ type LandingClientProps = {
   finalCtaLabel: string;
 };
 
-type BentoTiltProps = {
-  children: ReactNode;
-  className?: string;
-  style?: CSSProperties;
+type Scene = {
+  key: SceneKey;
+  eyebrow: string;
+  title: string;
+  body: string;
 };
 
-const BentoTilt = ({ children, className = '', style }: BentoTiltProps) => {
-  const [transformStyle, setTransformStyle] = useState('');
-  const itemRef = useRef<HTMLDivElement>(null);
+type FloatingNode = {
+  label: string;
+  detail?: string;
+  icon: LucideIcon;
+};
 
-  const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!itemRef.current) return;
-    const { left, top, width, height } = itemRef.current.getBoundingClientRect();
-    const relativeX = (event.clientX - left) / width;
-    const relativeY = (event.clientY - top) / height;
-    const tiltX = (relativeY - 0.5) * 8;
-    const tiltY = (relativeX - 0.5) * -8;
+const scenes: Scene[] = [
+  {
+    key: 'origin',
+    eyebrow: 'Empyralis Agent OS',
+    title: 'One command room for serious agents.',
+    body: 'Sage sits at the center while channels, external agents, memory, local computers, cloud runners, and governance move around one controlled platform.',
+  },
+  {
+    key: 'channels',
+    eyebrow: 'Channels enter the room',
+    title: 'Every conversation flows into one main agent.',
+    body: 'Telegram, Discord, WhatsApp, Slack, email, web chat, and API events become one observable routing layer instead of disconnected inboxes.',
+  },
+  {
+    key: 'agents',
+    eyebrow: 'Bring your own agents',
+    title: 'External agents plug into the same control surface.',
+    body: 'OpenClaw-style gateways, MCP servers, A2A workers, custom HTTP agents, and local automations can be governed inside Empyralis.',
+  },
+  {
+    key: 'execution',
+    eyebrow: 'Local + cloud execution',
+    title: 'Real computers and cloud runners become safe agent workspaces.',
+    body: 'Agents can operate browsers, files, apps, terminals, local machines, VPS runners, and cloud jobs through the same execution policy.',
+  },
+  {
+    key: 'memory',
+    eyebrow: 'Permissioned memory',
+    title: 'The platform remembers with boundaries.',
+    body: 'Profile, episodic, operational, specialist, local-private, and cloud-synced memory stay scoped, inspectable, and useful.',
+  },
+  {
+    key: 'governance',
+    eyebrow: 'Enterprise control',
+    title: 'Autonomy is wrapped in approvals, audit, and policy.',
+    body: 'Risk gates, sandboxed execution, brokered secrets, diagnostics export, and audit streams make the agent workforce controllable.',
+  },
+];
 
-    setTransformStyle(`perspective(1000px) rotateX(${tiltX}deg) rotateY(${tiltY}deg) scale3d(1.02, 1.02, 1.02)`);
-  };
+const channelNodes = [
+  { key: 'telegram', label: 'Telegram' },
+  { key: 'discord', label: 'Discord' },
+  { key: 'whatsapp', label: 'WhatsApp' },
+  { key: 'slack', label: 'Slack' },
+  { key: 'email', label: 'Email' },
+  { key: 'web', label: 'Web Chat' },
+] as const;
 
+const agentNodes: FloatingNode[] = [
+  { label: 'OpenClaw', detail: 'gateway', icon: PlugZap },
+  { label: 'MCP', detail: 'servers', icon: CodeXml },
+  { label: 'A2A', detail: 'workers', icon: Workflow },
+  { label: 'Custom', detail: 'agents', icon: Globe2 },
+];
+
+const executionNodes: FloatingNode[] = [
+  { label: 'Local Mac', detail: 'private computer', icon: Cpu },
+  { label: 'VPS', detail: 'remote runner', icon: Server },
+  { label: 'Cloud', detail: 'control plane', icon: Cloud },
+  { label: 'Terminal', detail: 'browser/files/apps', icon: SquareTerminal },
+];
+
+const memoryNodes: FloatingNode[] = [
+  { label: 'Profile', detail: 'identity', icon: Database },
+  { label: 'Episodic', detail: 'history', icon: Brain },
+  { label: 'Local Private', detail: 'device only', icon: LockKeyhole },
+  { label: 'Operational', detail: 'active work', icon: Activity },
+];
+
+const governanceNodes: FloatingNode[] = [
+  { label: 'Approval', detail: 'gates', icon: ShieldCheck },
+  { label: 'Audit', detail: 'stream', icon: Activity },
+  { label: 'Sandbox', detail: 'runtime', icon: SquareTerminal },
+  { label: 'Diagnostics', detail: 'export', icon: FileStack },
+];
+
+function BrandIcon({ name }: { name: (typeof channelNodes)[number]['key'] }) {
+  if (name === 'telegram') {
+    return (
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <path d="M34.8 8.1 6.2 19.3c-1.7.7-1.7 3.1.1 3.6l6.9 2.1 2.7 8.1c.5 1.6 2.6 1.8 3.5.5l4.2-5.9 7 5.1c1.4 1 3.2.2 3.6-1.5l4.2-21.1c.3-1.5-1.8-2.9-3.6-2.1Zm-18.9 15 13.5-8.5-10.5 11-.6 4.4-1.9-5.9-.5-1Z" />
+      </svg>
+    );
+  }
+
+  if (name === 'discord') {
+    return (
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <path d="M12.4 11.2c4.9-2.3 10.1-2.3 15.2 0 3.5 5 4.7 10.4 4.2 15.7-3.2 2.4-6.2 3.8-9.3 4.2l-1.1-2.2c1.8-.5 3.4-1.3 4.8-2.3-4.2 2-8.2 2-12.4 0 1.4 1 3 1.8 4.8 2.3l-1.1 2.2c-3.1-.5-6.1-1.9-9.3-4.2-.5-6.1 1-11.3 4.2-15.7Zm4.1 10.6c1.1 0 2-1 2-2.2s-.9-2.2-2-2.2-2 1-2 2.2.9 2.2 2 2.2Zm7 0c1.1 0 2-1 2-2.2s-.9-2.2-2-2.2-2 1-2 2.2.9 2.2 2 2.2Z" />
+      </svg>
+    );
+  }
+
+  if (name === 'whatsapp') {
+    return (
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <path d="M20 5.2A14 14 0 0 0 8.2 26.8l-1.9 7.8 8-1.9A14 14 0 1 0 20 5.2Zm8.1 20.2c-.4 1.1-2.2 2.1-3.2 2.3-.8.1-1.9.2-3-.2-2.7-.9-5.2-2.5-7.2-4.8-1.9-2-3.2-4.4-3.7-6.4-.4-1.4 0-2.6.6-3.4.5-.6 1-.8 1.4-.8h1c.4 0 .8.1 1 .8.3.9 1.1 2.7 1.2 2.9.2.3.2.6 0 1l-.8 1.1c-.3.3-.4.6-.1 1 .5 1 1.2 1.9 2.1 2.7 1 .9 2.1 1.5 3.2 1.9.4.1.8.1 1-.2l1.3-1.5c.3-.4.7-.4 1.1-.3.4.1 2.7 1.3 3.2 1.5.5.3.8.4.8.7.2.3.2 1-.1 1.7Z" />
+      </svg>
+    );
+  }
+
+  if (name === 'slack') {
+    return (
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <path d="M15.4 6.3a3.1 3.1 0 0 1 6.2 0v6.4a3.1 3.1 0 0 1-6.2 0V6.3Zm9.1 9.1h6.4a3.1 3.1 0 0 1 0 6.2h-6.4a3.1 3.1 0 0 1 0-6.2Zm-9.1 11.9a3.1 3.1 0 1 1 6.2 0v6.4a3.1 3.1 0 0 1-6.2 0v-6.4ZM6.3 15.4h6.4a3.1 3.1 0 0 1 0 6.2H6.3a3.1 3.1 0 0 1 0-6.2Zm18.2-5.9A3.1 3.1 0 1 1 30.7 12v.7h-6.2V9.5Zm6.2 15v.7a3.1 3.1 0 1 1-6.2-3.1v-3.8h3.1a3.1 3.1 0 0 1 3.1 3.1v3.1ZM9.5 24.5h6.2v6.2H15a3.1 3.1 0 0 1-5.5-2v-4.2Zm0-9v-.5a3.1 3.1 0 1 1 6.2-2.3v2.8H9.5Z" />
+      </svg>
+    );
+  }
+
+  if (name === 'email') return <Mail aria-hidden="true" />;
+  return <MessageCircle aria-hidden="true" />;
+}
+
+function SparkMark() {
   return (
-    <div
-      ref={itemRef}
-      className={`bento-tilt ${className}`}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={() => setTransformStyle('')}
-      style={{
-        ...style,
-        transform: transformStyle,
-        transition: transformStyle ? 'none' : 'transform 0.5s ease',
-      }}
-    >
-      {children}
+    <svg className="spark-mark" viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M32 5 38.4 24.4 59 32 38.4 39.6 32 59 25.6 39.6 5 32 25.6 24.4 32 5Z" />
+      <circle cx="32" cy="32" r="6.5" />
+    </svg>
+  );
+}
+
+function PlatformRoom({ activeScene }: { activeScene: SceneKey }) {
+  return (
+    <div className="cinema-stage__world" data-active-scene={activeScene} aria-hidden="true">
+      <div className="room">
+        <div className="room__back" />
+        <div className="room__floor" />
+        <div className="room__left" />
+        <div className="room__right" />
+        <div className="room__light room__light--blue" />
+        <div className="room__light room__light--violet" />
+      </div>
+
+      <svg className="signal-web" viewBox="0 0 1200 760">
+        <defs>
+          <linearGradient id="signalGradient" x1="0%" x2="100%" y1="0%" y2="0%">
+            <stop offset="0%" stopColor="#60a5fa" />
+            <stop offset="50%" stopColor="#22d3ee" />
+            <stop offset="100%" stopColor="#a78bfa" />
+          </linearGradient>
+        </defs>
+        <ellipse className="signal-ring signal-ring--one" cx="600" cy="380" rx="236" ry="84" />
+        <ellipse className="signal-ring signal-ring--two" cx="600" cy="380" rx="344" ry="132" />
+        <ellipse className="signal-ring signal-ring--three" cx="600" cy="380" rx="462" ry="188" />
+        <path id="pathA" className="signal-path" d="M160 402 C340 250 486 262 600 380 C732 516 894 540 1040 406" />
+        <path id="pathB" className="signal-path signal-path--soft" d="M232 205 C426 252 496 316 600 380 C728 458 868 340 992 204" />
+        <path id="pathC" className="signal-path signal-path--soft" d="M246 586 C406 450 500 420 600 380 C748 316 878 400 1030 570" />
+        <circle className="signal-dot signal-dot--one" r="7">
+          <animateMotion dur="6.4s" repeatCount="indefinite" href="#pathA" />
+        </circle>
+        <circle className="signal-dot signal-dot--two" r="5">
+          <animateMotion dur="7.8s" begin="0.9s" repeatCount="indefinite" href="#pathB" />
+        </circle>
+        <circle className="signal-dot signal-dot--three" r="6">
+          <animateMotion dur="8.2s" begin="1.7s" repeatCount="indefinite" href="#pathC" />
+        </circle>
+      </svg>
+
+      <div className="sage-core">
+        <div className="sage-core__halo" />
+        <div className="sage-core__orb">
+          <SparkMark />
+          <strong>Sage</strong>
+          <span>Main agent</span>
+        </div>
+        <div className="sage-core__shadow" />
+      </div>
+
+      <div className={`scene-layer scene-layer--channels ${activeScene === 'channels' ? 'is-active' : ''}`}>
+        {channelNodes.map((node, index) => (
+          <div className={`brand-orb brand-orb--${node.key}`} style={{ '--i': index } as CSSProperties} key={node.key}>
+            <BrandIcon name={node.key} />
+            <span>{node.label}</span>
+          </div>
+        ))}
+      </div>
+
+      <NodeLayer className="scene-layer--agents" active={activeScene === 'agents'} nodes={agentNodes} />
+      <ExecutionLayer active={activeScene === 'execution'} />
+      <NodeLayer className="scene-layer--memory" active={activeScene === 'memory'} nodes={memoryNodes} />
+      <NodeLayer className="scene-layer--governance" active={activeScene === 'governance'} nodes={governanceNodes} />
     </div>
   );
-};
+}
 
-export function LandingClient({
-  accountHref,
-  accountLabel,
-  primaryHref,
-  primaryLabel,
-  finalCtaLabel,
-}: LandingClientProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
+function NodeLayer({ className, active, nodes }: { className: string; active: boolean; nodes: FloatingNode[] }) {
+  return (
+    <div className={`scene-layer ${className} ${active ? 'is-active' : ''}`}>
+      {nodes.map((node, index) => {
+        const Icon = node.icon;
+        return (
+          <div className="micro-node" style={{ '--i': index } as CSSProperties} key={node.label}>
+            <Icon aria-hidden="true" />
+            <span>{node.label}</span>
+            {node.detail ? <small>{node.detail}</small> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ExecutionLayer({ active }: { active: boolean }) {
+  return (
+    <div className={`scene-layer scene-layer--execution ${active ? 'is-active' : ''}`}>
+      <div className="machine machine--mac">
+        <div className="machine__screen">
+          <i />
+        </div>
+        <div className="machine__base" />
+        <span>Local Mac</span>
+      </div>
+      <div className="machine machine--vps">
+        <div className="rack">
+          <i />
+          <i />
+          <i />
+        </div>
+        <span>VPS Runner</span>
+      </div>
+      <div className="micro-node micro-node--cloud">
+        <Cloud aria-hidden="true" />
+        <span>Cloud</span>
+        <small>control</small>
+      </div>
+      <div className="micro-node micro-node--terminal">
+        <SquareTerminal aria-hidden="true" />
+        <span>Terminal</span>
+        <small>browser/files</small>
+      </div>
+    </div>
+  );
+}
+
+function Caption({ activeScene }: { activeScene: SceneKey }) {
+  const scene = scenes.find((item) => item.key === activeScene) ?? scenes[0];
+  return (
+    <div className="scene-caption" aria-live="polite">
+      <p>{scene.eyebrow}</p>
+      <h1>{scene.title}</h1>
+      <span>{scene.body}</span>
+    </div>
+  );
+}
+
+function LandingExperience({ accountHref, accountLabel, primaryHref, primaryLabel, finalCtaLabel }: LandingClientProps) {
+  const rootRef = useRef<HTMLElement | null>(null);
+  const [activeScene, setActiveScene] = useState<SceneKey>('origin');
+
+  useLenis(() => ScrollTrigger.update());
 
   useLayoutEffect(() => {
     gsap.registerPlugin(ScrollTrigger);
+    const root = rootRef.current;
+    if (!root) return undefined;
 
-    const lenis = new Lenis({
-      duration: 1.2,
-      easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
-      smoothWheel: true,
-    });
-    const raf = (time: number) => lenis.raf(time * 1000);
-    lenis.on('scroll', ScrollTrigger.update);
-    gsap.ticker.add(raf);
-    gsap.ticker.lagSmoothing(0);
+    const context = gsap.context(() => {
+      gsap.fromTo(
+        '.scene-caption > *',
+        { opacity: 0, y: 18 },
+        { opacity: 1, y: 0, duration: 0.85, ease: 'power3.out', stagger: 0.08 },
+      );
 
-    gsap.to('.hero-bg', {
-      scrollTrigger: {
-        trigger: '#hero-container',
-        start: 'top top',
-        end: 'bottom top',
-        scrub: true,
-      },
-      clipPath: 'polygon(5% 5%, 95% 5%, 95% 95%, 5% 95%)',
-      borderRadius: '40px',
-      ease: 'none',
-    });
+      gsap.utils.toArray<HTMLElement>('[data-story-scene]').forEach((step) => {
+        const scene = step.dataset.storyScene as SceneKey | undefined;
+        if (!scene) return;
+        ScrollTrigger.create({
+          trigger: step,
+          start: 'top center',
+          end: 'bottom center',
+          onEnter: () => setActiveScene(scene),
+          onEnterBack: () => setActiveScene(scene),
+        });
+      });
+    }, root);
 
-    gsap.to('.hero-content', {
-      scrollTrigger: {
-        trigger: '#hero-container',
-        start: 'top top',
-        end: 'center top',
-        scrub: true,
-      },
-      opacity: 0,
-      y: -50,
-      scale: 0.95,
-    });
-
-    const timeline = gsap.timeline({
-      scrollTrigger: {
-        trigger: '#horizontal-pin-section',
-        start: 'top top',
-        end: '+=3000',
-        scrub: 1,
-        pin: true,
-      },
-    });
-
-    timeline.to('.horizontal-track', {
-      xPercent: -66.666,
-      ease: 'none',
-    });
-
-    let lastScroll = 0;
-    const nav = document.querySelector('.landing-nav');
-    const handleScroll = () => {
-      const currentScroll = window.scrollY;
-      if (currentScroll <= 0) {
-        nav?.classList.remove('scroll-up');
-        lastScroll = currentScroll;
-        return;
-      }
-      if (currentScroll > lastScroll && !nav?.classList.contains('scroll-down')) {
-        nav?.classList.remove('scroll-up');
-        nav?.classList.add('scroll-down');
-      } else if (currentScroll < lastScroll && nav?.classList.contains('scroll-down')) {
-        nav?.classList.remove('scroll-down');
-        nav?.classList.add('scroll-up');
-      }
-      lastScroll = currentScroll;
-    };
-    window.addEventListener('scroll', handleScroll);
-
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-      lenis.destroy();
-      gsap.ticker.remove(raf);
-      ScrollTrigger.getAll().forEach((trigger) => trigger.kill());
-    };
+    return () => context.revert();
   }, []);
 
   return (
-    <main className="landing-root" ref={containerRef}>
+    <main className="landing-root" data-scene={activeScene} ref={rootRef}>
       <nav className="landing-nav" aria-label="Empyralis public navigation">
-        <Link href="/" className="nav-logo" aria-label="Empyralis home">
-          <span className="nav-logo__mark" />
+        <Link className="nav-logo" href="/" aria-label="Empyralis home">
+          <span className="nav-logo__mark">
+            <SparkMark />
+          </span>
           <span>Empyralis</span>
         </Link>
         <div className="landing-nav__actions">
-          <Link href={accountHref} className="btn btn--secondary">
+          <Link className="landing-button landing-button--quiet" href={accountHref}>
             {accountLabel}
           </Link>
-          <Link href={primaryHref} className="btn btn--primary">
+          <Link className="landing-button landing-button--solid" href={primaryHref}>
             {primaryLabel}
           </Link>
         </div>
       </nav>
 
-      <section id="hero-container" aria-labelledby="landing-hero-title">
-        <div className="hero-bg" />
-        <div className="hero-content">
-          <h1 id="landing-hero-title" className="hero-title">
-            The Operating System <br />
-            for <span>Serious Agents</span>
-          </h1>
-          <p className="hero-subtitle">
-            A unified workspace for building, running, and governing your AI. One central command surface for your
-            personal agent, and a dedicated studio for your workforce.
-          </p>
+      <section className="cinematic-landing" aria-label="Empyralis platform overview">
+        <div className="cinema-stage">
+          <PlatformRoom activeScene={activeScene} />
+          <Caption activeScene={activeScene} />
+          <div className="scroll-cue">Scroll to orbit the platform</div>
+        </div>
+        <div className="story-steps" aria-hidden="true">
+          {scenes.map((scene) => (
+            <article data-story-scene={scene.key} key={scene.key} />
+          ))}
         </div>
       </section>
 
-      <section id="horizontal-pin-section">
-        <div className="horizontal-track">
-          <div className="h-panel h-panel--intro">
-            <BentoTilt className="bento-card bento-card--centered">
-              <h3>Two Core Pillars</h3>
-              <p>Empyralis simplifies AI down to two powerful concepts. Scroll to unpack them.</p>
-              <div className="pillar-pair">
-                <div>
-                  <Bot size={24} color="var(--landing-accent)" />
-                  <strong>The Main Agent</strong>
-                </div>
-                <div>
-                  <Workflow size={24} color="var(--landing-purple)" />
-                  <strong>Agent Studio</strong>
-                </div>
-              </div>
-            </BentoTilt>
-          </div>
-
-          <div className="h-panel h-panel--agent">
-            <BentoTilt className="bento-card bento-card--split">
-              <div>
-                <span className="pillar-label pillar-label--main">PILLAR 01</span>
-                <h3>The Main Agent</h3>
-                <p>
-                  The primary intelligence that owns the user relationship. It acts as your interface to the entire
-                  platform, using layered memory to know how you work.
-                </p>
-                <div className="data-stack">
-                  <div className="data-row"><Layers size={20} color="var(--landing-accent)" /> Total Context & Memory Awareness</div>
-                  <div className="data-row"><Package size={20} color="var(--landing-accent)" /> Bring Your Own Hosted Apps</div>
-                  <div className="data-row"><Network size={20} color="var(--landing-accent)" /> Omnichannel: WhatsApp, Slack, Telegram</div>
-                </div>
-              </div>
-              <div className="feature-tile">
-                <Cpu size={80} color="var(--landing-accent)" />
-                <p>
-                  <strong>Hardware Control</strong>
-                  <span>Run agents securely on your own local Mac mini or cloud instance.</span>
-                </p>
-              </div>
-            </BentoTilt>
-          </div>
-
-          <div className="h-panel h-panel--studio">
-            <BentoTilt className="bento-card bento-card--split">
-              <div>
-                <span className="pillar-label pillar-label--studio">PILLAR 02</span>
-                <h3>Agent Studio</h3>
-                <p>
-                  The control center for your workforce. Build native workers, connect external runtimes, and monitor
-                  production behavior with full transparency.
-                </p>
-                <div className="data-stack">
-                  <div className="data-row"><Workflow size={20} color="var(--landing-purple)" /> Build Native Platform Workers</div>
-                  <div className="data-row"><PlugZap size={20} color="var(--landing-purple)" /> Connect External Agents: OpenClaw, Hermes</div>
-                  <div className="data-row"><ShieldCheck size={20} color="var(--landing-purple)" /> Safety Control Plane & Approvals</div>
-                </div>
-              </div>
-              <div className="feature-tile">
-                <Compass size={80} color="var(--landing-purple)" />
-                <p>
-                  <strong>The Discover Marketplace</strong>
-                  <span>Install pre-built templates, skills, and governed connectors.</span>
-                </p>
-              </div>
-            </BentoTilt>
-          </div>
-        </div>
-      </section>
-
-      <section className="landing-final-cta">
-        <div>
-          <h2>Take control of your agents.</h2>
-          <Link href={primaryHref} className="btn btn--primary btn--large">
-            {finalCtaLabel}
-          </Link>
-        </div>
+      <section className="landing-summary">
+        <p>Investor-ready platform story</p>
+        <h2>Native agents, external agents, channels, memory, execution, and governance in one operating surface.</h2>
+        <Link className="landing-button landing-button--solid landing-button--large" href={primaryHref}>
+          {finalCtaLabel}
+        </Link>
       </section>
     </main>
+  );
+}
+
+export function LandingClient(props: LandingClientProps) {
+  return (
+    <ReactLenis
+      root
+      options={{
+        duration: 1.05,
+        easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+        smoothWheel: true,
+      }}
+    >
+      <LandingExperience {...props} />
+    </ReactLenis>
   );
 }

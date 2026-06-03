@@ -1,10 +1,7 @@
 'use client';
 
 import { memo } from 'react';
-import { MonitorCheck, ShieldCheck } from 'lucide-react';
 
-import { ListDetailPanel } from '@/lib/ui/list-detail';
-import { AppSurfaceStat, AppSurfaceStatGrid } from '@/lib/ui/primitives';
 import { DataBadge } from '@/lib/ui/data-table';
 import type { RuntimeAttachmentSnapshot, StudioAgentComputerSurface } from './types';
 import { AGENT_STUDIO_OBJECT_LABELS } from './constants';
@@ -47,72 +44,57 @@ export const AgentComputerDetailView = memo(({
   const capabilities = Array.isArray(computerValue(computer, 'capabilities'))
     ? computerValue(computer, 'capabilities') as unknown[]
     : [];
+  const capabilityIds = capabilities.map((item) => readString(item).toLowerCase()).filter(Boolean);
+  const ownerApproved = computerValue(computer, 'ownerApproved') === true || computerValue(computer, 'owner_approved') === true;
+  const externalAgentProxyReady = online && healthy && capabilityIds.includes('external_agent_proxy');
+  const externalAgentBridgeLabel = externalAgentProxyReady
+    ? 'Ready'
+    : !online
+      ? 'Agent Computer offline'
+      : !healthy
+        ? 'Needs health check'
+        : 'Local bridge unavailable';
+  const statusTone = online && healthy ? 'success' : 'warning';
 
   return (
-    <div className="app-stack-4 studio-agent-detail-motion">
-      <ListDetailPanel
-        className="studio-panel studio-panel--detail"
-        hideHeaderText
-        eyebrow="Agent Computer"
-        title={name}
-        subtitle="Connected hardware runtime for native or connected agents."
-      >
-        <div className="studio-agent-overview">
-          <div className="studio-agent-overview__readiness-hero">
-            <div className="studio-agent-overview__hero-copy">
-              <div className="studio-agent-overview__state-row">
-                <span className="studio-agent-overview__state-dot" data-tone={online && healthy ? 'live' : 'warning'} />
-                <DataBadge tone={online && healthy ? 'success' : 'warning'}>
-                  {online && healthy ? 'Available' : humanizeToken(status, 'Unknown')}
-                </DataBadge>
-              </div>
-              <h3>{AGENT_STUDIO_OBJECT_LABELS.agent_computer}</h3>
-              <p>Gateway keeps the computer connected. Supervisor executes governed hardware actions for attached agents.</p>
-              <div className="studio-agent-overview__chips">
-                <span>{humanizeToken(nodeKind, 'Runtime')}</span>
-                <span>{online ? 'Online' : 'Offline'}</span>
-                <span>{healthy ? 'Healthy' : 'Needs check'}</span>
-              </div>
-            </div>
-          </div>
-          <AppSurfaceStatGrid>
-            <AppSurfaceStat label="Resource" value={name} hint="Registered runtime resource" />
-            <AppSurfaceStat label="Status" value={humanizeToken(status, 'Unknown')} hint="Runtime-reported state" />
-            <AppSurfaceStat label="Last heartbeat" value={formatOptionalTimestamp(heartbeatAt, 'Not seen')} hint="Last runtime check-in" />
-            <AppSurfaceStat label="Runtime" value="Gateway + Supervisor" hint="The hardware connector and local executor" />
-          </AppSurfaceStatGrid>
-          <ListDetailPanel
-            className="studio-panel studio-panel--detail"
-            eyebrow="Runtime"
-            title="Gateway and Supervisor"
-            subtitle="The hardware details are implementation status, not a menu of things the agent may advertise."
-          >
-            {capabilities.length > 0 ? (
-              <div className="studio-inline-wrap">
-                <DataBadge tone={online ? 'success' : 'neutral'}>Gateway</DataBadge>
-                <DataBadge tone={healthy ? 'success' : 'neutral'}>Supervisor</DataBadge>
-              </div>
-            ) : (
-              <div className="studio-agent-overview__grid">
-                <div className="studio-agent-overview__card">
-                  <div className="studio-agent-overview__card-icon"><MonitorCheck size={15} aria-hidden="true" /></div>
-                  <div>
-                    <strong>Gateway</strong>
-                    <span>Reconnect or refresh the runtime to publish a hardware heartbeat.</span>
-                  </div>
-                </div>
-                <div className="studio-agent-overview__card">
-                  <div className="studio-agent-overview__card-icon"><ShieldCheck size={15} aria-hidden="true" /></div>
-                  <div>
-                    <strong>Supervisor</strong>
-                    <span>Governed hardware execution becomes available after the runtime heartbeat.</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </ListDetailPanel>
+    <div className="studio-agent-computer-compact studio-agent-detail-motion" aria-label="Agent Computer detail">
+      <header className="studio-agent-computer-compact__header">
+        <div>
+          <span>{AGENT_STUDIO_OBJECT_LABELS.agent_computer}</span>
+          <strong>{name}</strong>
         </div>
-      </ListDetailPanel>
+        <DataBadge tone={statusTone}>{online && healthy ? 'Available' : humanizeToken(status, 'Unknown')}</DataBadge>
+      </header>
+
+      <div className="studio-agent-computer-compact__rows">
+        <div>
+          <span>Status</span>
+          <strong>{online ? 'Online' : 'Offline'}</strong>
+        </div>
+        <div>
+          <span>Health</span>
+          <strong>{healthy ? 'Healthy' : 'Needs check'}</strong>
+        </div>
+        <div>
+          <span>Last seen</span>
+          <strong>{formatOptionalTimestamp(heartbeatAt, 'Not seen')}</strong>
+        </div>
+        <div>
+          <span>Bridge</span>
+          <strong>{externalAgentBridgeLabel}</strong>
+        </div>
+      </div>
+
+      <div className="studio-agent-computer-compact__badges">
+        <DataBadge tone={online ? 'success' : 'warning'}>{online ? 'Connected' : 'Offline'}</DataBadge>
+        <DataBadge tone={healthy ? 'success' : 'warning'}>{healthy ? 'Health OK' : 'Needs health check'}</DataBadge>
+        <DataBadge tone={ownerApproved ? 'success' : 'neutral'}>{ownerApproved ? 'Owner approved' : 'Approval pending'}</DataBadge>
+        <DataBadge tone={externalAgentProxyReady ? 'success' : 'warning'}>
+          {externalAgentProxyReady ? 'Bridge ready' : 'Bridge unavailable'}
+        </DataBadge>
+        <DataBadge tone="neutral">{humanizeToken(nodeKind, 'Runtime')}</DataBadge>
+        {capabilities.length > 0 ? <DataBadge tone="neutral">{capabilities.length} capabilities</DataBadge> : null}
+      </div>
     </div>
   );
 });

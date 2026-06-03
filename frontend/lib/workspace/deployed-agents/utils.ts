@@ -110,6 +110,29 @@ export function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
+export function studioAgentDisplayName(agent: DeployedAgentRecord | null | undefined, fallback = 'Business Agent'): string {
+  const rawName = readString(agent?.name);
+  const agentId = readString(agent?.id);
+  const state = readString(agent?.deployment_state).toLowerCase();
+  const normalized = rawName.toLowerCase();
+  const compact = normalized.replace(/[^a-z0-9]/g, '');
+  const looksPlaceholder = !rawName
+    || normalized === 'new agent'
+    || normalized === 'untitled'
+    || normalized === 'untitled agent'
+    || normalized === 'draft'
+    || normalized === 'test'
+    || normalized === 'asdf'
+    || normalized === 'qwerty'
+    || /^agent[-_\s]?\d*$/i.test(rawName)
+    || (/^[a-z]{3,8}$/.test(compact) && !/[aeiou]/.test(compact));
+
+  if (looksPlaceholder && state !== 'live') {
+    return 'Untitled agent';
+  }
+  return rawName || agentId || fallback;
+}
+
 export function readOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -199,7 +222,7 @@ export function normalizeRuntimeAttachments(payload: unknown): RuntimeAttachment
       heartbeatAt: readOptionalString(item.heartbeat_at ?? item.last_seen_at),
       capabilities: normalizeLabelList(item.capabilities),
     }))
-    .filter((item) => item.attachmentKind === 'self_hosted_business_node');
+    .filter((item) => item.attachmentKind === 'self_hosted_business_node' || item.attachmentKind === 'local_companion');
 }
 
 export function selfHostedNodeGateReason(node: RuntimeAttachmentSnapshot | null): string | null {

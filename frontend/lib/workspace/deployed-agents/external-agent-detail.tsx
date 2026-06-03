@@ -281,16 +281,16 @@ function localConnectorStatusLabel(localConnector: Record<string, unknown>): str
 
 function localConnectorStatusHint(localConnector: Record<string, unknown>): string {
   if (!localConnector.required) {
-    return 'Public HTTPS proxy path';
+    return 'Public HTTPS path';
   }
   const state = readString(localConnector.binding_state, 'missing_agent_computer');
   if (state === 'bound' && !localConnector.proxy_available) {
-    return 'Bound, private proxy disabled';
+    return 'Bound, Agent Computer bridge disabled';
   }
   if (readString(localConnector.binding_message)) {
     return readString(localConnector.binding_message);
   }
-  return 'Private endpoints require Agent Computer';
+  return 'Local runtimes require an approved Agent Computer bridge';
 }
 
 export const ConnectedExternalAgentDetailView = memo(({
@@ -457,6 +457,10 @@ export const ConnectedExternalAgentDetailView = memo(({
   async function sendPrivateChatTurn() {
     const message = messageDraft.trim();
     if (!externalAgentId || !message || isSending) {
+      return;
+    }
+    if (!isVerified || isRevoked) {
+      setLocalError(isRevoked ? 'This connected agent is disconnected.' : 'Verify this connected agent before sending a Studio chat turn.');
       return;
     }
     setLocalError(null);
@@ -670,7 +674,7 @@ export const ConnectedExternalAgentDetailView = memo(({
         title={section.title}
         subtitle={section.actionsEndpointRef
           ? 'External-owned records are read-only in this pass. Actions are declared but not enabled.'
-          : 'External-owned records load through the backend proxy.'}
+          : 'External-owned records load through the Agent Computer or hosted connection.'}
         actions={(
           <AppButton
             type="button"
@@ -685,7 +689,7 @@ export const ConnectedExternalAgentDetailView = memo(({
         {error ? renderSectionError(section, 'External section unavailable', error) : payload ? renderSectionItems(payload, section) : (
           <EmptyPanel
             title="Section not loaded"
-            body={isVerified ? 'Load this provider-owned section to inspect external records.' : 'Verify the connection before loading provider-owned records.'}
+            body={isVerified ? 'Load this external-agent-owned section to inspect external records.' : 'Verify the connection before loading external-agent-owned records.'}
           />
         )}
       </ListDetailPanel>
@@ -823,11 +827,11 @@ export const ConnectedExternalAgentDetailView = memo(({
     if (tabId === 'ai') {
       return (
         <MotionTabPanel key={`${keyPrefix}-external-model`} className="studio-agent-motion-panel">
-          <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Model" title="External runtime owns the model" subtitle="Provider switching is disabled because this agent runs outside the native Studio runtime.">
+          <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Model" title="External agent owns its AI route" subtitle="AI route switching is disabled because this agent runs outside the native Studio runtime.">
             <AppSurfaceStatGrid>
-              <AppSurfaceStat label="Provider" value={providerLabel} hint="Declared by manifest" />
-              <AppSurfaceStat label="Route" value="External endpoint" hint="Model route is outside native Studio" />
-              <AppSurfaceStat label="Platform control" value="Read-only" hint="No native provider switching" />
+              <AppSurfaceStat label="External agent" value={providerLabel} hint="Declared by manifest" />
+              <AppSurfaceStat label="Route" value="External endpoint" hint="AI route is outside native Studio" />
+              <AppSurfaceStat label="Platform control" value="Read-only" hint="No native AI route switching" />
             </AppSurfaceStatGrid>
           </ListDetailPanel>
         </MotionTabPanel>
@@ -837,17 +841,17 @@ export const ConnectedExternalAgentDetailView = memo(({
     if (tabId === 'tools') {
       return (
         <MotionTabPanel key={`${keyPrefix}-external-actions`} className="studio-agent-motion-panel">
-          <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Actions" title="External tools and actions" subtitle="Declared actions are external-owned and read-only until a dedicated approval/audit action route exists.">
+          <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Actions" title="External actions" subtitle="Declared actions are external-owned and read-only until a dedicated approval and audit route exists.">
             <div className="app-stack-3">
               <div className="studio-inline-wrap">
                 <DataBadge tone="warning">Read-only v1</DataBadge>
                 <DataBadge>Revocable</DataBadge>
-                <DataBadge>No native tool install</DataBadge>
+                <DataBadge>No native action install</DataBadge>
               </div>
               {renderExternalSectionGroup(
                 tabSections.tools,
-                'No external tools declared',
-                'Tools and actions appear here when the manifest exposes safe provider-owned sections.',
+                'No external actions declared',
+                'Actions appear here when the manifest exposes safe external-agent-owned sections.',
               )}
             </div>
           </ListDetailPanel>
@@ -935,7 +939,7 @@ export const ConnectedExternalAgentDetailView = memo(({
     return (
       <div className="studio-agent-detail-empty" aria-label="Connected agent detail">
         <strong>Select a connected agent</strong>
-        <span>Connection status, private chat, endpoints, and capabilities will appear here.</span>
+        <span>Connection status, owner test chat, endpoints, and declared sections will appear here.</span>
       </div>
     );
   }
@@ -1031,11 +1035,11 @@ export const ConnectedExternalAgentDetailView = memo(({
 
             {isDetailModalOpen && detailModalTab === 'ai' && (
               <MotionTabPanel key="external-model" className="studio-agent-motion-panel">
-                <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Model" title="External runtime owns the model" subtitle="Provider switching is disabled because this agent runs outside the native Studio runtime.">
+                <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Model" title="External agent owns its AI route" subtitle="AI route switching is disabled because this agent runs outside the native Studio runtime.">
                   <AppSurfaceStatGrid>
-                    <AppSurfaceStat label="Provider" value={providerLabel} hint="Declared by manifest" />
-                    <AppSurfaceStat label="Route" value="External endpoint" hint="Model route is outside native Studio" />
-                    <AppSurfaceStat label="Platform control" value="Read-only" hint="No native provider switching" />
+                    <AppSurfaceStat label="External agent" value={providerLabel} hint="Declared by manifest" />
+                    <AppSurfaceStat label="Route" value="External endpoint" hint="AI route is outside native Studio" />
+                    <AppSurfaceStat label="Platform control" value="Read-only" hint="No native AI route switching" />
                   </AppSurfaceStatGrid>
                 </ListDetailPanel>
               </MotionTabPanel>
@@ -1043,17 +1047,17 @@ export const ConnectedExternalAgentDetailView = memo(({
 
             {isDetailModalOpen && detailModalTab === 'tools' && (
               <MotionTabPanel key="external-actions" className="studio-agent-motion-panel">
-                <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Actions" title="External tools and actions" subtitle="Declared actions are external-owned and read-only until a dedicated approval/audit action route exists.">
+                <ListDetailPanel className="studio-panel studio-panel--detail" eyebrow="Actions" title="External actions" subtitle="Declared actions are external-owned and read-only until a dedicated approval and audit route exists.">
                   <div className="app-stack-3">
                     <div className="studio-inline-wrap">
                       <DataBadge tone="warning">Read-only v1</DataBadge>
                       <DataBadge>Revocable</DataBadge>
-                      <DataBadge>No native tool install</DataBadge>
+                      <DataBadge>No native action install</DataBadge>
                     </div>
                     {renderExternalSectionGroup(
                       tabSections.tools,
-                      'No external tools declared',
-                      'Tools and actions appear here when the manifest exposes safe provider-owned sections.',
+                      'No external actions declared',
+                      'Actions appear here when the manifest exposes safe external-agent-owned sections.',
                     )}
                   </div>
                 </ListDetailPanel>
@@ -1148,7 +1152,7 @@ export const ConnectedExternalAgentDetailView = memo(({
                   hideHeaderText
                   eyebrow="Connected Agent"
                   title={displayName}
-                  subtitle="A workspace-owned connection to an external agent runtime. The platform does not own its brain."
+                  subtitle="A workspace-owned connection to an external agent. Empyralis owns routing, trust, and audit; the external runtime owns execution."
                   actions={(
                     <div className="app-inline-actions app-inline-actions--tight">
                       <AppButton type="button" tone="secondary" onClick={refreshManifest} disabled={isRefreshingManifest || isRevoked}>
@@ -1167,20 +1171,20 @@ export const ConnectedExternalAgentDetailView = memo(({
                           </DataBadge>
                         </div>
                         <h3>{isVerified ? 'Connection verified' : isRevoked ? 'Connection revoked' : 'Verification needed'}</h3>
-                        <p>Connected agents start private, approval-gated, and revocable. Public customer send is not enabled here.</p>
+                        <p>Connected agents start workspace-only, approval-gated, and revocable. Public customer send is not enabled here.</p>
                         <div className="studio-agent-overview__chips" aria-label={`${displayName} boundary`}>
                           <span>{AGENT_STUDIO_OBJECT_LABELS.connected_external_agent}</span>
                           <span>External-owned</span>
-                          <span>{AGENT_VISIBILITY_LABELS.private_workspace}</span>
+                          <span>Workspace-only</span>
                           <span>{providerLabel}</span>
                         </div>
                       </div>
                     </div>
                     <AppSurfaceStatGrid>
-                      <AppSurfaceStat label="Provider" value={providerLabel} hint="External provider kind" />
+                      <AppSurfaceStat label="External agent" value={providerLabel} hint="Declared connection type" />
                       <AppSurfaceStat label="Trust state" value={humanizeToken(trustState, 'Unverified')} hint="Verified after manifest refresh" />
-                      <AppSurfaceStat label="Chat" value={hasChat ? 'Available' : 'Not exposed'} hint="Manifest chat capability" />
-                      <AppSurfaceStat label="Endpoint" value={readString(endpointRefs.chat_url) ? 'Backend proxy' : 'Missing'} hint="External endpoint never called from browser" />
+                      <AppSurfaceStat label="Chat" value={hasChat ? 'Available' : 'Not exposed'} hint="Declared chat support" />
+                      <AppSurfaceStat label="Endpoint" value={readString(endpointRefs.chat_url) ? 'Empyralis bridge' : 'Missing'} hint="External endpoint never called from browser" />
                       <AppSurfaceStat label="Protocols" value={protocols.length > 0 ? protocols.join(', ') : 'Custom HTTP'} hint="Adapter hints only" />
                       <AppSurfaceStat
                         label="Agent Computer"
@@ -1191,25 +1195,25 @@ export const ConnectedExternalAgentDetailView = memo(({
                     {localConnector.required ? (
                       <ListDetailPanel
                         className="studio-panel studio-panel--detail"
-                        eyebrow="Local Connector"
+                        eyebrow="Agent Computer bridge"
                         title={readString(localConnector.agent_computer_label, 'Agent Computer required')}
-                        subtitle="Localhost and private-network endpoints stay blocked unless they are routed through a verified Agent Computer connector."
+                        subtitle="Local network endpoints stay blocked unless they are routed through a verified Agent Computer bridge."
                       >
                         <div className="studio-agent-overview__grid">
                           <div className="studio-agent-overview__card">
                             <div className="studio-agent-overview__card-icon"><ShieldCheck size={15} aria-hidden="true" /></div>
                             <div>
                               <strong>{humanizeToken(localConnector.binding_state, 'Needs Agent Computer')}</strong>
-                              <span>{readString(localConnector.binding_message, 'Bind an Agent Computer before private local runtime access is possible.')}</span>
-                              <span>{localConnector.proxy_available ? 'Private proxy enabled' : 'Private proxy not enabled yet'}</span>
+                              <span>{readString(localConnector.binding_message, 'Choose an Agent Computer before local runtime access is possible.')}</span>
+                              <span>{localConnector.proxy_available ? 'Agent Computer bridge enabled' : 'Agent Computer bridge not enabled yet'}</span>
                             </div>
                           </div>
                           <div className="studio-agent-overview__card">
                             <div className="studio-agent-overview__card-icon"><Cable size={15} aria-hidden="true" /></div>
                             <div>
-                              <strong>{humanizeToken(localConnector.mode, 'Agent Computer proxy')}</strong>
-                              <span>{readString(localConnector.agent_computer_capability, 'No extra capability declared')}</span>
-                              <span>{readString(localConnector.attachment_kind, 'No runtime attachment selected')}</span>
+                              <strong>{humanizeToken(localConnector.mode, 'Agent Computer bridge')}</strong>
+                              <span>Uses an approved Agent Computer bridge for local runtime access.</span>
+                              <span>{readString(localConnector.attachment_kind) ? 'Agent Computer selected' : 'No Agent Computer selected'}</span>
                             </div>
                           </div>
                         </div>
@@ -1217,22 +1221,22 @@ export const ConnectedExternalAgentDetailView = memo(({
                     ) : null}
                     <ListDetailPanel
                       className="studio-panel studio-panel--detail"
-                      eyebrow="Capabilities"
-                      title="Manifest claims"
-                      subtitle="Claims stay limited to the connected-agent surface and do not grant native deployed-agent capabilities."
+                      eyebrow="Manifest"
+                      title="Declared sections"
+                      subtitle="Declared sections stay limited to this connected-agent surface and do not grant native Studio permissions."
                     >
                       {capabilityLabels.length > 0 ? (
                         <div className="studio-inline-wrap">
                           {capabilityLabels.map((label) => <DataBadge key={label}>{label}</DataBadge>)}
                         </div>
                       ) : (
-                        <EmptyPanel title="No capabilities verified" body="Refresh the manifest after connecting the endpoint." />
+                        <EmptyPanel title="No declared sections verified" body="Refresh the manifest after connecting the endpoint." />
                       )}
                     </ListDetailPanel>
                     <ListDetailPanel
                       className="studio-panel studio-panel--detail"
-                      eyebrow="Provider-owned sections"
-                      title="Provider-owned surfaces"
+                      eyebrow="External sections"
+                      title="External-agent surfaces"
                       subtitle="These read-only sections are schema-rendered by Studio. No external frontend code runs here."
                     >
                       {externalSections.length > 0 ? (
@@ -1244,14 +1248,14 @@ export const ConnectedExternalAgentDetailView = memo(({
                                 <strong>{section.title}</strong>
                                 <span>{humanizeToken(section.category)} · {humanizeToken(section.displayKind)} · {humanizeToken(section.interaction, 'Read only')}</span>
                                 {section.description ? <span>{section.description}</span> : null}
-                                {section.capabilityRequired ? <span>Requires {humanizeToken(section.capabilityRequired)}</span> : null}
+                                {section.capabilityRequired ? <span>Requires approved access</span> : null}
                                 {section.actionsEndpointRef ? <span>Actions declared, approval support not enabled</span> : null}
                               </div>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <EmptyPanel title="No custom sections declared" body="This connected agent has not exposed provider-owned Studio sections." />
+                        <EmptyPanel title="No external sections declared" body="This connected agent has not exposed external-agent-owned Studio sections." />
                       )}
                     </ListDetailPanel>
                   </div>
@@ -1264,19 +1268,19 @@ export const ConnectedExternalAgentDetailView = memo(({
                 <ListDetailPanel
                   className="studio-panel studio-panel--detail studio-panel--chat"
                   eyebrow="Chat"
-                  title="Private external-agent chat"
-                  subtitle="Owner workspace chat through the backend proxy. No customer channel send."
+                  title="Owner test chat"
+                  subtitle="Workspace-only chat through Empyralis routing. No customer channel send."
                 >
                   {!hasChat || !isVerified || isRevoked ? (
                     <EmptyPanel
-                      title="Private chat is not available"
+                      title="Owner test chat is not available"
                       body={isRevoked ? 'This connection is revoked.' : !isVerified ? 'Refresh and verify the manifest before chatting.' : 'The manifest does not expose chat.'}
                     />
                   ) : (
                     <div className="studio-external-chat">
                       <div className="studio-external-chat__transcript" aria-live="polite">
                         {chatSession.messages.length === 0 ? (
-                          <EmptyPanel title="No owner chat yet" body="Send a message to this connected agent. It stays private to Studio." />
+                          <EmptyPanel title="No owner chat yet" body="Send a message to this connected agent. It stays inside Studio." />
                         ) : chatSession.messages.map((message) => (
                           <div key={message.id} className={joinClassNames(
                             'studio-external-chat__message',
@@ -1291,10 +1295,10 @@ export const ConnectedExternalAgentDetailView = memo(({
                         <AppTextarea
                           value={messageDraft}
                           rows={3}
-                          placeholder="Message this connected agent privately..."
+                          placeholder="Message this connected agent inside Studio..."
                           onChange={(event) => setMessageDraft(event.currentTarget.value)}
                         />
-                        <AppButton type="button" onClick={() => { void sendPrivateChatTurn(); }} disabled={isSending || !messageDraft.trim()}>
+                        <AppButton type="button" onClick={() => { void sendPrivateChatTurn(); }} disabled={isSending || !messageDraft.trim() || !isVerified || isRevoked}>
                           {isSending ? 'Sending...' : 'Send'}
                         </AppButton>
                       </div>

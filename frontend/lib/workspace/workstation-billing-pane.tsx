@@ -121,7 +121,7 @@ function usageRowSubtitle(item: Record<string, unknown>): string {
   const payer = readText(item.payer, '').toLowerCase();
   const credits = readNumber(item.credits_debited, 0);
   if (payer !== 'platform_credits') {
-    return 'No Empyralis credits used';
+    return 'No Workspace AI usage';
   }
   return credits > 0 ? formatSignedCredits(credits) : '0 credits';
 }

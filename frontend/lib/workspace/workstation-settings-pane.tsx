@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Moon, SunMedium } from 'lucide-react';
 
 import { logout, me, type AuthProviderOptions, listAuthProviders } from '@/lib/auth/auth-client';
@@ -20,13 +20,10 @@ import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
-import { WorkstationBillingPane } from '@/lib/workspace/workstation-billing-pane';
-import { WorkstationDesktopStatus } from '@/lib/workspace/workstation-desktop-status';
-import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gateway-operator-pane';
 import { WorkstationPlatformAnalyticsPane } from '@/lib/workspace/workstation-platform-analytics-pane';
 import type { ProviderCatalogRecord, ProviderProfileRecord } from '@/lib/workspace/workstation-client';
 
-type SettingsSectionId = 'account' | 'appearance' | 'devices' | 'usage' | 'billing' | 'privacy' | 'transparency';
+type SettingsSectionId = 'account' | 'appearance' | 'usage' | 'billing' | 'privacy' | 'transparency';
 
 const SETTINGS_SECTIONS: Array<{
   id: SettingsSectionId;
@@ -50,25 +47,18 @@ const SETTINGS_SECTIONS: Array<{
     description: 'Theme and interface density.',
   },
   {
-    id: 'devices',
-    label: 'Agent Computer',
-    eyebrow: 'Agent Computer',
-    title: 'Agent Computer',
-    description: 'Connected hardware runtime for this workspace.',
-  },
-  {
     id: 'usage',
     label: 'Usage',
     eyebrow: 'Analytics',
     title: 'Usage',
-    description: 'Usage and spend.',
+    description: 'Workspace usage.',
   },
   {
     id: 'billing',
-    label: 'Billing',
-    eyebrow: 'Plan',
-    title: 'Billing',
-    description: 'Subscription and limits.',
+    label: 'Limits',
+    eyebrow: 'Usage',
+    title: 'Usage limits',
+    description: 'Workspace limits and current usage.',
   },
   {
     id: 'privacy',
@@ -165,11 +155,6 @@ function readOptionalString(value: unknown): string | null {
 function readNumber(value: unknown, fallback = 0): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function readOptionalNumber(value: unknown): number | null {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function readBoolean(value: unknown, fallback = false): boolean {
@@ -335,17 +320,6 @@ function statusToneClass(status: string, fallbackReady = false): string {
   return 'settings-status--muted';
 }
 
-function formatHeartbeatAge(value: unknown): string {
-  const seconds = readOptionalNumber(value);
-  if (seconds === null) {
-    return 'Not reported';
-  }
-  if (seconds < 60) {
-    return `${Math.max(0, Math.round(seconds))}s ago`;
-  }
-  return `${Math.round(seconds / 60)}m ago`;
-}
-
 function deriveActiveModelPath(
   providers: ProviderCatalogRecord[],
   profiles: ProviderProfileRecord[],
@@ -368,7 +342,7 @@ function deriveActiveModelPath(
           : 'Pro AI';
       return {
         value: tierLabel,
-        hint: 'Empyralis credits',
+        hint: 'Workspace AI',
       };
     }
     const providerLabel = readString(provider?.label, providerId || 'AI model');
@@ -397,20 +371,19 @@ function deriveActiveModelPath(
         : 'Pro AI';
     return {
       value: tierLabel,
-      hint: 'Empyralis credits',
+      hint: 'Workspace AI',
     };
   }
 
   return {
     value: 'No AI model selected',
-    hint: 'Choose credits, connect your own AI account, or connect a computer.',
+    hint: 'Choose Workspace AI, connect your own AI account, or connect a computer.',
   };
 }
 
 function isSettingsSectionId(value: string | null): value is SettingsSectionId {
   return value === 'account'
     || value === 'appearance'
-    || value === 'devices'
     || value === 'usage'
     || value === 'billing'
     || value === 'privacy'
@@ -522,13 +495,6 @@ function AgentComputerDetailsPanel({
     ?? attachments.find((attachment) => attachment.attachmentKind === 'self_hosted_business_node')
     ?? attachments.find((attachment) => attachment.attachmentKind === 'cloud_computer')
     ?? null;
-  const nativeRuntime = selectedAttachment?.nativeRuntime ?? null;
-  const targetSelection = selectedAttachment?.targetSelection ?? {};
-  const heartbeatAge = formatHeartbeatAge(targetSelection.heartbeat_age_seconds);
-  const targetReason = selectedAttachment?.statusReason
-    ?? readOptionalString(targetSelection.reason)
-    ?? localTarget?.statusReason
-    ?? 'No blocker reported.';
   const status = selectedAttachment?.status ?? localTarget?.status ?? 'offline';
   const isReady = selectedAttachment
     ? selectedAttachment.online && selectedAttachment.healthy
@@ -536,50 +502,35 @@ function AgentComputerDetailsPanel({
   const statusLabel = selectedAttachment
     ? humanizeToken(status)
     : localTarget?.statusLabel || humanizeToken(status);
-  const runtimeLine = nativeRuntime
-    ? [humanizeToken(nativeRuntime.os || 'unknown'), nativeRuntime.arch, nativeRuntime.release].filter(Boolean).join(' · ')
-    : 'Not reported yet';
-  const runtimeMode = nativeRuntime
-    ? nativeRuntime.systemServiceMode
-      ? 'System service mode'
-      : humanizeToken(nativeRuntime.desktopSession || 'user_session')
-    : 'Waiting for heartbeat';
+  const computerLabel = selectedAttachment?.label || localTarget?.label || 'This computer';
 
   return (
     <article className="settings-detail-card settings-agent-computer-details">
       <div className="settings-detail-card__header">
         <div className="settings-agent-computer-details__copy">
           <strong className="settings-detail-card__title">
-            {selectedAttachment?.label || localTarget?.label || 'This Device'}
+            {computerLabel}
           </strong>
           <p className="settings-detail-card__body">
-            Gateway connects this computer. Supervisor executes governed hardware actions.
+            {isReady ? 'Empyralis can use this computer.' : 'Empyralis cannot use this computer right now.'}
           </p>
         </div>
         <span className={joinClassNames('settings-status', statusToneClass(status, isReady))}>
-          {statusLabel}
+          {isReady ? 'Connected' : statusLabel}
         </span>
       </div>
 
       {error ? <AppNotice tone="warning">{error}</AppNotice> : null}
       {!selectedAttachment ? (
-        <AppNotice tone="neutral">Connect Agent Computer to see Gateway and Supervisor status.</AppNotice>
+        <AppNotice tone="neutral">Connect this computer when you want Sage or an approved agent to use local apps, files, browser, or terminal work.</AppNotice>
       ) : null}
-
-      <details className="settings-agent-computer-connection">
-        <summary>Connection details</summary>
-        <FormGrid>
-          <FormReadout label="Target blocker" value={targetReason} />
-          <FormReadout label="Heartbeat" value={heartbeatAge} />
-          <FormReadout label="Native runtime" value={runtimeLine} />
-          <FormReadout label="Desktop mode" value={runtimeMode} />
-        </FormGrid>
-      </details>
     </article>
   );
 }
 
 export function WorkstationSettingsPane() {
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
@@ -593,8 +544,6 @@ export function WorkstationSettingsPane() {
   const [billingSummary, setBillingSummary] = useState<BillingSummaryPayload | null>(null);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogRecord[]>([]);
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfileRecord[]>([]);
-  const [runtimeAttachments, setRuntimeAttachments] = useState<AgentComputerAttachment[]>([]);
-  const [runtimeAttachmentError, setRuntimeAttachmentError] = useState<string | null>(null);
   const [transparencySettings, setTransparencySettings] = useState<TransparencySettingsPayload>(DEFAULT_TRANSPARENCY_SETTINGS);
   const [transparencyStatus, setTransparencyStatus] = useState<string | null>(null);
   const [transparencyError, setTransparencyError] = useState<string | null>(null);
@@ -609,15 +558,26 @@ export function WorkstationSettingsPane() {
 
   useEffect(() => {
     const requestedSection = searchParams.get('section');
+    if (requestedSection === 'devices') {
+      router.replace(pathname.replace(/\/settings(?:\/.*)?$/, '/hardware'), { scroll: false });
+      return;
+    }
     if (isSettingsSectionId(requestedSection) && requestedSection !== selectedSection) {
       setSelectedSection(requestedSection);
     }
-  }, [searchParams, selectedSection]);
+  }, [pathname, router, searchParams, selectedSection]);
+
+  const selectSettingsSection = (sectionId: SettingsSectionId) => {
+    setSelectedSection(sectionId);
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.set('section', sectionId);
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  };
 
   useEffect(() => {
     let cancelled = false;
     setAccountDetailsError(null);
-    setRuntimeAttachmentError(null);
 
     void Promise.allSettled([
       me(),
@@ -626,7 +586,6 @@ export function WorkstationSettingsPane() {
       services.client.listProviderProfiles(),
       services.client.getWorkspaceTransparencySettings(),
       listAuthProviders(),
-      services.client.listRuntimeAttachments(),
     ]).then((results) => {
       if (cancelled) {
         return;
@@ -639,7 +598,6 @@ export function WorkstationSettingsPane() {
         profilesResult,
         transparencyResult,
         authProvidersResult,
-        runtimeAttachmentsResult,
       ] = results;
 
       if (profileResult.status === 'fulfilled') {
@@ -664,13 +622,7 @@ export function WorkstationSettingsPane() {
           apple: { enabled: authProvidersResult.value?.apple?.enabled === true },
         });
       }
-      if (runtimeAttachmentsResult.status === 'fulfilled') {
-        setRuntimeAttachments(normalizeAgentComputerAttachments(runtimeAttachmentsResult.value));
-      } else {
-        setRuntimeAttachmentError('Agent Computer details could not refresh. Target health is still shown above.');
-      }
-
-      const failed = results.slice(0, 6).some((result) => result.status === 'rejected');
+      const failed = results.some((result) => result.status === 'rejected');
       if (failed) {
         setAccountDetailsError('Some account details could not refresh. Showing the last known basics.');
       }
@@ -681,25 +633,6 @@ export function WorkstationSettingsPane() {
     };
   }, [services.client]);
 
-  const preferredRuntimeTarget = useMemo(
-    () => bootstrap.runtime.runtimeTargets.find((target) => target.preferred) ?? bootstrap.runtime.runtimeTargets[0] ?? null,
-    [bootstrap.runtime.runtimeTargets],
-  );
-  const localCompanionTarget = useMemo(
-    () => bootstrap.runtime.runtimeTargets.find((target) => target.id === 'local_companion') ?? null,
-    [bootstrap.runtime.runtimeTargets],
-  );
-  const preferredComputerLabel = preferredRuntimeTarget
-    ? preferredRuntimeTarget.id === 'local_companion' || preferredRuntimeTarget.canonicalId === 'user_device_gateway'
-      ? 'Agent Computer · This Device'
-      : preferredRuntimeTarget.id === 'sage_cloud_computer'
-        || preferredRuntimeTarget.canonicalId === 'empyralis_cloud_computer'
-        ? 'Agent Computer · Cloud Computer'
-        : preferredRuntimeTarget.id === 'self_host_runtime'
-          || preferredRuntimeTarget.canonicalId === 'self_hosted_node'
-          ? 'Agent Computer · Server/VPS'
-        : preferredRuntimeTarget.publicLabel || preferredRuntimeTarget.label
-    : 'Cloud';
   const activeSection = SETTINGS_SECTIONS.find((section) => section.id === selectedSection) ?? SETTINGS_SECTIONS[0];
   const currentThemePreference = accountShellState.globalTheme;
   const nextAppearanceTheme = resolvedTheme === 'dark' ? 'light' : 'dark';
@@ -766,29 +699,7 @@ export function WorkstationSettingsPane() {
 
   return (
     <main data-workstation-surface="settings" className="app-settings-page">
-      <div className="settings-workbench">
-        <aside className="settings-nav" aria-label="Settings sections">
-          <div className="app-settings-sidebar__header">
-            <h2 className="app-settings-sidebar__title">Settings</h2>
-            <p className="app-settings-sidebar__subtitle">Account, appearance, trust, and billing.</p>
-          </div>
-          {SETTINGS_SECTIONS.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              aria-selected={selectedSection === section.id}
-              className={joinClassNames(
-                'settings-nav__item',
-                selectedSection === section.id && 'settings-nav__item--active',
-              )}
-              onClick={() => setSelectedSection(section.id)}
-            >
-              <span className="settings-nav__eyebrow">{section.eyebrow}</span>
-              <span className="settings-nav__label">{section.label}</span>
-            </button>
-          ))}
-        </aside>
-
+      <div className="settings-workbench settings-workbench--content-only">
         <section className="settings-content">
           <header className="app-settings-main__header">
             <h1 className="app-settings-main__title">{activeSection.title}</h1>
@@ -806,12 +717,12 @@ export function WorkstationSettingsPane() {
                   <h2 className="settings-account-card__name">{accountDisplayName}</h2>
                   <p className="settings-account-card__email">{accountEmail}</p>
                   <p className="settings-account-card__summary">
-                    Your Empyralis account owns this workspace, its credits, your connected apps, and the sign-in methods below.
+                    Your Empyralis account owns this workspace, its connected apps, and the sign-in methods below.
                   </p>
                 </div>
                 <div className="settings-account-card__actions">
-                  <AppButton type="button" tone="secondary" onClick={() => setSelectedSection('billing')}>
-                    Manage billing
+                  <AppButton type="button" tone="secondary" onClick={() => selectSettingsSection('billing')}>
+                    View usage
                   </AppButton>
                   <AppButton type="button" tone="ghost" disabled={logoutPending} onClick={() => void handleLogout()}>
                     {logoutPending ? 'Signing out…' : 'Log out'}
@@ -948,52 +859,34 @@ export function WorkstationSettingsPane() {
             </div>
           ) : null}
 
-          {selectedSection === 'devices' ? (
-            <div className="settings-section-stack">
-              <WorkstationDesktopStatus />
-              <WorkstationGatewayOperatorPane />
-              <FormGrid>
-                <FormReadout label="Deployment mode" value={humanizeToken(bootstrap.runtime.deploymentMode)} />
-                <FormReadout
-                  label="Preferred runtime"
-                  value={preferredComputerLabel}
-                />
-                <FormReadout
-                  label="This Device"
-                  value={localCompanionTarget?.online ? 'Connected' : localCompanionTarget ? 'Available but offline' : 'Not detected'}
-                />
-                <FormReadout
-                  label="Approval mode"
-                  value={preferredRuntimeTarget?.approvalMode ? humanizeToken(preferredRuntimeTarget.approvalMode) : 'Auto-run'}
-                />
-              </FormGrid>
-              <AgentComputerDetailsPanel
-                attachments={runtimeAttachments}
-                localTarget={localCompanionTarget}
-                error={runtimeAttachmentError}
-              />
-              <div className="settings-device-grid">
-                {bootstrap.runtime.runtimeTargets.map((target) => (
-                  <article key={target.id} className="settings-detail-card">
-                    <div className="settings-detail-card__header">
-                      <strong className="settings-detail-card__title">
-                        {target.id === 'cloud_default' ? 'Cloud' : `Agent Computer · ${target.label}`}
-                      </strong>
-                      <span className={`settings-status settings-status--${target.online && target.healthy ? 'ready' : target.available ? 'warning' : 'muted'}`}>
-                        {target.statusLabel || humanizeToken(target.status)}
-                      </span>
-                    </div>
-                    <p className="settings-detail-card__body">
-                      {target.statusReason || target.description || 'Available for runs.'}
-                    </p>
-                  </article>
-                ))}
-              </div>
-            </div>
-          ) : null}
           {selectedSection === 'usage' ? <WorkstationPlatformAnalyticsPane /> : null}
 
-          {selectedSection === 'billing' ? <WorkstationBillingPane /> : null}
+          {selectedSection === 'billing' ? (
+            <div className="settings-section-stack">
+              <AppSurfaceCard
+                title="Workspace limits"
+                description="Paid plans are not configured yet. This section will show launch limits once they are decided."
+              >
+                <AppSurfaceList>
+                  <AppSurfaceListItem
+                    title="Current mode"
+                    subtitle="Workspace-first"
+                    description="Apps, Sage, Studio, and Agent Computer access stay governed by workspace policy."
+                  />
+                  <AppSurfaceListItem
+                    title="Usage policy"
+                    subtitle="Not monetized"
+                    description="No paid-plan claims are shown until pricing and billing are ready."
+                  />
+                  <AppSurfaceListItem
+                    title="Next step"
+                    subtitle="Define launch limits"
+                    description="When limits are approved, this surface can show current usage, caps, and owner controls."
+                  />
+                </AppSurfaceList>
+              </AppSurfaceCard>
+            </div>
+          ) : null}
 
           {selectedSection === 'privacy' ? (
             <div className="settings-section-stack">

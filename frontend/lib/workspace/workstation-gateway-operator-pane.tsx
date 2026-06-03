@@ -673,11 +673,13 @@ function summarizeDoctorFacet(value: unknown): {
   };
 }
 
-function gatewayPairingCommand(token: unknown): string {
+function gatewayPairingCommand(token: unknown, displayName?: unknown, workspaceId?: unknown): string {
   const pairingToken = readString(token, '');
   if (!pairingToken) {
     return 'Pairing token unavailable';
   }
+  const deviceLabel = readString(displayName, 'Agent Computer');
+  const expectedWorkspaceId = readString(workspaceId, '');
   const shellQuote = (value: string): string => `'${String(value).replace(/'/g, "'\\''")}'`;
   const normalizeGatewayApiBase = (value: string): string => {
     const trimmed = String(value || '').trim().replace(/\/+$/, '');
@@ -710,11 +712,14 @@ function gatewayPairingCommand(token: unknown): string {
     return 'Computer connector API URL unavailable. Set NEXT_PUBLIC_ORION_API_URL or NEXT_PUBLIC_API_URL before pairing.';
   }
   return [
-    'cd "$(git rev-parse --show-toplevel)/empyralis-gateway"',
-    'npm run build',
+    'cd "$(git rev-parse --show-toplevel)"',
     `export EMPYRALIS_GATEWAY_API_URL=${shellQuote(apiUrl)}`,
     `export EMPYRALIS_GATEWAY_PAIRING_TOKEN=${shellQuote(pairingToken)}`,
-    'npm start',
+    `export EMPYRALIS_GATEWAY_DISPLAY_NAME=${shellQuote(deviceLabel)}`,
+    ...(expectedWorkspaceId ? [`export EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID=${shellQuote(expectedWorkspaceId)}`] : []),
+    'scripts/agent_computer.sh stop',
+    'scripts/agent_computer.sh install',
+    'scripts/agent_computer.sh start',
   ].join('\n');
 }
 
@@ -733,10 +738,10 @@ function detectGatewayPlatform(): string {
 }
 
 const GATEWAY_SETUP_STEPS = [
-  {
-    title: 'Install the connector',
-    description: 'The connector is a small app that runs on your computer. It allows Sage to work with your local files and apps.',
-  },
+    {
+      title: 'Install the connector',
+    description: 'The connector is a small app that runs on your computer. It lets Empyralis route approved local work through this workspace.',
+    },
   {
     title: 'Pair your machine',
     description: 'Pairing creates a secure connection. You remain in control and can revoke access at any time.',
@@ -764,7 +769,7 @@ const GATEWAY_MODE_SUMMARIES = [
   {
     title: 'Autonomous Full Access',
     subtitle: 'Dedicated hardware',
-    description: 'Lets Sage run allowed computer actions on dedicated hardware without Empyralis per-action prompts.',
+    description: 'Lets Empyralis run allowed computer actions on dedicated hardware without per-action prompts.',
   },
   {
     title: 'Custom',
@@ -806,7 +811,7 @@ function summarizeMyComputerCapabilities(
     },
     {
       id: 'supervisor',
-      label: 'Supervisor',
+      label: 'Local execution',
       description: 'Executes governed hardware actions for the selected computer.',
       available: supervisorReady,
     },
@@ -867,7 +872,7 @@ function summarizeMyComputerStatus(params: {
       id: 'revoked',
       label: 'Revoked',
       tone: 'danger',
-      detail: 'Access from the selected computer was revoked. Pair it again before Sage can use any local tools.',
+      detail: 'Access from the selected computer was revoked. Pair it again before this workspace can use local tools.',
       primaryAction: {
         label: 'Reconnect',
         tone: 'primary',
@@ -1440,7 +1445,7 @@ export function WorkstationGatewayOperatorPane({
         },
       );
       setPairingIntent(payload);
-      setStatusMessage('Computer pairing is ready. Run the command below on the computer you want to connect to Sage.');
+      setStatusMessage('Computer pairing is ready. Run the command below on the computer you want to connect to this workspace.');
       await refreshRegistrations(false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not create a computer pairing token.');
@@ -1491,7 +1496,7 @@ export function WorkstationGatewayOperatorPane({
     }
     const deviceLabel = readString(selectedGateway.display_name, 'the selected computer');
     const confirmed = window.confirm(
-      `Revoke ${deviceLabel}? Sage will stop using that computer until it is paired again.`,
+      `Revoke ${deviceLabel}? This workspace will stop using that computer until it is paired again.`,
     );
     if (!confirmed) {
       return;
@@ -1919,7 +1924,7 @@ export function WorkstationGatewayOperatorPane({
         <div className="gateway-computer-sheet__header">
           <div>
             <h2>Connect a computer</h2>
-            <p>Gateway and Supervisor connect this hardware to Empyralis.</p>
+            <p>Agent Computer connects this hardware to Empyralis for governed local execution.</p>
           </div>
           <AppButton
             type="button"
@@ -1942,12 +1947,12 @@ export function WorkstationGatewayOperatorPane({
               </span>
               <strong>Selected hardware runtime.</strong>
               <p>
-                The connected computer is treated as full hardware. Gateway keeps it online; Supervisor carries out governed work.
+                The connected computer is treated as full hardware. Agent Computer keeps it connected and carries out governed local work.
               </p>
             </div>
           </div>
-          <div className="sage-computer-connect__capabilities" aria-label="Hardware runtime components">
-            {['Gateway', 'Supervisor'].map((label) => (
+          <div className="sage-computer-connect__capabilities" aria-label="Agent Computer components">
+            {['Connection', 'Local execution'].map((label) => (
               <span key={label}>{label}</span>
             ))}
           </div>
@@ -2011,7 +2016,7 @@ export function WorkstationGatewayOperatorPane({
 
         {diagnosticsSectionVisible ? (
           <FormSection
-          title="Hardware runtime components"
+          title="Agent Computer components"
           description="Implementation status for the selected computer."
         >
           {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
@@ -2336,13 +2341,16 @@ export function WorkstationGatewayOperatorPane({
               <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
                 <div className="gateway-pairing-command-card__copy">
                   <strong>Run on the computer you want to connect</strong>
-                  <span>Use this only if the connector is not already online.</span>
+                  <span>Use this when the connector is offline or paired to the wrong workspace. The status output warns if the workspace does not match.</span>
                 </div>
                 <div className="app-inline-actions app-inline-actions--tight">
                   <WorkstationActionButton
                     type="button"
                     onClick={() => {
-                      void copyToClipboard('Computer connector setup command', gatewayPairingCommand(pairingIntent.pairing_token));
+                      void copyToClipboard(
+                        'Computer connector setup command',
+                        gatewayPairingCommand(pairingIntent.pairing_token, pairingIntent.display_name, workspaceId),
+                      );
                     }}
                   >
                     Copy setup command
@@ -2350,7 +2358,7 @@ export function WorkstationGatewayOperatorPane({
                 </div>
               </div>
               <pre className="gateway-pairing-command">
-                <code>{gatewayPairingCommand(pairingIntent.pairing_token)}</code>
+                <code>{gatewayPairingCommand(pairingIntent.pairing_token, pairingIntent.display_name, workspaceId)}</code>
               </pre>
             </div>
           </FormSection>
@@ -2361,7 +2369,7 @@ export function WorkstationGatewayOperatorPane({
         ) : diagnosticsSectionVisible && gateways.length === 0 ? (
           <EmptyPanel
             title="No computers connected"
-            body="Connect a computer to bring Gateway and Supervisor online for this workspace."
+            body="Connect a computer to bring hardware connection and governed local execution online for this workspace."
           />
         ) : diagnosticsSectionVisible ? (
           <WorkstationSurfaceList>
@@ -2540,7 +2548,7 @@ export function WorkstationGatewayOperatorPane({
 
           <FormSection
             title="Revoke selected computer"
-            description="Revocation is immediate and server-side. The computer must be paired again before Sage can use its local tools or personal channels."
+            description="Revocation is immediate and server-side. The computer must be paired again before this workspace can use local tools or personal channels."
           >
             <div className="settings-action-row">
               <WorkstationActionButton

@@ -42,7 +42,10 @@ import {
   resolveWorkstationApproval,
   subscribeWorkstationApprovalResolved,
 } from '@/lib/workspace/workstation-approval-events';
-import { subscribeWorkstationChatThreadSelected } from '@/lib/workspace/workstation-chat-thread-events';
+import {
+  subscribeWorkstationChatNewThreadRequested,
+  subscribeWorkstationChatThreadSelected,
+} from '@/lib/workspace/workstation-chat-thread-events';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { subscribeWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
 import {
@@ -257,10 +260,11 @@ const SAGE_CONNECTOR_MENU_SHORTCUTS: readonly SageConnectorMenuShortcut[] = [
 ];
 
 const SAGE_EMPTY_STATE_PROMPTS = [
-  'What can you do?',
-  'Show my running tasks',
-  'Check my system status',
-  'What tools do you have access to?',
+  'Summarize this workspace',
+  'Start a new plan',
+  'Show my active work',
+  'Check Agent Computer status',
+  'Help me build an app',
 ] as const;
 
 const SAGE_MODEL_PICKER_PROVIDERS = [
@@ -1470,6 +1474,13 @@ export function WorkstationChatPane() {
       });
   }), [bootstrap.workspace.id]);
 
+  useEffect(() => subscribeWorkstationChatNewThreadRequested((detail) => {
+    if (detail.workspaceId !== bootstrap.workspace.id) {
+      return;
+    }
+    void startNewThread();
+  }), [bootstrap.workspace.id, startNewThread]);
+
   useEffect(() => {
     const rememberedThreadId = readPersistedActiveThread(bootstrap.workspace.id) ?? PRIMARY_THREAD_ID;
     if (rememberedThreadId !== activeThreadId) {
@@ -1733,7 +1744,7 @@ export function WorkstationChatPane() {
       };
     }
     const selectedProviderLabel = selectedModelOption.uiSection === 'empyralis'
-      ? `${selectedModelOption.label} · Empyralis credits`
+      ? `${selectedModelOption.label} · Workspace AI`
       : providerSummaryLabel({
           provider: selectedProviderRecord,
           providerLabel: selectedProviderContext.providerLabel,
@@ -1757,7 +1768,7 @@ export function WorkstationChatPane() {
       };
     }
     return {
-      label: 'No AI model - Set up in AI & Runtime',
+      label: 'No AI model - Set up AI',
       connected: false,
     };
   }, [
@@ -1781,11 +1792,11 @@ export function WorkstationChatPane() {
       || credentialPlane === 'local_runtime';
     if (!selectedProviderRecord) {
       if (selectedModelOption.uiSection === 'empyralis') {
-        return { label: 'Empyralis credits', tone: 'success' as const };
+        return { label: 'Workspace AI', tone: 'success' as const };
       }
       if (selectedModelOption.uiSection === 'local_ai') {
         return {
-          label: localToolingOnline ? 'This Device' : 'This Device offline',
+          label: localToolingOnline ? 'Agent Computer' : 'Agent Computer offline',
           tone: localToolingOnline ? 'success' as const : 'warning' as const,
         };
       }
@@ -1798,13 +1809,13 @@ export function WorkstationChatPane() {
       return { label: 'No AI model', tone: 'warning' as const };
     }
     if (localProvider && !localToolingOnline) {
-      return { label: 'This Device offline', tone: 'warning' as const };
+      return { label: 'Agent Computer offline', tone: 'warning' as const };
     }
     if (localProvider) {
-      return { label: providerPath ?? 'This Device', tone: 'success' as const };
+      return { label: providerPath ?? 'Agent Computer', tone: 'success' as const };
     }
-    if (providerPath === 'Empyralis credits') {
-      return { label: 'Empyralis credits', tone: 'success' as const };
+    if (providerPath === 'Workspace AI') {
+      return { label: 'Workspace AI', tone: 'success' as const };
     }
     if (providerPath === 'Your AI account' || providerPath === 'Ollama Cloud') {
       return { label: providerPath, tone: 'neutral' as const };
@@ -1833,6 +1844,10 @@ export function WorkstationChatPane() {
   const integrationsHref = useMemo(
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
+  );
+  const settingsHref = useMemo(
+    () => routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/settings`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.settings],
   );
   const approvalsHref = useMemo(
     () => routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`,
@@ -1893,7 +1908,7 @@ export function WorkstationChatPane() {
           continue;
         }
         groupedOptions.push({
-          label: section === 'empyralis' ? 'Empyralis credits' : USER_OWNED_SECTION_LABELS[section],
+          label: section === 'empyralis' ? 'Workspace AI' : USER_OWNED_SECTION_LABELS[section],
           options: sectionItems,
         });
       }
@@ -1936,21 +1951,25 @@ export function WorkstationChatPane() {
     setDraft('');
     switch (command.actionKind) {
       case 'open_usage':
-        setStatusMessage('Credits moved to the account menu.');
+        router.push(`${settingsHref}?section=usage`);
         return;
       case 'open_tools':
+        router.push(`${integrationsHref}?section=connections`);
+        return;
       case 'open_runtime':
-        router.push(integrationsHref);
+        router.push(`${integrationsHref}?section=ai-runtime`);
         return;
       case 'run_doctor':
         void refreshBrowserGatewayReadiness();
-        setStatusMessage('Sage setup check refreshed.');
+        setStatusMessage('Sage setup check refreshed. Open Agent Computer status for readiness checks.');
+        router.push(gatewayHref);
         return;
       case 'open_status':
       default:
-        setStatusMessage(runtimeStatus.label);
+        setStatusMessage(`${runtimeStatus.label}. Open Agent Computer status for readiness checks.`);
+        router.push(gatewayHref);
     }
-  }, [integrationsHref, refreshBrowserGatewayReadiness, router, runtimeStatus.label, setDraft, setStatusMessage]);
+  }, [gatewayHref, integrationsHref, refreshBrowserGatewayReadiness, router, runtimeStatus.label, setDraft, setStatusMessage, settingsHref]);
   const handleWorkspaceCommandSelect = useCallback((command: SageWorkspaceCommandMetadata) => {
     setWorkspaceCommandPaletteOpen(false);
     if (command.routeId === 'approvals') {
@@ -1989,8 +2008,8 @@ export function WorkstationChatPane() {
           value: 'auto',
           label: 'Auto',
           detail: localCompanionConnected
-            ? 'Use this computer only when the turn needs it.'
-            : 'Use hosted chat unless a computer comes online.',
+            ? 'Use Agent Computer only when the turn needs it.'
+            : 'Use hosted chat unless Agent Computer comes online.',
         },
         {
           value: 'cloud',
@@ -2001,7 +2020,7 @@ export function WorkstationChatPane() {
 
       options.push({
         value: 'local',
-        label: 'This computer',
+        label: 'Agent Computer',
         detail: localCompanionConnected
           ? readString(localRuntimeTarget?.sampleAttachmentLabel || localRuntimeTarget?.label) || 'Ready'
           : readString(localRuntimeTarget?.statusLabel) || 'Offline',
@@ -2029,7 +2048,7 @@ export function WorkstationChatPane() {
   }, [localCompanionConnected, localRuntimeTargetId, selectedHardwareTarget]);
   const selectedHardwareLabel = useMemo(() => {
     if (selectedHardwareTarget === 'local') {
-      return 'This computer';
+      return 'Agent Computer';
     }
     if (selectedHardwareTarget === 'cloud') {
       return 'Cloud';
@@ -2236,7 +2255,7 @@ export function WorkstationChatPane() {
       router.push(`${integrationsHref}?section=plugins`);
     };
     const openConnectors = () => {
-      router.push(`${integrationsHref}?section=plugins`);
+      router.push(`${integrationsHref}?section=connections`);
     };
     const allSkillItems: ComposerCapabilitySubItem[] = [...sageComposerSkills]
       .sort((first, second) => first.name.localeCompare(second.name))
@@ -2257,11 +2276,6 @@ export function WorkstationChatPane() {
     }
     const connectorMenuItems = buildSageConnectorMenuItems(connectorCredentials, openConnectors);
     return [
-      {
-        id: 'files',
-        title: 'Add files',
-        onSelect: () => undefined,
-      },
       {
         id: 'connectors',
         title: 'Connectors',
@@ -2353,7 +2367,7 @@ export function WorkstationChatPane() {
     if (!localToolingOnline) {
       pills.push({
         id: 'gateway',
-        label: 'This Device: Offline',
+        label: 'Agent Computer: Offline',
         tone: 'danger',
         target: 'integrations',
       });
@@ -2473,7 +2487,7 @@ export function WorkstationChatPane() {
       .then(async (persisted) => {
         if (!persisted) {
           setSelectedModel(previousModelId);
-          setStatusMessage('This provider cannot save a workspace model preference yet.');
+          setStatusMessage('This AI connection cannot save a workspace model preference yet.');
           return;
         }
         services.queryClient.invalidate('chat:provider-catalog');
@@ -2605,19 +2619,23 @@ export function WorkstationChatPane() {
       setDraft('');
       switch (sessionCommand.actionKind) {
         case 'open_usage':
-          setStatusMessage('Credits moved to the account menu.');
+          router.push(`${settingsHref}?section=usage`);
           break;
         case 'open_tools':
+          router.push(`${integrationsHref}?section=connections`);
+          break;
         case 'open_runtime':
-          router.push(integrationsHref);
+          router.push(`${integrationsHref}?section=ai-runtime`);
           break;
         case 'run_doctor':
           void refreshBrowserGatewayReadiness();
-          setStatusMessage('Sage setup check refreshed.');
+          setStatusMessage('Sage setup check refreshed. Open Agent Computer status for readiness checks.');
+          router.push(gatewayHref);
           break;
         case 'open_status':
         default:
-          setStatusMessage(runtimeStatus.label);
+          setStatusMessage(`${runtimeStatus.label}. Open Agent Computer status for readiness checks.`);
+          router.push(gatewayHref);
       }
       return;
     }
@@ -3068,7 +3086,7 @@ export function WorkstationChatPane() {
           ? null
           : hasPendingApprovals
             ? responseExecutionTarget === 'local_companion'
-              ? 'Sage is waiting for approval before using the connected computer.'
+              ? 'Sage is waiting for approval before using Agent Computer.'
               : 'Approval is waiting.'
             : needsUserIntervention && !hasProviderFailure && !connectorSetupInterventionOnly
               ? 'Sage needs your input before it can continue.'
@@ -3138,9 +3156,9 @@ export function WorkstationChatPane() {
         const serverFailure = (typeof normalizedError?.status === 'number' && normalizedError.status >= 500)
           || /bad gateway|gateway timeout|service unavailable|internal server error|server error/i.test(normalizedRawMessage);
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
-          ? 'This Device is needed for this request. Connect a device and try again.'
+          ? 'Agent Computer is needed for this request. Connect Agent Computer and try again.'
           : providerNeedsAttention
-            ? 'The selected AI path is not ready. Use Empyralis credits, connect your own AI account, connect a computer, or choose another model in Connections.'
+            ? 'The selected AI path is not ready. Use the workspace AI route, connect your own AI account, connect Agent Computer, or choose another model in Connections.'
             : approvalNeedsAttention
               ? 'Sage needs approval before using that capability. Review the pending request instead of retrying blindly.'
               : authNeedsAttention
@@ -3410,7 +3428,7 @@ export function WorkstationChatPane() {
         <button
           type="button"
           className="sage-canvas-hardware__trigger"
-          aria-label={`Choose computer. Current: ${selectedHardwareLabel}`}
+          aria-label={`Choose Agent Computer mode. Current: ${selectedHardwareLabel}`}
           aria-expanded={hardwareCanvasPickerOpen}
           disabled={isSending || isPersistingModelSelection}
           onClick={() => {
@@ -3419,11 +3437,11 @@ export function WorkstationChatPane() {
             setHardwareCanvasPickerOpen((current) => !current);
           }}
         >
-          {selectedHardwareTarget === 'local' ? selectedHardwareLabel : `Computer ${selectedHardwareLabel}`}
+          {selectedHardwareTarget === 'local' ? selectedHardwareLabel : `Agent Computer: ${selectedHardwareLabel}`}
         </button>
         {hardwareCanvasPickerOpen ? (
-          <div className="sage-canvas-hardware__menu" role="dialog" aria-label="Computer">
-            <div className="sage-canvas-hardware__options" role="listbox" aria-label="Computer">
+          <div className="sage-canvas-hardware__menu" role="dialog" aria-label="Agent Computer">
+            <div className="sage-canvas-hardware__options" role="listbox" aria-label="Agent Computer">
               {hardwareOptions.map((option) => (
                 <button
                   key={option.value}
@@ -3457,7 +3475,7 @@ export function WorkstationChatPane() {
             >
               <span className="sage-canvas-hardware__option-copy">
                 <Settings className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
-                <span>Computer settings</span>
+                <span>Agent Computer settings</span>
               </span>
               <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
             </button>
@@ -3747,7 +3765,7 @@ export function WorkstationChatPane() {
         providerGateVisible={!activeProviderSummary.connected}
         providerSummary={{
           label: activeProviderSummary.label,
-          actionLabel: 'Set up in AI & Runtime',
+          actionLabel: 'Set up AI',
         }}
         smallModelWarning={smallModelWarningVisible
           ? "You're using a small model. For best results with tools and complex tasks, we recommend switching to a larger model (7B+)."

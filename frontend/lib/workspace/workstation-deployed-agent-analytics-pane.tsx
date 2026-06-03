@@ -26,7 +26,6 @@ type DashboardSnapshot = {
   ordersToday: number;
   revenueTodayUsd: number;
   usersAtLimitToday: number;
-  upgradeClicksThisMonth: number;
   commonQuestions: DeployedAgentAdminDashboardQuestion[];
   customerEntry: DeployedAgentCustomerEntryRecord | null;
   specialistProfile: Record<string, unknown>;
@@ -87,7 +86,6 @@ function normalizeDashboard(payload: unknown): DashboardSnapshot {
     ordersToday: readNumber((record as Record<string, unknown>).orders_today),
     revenueTodayUsd: readNumber((record as Record<string, unknown>).revenue_today_usd),
     usersAtLimitToday: readNumber(record.users_at_limit_today),
-    upgradeClicksThisMonth: readNumber(record.upgrade_clicks_this_month),
     commonQuestions: readItems<DeployedAgentAdminDashboardQuestion>((record as Record<string, unknown>).common_questions),
     customerEntry:
       record.customer_entry && typeof record.customer_entry === 'object'
@@ -186,7 +184,7 @@ function extractErrorMessage(payload: unknown, status: number): string {
       }
     }
   }
-  return `Analytics could not be loaded (${status}).`;
+  return `Results are not available yet (${status}).`;
 }
 
 function compareUserRows(
@@ -428,7 +426,7 @@ export function WorkstationDeployedAgentAnalyticsPane({
       if (requestController.signal.aborted || activeRequestControllerRef.current !== requestController) {
         return;
       }
-      setError(loadError instanceof Error ? loadError.message : 'Analytics could not be loaded.');
+      setError(loadError instanceof Error ? loadError.message : 'Results are not available yet.');
       if (!append) {
         setDashboard(null);
       }
@@ -618,11 +616,11 @@ export function WorkstationDeployedAgentAnalyticsPane({
     return (
       <div className="deployed-agent-analytics">
         <EmptyPanel
-          title="Analytics could not be loaded"
-          body="Refresh analytics when the service is ready."
+          title="No results yet"
+          body="Results will appear here after this agent handles real customer activity. You can refresh if you expect recent activity to be available."
           actions={(
             <AppButton type="button" onClick={() => { void loadDashboard({ cursor: null }); }}>
-              Retry
+              Refresh results
             </AppButton>
           )}
         />
@@ -641,7 +639,6 @@ export function WorkstationDeployedAgentAnalyticsPane({
             ['Orders Today', dashboard?.ordersToday ?? 0],
             ['Revenue Today', formatUsd(dashboard?.revenueTodayUsd ?? 0)],
             ['Users At Limit Today', dashboard?.usersAtLimitToday ?? 0],
-            ['Upgrade Clicks This Month', dashboard?.upgradeClicksThisMonth ?? 0],
           ].map(([label, value]) => (
             <div key={label} className="deployed-agent-analytics__stat">
               <strong className="deployed-agent-analytics__stat-value">
@@ -664,9 +661,9 @@ export function WorkstationDeployedAgentAnalyticsPane({
     <div className="deployed-agent-analytics">
       {error ? (
         <div className="deployed-agent-analytics__error">
-          <span>Analytics could not refresh. Try again when ready.</span>
+          <span>Results could not refresh yet. Try again when activity is available.</span>
           <AppButton type="button" tone="secondary" onClick={() => { void loadDashboard({ cursor: null }); }}>
-            Retry
+            Refresh results
           </AppButton>
         </div>
       ) : null}
@@ -694,10 +691,6 @@ export function WorkstationDeployedAgentAnalyticsPane({
         <div className="deployed-agent-analytics__stat">
           <strong className="deployed-agent-analytics__stat-value">{formatCount(dashboard.usersAtLimitToday)}</strong>
           <span className="deployed-agent-analytics__stat-label">Users At Limit Today</span>
-        </div>
-        <div className="deployed-agent-analytics__stat">
-          <strong className="deployed-agent-analytics__stat-value">{formatCount(dashboard.upgradeClicksThisMonth)}</strong>
-          <span className="deployed-agent-analytics__stat-label">Upgrade Clicks This Month</span>
         </div>
       </div>
 

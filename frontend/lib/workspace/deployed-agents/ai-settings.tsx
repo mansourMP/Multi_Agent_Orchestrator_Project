@@ -54,9 +54,9 @@ const AI_ROUTE_DETAILS: Record<WizardState['aiSource'], {
     description: 'Best for technical workspaces that operate a local or self-hosted model runtime.',
   },
   subscription_passthrough: {
-    audience: 'Enterprise',
-    status: 'Gateway route',
-    description: 'Best only when this workspace has an approved enterprise AI gateway route.',
+    audience: 'Approved route',
+    status: 'Workspace gateway',
+    description: 'Best only when this workspace has an approved AI gateway route.',
   },
 };
 
@@ -152,18 +152,18 @@ export function AgentAiSettingsSections({
   const providerLabel = usesEmpyralisCredits
     ? 'Workspace default'
     : usesSubscriptionPassthrough
-      ? selectedProvider?.label ?? 'Enterprise gateway'
+      ? selectedProvider?.label ?? 'Workspace gateway'
       : selectedProvider?.label ?? (usesLocalModel ? 'Connect Agent Computer' : 'Choose provider');
   const providerHint = usesEmpyralisCredits
     ? 'Uses the workspace AI route from Connections. Most agents should inherit this.'
     : usesSubscriptionPassthrough
-      ? 'Uses an approved enterprise AI gateway when available.'
+      ? 'Uses an approved workspace AI gateway when available.'
       : usesLocalModel
         ? 'Uses a local or self-hosted model provider from an Agent Computer.'
         : 'Uses a workspace credential shared across this workspace (not an agent-private secret).';
   const modelLabel = usesEmpyralisCredits
     ? `${PLATFORM_MODEL_LABELS[value.aiTier]} model`
-    : selectedModel?.label ?? (usesSubscriptionPassthrough ? 'Subscription default' : 'Choose model');
+    : selectedModel?.label ?? (usesSubscriptionPassthrough ? 'Workspace gateway default' : 'Choose model');
   const modelHint = usesEmpyralisCredits
     ? 'The exact provider route stays managed by Empyralis.'
     : selectedProvider

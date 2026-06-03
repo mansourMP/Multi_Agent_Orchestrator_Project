@@ -77,6 +77,7 @@ import {
   studioPaneCache,
   updateStudioPaneCache,
   readString,
+  readBoolean,
   readPositiveDecimalString,
   readRecord,
   readItems,
@@ -113,6 +114,7 @@ import {
   studioTemplateById,
   normalizeStudioTemplates,
   parseKnowledgeSources,
+  studioAgentDisplayName,
 } from './deployed-agents/utils';
 
 function useStableEvent<TArgs extends unknown[], TResult>(
@@ -125,6 +127,65 @@ function useStableEvent<TArgs extends unknown[], TResult>(
   }, [handler]);
 
   return useCallback((...args: TArgs) => handlerRef.current(...args), []);
+}
+
+function runtimeAttachmentIdCandidates(item: RuntimeAttachmentSnapshot): Set<string> {
+  const record = item as unknown as Record<string, unknown>;
+  const values = [
+    item.attachmentId,
+    item.runtimeProfileId,
+    item.runtimeNodeId,
+    item.attachmentKind && item.attachmentId ? `${item.attachmentKind}:${item.attachmentId}` : '',
+    item.attachmentKind && item.runtimeProfileId ? `${item.attachmentKind}:${item.runtimeProfileId}` : '',
+    item.attachmentKind && item.runtimeNodeId ? `${item.attachmentKind}:${item.runtimeNodeId}` : '',
+    record.id,
+    record.attachment_id,
+    record.runtime_profile_id,
+    record.runtime_node_id,
+  ];
+  return new Set(values.map((value) => readString(value)).filter(Boolean));
+}
+
+function normalizeSurfaceAgentComputers(payload: unknown): RuntimeAttachmentSnapshot[] {
+  const agentComputers = readRecord(payload).agent_computers;
+  if (!Array.isArray(agentComputers)) {
+    return [];
+  }
+  return agentComputers.map((item) => readRecord(item)).map((surface) => {
+    const record = readRecord(surface.record);
+    const attachmentId = readString(record.attachment_id ?? surface.id);
+    const attachmentKind = readString(record.attachment_kind ?? record.node_kind ?? record.kind);
+    const runtimeProfileId = readString(record.runtime_profile_id);
+    const runtimeNodeId = readString(record.runtime_node_id ?? record.node_id);
+    const status = readString(record.status ?? surface.status, 'unknown');
+    const capabilityReadiness = readRecord(record.capability_readiness);
+    const readyCapabilities = Array.isArray(capabilityReadiness.ready)
+      ? capabilityReadiness.ready.map((value) => readString(value)).filter(Boolean)
+      : [];
+    const requestedCapabilities = Array.isArray(capabilityReadiness.requested)
+      ? capabilityReadiness.requested.map((value) => readString(value)).filter(Boolean)
+      : [];
+    const capabilities = Array.from(new Set([
+      ...readyCapabilities,
+      ...requestedCapabilities,
+      ...(Array.isArray(record.capabilities) ? record.capabilities.map((value) => readString(value)).filter(Boolean) : []),
+    ]));
+    return {
+      attachmentId,
+      attachmentKind,
+      runtimeProfileId,
+      runtimeNodeId,
+      label: readString(record.label ?? record.runtime_profile_label ?? surface.name, 'Agent Computer'),
+      online: readBoolean(record.online) || status.toLowerCase() === 'online',
+      healthy: readBoolean(record.healthy),
+      ownerApproved: readBoolean(record.owner_approved ?? record.ownerApproved),
+      selfHostedNodeStatus: readString(record.self_hosted_node_status),
+      nodeKind: readString(record.node_kind ?? record.kind ?? attachmentKind),
+      heartbeatAt: readString(record.last_heartbeat_at ?? record.last_seen_at) || null,
+      capabilities,
+      status,
+    } satisfies RuntimeAttachmentSnapshot;
+  }).filter((item) => runtimeAttachmentIdCandidates(item).size > 0);
 }
 
 function connectedAgentHasArtifactSurface(agent: ConnectedExternalAgentRecord | null): boolean {
@@ -309,7 +370,7 @@ export function WorkstationDeployedAgentsPane({
     [connectedExternalAgents, selectedExternalAgentId],
   );
   const selectedAgentComputer = useMemo(
-    () => runtimeAttachments.find((item) => item.attachmentId === selectedAgentComputerId || item.runtimeProfileId === selectedAgentComputerId) ?? null,
+    () => runtimeAttachments.find((item) => runtimeAttachmentIdCandidates(item).has(readString(selectedAgentComputerId))) ?? null,
     [runtimeAttachments, selectedAgentComputerId],
   );
   const selectedAgentMetrics = useMemo(
@@ -639,7 +700,23 @@ export function WorkstationDeployedAgentsPane({
         ? payload.connected_external_agents.filter((item): item is ConnectedExternalAgentRecord => Boolean(item) && typeof item === 'object')
           .filter(isConnectedExternalAgentActive)
         : [];
+      const nextSurfaceAgentComputers = normalizeSurfaceAgentComputers(payload);
       setConnectedExternalAgents(nextExternalAgents);
+      if (nextSurfaceAgentComputers.length > 0) {
+        setRuntimeAttachments((current) => {
+          const merged = [...current];
+          for (const computer of nextSurfaceAgentComputers) {
+            if (!merged.some((item) => {
+              const currentIds = runtimeAttachmentIdCandidates(item);
+              return Array.from(runtimeAttachmentIdCandidates(computer)).some((id) => currentIds.has(id));
+            })) {
+              merged.push(computer);
+            }
+          }
+          updateStudioPaneCache(workspaceId, { runtimeAttachments: merged });
+          return merged;
+        });
+      }
       updateStudioPaneCache(workspaceId, { connectedExternalAgents: nextExternalAgents });
       setSelectedExternalAgentId((current) => {
         if (!current || nextExternalAgents.some((item) => readString(item.id) === current)) {
@@ -907,7 +984,7 @@ export function WorkstationDeployedAgentsPane({
     if (!requestedAgentComputerId) {
       return;
     }
-    if (!runtimeAttachments.some((item) => item.attachmentId === requestedAgentComputerId || item.runtimeProfileId === requestedAgentComputerId)) {
+    if (!runtimeAttachments.some((item) => runtimeAttachmentIdCandidates(item).has(requestedAgentComputerId))) {
       return;
     }
     setCurrentStudioSubview('agents');
@@ -1169,7 +1246,7 @@ export function WorkstationDeployedAgentsPane({
       } else {
         selectOverlayTab('overview');
       }
-      setStatusMessage(`Created agent ${readString(record.name)}.`);
+      setStatusMessage(`Created agent ${studioAgentDisplayName(record)}.`);
       if (recordId) {
         await Promise.all([
           loadAgentAnalytics(recordId),
@@ -1183,7 +1260,7 @@ export function WorkstationDeployedAgentsPane({
         loadAgentAnalytics(recordId),
         loadTelegramReadiness(recordId),
       ]);
-      setStatusMessage(`Updated ${readString(record.name, 'assistant')} settings.`);
+      setStatusMessage(`Updated ${studioAgentDisplayName(record, 'assistant')} settings.`);
     }
   }
 
@@ -1307,9 +1384,9 @@ export function WorkstationDeployedAgentsPane({
       setStatusMessage(
         action === 'deploy'
           ? listEnabledChannels(record.channels).length > 0
-            ? `${readString(record.name, 'Assistant')} is now live on its configured channels.`
-            : `${readString(record.name, 'Assistant')} is live with safe defaults. Connect a customer channel when ready.`
-          : `${readString(record.name, 'Assistant')} is paused and will no longer reply to live customer messages.`,
+            ? `${studioAgentDisplayName(record, 'Assistant')} is now live on its configured channels.`
+            : `${studioAgentDisplayName(record, 'Assistant')} is live with safe defaults. Connect a customer channel when ready.`
+          : `${studioAgentDisplayName(record, 'Assistant')} is paused and will no longer reply to live customer messages.`,
       );
       await Promise.all([
         refreshAgentAnalytics(upsertAgentRecord(agents, record)),
@@ -1395,7 +1472,7 @@ export function WorkstationDeployedAgentsPane({
       setAgents((current) => upsertAgentRecord(current, record));
       setSelectedAgentDetail(record);
       setDetailConfigDraft(buildDetailConfigDraft(record));
-      setStatusMessage(`Updated ${readString(record.name, 'assistant')} purpose, AI, actions, and memory settings.`);
+      setStatusMessage(`Updated ${studioAgentDisplayName(record, 'assistant')} purpose, AI, actions, and memory settings.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'AI, actions, and memory settings could not be saved.');
     } finally {
@@ -1467,7 +1544,7 @@ export function WorkstationDeployedAgentsPane({
     visibleErrorMessage === 'Business Agents cannot load that workspace data right now. Refresh, or check workspace access if it keeps happening.';
   const hasSelectedStudioObject = Boolean(selectedAgent || selectedExternalAgent || selectedAgentComputer);
   const selectedStudioObjectName = selectedAgent
-    ? readString(selectedAgent.name, 'Selected agent')
+    ? studioAgentDisplayName(selectedAgent, 'Selected agent')
     : selectedExternalAgent
       ? readString(selectedExternalAgent.name ?? selectedExternalAgent.label, 'Connected agent')
       : selectedAgentComputer
@@ -1552,7 +1629,7 @@ export function WorkstationDeployedAgentsPane({
         loadAgentAnalytics(agentId),
         loadMemoryEntries(agentId),
       ]);
-      setStatusMessage(`Deleted saved data for ${selectedExternalUserLabel} from ${readString(selectedAgent?.name, 'this Business Agent')}.`);
+      setStatusMessage(`Deleted saved data for ${selectedExternalUserLabel} from ${studioAgentDisplayName(selectedAgent, 'this Business Agent')}.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Customer data could not be deleted.');
     } finally {
@@ -1634,7 +1711,7 @@ export function WorkstationDeployedAgentsPane({
     setAgents((current) => upsertAgentRecord(current, record));
     setSelectedAgentDetail(record);
     setDetailConfigDraft(buildDetailConfigDraft(record));
-    setStatusMessage(`Added ${file.name} to ${readString(record.name, 'Business Agent')} knowledge.`);
+    setStatusMessage(`Added ${file.name} to ${studioAgentDisplayName(record, 'Business Agent')} knowledge.`);
   });
 
   const handleRefreshProviderModelsEvent = useStableEvent((id: string) => {
@@ -1787,7 +1864,7 @@ export function WorkstationDeployedAgentsPane({
                   Back
                 </AppButton>
                 <span className="studio-agent-mobile-return__agent-name">
-                  {readString(selectedAgent.name, 'Selected agent')}
+                  {studioAgentDisplayName(selectedAgent, 'Selected agent')}
                 </span>
               </div>
               <AgentDetailView
@@ -1824,6 +1901,9 @@ export function WorkstationDeployedAgentsPane({
                 selectedAgentSelfHostedDeployBlocker={selectedAgentSelfHostedDeployBlocker}
                 selectedStudioTemplate={selectedStudioTemplate}
                 onOpenCreateWizard={handleOpenCreateWizard}
+                onDeploy={handleDeploy}
+                onPause={handlePause}
+                isDeploymentBusy={busyAgentId === selectedAgentId}
                 testChatSession={selectedAgentTestChatSession}
                 onTestChatSessionChange={handleSelectedAgentTestChatSessionChange}
                 onResetTestChatSession={handleResetSelectedAgentTestChatSession}

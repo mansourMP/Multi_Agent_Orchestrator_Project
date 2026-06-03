@@ -15,42 +15,15 @@ import {
   CUSTOM_STUDIO_TEMPLATE,
 } from './constants';
 import {
-  readRecord,
+  resolveExternalProviderBadge,
+} from './external-agent-provider-badges';
+import {
   readString,
   humanizeToken,
   deploymentStateLabel,
   rosterStatusTone,
+  studioAgentDisplayName,
 } from './utils';
-
-type ProviderBadgeDescriptor = {
-  label: string;
-  initials: string;
-  imageSrc?: string;
-};
-
-const EXTERNAL_PROVIDER_BADGES: Record<string, ProviderBadgeDescriptor> = {
-  openclaw: {
-    label: 'OpenClaw',
-    initials: 'OC',
-    imageSrc: '/brand-assets/providers/openclaw.svg',
-  },
-  custom: {
-    label: 'Custom',
-    initials: 'C',
-  },
-  custom_http: {
-    label: 'Custom HTTP',
-    initials: 'C',
-  },
-};
-
-function resolveExternalProviderBadge(providerKind: unknown): ProviderBadgeDescriptor {
-  const normalized = readString(providerKind, 'custom').toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  return EXTERNAL_PROVIDER_BADGES[normalized] ?? {
-    label: humanizeToken(providerKind, 'Custom endpoint'),
-    initials: readString(providerKind, 'C').slice(0, 2).toUpperCase(),
-  };
-}
 
 const AgentRosterItem = memo(({
   agent,
@@ -65,7 +38,7 @@ const AgentRosterItem = memo(({
 }) => {
   const agentId = readString(agent.id);
   const stateLabel = deploymentStateLabel(agent.deployment_state);
-  const displayName = readString(agent.name, agentId);
+  const displayName = studioAgentDisplayName(agent, agentId);
   const displayInitial = (displayName.trim().charAt(0) || 'A').toUpperCase();
   const latestActivityLabel = agentMetrics?.latestActivityLabel;
 
@@ -120,15 +93,17 @@ const ConnectedExternalAgentRosterItem = memo(({
       aria-selected={selected}
       onClick={() => onSelectAgent(agentId)}
     >
-      <span className="studio-agents-nav__provider-badge" title={`${providerBadge.label} connected agent`}>
-        {providerBadge.imageSrc ? (
-          <img src={providerBadge.imageSrc} alt="" aria-hidden="true" />
-        ) : (
-          <span>{providerBadge.initials}</span>
-        )}
-      </span>
       <span className="studio-agents-nav__copy">
-        <span className="studio-agents-nav__label">{displayName}</span>
+        <span className="studio-agents-nav__identity">
+          <span className="studio-agents-nav__label">{displayName}</span>
+          <span className="studio-agents-nav__provider-badge" title={`${providerBadge.label} connected agent`}>
+            {providerBadge.imageSrc ? (
+              <img src={providerBadge.imageSrc} alt="" aria-hidden="true" />
+            ) : (
+              <span>{providerBadge.initials}</span>
+            )}
+          </span>
+        </span>
       </span>
       <span className={joinClassNames('studio-agents-nav__status', connectionState === 'verified' ? 'studio-agents-nav__status--live' : connectionState === 'revoked' ? 'studio-agents-nav__status--danger' : 'studio-agents-nav__status--warning')}>
         {connectionLabel}
@@ -138,55 +113,6 @@ const ConnectedExternalAgentRosterItem = memo(({
 });
 
 ConnectedExternalAgentRosterItem.displayName = 'ConnectedExternalAgentRosterItem';
-
-function readComputerValue(computer: StudioAgentComputerSurface | RuntimeAttachmentSnapshot, key: string): unknown {
-  if (key in computer) {
-    return (computer as Record<string, unknown>)[key];
-  }
-  return readRecord((computer as StudioAgentComputerSurface).record)[key];
-}
-
-const AgentComputerRosterItem = memo(({
-  computer,
-  selected,
-  onSelectComputer,
-}: {
-  computer: StudioAgentComputerSurface | RuntimeAttachmentSnapshot;
-  selected: boolean;
-  onSelectComputer: (id: string) => void;
-}) => {
-  const computerId = readString(
-    readComputerValue(computer, 'id')
-    ?? readComputerValue(computer, 'attachmentId')
-    ?? readComputerValue(computer, 'attachment_id'),
-  );
-  const displayName = readString(readComputerValue(computer, 'name') ?? readComputerValue(computer, 'label'), computerId || 'Agent Computer');
-  const status = readString(readComputerValue(computer, 'status'), 'unknown');
-  const kindLabel = humanizeToken(readComputerValue(computer, 'nodeKind') ?? readComputerValue(computer, 'node_kind'), 'Runtime');
-  const online = readComputerValue(computer, 'online') === true;
-
-  return (
-    <button
-      type="button"
-      className={joinClassNames(
-        'studio-agents-nav__agent',
-        selected && 'studio-agents-nav__agent--active',
-      )}
-      aria-label={`${displayName}, Agent Computer, ${kindLabel}, ${online ? 'Online' : humanizeToken(status, 'Unknown')}`}
-      aria-selected={selected}
-      onClick={() => onSelectComputer(computerId)}
-    >
-      <span className="studio-agents-nav__copy">
-        <span className="studio-agents-nav__label">{displayName}</span>
-      </span>
-      <span className={joinClassNames('studio-agents-nav__status', online ? 'studio-agents-nav__status--live' : 'studio-agents-nav__status--warning')}>
-        {online ? 'Online' : humanizeToken(status, 'Unknown')}
-      </span>
-    </button>
-  );
-});
-
-AgentComputerRosterItem.displayName = 'AgentComputerRosterItem';
 
 export interface AgentRosterSidebarProps {
   collapsed?: boolean;
@@ -253,23 +179,9 @@ export const AgentRosterSidebar = memo(({
           />
         );
       }) : null;
-
-  const agentComputerItems = !collapsed ? agentComputers.map((computer, index) => {
-        const computerId = readString(
-          readComputerValue(computer, 'id')
-          ?? readComputerValue(computer, 'attachmentId')
-          ?? readComputerValue(computer, 'attachment_id'),
-          `agent-computer-${index}`,
-        );
-        return (
-          <AgentComputerRosterItem
-            key={computerId}
-            computer={computer}
-            selected={computerId === selectedAgentComputerId}
-            onSelectComputer={onSelectAgentComputer}
-          />
-        );
-      }) : null;
+  void agentComputers;
+  void selectedAgentComputerId;
+  void onSelectAgentComputer;
 
   return (
     <div className="app-stack-4">
@@ -375,7 +287,6 @@ export const AgentRosterSidebar = memo(({
                   );
                 })}
                 {connectedAgentItems}
-                {agentComputerItems}
               </div>
             )}
           </div>

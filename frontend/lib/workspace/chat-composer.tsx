@@ -289,6 +289,21 @@ export function ChatComposer({
   const canStop = busy && typeof onStop === 'function';
   const showSendButton = busy || hasDraft;
   const selectedReasoningLabel = composerOptionLabel(reasoningOptions, reasoningEffort) || reasoningEffort || 'Auto';
+  const fileDropEnabled = typeof onFilesSelected === 'function' && !controlsDisabled;
+  const menuCapabilityItems = useMemo<readonly ComposerCapabilityItem[]>(() => {
+    if (!fileDropEnabled || capabilityItems.some((item) => item.id === 'files')) {
+      return capabilityItems;
+    }
+    return [
+      {
+        id: 'files',
+        title: 'Add files',
+        icon: Paperclip,
+        onSelect: () => {},
+      },
+      ...capabilityItems,
+    ];
+  }, [capabilityItems, fileDropEnabled]);
   const availableReasoningOptions = useMemo(
     () => reasoningOptions.filter((option) => !option.disabled),
     [reasoningOptions],
@@ -335,11 +350,11 @@ export function ChatComposer({
     && filteredSlashCommands.length > 0
     && typeof onSlashCommandSelect === 'function';
   const actionMenuVisible = actionPaletteOpen
-    && capabilityItems.length > 0;
+    && menuCapabilityItems.length > 0;
   const [activeCapabilitySubmenuId, setActiveCapabilitySubmenuId] = useState<string | null>(null);
   const activeCapabilitySubmenu = useMemo(
-    () => capabilityItems.find((item) => item.id === activeCapabilitySubmenuId && item.submenuItems && item.submenuItems.length > 0) ?? null,
-    [activeCapabilitySubmenuId, capabilityItems],
+    () => menuCapabilityItems.find((item) => item.id === activeCapabilitySubmenuId && item.submenuItems && item.submenuItems.length > 0) ?? null,
+    [activeCapabilitySubmenuId, menuCapabilityItems],
   );
 
   const submitDraft = () => {
@@ -382,12 +397,12 @@ export function ChatComposer({
       return;
     }
     setActiveCapabilitySubmenuId((current) => {
-      if (current && capabilityItems.some((item) => item.id === current && item.submenuItems && item.submenuItems.length > 0)) {
+      if (current && menuCapabilityItems.some((item) => item.id === current && item.submenuItems && item.submenuItems.length > 0)) {
         return current;
       }
       return null;
     });
-  }, [actionMenuVisible, capabilityItems]);
+  }, [actionMenuVisible, menuCapabilityItems]);
 
   useEffect(() => {
     if (selectedCommandIndex < filteredSlashCommands.length) {
@@ -569,7 +584,6 @@ export function ChatComposer({
   const openFilePicker = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
-  const fileDropEnabled = typeof onFilesSelected === 'function' && !controlsDisabled;
   const eventHasFiles = (event: DragEvent<HTMLElement>) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
   const handleFilesSelected = (files: FileList | null) => {
     const selectedFiles = Array.from(files ?? []);
@@ -730,7 +744,7 @@ export function ChatComposer({
                   aria-label="Add actions"
                 >
                   <div className="app-chat-composer__capability-list" role="list">
-                    {capabilityItems.map((item) => {
+                    {menuCapabilityItems.map((item) => {
                       const CapabilityIcon = item.icon ?? capabilityOptionIcon(item.id);
                       const hasSubmenu = Boolean(item.submenuItems && item.submenuItems.length > 0);
                       const isSubmenuActive = activeCapabilitySubmenuId === item.id;

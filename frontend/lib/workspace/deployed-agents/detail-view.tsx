@@ -61,6 +61,7 @@ import {
   inferAiTierFromProviderModel,
   connectorConnected,
   providerCatalogById,
+  studioAgentDisplayName,
 } from './utils';
 
 const SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS = ['.md', '.markdown', '.txt', '.csv', '.json'];
@@ -115,6 +116,9 @@ export interface AgentDetailViewProps {
   selectedAgentSelfHostedDeployBlocker: string | null;
   selectedStudioTemplate: any;
   onOpenCreateWizard: (templateId: string) => void;
+  onDeploy: () => void;
+  onPause: () => void;
+  isDeploymentBusy: boolean;
   testChatSession: DeployedAgentTestChatSessionState;
   onTestChatSessionChange: Dispatch<SetStateAction<DeployedAgentTestChatSessionState>>;
   onResetTestChatSession: () => void;
@@ -154,6 +158,9 @@ export const AgentDetailView = memo(({
   selectedAgentSelfHostedDeployBlocker,
   selectedStudioTemplate,
   onOpenCreateWizard,
+  onDeploy,
+  onPause,
+  isDeploymentBusy,
   testChatSession,
   onTestChatSessionChange,
   onResetTestChatSession,
@@ -263,6 +270,7 @@ export const AgentDetailView = memo(({
   );
   const selectedAgentState = readString(selectedAgent?.deployment_state).toLowerCase();
   const selectedAgentStateLabel = humanizeToken(selectedAgent?.deployment_state, 'Draft');
+  const selectedAgentDisplayName = studioAgentDisplayName(selectedAgent);
   const selectedAgentModelLabel = formatDeploymentModelLabel(selectedAgent, providerCatalogIndex);
   const selectedAgentToolCount = normalizeToolIds(
     readRecord(readRecord(selectedAgent?.config).tool_policy).enabled_tools ??
@@ -314,7 +322,7 @@ export const AgentDetailView = memo(({
     },
     {
       label: 'Actions',
-      detail: selectedAgentToolCount > 0 ? `${selectedAgentToolCount} permission${selectedAgentToolCount === 1 ? '' : 's'} enabled.` : 'No tool permissions enabled.',
+      detail: selectedAgentToolCount > 0 ? `${selectedAgentToolCount} permission${selectedAgentToolCount === 1 ? '' : 's'} enabled.` : 'No action permissions enabled.',
       ready: selectedAgentToolCount > 0,
       tab: 'tools' as SpecialistOverlayTabId,
     },
@@ -895,8 +903,24 @@ export const AgentDetailView = memo(({
           className="studio-panel studio-panel--detail"
           hideHeaderText
           eyebrow="Command Center"
-          title={readString(selectedAgent.name, 'Assistant overview')}
+          title={selectedAgentDisplayName}
           subtitle="Work handled, customer activity, and operating cost."
+          actions={(
+            <div className="app-inline-actions app-inline-actions--tight">
+              {selectedAgentState === 'live' ? (
+                <AppButton type="button" tone="secondary" onClick={onPause} disabled={isDeploymentBusy}>
+                  {isDeploymentBusy ? 'Pausing...' : 'Pause'}
+                </AppButton>
+              ) : (
+                <AppButton type="button" tone="primary" onClick={onDeploy} disabled={isDeploymentBusy || !launchReady}>
+                  {isDeploymentBusy ? 'Deploying...' : 'Deploy'}
+                </AppButton>
+              )}
+              <AppButton type="button" tone="secondary" onClick={onOpenEditWizard}>
+                Edit setup
+              </AppButton>
+            </div>
+          )}
         >
           {isLoadingDetail ? (
             <div className="app-stack-3">
@@ -913,8 +937,8 @@ export const AgentDetailView = memo(({
                       {selectedAgentStateLabel}
                     </DataBadge>
                   </div>
-                  <strong>{readString(selectedAgent.name, 'Business Agent')}</strong>
-                  <p>{!modelReady ? 'Choose platform credits, your API key, or a local model before launch.' : overviewStatusDetail}</p>
+                  <strong>{selectedAgentDisplayName}</strong>
+                  <p>{!modelReady ? 'Choose Workspace AI, your AI account, or a local model before launch.' : overviewStatusDetail}</p>
                 </div>
               </section>
 

@@ -250,7 +250,6 @@ async def _execute_handler_skill(
     agent_label: str,
     hard_context: str,
     operational_policy: str,
-    seed_demo_if_empty: bool = False,
 ) -> dict[str, Any]:
     skill_path = Path(str(definition.path or "")).expanduser().resolve()
     handler_path = skill_path / "handler.py"
@@ -267,7 +266,6 @@ async def _execute_handler_skill(
         "agent_label": agent_label,
         "hard_context": hard_context,
         "operational_policy": operational_policy,
-        "seed_demo_if_empty": bool(seed_demo_if_empty),
     }
 
     def _run_handler() -> subprocess.CompletedProcess[bytes]:
@@ -572,7 +570,6 @@ async def execute_skill(
     agent_label: str,
     hard_context: str,
     operational_policy: str,
-    seed_demo_if_empty: bool = False,
 ) -> dict[str, Any]:
     definition = get_skill_definition(skill_id, workspace_id=workspace_id, include_disabled=True)
     if definition is None:
@@ -616,7 +613,6 @@ async def execute_skill(
             agent_label=agent_label,
             hard_context=hard_context,
             operational_policy=operational_policy,
-            seed_demo_if_empty=seed_demo_if_empty,
         )
 
     if definition.execution_adapter == "handler":
@@ -628,7 +624,6 @@ async def execute_skill(
             agent_label=agent_label,
             hard_context=hard_context,
             operational_policy=operational_policy,
-            seed_demo_if_empty=seed_demo_if_empty,
         )
 
     if definition.execution_adapter == "mcp_tool":

@@ -202,7 +202,6 @@ class AutopilotRunEntryService:
             ).strip()
             or None,
             privileged_runtime_approved=bool(metadata.get("privileged_runtime_approved")),
-            seed_demo_if_empty=bool(metadata.get("seed_demo_if_empty")),
         )
         if not isinstance(result, dict):
             return {"result": result}

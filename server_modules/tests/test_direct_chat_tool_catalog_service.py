@@ -208,10 +208,11 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
         self.assertTrue(service.message_requests_tool_inventory("/tools"))
         self.assertTrue(service.message_requests_tool_inventory("show tool inventory"))
         self.assertTrue(service.message_requests_tool_inventory("List tool inventory"))
-        self.assertTrue(service.message_requests_tool_inventory("what can you do?"))
         self.assertTrue(service.message_requests_tool_inventory("what capabilities do you have?"))
         self.assertTrue(service.message_requests_tool_inventory("what tools do you have?"))
-        self.assertTrue(service.message_requests_tool_inventory("What can you help me with here right now?"))
+        self.assertFalse(service.message_requests_tool_inventory("what can you do?"))
+        self.assertFalse(service.message_requests_tool_inventory("What can you help me with here right now?"))
+        self.assertFalse(service.message_requests_tool_inventory("What can Sage do?"))
         self.assertFalse(service.message_requests_tool_inventory("List your tools"))
         self.assertFalse(service.message_requests_tool_inventory("use the web search tool"))
 
@@ -225,10 +226,10 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
         )
 
         self.assertIn("Web:", reply)
-        self.assertIn("web__search", reply)
-        self.assertIn("Local machine:", reply)
-        self.assertIn("file__read", reply)
-        self.assertIn("Local machine tools require the gateway to be online.", reply)
+        self.assertIn("Search the web", reply)
+        self.assertIn("Agent Computer:", reply)
+        self.assertIn("Read a file", reply)
+        self.assertIn("This Device capabilities require Agent Computer to be online.", reply)
 
     def test_tool_inventory_reply_distinguishes_cloud_computer_from_personal_gateway(self) -> None:
         reply = service.direct_chat_tool_inventory_reply(
@@ -239,9 +240,9 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
             {"cloud_computer_online": True, "local_gateway_online": False},
         )
 
-        self.assertIn("Computer tools are available through Sage Cloud Computer.", reply)
-        self.assertIn("Personal-device tools still require a paired gateway.", reply)
-        self.assertIn("Tool availability is based on gateway status, connector state, and workspace policy", reply)
+        self.assertIn("Computer capabilities are available through Sage Cloud Computer.", reply)
+        self.assertIn("This Device still requires a paired Agent Computer.", reply)
+        self.assertIn("Capability availability is based on Agent Computer status, connector state, and workspace policy", reply)
 
     def test_tool_inventory_reply_includes_setup_actions_from_capability_truth(self) -> None:
         reply = service.direct_chat_tool_inventory_reply(
@@ -272,13 +273,13 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("Selected AI model: DeepSeek (setup required)", reply)
-        self.assertIn("Empyralis credits: blocked (policy disabled)", reply)
-        self.assertIn("My Computer: offline", reply)
+        self.assertIn("Sage AI: setup required", reply)
+        self.assertIn("Workspace AI: blocked (policy disabled)", reply)
+        self.assertIn("Agent Computer: offline", reply)
         self.assertIn("Connected apps: Google Workspace, GitHub (not connected)", reply)
         self.assertIn("Messaging channels: Telegram, WhatsApp (not ready)", reply)
-        self.assertIn("AI model connections you can use: DeepSeek, Gemini, OpenAI", reply)
-        self.assertIn("Setup available now: Connect My Computer, Add API key.", reply)
+        self.assertIn("Additional AI connections: 3 configured", reply)
+        self.assertIn("Setup available now: Connect Agent Computer, Add API key.", reply)
 
 
 if __name__ == "__main__":

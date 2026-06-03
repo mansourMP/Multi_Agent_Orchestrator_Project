@@ -279,6 +279,9 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
 
             system_prompt = mock_gen.call_args[0][3]
             self.assertNotIn("sk-", system_prompt)
+            self.assertIn("what can you do", system_prompt)
+            self.assertIn("explain Sage's role in the current workspace", system_prompt)
+            self.assertIn("Do not dump a tool inventory", system_prompt)
 
     def test_write_skill_terms_do_not_preempt_model(self):
         from server_modules.skill_registry import SkillDefinition

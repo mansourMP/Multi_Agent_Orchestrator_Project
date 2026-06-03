@@ -466,10 +466,23 @@ async def handle_sage_chat(
     if int(prompt_diagnostics.get("capability_count") or 0) > 0:
         used_context.append("sage_capabilities")
 
+    sage_surface_guardrails = (
+        "\n\n## Sage surface boundary\n"
+        "You are Sage, the user's main AI assistant inside Empyralis. "
+        "Stay inside the Sage surface boundary: answer as the main agent, "
+        "use only available tools, and do not claim unavailable capabilities. "
+        "When the user asks a broad identity or help question like 'what can you do', "
+        "explain Sage's role in the current workspace in plain language. Do not dump a "
+        "tool inventory, Agent Studio agent list, or provider/runtime details unless the "
+        "user explicitly asks for tools, capabilities, agents, or diagnostics.\n"
+        "Approval rule: require explicit approval before sending messages, "
+        "changing files, spending credits, controlling a computer, publishing "
+        "apps, or making external changes when policy requires approval."
+    )
     envelope = _build_prompt_envelope(
         workspace_id=normalized_workspace_id,
         message=normalized_message,
-        system_prompt=instruction_bundle.system_prompt,
+        system_prompt=f"{instruction_bundle.system_prompt.rstrip()}{sage_surface_guardrails}",
     )
 
     try:

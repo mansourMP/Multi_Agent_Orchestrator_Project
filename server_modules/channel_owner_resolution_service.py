@@ -31,7 +31,6 @@ async def resolve_public_channel_owner(
     metadata: Optional[Dict[str, Any]] = None,
     allow_master_fallback: bool = False,
     privileged_runtime_approved: bool = False,
-    seed_demo_if_empty: bool = False,
 ):
     owner_route = await agent_specialist_repository.resolve_active_inbound_channel_owner(
         tenant_id=tenant_id,
@@ -120,7 +119,6 @@ async def resolve_public_channel_owner(
         runtime_profile_id=runtime_profile_id,
         allow_master_fallback=allow_master_fallback,
         privileged_runtime_approved=privileged_runtime_approved,
-        seed_demo_if_empty=seed_demo_if_empty,
         validate_preflight=False,
     )
     context.deployed_agent = deployed_agent

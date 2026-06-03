@@ -4256,6 +4256,18 @@ async def evaluate_deployed_shop_assistant_customer_question(
         except Exception:
             pass
 
+    try:
+        from server_modules import agent_completion_notification_service
+
+        await agent_completion_notification_service.notify_completion(
+            workspace_id=resolved_workspace_id,
+            agent_name=f"Agent {deployed_agent_id}",
+            result_summary=result,
+            artifact_url=None,
+        )
+    except Exception:
+        pass
+
     return result
 
 

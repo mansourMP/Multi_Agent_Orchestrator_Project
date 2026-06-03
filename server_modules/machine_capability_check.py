@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -56,6 +58,57 @@ def _macos_accessibility_probe() -> Optional[bool]:
                 return bool(probe())
         except Exception:
             return None
+    return None
+
+
+def _run_probe_command(command: list[str], *, timeout: float = 2.0) -> subprocess.CompletedProcess[str] | None:
+    try:
+        return subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except Exception:
+        return None
+
+
+def _linux_screen_recording_probe() -> Optional[bool]:
+    session_type = str(os.getenv("XDG_SESSION_TYPE") or "").strip().lower()
+    if session_type == "wayland":
+        if shutil.which("busctl"):
+            result = _run_probe_command(["busctl", "--user", "--list"])
+            output = f"{result.stdout if result else ''}\n{result.stderr if result else ''}"
+            if "org.freedesktop.portal.Desktop" in output:
+                return True
+        if shutil.which("xdg-desktop-portal"):
+            return True
+        return None
+    if shutil.which("xrandr"):
+        result = _run_probe_command(["xrandr", "--query"])
+        if result is not None:
+            return result.returncode == 0
+    if shutil.which("gnome-screenshot") or shutil.which("grim") or shutil.which("import"):
+        return True
+    return None
+
+
+def _linux_accessibility_probe() -> Optional[bool]:
+    if shutil.which("gsettings"):
+        result = _run_probe_command(["gsettings", "get", "org.gnome.desktop.interface", "toolkit-accessibility"])
+        if result is not None and result.returncode == 0:
+            value = str(result.stdout or "").strip().lower()
+            if value in {"true", "'true'"}:
+                return True
+            if value in {"false", "'false'"}:
+                return False
+    if shutil.which("pgrep"):
+        result = _run_probe_command(["pgrep", "-f", "at-spi"], timeout=1.0)
+        if result is not None and result.returncode == 0:
+            return True
+    if os.getenv("AT_SPI_BUS_ADDRESS"):
+        return True
     return None
 
 
@@ -167,6 +220,19 @@ def _fallback_screen_recording_entry() -> Dict[str, Any]:
             source="os_default",
             detail="Windows desktop capture does not require a separate privacy grant for this local desktop flow.",
         )
+    if sys.platform.startswith("linux"):
+        probe = _linux_screen_recording_probe()
+        if isinstance(probe, bool):
+            return _permission_entry(
+                "granted" if probe else "denied",
+                source="direct_probe",
+                detail="Linux screen capture capability probe.",
+            )
+        return _permission_entry(
+            "unknown",
+            source="probe_pending",
+            detail="Linux screen capture tooling or portal access could not be confirmed.",
+        )
     return _permission_entry(
         "unsupported",
         source="platform_capabilities",
@@ -193,6 +259,19 @@ def _fallback_accessibility_entry() -> Dict[str, Any]:
             "granted",
             source="os_default",
             detail="Windows desktop automation does not require a separate accessibility privacy grant for this local flow.",
+        )
+    if sys.platform.startswith("linux"):
+        probe = _linux_accessibility_probe()
+        if isinstance(probe, bool):
+            return _permission_entry(
+                "granted" if probe else "denied",
+                source="direct_probe",
+                detail="Linux accessibility capability probe.",
+            )
+        return _permission_entry(
+            "unknown",
+            source="probe_pending",
+            detail="Linux AT-SPI accessibility access could not be confirmed.",
         )
     return _permission_entry(
         "unsupported",

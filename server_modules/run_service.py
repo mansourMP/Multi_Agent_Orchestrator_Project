@@ -1919,6 +1919,20 @@ def transition_live_run_status(
                 trace_context = _resume_run_trace_context(run) if str(previous or "").strip() != str(status or "").strip() else None
                 if status == "completed" and str(previous or "").strip() != "completed":
                     _publish_local_completion_summary_bridge(run_id, run)
+                    try:
+                        from server_modules import agent_completion_notification_service
+
+                        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+                        run_async_tool_call(
+                            agent_completion_notification_service.notify_completion(
+                                workspace_id=str(context.get("workspace_id") or run.get("workspace_id") or "").strip() or "default",
+                                agent_name=str(metadata.get("agent_name") or metadata.get("deployed_agent_name") or run.get("agent_name") or "Agent").strip() or "Agent",
+                                result_summary=run.get("result") or run.get("summary") or "Completed.",
+                                artifact_url=str(metadata.get("artifact_url") or "").strip() or None,
+                            )
+                        )
+                    except Exception:
+                        pass
                 if str(previous or "").strip() != str(status or "").strip():
                     if str((context.get("metadata") if isinstance(context.get("metadata"), dict) else {}).get("deployed_agent_id") or "").strip():
                         cost_cap_settlement_key = f"{run_id}:{status}"

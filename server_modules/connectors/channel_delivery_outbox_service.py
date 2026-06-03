@@ -21,6 +21,10 @@ def _delivery(payload: Dict[str, Any]) -> Dict[str, Any]:
     return dict(payload.get("delivery") or {}) if isinstance(payload.get("delivery"), dict) else {}
 
 
+def _notification_text(payload: Dict[str, Any]) -> str:
+    return str(payload.get("notification_text") or "").strip()
+
+
 def _connector_shell() -> Any:
     from server_modules.connectors.autopilot_runtime_exports import _autopilot_connector_shell_service
 
@@ -113,7 +117,7 @@ def _deliver_telegram(event: "OutboxEvent") -> bool:
     payload = _payload(event)
     delivery_state = _delivery(payload)
     connector_id = _require_token(payload.get("connector_id"), label="connector_id")
-    chat_id = _require_token(payload.get("chat_id"), label="chat_id")
+    chat_id = _require_token(payload.get("chat_id") or payload.get("recipient"), label="chat_id")
     run_id = _require_token(event.run_id, label="run_id")
     shell = _connector_shell()
     registry = shell.telegram_service_registry()
@@ -127,9 +131,13 @@ def _deliver_telegram(event: "OutboxEvent") -> bool:
         connector_state=connector_state,
     ):
         return True
-    result = dispatch.poll_run_terminal_result(run_id, max_reply_chars=registry.max_reply_chars)
-    if not bool(result.get("ready")):
-        _defer_until_terminal(event, status=str(result.get("status") or "starting"))
+    direct_notification = _notification_text(payload)
+    if direct_notification:
+        result = {"ready": True, "status": "completed", "summary": direct_notification}
+    else:
+        result = dispatch.poll_run_terminal_result(run_id, max_reply_chars=registry.max_reply_chars)
+        if not bool(result.get("ready")):
+            _defer_until_terminal(event, status=str(result.get("status") or "starting"))
     entry = state_service.get_connector_entry(connector_id)
     secret = registry.resolve_secret(entry)
     profile = registry.resolve_profile(entry)
@@ -175,7 +183,7 @@ def _deliver_whatsapp(event: "OutboxEvent") -> bool:
     payload = _payload(event)
     delivery_state = _delivery(payload)
     connector_id = _require_token(payload.get("connector_id"), label="connector_id")
-    reply_to_number = _require_token(payload.get("reply_to_number"), label="reply_to_number")
+    reply_to_number = _require_token(payload.get("reply_to_number") or payload.get("recipient"), label="reply_to_number")
     run_id = _require_token(event.run_id, label="run_id")
     shell = _connector_shell()
     registry = shell.whatsapp_service_registry()
@@ -189,9 +197,13 @@ def _deliver_whatsapp(event: "OutboxEvent") -> bool:
         connector_state=connector_state,
     ):
         return True
-    result = dispatch.poll_run_terminal_result(run_id, max_reply_chars=registry.max_reply_chars)
-    if not bool(result.get("ready")):
-        _defer_until_terminal(event, status=str(result.get("status") or "starting"))
+    direct_notification = _notification_text(payload)
+    if direct_notification:
+        result = {"ready": True, "status": "completed", "summary": direct_notification}
+    else:
+        result = dispatch.poll_run_terminal_result(run_id, max_reply_chars=registry.max_reply_chars)
+        if not bool(result.get("ready")):
+            _defer_until_terminal(event, status=str(result.get("status") or "starting"))
     entry = state_service.get_connector_entry(connector_id)
     secret = registry.resolve_vault_credential(connector_id, event.workspace_id)
     profile = registry.resolve_profile(entry)

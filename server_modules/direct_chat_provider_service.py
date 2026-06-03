@@ -222,10 +222,10 @@ def build_capability_truth(
             if hosted_reason in {"owner_approval_required", "cap_reached", "policy_disabled"}:
                 _append_setup_action(
                     setup_actions,
-                    action_id="manage_credits",
-                    label="Manage credits",
+                    action_id="view_workspace_ai",
+                    label="View Workspace AI",
                     href="/integrations",
-                    reason="Empyralis credits are currently blocked for this workspace.",
+                    reason="Workspace AI is currently blocked for this workspace.",
                 )
             _append_setup_action(
                 setup_actions,
@@ -694,7 +694,7 @@ def provider_unavailable_response(
                 f"{label} is not available",
                 detail=(
                     f"{label} is selected for chat but is not available right now. "
-                    "Connect this computer, switch to Empyralis credits, or add your own API key."
+                    "Connect this computer, switch to Workspace AI, or add your own API key."
                 ),
                 severity="warning",
                 status="waiting",

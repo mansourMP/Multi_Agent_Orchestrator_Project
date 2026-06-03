@@ -58,7 +58,7 @@ class DirectChatContextServiceTests(unittest.TestCase):
         )
 
         self.assertIn("Selected AI model: DeepSeek (setup required)", lines)
-        self.assertIn("Empyralis credits: blocked (policy disabled)", lines)
+        self.assertIn("Workspace AI: blocked (policy disabled)", lines)
         self.assertIn("My Computer: offline", lines)
         self.assertIn("Connected apps: Google Workspace", lines)
         self.assertIn("Messaging channels: Telegram", lines)

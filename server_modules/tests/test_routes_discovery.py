@@ -78,6 +78,7 @@ async def test_discovery_feed_and_adopt_routes(monkeypatch: pytest.MonkeyPatch) 
             visibility="public",
             creator_label="@sarah",
         )
+        mini_apps_service.approve_app_publication("source-ws", "public_budget")
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -85,7 +86,7 @@ async def test_discovery_feed_and_adopt_routes(monkeypatch: pytest.MonkeyPatch) 
             assert apps_response.status_code == 200
             app_item = apps_response.json()["items"][0]
             assert app_item["title"] == "Public Budget"
-            assert app_item["action"]["label"] == "Clone App"
+            assert app_item["action"]["label"] == "Clone Blueprint"
             assert "public_app_id" not in app_item
             assert "package_id" not in app_item
 

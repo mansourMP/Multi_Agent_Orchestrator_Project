@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import time
 from typing import Any, Dict, Optional
 
 from server_modules import (
@@ -12,9 +13,36 @@ from server_modules import (
     gateway_protocol_service,
     gateway_state_repository,
     gateway_transparency_service,
+    hardware_activity_event_service,
+    machine_capability_check,
     rust_runtime_kernel_client,
     secret_redaction_service,
 )
+
+
+SCREEN_REQUIRED_CAPABILITIES = {
+    "screenshot.capture",
+    "screenshot",
+    "screen.capture",
+    "ocr",
+    "screen.ocr",
+}
+
+ACCESSIBILITY_REQUIRED_CAPABILITIES = {
+    "mouse",
+    "keyboard",
+    "mouse.click",
+    "mouse.move",
+    "keyboard.type",
+    "keyboard.press",
+    "input.click",
+    "input.type",
+    "app.focus",
+    "window.control",
+}
+
+_PERMISSION_PROBE_CACHE_TTL_SECONDS = 60
+_PERMISSION_PROBE_CACHE: Dict[str, tuple[float, Dict[str, str]]] = {}
 
 
 def _text(value: Any, fallback: str = "") -> str:
@@ -39,6 +67,62 @@ def _gateway_supervisor_capability(
 
 def _has_gateway_capability(registration: Dict[str, Any], capability_id: str) -> bool:
     return gateway_inventory_service.registration_has_execution_capability(registration, capability_id)
+
+
+def _permission_statuses_for_gateway(*, gateway_id: str, workspace_id: str) -> Dict[str, str]:
+    cache_key = str(gateway_id or "").strip()
+    now = time.time()
+    cached = _PERMISSION_PROBE_CACHE.get(cache_key)
+    if cached and now - cached[0] <= _PERMISSION_PROBE_CACHE_TTL_SECONDS:
+        return dict(cached[1])
+    registration = gateway_state_repository.get_gateway_registration(cache_key)
+    registration_metadata = dict((registration or {}).get("metadata") or {}) if isinstance(registration, dict) else {}
+    permission_probe = registration_metadata.get("permission_probe") if isinstance(registration_metadata.get("permission_probe"), dict) else {}
+    statuses: Dict[str, str] = {}
+    for key, value in permission_probe.items():
+        if isinstance(value, dict):
+            statuses[str(key or "").strip().lower()] = str(value.get("status") or "unknown").strip().lower() or "unknown"
+        elif isinstance(value, str):
+            statuses[str(key or "").strip().lower()] = value.strip().lower() or "unknown"
+    if statuses:
+        _PERMISSION_PROBE_CACHE[cache_key] = (now, statuses)
+        return dict(statuses)
+    payload = machine_capability_check.desktop_setup_status(workspace_id=workspace_id)
+    for item in list(payload.get("checks") or []):
+        if not isinstance(item, dict):
+            continue
+        check_id = str(item.get("id") or item.get("name") or "").strip().lower()
+        status = str(item.get("status") or "unknown").strip().lower() or "unknown"
+        if check_id:
+            statuses[check_id] = status
+    _PERMISSION_PROBE_CACHE[cache_key] = (now, statuses)
+    return dict(statuses)
+
+
+def _enforce_hardware_permission_gate(
+    *,
+    gateway_id: str,
+    workspace_id: str,
+    capability_id: str,
+) -> None:
+    normalized_capability = str(capability_id or "").strip().lower()
+    if normalized_capability not in SCREEN_REQUIRED_CAPABILITIES and normalized_capability not in ACCESSIBILITY_REQUIRED_CAPABILITIES:
+        return
+    statuses = _permission_statuses_for_gateway(gateway_id=gateway_id, workspace_id=workspace_id)
+    if normalized_capability in SCREEN_REQUIRED_CAPABILITIES:
+        if statuses.get("screen_recording") == "denied":
+            raise PermissionError(
+                "Screen recording permission is required for this action. "
+                "Grant access in System Preferences > Privacy & Security > "
+                "Screen Recording, then reconnect."
+            )
+    if normalized_capability in ACCESSIBILITY_REQUIRED_CAPABILITIES:
+        if statuses.get("accessibility") == "denied":
+            raise PermissionError(
+                "Accessibility permission is required for this action. "
+                "Grant access in System Preferences > Privacy & Security > "
+                "Accessibility, then reconnect."
+            )
 
 
 def _heartbeat_capability_ready(
@@ -313,6 +397,11 @@ async def execute_tool_via_gateway(
         request_id=_text(request_id or run_id),
         quota_profile="gateway_tool_execution",
     )
+    _enforce_hardware_permission_gate(
+        gateway_id=_gw,
+        workspace_id=_ws,
+        capability_id=_cap,
+    )
     _enforce_gateway_service_decision(
         operation="tool_execute",
         tenant_id=str(registration.get("tenant_id") or "default").strip() or "default",
@@ -355,24 +444,48 @@ async def execute_tool_via_gateway(
         gateway_id=_gw,
         capability_id=_cap,
     )
-    response = await gateway_protocol_service.dispatch_tool_invoke(
-        gateway_id=str(gateway_id or "").strip(),
-        capability_id=supervisor_capability_id,
-        arguments=supervisor_arguments,
-        run_id=str(run_id or "").strip(),
-        trace_id=str(trace_id or "").strip(),
+    dispatch_started = time.time()
+    try:
+        response = await gateway_protocol_service.dispatch_tool_invoke(
+            gateway_id=str(gateway_id or "").strip(),
+            capability_id=supervisor_capability_id,
+            arguments=supervisor_arguments,
+            run_id=str(run_id or "").strip(),
+            trace_id=str(trace_id or "").strip(),
+            workspace_id=_ws,
+            timeout_seconds=timeout_seconds,
+            request_id=request_id,
+            runtime_access_mode=runtime_access_mode,
+            empyralis_approved=empyralis_approved,
+        )
+        result = _materialize_gateway_artifacts(
+            capability_id=_cap,
+            response=response,
+            registration=registration,
+            run_id=str(response.get("run_id") or run_id).strip(),
+            screenshot_retention=screenshot_retention,
+        )
+    except Exception:
+        hardware_activity_event_service.emit_hardware_action_event(
+            workspace_id=_ws,
+            tenant_id=str(registration.get("tenant_id") or "default").strip() or "default",
+            gateway_id=_gw,
+            capability=_cap,
+            status="failed",
+            duration_ms=int(max(0, (time.time() - dispatch_started) * 1000)),
+            run_id=str(run_id or "").strip() or None,
+            trace_id=_tid or None,
+        )
+        raise
+    hardware_activity_event_service.emit_hardware_action_event(
         workspace_id=_ws,
-        timeout_seconds=timeout_seconds,
-        request_id=request_id,
-        runtime_access_mode=runtime_access_mode,
-        empyralis_approved=empyralis_approved,
-    )
-    result = _materialize_gateway_artifacts(
-        capability_id=_cap,
-        response=response,
-        registration=registration,
-        run_id=str(response.get("run_id") or run_id).strip(),
-        screenshot_retention=screenshot_retention,
+        tenant_id=str(registration.get("tenant_id") or "default").strip() or "default",
+        gateway_id=_gw,
+        capability=_cap,
+        status="completed",
+        duration_ms=int(max(0, (time.time() - dispatch_started) * 1000)),
+        run_id=str(response.get("run_id") or run_id).strip() or None,
+        trace_id=_tid or None,
     )
     activity_payload = {
         "request_id": str(response.get("request_id") or request_id or "").strip() or None,

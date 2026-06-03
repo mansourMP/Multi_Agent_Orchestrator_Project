@@ -156,6 +156,17 @@ class AppCloneRequest(BaseModel):
     public_app_id: str = Field(min_length=1, max_length=160)
 
 
+class AppBlueprintProposalRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2_000)
+    source_url: Optional[str] = Field(default=None, max_length=2_048)
+    proposed_by: str = Field(default="agent", max_length=40)
+
+
+class AppPublicationDecisionRequest(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=1_000)
+
+
 class MiniAppRetrieveRecordsRequest(BaseModel):
     ids: Optional[List[str]] = None
     kind: Optional[str] = None
@@ -1011,6 +1022,73 @@ async def clone_public_app(
             public_app_id=body.public_app_id,
             creator_label=_current_user_creator_label(current_user),
             creator_id=_current_user_id(current_user),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workspaces/{workspace_id}/apps/proposals")
+async def propose_app_blueprint(
+    workspace_id: str,
+    body: AppBlueprintProposalRequest,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
+    try:
+        return mini_apps_service.propose_app_blueprint(
+            resolved_workspace_id,
+            name=body.name,
+            description=body.description,
+            source_url=body.source_url,
+            proposed_by=body.proposed_by,
+            creator_label=_current_user_creator_label(current_user),
+            creator_id=_current_user_id(current_user),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workspaces/{workspace_id}/apps/{app_id}/publish-request")
+async def request_app_publication(
+    workspace_id: str,
+    app_id: str,
+    body: AppPublicationDecisionRequest,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="member")
+    try:
+        return mini_apps_service.request_app_publication(
+            resolved_workspace_id,
+            app_id,
+            actor_label=_current_user_creator_label(current_user),
+            actor_id=_current_user_id(current_user),
+            note=body.note,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workspaces/{workspace_id}/apps/{app_id}/approve-publication")
+async def approve_app_publication(
+    workspace_id: str,
+    app_id: str,
+    body: AppPublicationDecisionRequest,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="owner")
+    try:
+        return mini_apps_service.approve_app_publication(
+            resolved_workspace_id,
+            app_id,
+            actor_label=_current_user_creator_label(current_user),
+            actor_id=_current_user_id(current_user),
+            note=body.note,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

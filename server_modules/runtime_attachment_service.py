@@ -298,15 +298,16 @@ def _rust_normalized_runtime_target_id(
     value: Any,
     raise_value_error: bool = False,
 ) -> str:
+    normalized_target = normalize_runtime_target_id(value)
     decision = _enforce_rust_runtime_attachment_decision(
         operation="normalize_target",
         tenant_id=tenant_id,
         workspace_id=workspace_id,
-        runtime_target=str(value or "").strip(),
+        runtime_target=normalized_target,
         raise_value_error=raise_value_error,
     )
     target = str(decision.get("runtime_target") or "").strip()
-    return target or normalize_runtime_target_id(value)
+    return target or normalized_target
 
 
 def canonical_runtime_target_id(value: Any) -> str:
@@ -880,6 +881,18 @@ def _gateway_attachment_from_registration(registration: Dict[str, Any]) -> Dict[
     registration_status = str(registration.get("status") or "active").strip().lower() or "active"
     trust_state = str(registration.get("device_trust_state") or "verified").strip().lower() or "verified"
     target_selection = _gateway_target_selection_state(registration)
+    capability_readiness = dict(registration_metadata.get("capability_readiness") or {})
+    capabilities = sorted(
+        {
+            str(item or "").strip()
+            for item in (
+                list(registration.get("capabilities") or [])
+                + list(capability_readiness.get("requested") or [])
+                + list(capability_readiness.get("ready") or [])
+            )
+            if str(item or "").strip()
+        }
+    )
     online = bool(target_selection.get("selectable"))
     revoked = registration_status == "revoked" or trust_state == "revoked"
     healthy = bool(online and not revoked)
@@ -905,8 +918,8 @@ def _gateway_attachment_from_registration(registration: Dict[str, Any]) -> Dict[
         else str(target_selection.get("connection_status") or registration_metadata.get("health_state") or registration_metadata.get("status") or "offline").strip().lower()
         or "offline",
         "status_reason": str(target_selection.get("reason") or "").strip() or None,
-        "capabilities": _list_strings(registration.get("capabilities")),
-        "capability_readiness": dict(registration_metadata.get("capability_readiness") or {}),
+        "capabilities": capabilities,
+        "capability_readiness": capability_readiness,
         "service_inventory": gateway_inventory_service.inventory_from_metadata(registration_metadata),
         "native_runtime": gateway_inventory_service.native_runtime_from_metadata(registration_metadata),
         "target_selection": target_selection,

@@ -127,10 +127,12 @@ class MiniAppsServiceTests(unittest.TestCase):
         self.assertFalse(card["settings"]["records_enabled"])
         self.assertTrue(card["settings"]["sage_enabled"])
         self.assertEqual(card["settings"]["monthly_credit_limit"], 250)
-        self.assertEqual(card["visibility"], "public")
+        self.assertEqual(card["visibility"], "private")
+        self.assertEqual(card["blueprint"]["status"], "publish_requested")
 
         contract = mini_apps_service.get_mini_app_contract("ws-1", "budget_tracker")
-        self.assertEqual(contract["visibility"], "unlisted_link")
+        self.assertEqual(contract["visibility"], "workspace_private")
+        self.assertEqual(contract["blueprint_status"], "publish_requested")
         self.assertIn("app.ai.invoke", contract["permissions"])
         self.assertNotIn("app.records.write", contract["permissions"])
         self.assertIn("app.bridge.sage.request", contract["permissions"])
@@ -150,7 +152,12 @@ class MiniAppsServiceTests(unittest.TestCase):
         self.assertIsNone(private_card["public_app_id"])
         self.assertEqual(mini_apps_service._safe_read_public_apps_index()["items"], {})
 
-        public_card = mini_apps_service.update_app_settings("ws-1", "budget_tracker", visibility="public")
+        requested_card = mini_apps_service.update_app_settings("ws-1", "budget_tracker", visibility="public")
+        self.assertIsNone(requested_card["public_app_id"])
+        self.assertEqual(requested_card["blueprint"]["status"], "publish_requested")
+        self.assertEqual(mini_apps_service._safe_read_public_apps_index()["items"], {})
+
+        public_card = mini_apps_service.approve_app_publication("ws-1", "budget_tracker")
         public_app_id = public_card["public_app_id"]
         self.assertTrue(public_app_id)
         self.assertIn(public_app_id, mini_apps_service._safe_read_public_apps_index()["items"])
@@ -159,7 +166,7 @@ class MiniAppsServiceTests(unittest.TestCase):
         self.assertNotIn(public_app_id, mini_apps_service._safe_read_public_apps_index()["items"])
 
     def test_clone_public_app_creates_private_copy_with_attribution(self) -> None:
-        source_card = mini_apps_service.publish_app(
+        mini_apps_service.publish_app(
             "source-ws",
             name="Budget Tracker",
             description="Track expenses.",
@@ -167,6 +174,7 @@ class MiniAppsServiceTests(unittest.TestCase):
             visibility="public",
             creator_label="@sarah",
         )
+        source_card = mini_apps_service.approve_app_publication("source-ws", "budget_tracker")
 
         cloned = mini_apps_service.clone_public_app(
             "target-ws",
@@ -201,13 +209,14 @@ class MiniAppsServiceTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             mini_apps_service.clone_public_app("target-ws", public_app_id="missing")
 
-        public_card = mini_apps_service.publish_app(
+        mini_apps_service.publish_app(
             "source-ws",
             name="Public Tracker",
             description="Track expenses.",
             source_url="https://apps.example.com/public",
             visibility="public",
         )
+        public_card = mini_apps_service.approve_app_publication("source-ws", "public_tracker")
         mini_apps_service.update_app_settings("source-ws", "public_tracker", visibility="private")
         with self.assertRaises(KeyError):
             mini_apps_service.clone_public_app("target-ws", public_app_id=public_card["public_app_id"])

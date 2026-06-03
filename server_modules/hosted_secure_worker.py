@@ -102,7 +102,6 @@ async def _main_async(payload: Dict[str, Any]) -> Dict[str, Any]:
         tenant_id=str(payload.get("tenant_id") or "").strip(),
         workspace_id=str(payload.get("workspace_id") or "").strip(),
         goal=str(payload.get("goal") or "").strip(),
-        seed_demo_if_empty=bool(payload.get("seed_demo_if_empty")),
         runtime_mode="hosted_secure",
         runtime_profile=dict(payload.get("runtime_profile") or {}) if isinstance(payload.get("runtime_profile"), dict) else None,
         privileged_runtime_approved=False,

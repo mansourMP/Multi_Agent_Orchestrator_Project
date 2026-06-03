@@ -82,11 +82,12 @@ def _enforce_gateway_approval_transition(
     decision: str = "",
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    raw_payload = dict(payload or {})
     normalized_payload = {
         "gateway_id": str((registration or {}).get("gateway_id") or "").strip(),
         "device_id": str((registration or {}).get("device_id") or "").strip(),
-        "tenant_id": str((registration or {}).get("tenant_id") or "").strip(),
-        "workspace_id": str((registration or {}).get("workspace_id") or "").strip(),
+        "tenant_id": str((registration or {}).get("tenant_id") or raw_payload.get("tenant_id") or "default").strip(),
+        "workspace_id": str((registration or {}).get("workspace_id") or raw_payload.get("workspace_id") or "default").strip(),
         "user_id": str((registration or {}).get("user_id") or "").strip(),
         "approval_id": str(approval_id or "").strip(),
         "run_id": str(run_id or "").strip(),
@@ -94,7 +95,7 @@ def _enforce_gateway_approval_transition(
         "capability_id": str(capability_id or "").strip(),
         "status": str(status or "").strip(),
         "decision": str(decision or "").strip(),
-        "payload": dict(payload or {}),
+        "payload": raw_payload,
     }
     try:
         rust_decision = rust_runtime_kernel_client.runtime_state_store_decision(

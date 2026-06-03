@@ -186,11 +186,7 @@ async def search_workspace_inventory(
     workspace_id: str,
     goal: str,
     limit: int = 5,
-    seed_demo_if_empty: bool = False,
 ) -> List[Dict[str, Any]]:
-    if seed_demo_if_empty:
-        await ensure_demo_inventory_seeded(tenant_id=tenant_id, workspace_id=workspace_id)
-
     query = _extract_inventory_query(goal)
     patterns = []
     for token in [query["make"], query["model"], *query["product_terms"]]:
@@ -239,7 +235,6 @@ async def execute_inventory_skill(
     agent_label: str,
     hard_context: str,
     operational_policy: str,
-    seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
     try:
         items = await asyncio.wait_for(
@@ -247,7 +242,6 @@ async def execute_inventory_skill(
                 tenant_id=tenant_id,
                 workspace_id=workspace_id,
                 goal=goal,
-                seed_demo_if_empty=seed_demo_if_empty,
             ),
             timeout=2.5,
         )

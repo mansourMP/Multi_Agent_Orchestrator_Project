@@ -15,6 +15,7 @@ import httpx
 from fastapi import HTTPException
 
 from server_modules import control_plane_repository
+from server_modules import gateway_execution_service
 from server_modules import provider_profiles as provider_profiles_service
 from server_modules import runtime_attachment_service
 
@@ -122,6 +123,7 @@ ALLOWED_MANIFEST_KEYS = {
     "provider_kind",
     "runtime",
     "schema_version",
+    "sub_agents",
     "surface_sections",
     "summary",
     "trust",
@@ -177,7 +179,7 @@ MAX_SECTION_RESPONSE_BYTES = 256 * 1024
 MAX_CHAT_MESSAGE_CHARS = 16_000
 MAX_RECENT_MESSAGES = 16
 MAX_RECENT_MESSAGE_CHARS = 4_000
-LOCAL_CONNECTOR_PROXY_AVAILABLE = False
+LOCAL_CONNECTOR_PROXY_CAPABILITY = "external_agent_proxy"
 LOCAL_STORE: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 
 
@@ -360,7 +362,7 @@ def validate_public_https_url(value: Any, *, field_name: str = "endpoint", check
         return ""
     parsed = urlparse(url)
     if parsed.scheme != "https":
-        raise ValueError(f"{field_name} must use HTTPS unless routed through an Agent Computer connector.")
+        raise ValueError(f"{field_name} must use HTTPS unless routed through an Agent Computer bridge.")
     hostname = _read_string(parsed.hostname)
     if not hostname:
         raise ValueError(f"{field_name} must include a hostname.")
@@ -370,6 +372,24 @@ def validate_public_https_url(value: Any, *, field_name: str = "endpoint", check
     if check_dns and _resolve_host_is_private(hostname):
         raise ValueError(f"{field_name} cannot target private-network hosts directly.")
     return url
+
+
+def validate_agent_computer_proxy_url(value: Any, *, field_name: str = "endpoint") -> str:
+    url = _read_string(value)
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"{field_name} must use HTTP or HTTPS behind an Agent Computer bridge.")
+    hostname = _read_string(parsed.hostname)
+    if not hostname:
+        raise ValueError(f"{field_name} must include a hostname.")
+    lowered = hostname.lower()
+    if lowered in {"localhost", "localhost.localdomain"} or lowered.endswith(".local"):
+        return url
+    if _is_ip_private_or_loopback(hostname):
+        return url
+    raise ValueError(f"{field_name} must stay on localhost/private-network hosts when routed through Agent Computer.")
 
 
 def _canonical_endpoint_key(key: Any) -> str:
@@ -395,14 +415,18 @@ async def _validate_public_https_url_dns(value: Any, *, field_name: str = "endpo
     return url
 
 
-def _normalize_endpoints(value: Any) -> Dict[str, str]:
+def _normalize_endpoints(value: Any, *, allow_agent_computer_proxy: bool = False) -> Dict[str, str]:
     payload = _coerce_dict(value)
     normalized: Dict[str, str] = {}
     for source_key, source_value in payload.items():
         target_key = _canonical_endpoint_key(source_key)
         if target_key not in ALLOWED_ENDPOINT_KEYS:
             raise ValueError(f"External agent endpoint ref is unsupported: {source_key}.")
-        normalized[target_key] = validate_public_https_url(source_value, field_name=str(source_key))
+        normalized[target_key] = (
+            validate_agent_computer_proxy_url(source_value, field_name=str(source_key))
+            if allow_agent_computer_proxy
+            else validate_public_https_url(source_value, field_name=str(source_key))
+        )
     if normalized.get("base_url") and not normalized.get("manifest_url"):
         normalized["manifest_url"] = urljoin(normalized["base_url"].rstrip("/") + "/", ".well-known/agent-manifest.json")
     return {key: value for key, value in normalized.items() if value}
@@ -415,12 +439,12 @@ async def _validate_endpoint_map_dns(endpoints: Dict[str, str]) -> Dict[str, str
     return {key: value for key, value in validated.items() if value}
 
 
-def _manifest_endpoints(manifest: Any) -> Dict[str, str]:
+def _manifest_endpoints(manifest: Any, *, allow_agent_computer_proxy: bool = False) -> Dict[str, str]:
     payload = _coerce_dict(manifest)
     endpoints = _coerce_dict(payload.get("endpoints"))
     if not endpoints:
         endpoints = _coerce_dict(payload.get("endpoint_refs"))
-    return _normalize_endpoints(endpoints)
+    return _normalize_endpoints(endpoints, allow_agent_computer_proxy=allow_agent_computer_proxy)
 
 
 def _normalize_protocols(value: Any) -> List[Dict[str, str]]:
@@ -453,6 +477,46 @@ def _normalize_external_object_types(value: Any) -> List[str]:
             raise ValueError(f"External object type is unsupported: {token}.")
         out.append(token)
     return sorted(set(out))
+
+
+def _normalize_external_sub_agents(value: Any) -> List[Dict[str, Any]]:
+    raw_items = _coerce_list(value)
+    if not raw_items:
+        return []
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_items[:50]:
+        payload = _coerce_dict(item)
+        external_id = _read_string(payload.get("external_id") or payload.get("id"))
+        if not external_id:
+            continue
+        normalized_id = external_id[:160]
+        if normalized_id in seen:
+            continue
+        seen.add(normalized_id)
+        display_name = _read_string(payload.get("name") or payload.get("label") or payload.get("title"), normalized_id)
+        role = _read_string(payload.get("role") or payload.get("kind"))[:120] or None
+        capabilities = [
+            capability
+            for capability in (
+                _normalize_capability_id(raw_capability)
+                for raw_capability in _coerce_list(payload.get("capabilities"))
+            )
+            if capability in ALLOWED_EXTERNAL_AGENT_CAPABILITIES
+        ][:24]
+        out.append(_redact_secret_fields({
+            "id": normalized_id,
+            "external_id": normalized_id,
+            "name": display_name[:120],
+            "label": display_name[:120],
+            "summary": _read_string(payload.get("summary") or payload.get("description"))[:500] or None,
+            "status": _read_string(payload.get("status"))[:80] or None,
+            "role": role,
+            "capabilities": sorted(set(capabilities)),
+            "ownership": "external",
+            "object_type": "external_agent_sub_agent",
+        }))
+    return out
 
 
 def _endpoint_key_from_ref(value: Any, *, field_name: str) -> str:
@@ -535,6 +599,8 @@ def _normalize_local_connector(value: Any) -> Dict[str, Any]:
         }
     required = bool(payload.get("required"))
     capability = _read_string(payload.get("agent_computer_capability"))[:120] or None
+    if required and not capability:
+        capability = LOCAL_CONNECTOR_PROXY_CAPABILITY
     return {
         "required": required,
         "mode": "agent_computer_proxy" if required else "none",
@@ -567,6 +633,7 @@ def _normalize_manifest_projection(payload: Dict[str, Any]) -> Dict[str, Any]:
         "capability_manifest": capabilities,
         "surface_sections": _normalize_surface_sections(payload.get("surface_sections"), capabilities),
         "object_types": objects,
+        "external_sub_agents": _normalize_external_sub_agents(payload.get("sub_agents")),
         "local_connector": _normalize_local_connector(payload.get("local_connector")),
     }
 
@@ -595,11 +662,12 @@ def _local_connector_state(
     message: Optional[str] = None,
     gate_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
+    capability = _read_string(connector.get("agent_computer_capability"))
     payload = {
         **connector,
         "binding_state": state,
         "bound": state == "bound",
-        "proxy_available": bool(LOCAL_CONNECTOR_PROXY_AVAILABLE and state == "bound"),
+        "proxy_available": bool(state == "bound" and capability == LOCAL_CONNECTOR_PROXY_CAPABILITY),
     }
     if message:
         payload["binding_message"] = message[:240]
@@ -659,14 +727,12 @@ def _local_companion_binding_state(
     if not bool(attachment.get("healthy")):
         return {"state": "unhealthy", "message": "Agent Computer is unhealthy."}
     if required_capability:
-        available = {
-            _read_string(item).lower()
-            for item in list(attachment.get("capabilities") or [])
-            if _read_string(item)
-        }
-        if required_capability.lower() not in available:
-            return {"state": "missing_capability", "message": f"Agent Computer is missing {required_capability}."}
-    return {"state": "bound", "message": "Agent Computer is bound, but private proxying is not enabled yet."}
+        if not runtime_attachment_service._local_companion_ready_capability_match(attachment, [required_capability]):
+            return {
+                "state": "missing_capability",
+                "message": "Agent Computer is missing external-agent bridge readiness.",
+            }
+    return {"state": "bound", "message": "Agent Computer is ready to bridge approved local runtimes."}
 
 
 async def _resolve_local_connector_binding(
@@ -682,7 +748,7 @@ async def _resolve_local_connector_binding(
         return _local_connector_state(
             connector,
             state="missing_agent_computer",
-            message="Choose an Agent Computer before this connected agent can use private endpoints.",
+            message="Choose an Agent Computer before this connected agent can use a private local runtime.",
         )
     required_capability = _read_string(connector.get("agent_computer_capability")) or None
     try:
@@ -736,7 +802,7 @@ async def _resolve_local_connector_binding(
             connector,
             state="bound",
             attachment=selected,
-            message="Agent Computer is bound, but private proxying is not enabled yet.",
+            message="Agent Computer is ready to bridge approved local runtimes.",
         )
     if attachment_kind == "local_companion":
         gate = _local_companion_binding_state(
@@ -754,7 +820,7 @@ async def _resolve_local_connector_binding(
         connector,
         state="unsupported_attachment_kind",
         attachment=selected,
-        message="Only local companion and self-hosted Agent Computers can proxy private external agents.",
+        message="Only local companion and self-hosted Agent Computers can bridge private external agents.",
     )
 
 
@@ -926,8 +992,12 @@ def _validate_recent_messages(value: Any) -> List[Dict[str, str]]:
 def _surface_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
     metadata = _coerce_dict(record.get("metadata"))
     manifest = _coerce_dict(record.get("manifest"))
-    endpoints = _normalize_endpoints(metadata.get("endpoint_refs") or {})
     projection = _coerce_dict(metadata.get("manifest_projection")) or _normalize_manifest_projection(manifest)
+    local_connector = _coerce_dict(projection.get("local_connector"))
+    endpoints = _normalize_endpoints(
+        metadata.get("endpoint_refs") or {},
+        allow_agent_computer_proxy=bool(local_connector.get("required")),
+    )
     capability_manifest = _coerce_dict(projection.get("capability_manifest")) or _normalize_capabilities(metadata.get("capability_manifest") or manifest)
     display_name = _read_string(record.get("label") or record.get("name"), "Connected Agent")
     status = _read_string(record.get("status"), "active")
@@ -954,6 +1024,7 @@ def _surface_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "manifest_projection": projection,
         "surface_sections": _coerce_list(projection.get("surface_sections")),
         "object_types": _coerce_list(projection.get("object_types")),
+        "external_sub_agents": _coerce_list(projection.get("external_sub_agents")),
         "protocols": _coerce_list(projection.get("protocols")),
         "local_connector": _coerce_dict(projection.get("local_connector")),
         "manifest": manifest,
@@ -1074,6 +1145,137 @@ async def get_connected_external_agent(*, tenant_id: str, workspace_id: str, ext
     return _surface_from_record(dict(row))
 
 
+def _agent_uses_local_connector(agent: Dict[str, Any]) -> bool:
+    connector = _coerce_dict(agent.get("local_connector"))
+    return bool(connector.get("required"))
+
+
+def _gateway_id_for_local_connector(agent: Dict[str, Any]) -> str:
+    connector = _coerce_dict(agent.get("local_connector"))
+    gateway_id = _read_string(connector.get("gateway_id"))
+    if not gateway_id:
+        raise ValueError("External agent local connector is missing a gateway id.")
+    return gateway_id
+
+
+def _json_from_gateway_proxy_result(result: Dict[str, Any], *, label: str, max_bytes: int) -> Dict[str, Any]:
+    status = int(result.get("status") or 0)
+    if status >= 400:
+        raise ValueError(f"{label} proxy returned HTTP {status}.")
+    payload = result.get("body_json")
+    if isinstance(payload, dict):
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+        if len(encoded) > max_bytes:
+            raise ValueError(f"{label} response exceeded {max_bytes} bytes.")
+        return payload
+    text = _read_string(result.get("body_text"))
+    if text:
+        if len(text.encode("utf-8")) > max_bytes:
+            raise ValueError(f"{label} response exceeded {max_bytes} bytes.")
+        try:
+            parsed = json.loads(text)
+        except Exception as error:
+            raise ValueError(f"{label} response must be JSON.") from error
+        if not isinstance(parsed, dict):
+            raise ValueError(f"{label} response must be a JSON object.")
+        return parsed
+    raise ValueError(f"{label} response must include body_json.")
+
+
+async def _proxy_external_agent_json_request(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    agent: Dict[str, Any],
+    method: str,
+    endpoint_url: str,
+    label: str,
+    max_bytes: int,
+    json_body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    _ensure_local_connector_proxy_ready(agent)
+    target_url = validate_agent_computer_proxy_url(endpoint_url, field_name=label.lower().replace(" ", "_"))
+    auth_headers = _resolve_auth_headers_for_call(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        agent=agent,
+        target_url=target_url,
+    )
+    result = await gateway_execution_service.execute_tool_via_gateway(
+        gateway_id=_gateway_id_for_local_connector(agent),
+        capability_id=LOCAL_CONNECTOR_PROXY_CAPABILITY,
+        arguments={
+            "method": method,
+            "url": target_url,
+            "headers": {"Accept": "application/json", **auth_headers},
+            "json": json_body or {},
+            "max_bytes": max_bytes,
+        },
+        run_id=f"external-agent-proxy-{uuid.uuid4().hex}",
+        trace_id=f"external-agent-proxy-{uuid.uuid4().hex}",
+        workspace_id=workspace_id,
+        timeout_seconds=30,
+        runtime_access_mode="agent_computer_private_proxy",
+        empyralis_approved=True,
+        actor_id=_read_string(agent.get("id"), "connected_external_agent"),
+    )
+    return _json_from_gateway_proxy_result(result, label=label, max_bytes=max_bytes)
+
+
+async def _fetch_external_agent_json(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    agent: Dict[str, Any],
+    endpoint_url: Any,
+    field_name: str,
+    label: str,
+    max_bytes: int,
+    method: str = "GET",
+    json_body: Optional[Dict[str, Any]] = None,
+    http_client: Optional[httpx.AsyncClient] = None,
+) -> Dict[str, Any]:
+    if _agent_uses_local_connector(agent):
+        target_url = validate_agent_computer_proxy_url(endpoint_url, field_name=field_name)
+        if not target_url:
+            raise ValueError(f"External agent has no {field_name} endpoint.")
+        return await _proxy_external_agent_json_request(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            agent=agent,
+            method=method,
+            endpoint_url=target_url,
+            label=label,
+            max_bytes=max_bytes,
+            json_body=json_body,
+        )
+
+    target_url = await _validate_public_https_url_dns(endpoint_url, field_name=field_name)
+    if not target_url:
+        raise ValueError(f"External agent has no {field_name} endpoint.")
+    auth_headers = _resolve_auth_headers_for_call(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        agent=agent,
+        target_url=target_url,
+    )
+    close_client = False
+    client = http_client
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0, follow_redirects=False)
+        close_client = True
+    try:
+        if method.upper() == "POST":
+            response = await client.post(target_url, json=json_body or {}, headers={"Accept": "application/json", **auth_headers})
+        else:
+            response = await client.get(target_url, headers={"Accept": "application/json", **auth_headers})
+        response.raise_for_status()
+        return _json_response_payload(response, max_bytes=max_bytes, label=label)
+    finally:
+        if close_client:
+            await client.aclose()
+
+
 def _build_metadata(
     *,
     provider_kind: str,
@@ -1122,9 +1324,17 @@ async def create_connected_external_agent(
         raise ValueError("Raw external-agent secrets are not allowed; provide secret_ref.")
     normalized_provider = _normalize_provider_kind(provider_kind)
     normalized_manifest = _sanitize_manifest(manifest)
-    normalized_endpoints = _normalize_endpoints(endpoints or {})
-    normalized_endpoints = {**normalized_endpoints, **_manifest_endpoints(normalized_manifest)}
-    normalized_endpoints = await _validate_endpoint_map_dns(normalized_endpoints)
+    local_connector_required = bool(_coerce_dict(normalized_manifest.get("local_connector")).get("required"))
+    normalized_endpoints = _normalize_endpoints(
+        endpoints or {},
+        allow_agent_computer_proxy=local_connector_required,
+    )
+    normalized_endpoints = {
+        **normalized_endpoints,
+        **_manifest_endpoints(normalized_manifest, allow_agent_computer_proxy=local_connector_required),
+    }
+    if not local_connector_required:
+        normalized_endpoints = await _validate_endpoint_map_dns(normalized_endpoints)
     projection = await _manifest_projection_for_workspace(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -1269,11 +1479,19 @@ async def update_connected_external_agent(
     next_name = _read_string(name, current["name"])
     next_provider = _normalize_provider_kind(provider_kind or current.get("provider_kind"))
     next_manifest = _sanitize_manifest(manifest if manifest is not None else current.get("manifest"))
+    local_connector_required = bool(_coerce_dict(next_manifest.get("local_connector")).get("required"))
     next_endpoints = dict(current.get("endpoint_refs") or {})
     if endpoints is not None:
-        next_endpoints = _normalize_endpoints(endpoints)
-    next_endpoints = {**next_endpoints, **_manifest_endpoints(next_manifest)}
-    next_endpoints = await _validate_endpoint_map_dns(next_endpoints)
+        next_endpoints = _normalize_endpoints(
+            endpoints,
+            allow_agent_computer_proxy=local_connector_required,
+        )
+    next_endpoints = {
+        **next_endpoints,
+        **_manifest_endpoints(next_manifest, allow_agent_computer_proxy=local_connector_required),
+    }
+    if not local_connector_required:
+        next_endpoints = await _validate_endpoint_map_dns(next_endpoints)
     projection = await _manifest_projection_for_workspace(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -1305,6 +1523,7 @@ async def update_connected_external_agent(
                 "manifest_projection": projection,
                 "surface_sections": projection["surface_sections"],
                 "object_types": projection["object_types"],
+                "external_sub_agents": projection["external_sub_agents"],
                 "protocols": projection["protocols"],
                 "local_connector": projection["local_connector"],
                 "connection_state": next_connection_state,
@@ -1353,28 +1572,23 @@ async def refresh_connected_external_agent_manifest(
         external_agent_id=external_agent_id,
     )
     endpoints = dict(current.get("endpoint_refs") or {})
-    manifest_url = await _validate_public_https_url_dns(endpoints.get("manifest_url"), field_name="manifest_url")
-    if not manifest_url:
-        raise ValueError("External agent has no manifest endpoint.")
-    auth_headers = _resolve_auth_headers_for_call(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        agent=current,
-        target_url=manifest_url,
-    )
-    close_client = False
-    client = http_client
-    if client is None:
-        client = httpx.AsyncClient(timeout=10.0, follow_redirects=False)
-        close_client = True
+    local_connector_required = _agent_uses_local_connector(current)
+    refresh_client = http_client
+    close_refresh_client = False
+    if refresh_client is None and not local_connector_required:
+        refresh_client = httpx.AsyncClient(timeout=20.0, follow_redirects=False)
+        close_refresh_client = True
     try:
         try:
-            response = await client.get(manifest_url, headers={"Accept": "application/json", **auth_headers})
-            response.raise_for_status()
-            manifest_payload = _sanitize_manifest(_json_response_payload(
-                response,
-                max_bytes=MAX_MANIFEST_RESPONSE_BYTES,
+            manifest_payload = _sanitize_manifest(await _fetch_external_agent_json(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                agent=current,
+                endpoint_url=endpoints.get("manifest_url"),
+                field_name="manifest_url",
                 label="Manifest",
+                max_bytes=MAX_MANIFEST_RESPONSE_BYTES,
+                http_client=refresh_client,
             ))
         except Exception as error:
             await _mark_connection_error(
@@ -1385,23 +1599,23 @@ async def refresh_connected_external_agent_manifest(
             )
             raise ValueError(f"External agent manifest refresh failed: {error}") from error
 
-        manifest_endpoints = _manifest_endpoints(manifest_payload)
+        manifest_endpoints = _manifest_endpoints(manifest_payload, allow_agent_computer_proxy=local_connector_required)
         next_endpoints = {**endpoints, **manifest_endpoints}
-        next_endpoints = await _validate_endpoint_map_dns(next_endpoints)
+        if not local_connector_required:
+            next_endpoints = await _validate_endpoint_map_dns(next_endpoints)
         health_url = next_endpoints.get("health_url")
         if health_url:
             try:
-                health_response = await client.get(
-                    health_url,
-                    headers={"Accept": "application/json", **_resolve_auth_headers_for_call(
-                        tenant_id=tenant_id,
-                        workspace_id=workspace_id,
-                        agent=current,
-                        target_url=health_url,
-                    )},
+                await _fetch_external_agent_json(
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    agent={**current, "endpoint_refs": next_endpoints},
+                    endpoint_url=health_url,
+                    field_name="health_url",
+                    label="Health",
+                    max_bytes=MAX_MANIFEST_RESPONSE_BYTES,
+                    http_client=refresh_client,
                 )
-                health_response.raise_for_status()
-                _json_response_payload(health_response, max_bytes=MAX_MANIFEST_RESPONSE_BYTES, label="Health")
             except Exception as error:
                 await _mark_connection_error(
                     tenant_id=tenant_id,
@@ -1411,8 +1625,8 @@ async def refresh_connected_external_agent_manifest(
                 )
                 raise ValueError("External agent health verification failed.") from error
     finally:
-        if close_client:
-            await client.aclose()
+        if close_refresh_client and refresh_client is not None:
+            await refresh_client.aclose()
     metadata = _build_metadata(
         provider_kind=_normalize_provider_kind(current.get("provider_kind")),
         endpoints=next_endpoints,
@@ -1442,6 +1656,7 @@ async def refresh_connected_external_agent_manifest(
                 "manifest_projection": projection,
                 "surface_sections": projection["surface_sections"],
                 "object_types": projection["object_types"],
+                "external_sub_agents": projection["external_sub_agents"],
                 "protocols": projection["protocols"],
                 "local_connector": projection["local_connector"],
                 "connection_state": CONNECTION_STATE_VERIFIED,
@@ -1613,9 +1828,9 @@ def _ensure_local_connector_proxy_ready(agent: Dict[str, Any]) -> None:
         return
     binding_state = _read_string(connector.get("binding_state"), "missing_agent_computer")
     if binding_state != "bound":
-        raise ValueError(f"External agent local connector is not ready: {binding_state}.")
+        raise ValueError(f"External agent Agent Computer bridge is not ready: {binding_state}.")
     if not bool(connector.get("proxy_available")):
-        raise ValueError("External agent local connector proxy is not enabled yet.")
+        raise ValueError("External agent Agent Computer bridge is not enabled yet.")
 
 
 async def get_connected_external_agent_section_data(
@@ -1643,33 +1858,19 @@ async def get_connected_external_agent_section_data(
         raise ValueError("External agent section capability is not enabled.")
     endpoint_ref = _read_string(section.get("data_endpoint_ref"))
     endpoints = _coerce_dict(agent.get("endpoint_refs"))
-    endpoint_url = await _validate_public_https_url_dns(endpoints.get(endpoint_ref), field_name=endpoint_ref)
-    if not endpoint_url:
-        raise ValueError("External agent section endpoint is missing.")
-    auth_headers = _resolve_auth_headers_for_call(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        agent=agent,
-        target_url=endpoint_url,
-    )
-    close_client = False
-    client = http_client
-    if client is None:
-        client = httpx.AsyncClient(timeout=15.0, follow_redirects=False)
-        close_client = True
     try:
-        response = await client.get(endpoint_url, headers={"Accept": "application/json", **auth_headers})
-        response.raise_for_status()
-        payload = _json_response_payload(
-            response,
-            max_bytes=MAX_SECTION_RESPONSE_BYTES,
+        payload = await _fetch_external_agent_json(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            agent=agent,
+            endpoint_url=endpoints.get(endpoint_ref),
+            field_name=endpoint_ref,
             label="External section",
+            max_bytes=MAX_SECTION_RESPONSE_BYTES,
+            http_client=http_client,
         )
     except Exception as error:
         raise ValueError(f"External agent section fetch failed: {error}") from error
-    finally:
-        if close_client:
-            await client.aclose()
     normalized = _validate_section_payload(payload, section=section, external_agent_id=external_agent_id)
     return {
         "workspace_id": workspace_id,
@@ -1708,16 +1909,6 @@ async def chat_with_connected_external_agent(
     if not bool(capabilities.get("chat")):
         raise ValueError("External agent manifest does not expose private chat.")
     endpoints = _coerce_dict(agent.get("endpoint_refs"))
-    chat_url = await _validate_public_https_url_dns(endpoints.get("chat_url"), field_name="chat_url")
-    if not chat_url:
-        raise ValueError("External agent has no chat endpoint.")
-    auth_headers = _resolve_auth_headers_for_call(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        agent=agent,
-        target_url=chat_url,
-    )
-
     body = {
         "message": normalized_message,
         "workspace_id": workspace_id,
@@ -1728,24 +1919,21 @@ async def chat_with_connected_external_agent(
             "source": "empyralis_connected_external_agent_chat",
         },
     }
-    close_client = False
-    client = http_client
-    if client is None:
-        client = httpx.AsyncClient(timeout=20.0, follow_redirects=False)
-        close_client = True
     try:
-        response = await client.post(chat_url, json=body, headers={"Accept": "application/json", **auth_headers})
-        response.raise_for_status()
-        payload = _redact_secret_fields(_json_response_payload(
-            response,
-            max_bytes=MAX_CHAT_RESPONSE_BYTES,
+        payload = _redact_secret_fields(await _fetch_external_agent_json(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            agent=agent,
+            endpoint_url=endpoints.get("chat_url"),
+            field_name="chat_url",
             label="Chat",
+            max_bytes=MAX_CHAT_RESPONSE_BYTES,
+            method="POST",
+            json_body=body,
+            http_client=http_client,
         ))
     except Exception as error:
         raise ValueError(f"External agent chat failed: {error}") from error
-    finally:
-        if close_client:
-            await client.aclose()
 
     reply = _extract_chat_reply(payload)
     if not reply:

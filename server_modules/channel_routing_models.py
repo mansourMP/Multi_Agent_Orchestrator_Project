@@ -36,7 +36,6 @@ class ChannelRoutingContext:
     health_safety_context: Dict[str, Any] = field(default_factory=lambda: {"enabled": False})
     allow_master_fallback: bool = False
     privileged_runtime_approved: bool = False
-    seed_demo_if_empty: bool = False
 
 
 @dataclass

@@ -433,6 +433,9 @@ def _assert_auth_secrets_safe_for_environment() -> None:
         value = str(os.getenv(name) or "").strip()
         if len(value) < 32 or value.lower() in placeholders:
             raise RuntimeError(f"{name} must be explicitly set to a non-placeholder 32+ character secret in staging/production.")
+    mini_app_share_secret = str(os.getenv("EMPYRALIS_MINI_APP_SHARE_SECRET") or "").strip()
+    if len(mini_app_share_secret) < 32 or mini_app_share_secret.lower() in placeholders:
+        raise RuntimeError("EMPYRALIS_MINI_APP_SHARE_SECRET must be set in staging and production environments.")
 
 
 _assert_frontend_origins_safe_for_environment()

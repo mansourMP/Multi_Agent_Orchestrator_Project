@@ -431,18 +431,16 @@ def message_requests_tool_inventory(message: str) -> bool:
         "show tool inventory",
         "list tool inventory",
         "open tool inventory",
+        "what can you do in this environment",
+        "what can you do in this environment?",
     }
     if compact in explicit_commands:
         return True
     if compact.endswith("?"):
         compact = compact[:-1].strip()
     capability_questions = (
-        "what can you do",
-        "what can you help me with",
         "what capabilities do you have",
         "what tools do you have",
-        "what can sage do",
-        "what can empyralis do",
     )
     return any(compact.startswith(question) for question in capability_questions)
 
@@ -468,7 +466,10 @@ def _tool_label(tool: Dict[str, Any]) -> str:
     description = str(tool.get("description") or "").strip()
     if not name:
         return ""
-    return f"{name} — {description}" if description else name
+    if description:
+        return description
+    public_name = name.split("__", 1)[-1]
+    return public_name.replace("_", " ").strip().capitalize()
 
 
 def _status_summary_line(title: str, detail: str) -> str:
@@ -508,6 +509,11 @@ def _collect_state_labels(items: Any, *, limit: int = 4) -> str:
     return ", ".join(labels) if labels else "none"
 
 
+def _public_setup_label(label: str) -> str:
+    text = str(label or "").strip()
+    return text.replace("My Computer", "Agent Computer").replace("gateway", "Agent Computer")
+
+
 def direct_chat_tool_inventory_reply(tools: List[Dict[str, Any]], availability_payload: Dict[str, Any]) -> str:
     grouped: Dict[str, List[str]] = {}
     for item in tools:
@@ -543,7 +549,6 @@ def direct_chat_tool_inventory_reply(tools: List[Dict[str, Any]], availability_p
         if isinstance(capability_truth.get("required_setup_actions"), list)
         else []
     )
-    provider_label = str(provider_truth.get("label") or availability_payload.get("provider") or "AI").strip() or "AI"
     provider_ready = bool(provider_truth.get("ai_ready"))
     credits_enabled = bool(credits_truth.get("hosted_enabled"))
     credits_reason = _state_label(credits_truth.get("reason"))
@@ -554,53 +559,54 @@ def direct_chat_tool_inventory_reply(tools: List[Dict[str, Any]], availability_p
         if isinstance(item, dict) and str(item.get("label") or item.get("provider_id") or "").strip()
     ]
 
-    lines = ["Here is what I can actually do in this workspace right now:"]
+    lines = ["Here is what Sage can do in this workspace right now:"]
     lines.append("")
     lines.append(
         _status_summary_line(
-            "Selected AI model",
-            f"{provider_label} ({'ready' if provider_ready else 'setup required'})",
+            "Sage AI",
+            "ready" if provider_ready else "setup required",
         )
     )
     lines.append(
         _status_summary_line(
-            "Empyralis credits",
+            "Workspace AI",
             "available" if credits_enabled else f"blocked ({credits_reason})",
         )
     )
-    lines.append(_status_summary_line("My Computer", my_computer_state))
+    lines.append(_status_summary_line("Agent Computer", my_computer_state))
     lines.append(_status_summary_line("Connected apps", _collect_state_labels(connected_apps)))
     lines.append(_status_summary_line("Messaging channels", _collect_state_labels(channels)))
     if byok_labels:
-        lines.append(_status_summary_line("AI model connections you can use", ", ".join(byok_labels[:5])))
+        lines.append(_status_summary_line("Additional AI connections", f"{min(len(byok_labels), 5)} configured"))
     lines.append("")
-    lines.append("Available tools:")
+    lines.append("Available capabilities:")
     if not grouped:
         lines.append("")
-        lines.append("- No tools are currently available.")
+        lines.append("- No capabilities are currently available.")
     for group in ("Local machine", "Web", "Media", "Communication", "Data", "Other"):
         entries = sorted(grouped.get(group, []))
         if not entries:
             continue
         lines.append("")
-        lines.append(f"{group}:")
+        group_label = "Agent Computer" if group == "Local machine" else group
+        lines.append(f"{group_label}:")
         lines.extend(f"- {entry}" for entry in entries)
     lines.append("")
     if gateway_online:
-        lines.append("Local machine tools are available through the paired gateway.")
+        lines.append("This Device capabilities are available through the paired Agent Computer.")
     elif cloud_computer_online:
         lines.append(
-            "Computer tools are available through Sage Cloud Computer. Personal-device tools still require a paired gateway."
+            "Computer capabilities are available through Sage Cloud Computer. This Device still requires a paired Agent Computer."
         )
     else:
-        lines.append("Local machine tools require the gateway to be online. Sage Cloud Computer can run cloud-side computer tasks only when enabled.")
+        lines.append("This Device capabilities require Agent Computer to be online. Sage Cloud Computer can run cloud-side computer tasks only when enabled.")
     if setup_actions:
         labels = [
-            str(item.get("label") or "").strip()
+            _public_setup_label(str(item.get("label") or "").strip())
             for item in setup_actions
             if isinstance(item, dict) and str(item.get("label") or "").strip()
         ]
         if labels:
             lines.append(f"Setup available now: {', '.join(labels[:4])}.")
-    lines.append("Tool availability is based on gateway status, connector state, and workspace policy, not the selected model provider.")
+    lines.append("Capability availability is based on Agent Computer status, connector state, and workspace policy, not the selected model provider.")
     return "\n".join(lines).strip()

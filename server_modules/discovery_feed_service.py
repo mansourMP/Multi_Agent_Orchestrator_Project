@@ -83,10 +83,14 @@ def _app_feed_item(workspace_id: str, app_card: Dict[str, Any]) -> Optional[Dict
     creator = _read_record(app_card.get("creator"))
     source = _read_record(app_card.get("source"))
     open_target = _read_record(app_card.get("open"))
+    blueprint = _read_record(app_card.get("blueprint"))
+    provenance = _read_record(app_card.get("provenance"))
+    permission_summary = _read_string_list(app_card.get("permission_summary"))
     installed = app_card.get("installed") is not False
     clone_available = app_card.get("clone_available") is True
     action_kind = "clone_app" if clone_available else "open_app"
-    action_label = "Clone App" if clone_available else "Open App"
+    action_label = "Clone Blueprint" if clone_available else "Open App"
+    source_label = _read_string(source.get("label"), "Workspace app")
     return {
         "id": _feed_id("public_app", public_app_id),
         "type": "public_app",
@@ -96,9 +100,12 @@ def _app_feed_item(workspace_id: str, app_card: Dict[str, Any]) -> Optional[Dict
             "label": _read_string(creator.get("label"), "this workspace"),
             "byline": _read_string(creator.get("byline"), "by this workspace"),
         },
-        "summary": "A workspace shared this app so others can clone it.",
-        "components": [_read_string(source.get("label"), "Website")],
-        "badges": ["App", "Public"],
+        "summary": "Clone this app blueprint into your workspace." if clone_available else "Open this app from your workspace.",
+        "components": [source_label],
+        "badges": ["App Blueprint", "Cloneable" if clone_available else "Installed"],
+        "blueprint": blueprint,
+        "provenance": provenance,
+        "permission_summary": permission_summary,
         "installed": installed,
         "action": {
             "kind": action_kind,
@@ -244,8 +251,8 @@ def _build_feed_items(workspace_id: str, feed_filter: str) -> List[Dict[str, Any
     normalized_filter = _normalize_filter(feed_filter)
     items: List[Dict[str, Any]] = []
 
-    if normalized_filter in {"all", "apps", "tools"}:
-        app_payload = mini_apps_service.list_apps(normalized_workspace_id)
+    if normalized_filter in {"all", "apps"}:
+        app_payload = mini_apps_service.list_apps(normalized_workspace_id, include_public_catalog=True)
         for app_card in list(app_payload.get("items") or []):
             if not isinstance(app_card, dict):
                 continue

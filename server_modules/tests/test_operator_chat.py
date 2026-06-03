@@ -727,7 +727,7 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIn("Here is what I can actually do", payload["reply"])
+        self.assertIn("Here is what Sage can do", payload["reply"])
         self.assertIn("Google Workspace", payload["reply"])
         self.assertEqual(payload["mode"], "answer")
         generate_reply.assert_not_called()

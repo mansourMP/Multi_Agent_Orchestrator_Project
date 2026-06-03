@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import base64
+import io
+import json
 import logging
 import os
+import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -9,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import JSONResponse
 from starlette import status
 from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
 
 from server_modules.auth import enforce_workspace_access, validate_csrf, workspace_tenant_id
 from server_modules.kill_switch_gate import assert_not_killed, KillSwitchBlockedError
@@ -50,10 +55,12 @@ from server_modules import (
     gateway_execution_service,
     gateway_approval_service,
     gateway_health_service,
+    machine_capability_check,
     gateway_pairing_service,
     gateway_protocol_service,
     gateway_registry_service,
     gateway_state_repository,
+    hardware_activity_event_service,
     hardware_action_broker_service,
     kill_switch_gate,
     rust_runtime_kernel_client,
@@ -621,6 +628,156 @@ class GatewayRegistrationRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class GatewaySshPairingRequest(BaseModel):
+    workspace_id: str = Field(min_length=1)
+    pairing_token: Optional[str] = None
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    username: str = Field(min_length=1, max_length=128)
+    auth_mode: str = Field(default="password")
+    password: Optional[str] = None
+    ssh_key: Optional[str] = None
+    remote_root: Optional[str] = None
+
+
+def _gateway_api_url_for_remote_setup() -> str:
+    return (
+        str(os.getenv("EMPYRALIS_GATEWAY_API_URL") or "").strip()
+        or str(os.getenv("NEXT_PUBLIC_ORION_API_URL") or "").strip()
+        or str(os.getenv("NEXT_PUBLIC_API_URL") or "").strip()
+        or "http://127.0.0.1:8001"
+    )
+
+
+def _ssh_private_key_from_text(key_text: str) -> Any:
+    try:
+        import paramiko
+    except Exception as exc:  # pragma: no cover - dependency checked by route.
+        raise RuntimeError("SSH support is not installed.") from exc
+
+    key_stream = io.StringIO(key_text)
+    key_classes = (
+        getattr(paramiko, "Ed25519Key", None),
+        getattr(paramiko, "RSAKey", None),
+        getattr(paramiko, "ECDSAKey", None),
+        getattr(paramiko, "DSSKey", None),
+    )
+    last_error: Exception | None = None
+    for key_class in key_classes:
+        if key_class is None:
+            continue
+        key_stream.seek(0)
+        try:
+            return key_class.from_private_key(key_stream)
+        except Exception as exc:
+            last_error = exc
+    raise ValueError("SSH key could not be parsed.") from last_error
+
+
+def _remote_agent_computer_setup_command(
+    *,
+    workspace_id: str,
+    pairing_token: str,
+    display_name: str,
+    remote_root: str,
+) -> str:
+    root = (remote_root or "~/Multi_Agent_Orchestrator_Project").strip() or "~/Multi_Agent_Orchestrator_Project"
+    api_url = _gateway_api_url_for_remote_setup()
+    return "\n".join(
+        [
+            "set -e",
+            f"cd {shlex.quote(root)}",
+            f"export EMPYRALIS_GATEWAY_API_URL={shlex.quote(api_url)}",
+            f"export EMPYRALIS_GATEWAY_PAIRING_TOKEN={shlex.quote(pairing_token)}",
+            f"export EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID={shlex.quote(workspace_id)}",
+            f"export EMPYRALIS_GATEWAY_DISPLAY_NAME={shlex.quote(display_name)}",
+            "scripts/agent_computer.sh stop || true",
+            "scripts/agent_computer.sh service-install --system",
+            "scripts/agent_computer.sh start",
+        ]
+    )
+
+
+def _run_remote_agent_computer_setup_via_ssh(
+    *,
+    host: str,
+    port: int,
+    username: str,
+    auth_mode: str,
+    password: Optional[str],
+    ssh_key: Optional[str],
+    command: str,
+) -> Dict[str, Any]:
+    try:
+        import paramiko
+    except Exception as exc:
+        raise RuntimeError("SSH support is not installed. Install requirements.txt, then retry.") from exc
+
+    normalized_auth_mode = str(auth_mode or "password").strip().lower()
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    connect_kwargs: Dict[str, Any] = {
+        "hostname": host,
+        "port": int(port or 22),
+        "username": username,
+        "timeout": 12,
+        "banner_timeout": 12,
+        "auth_timeout": 12,
+        "look_for_keys": False,
+        "allow_agent": False,
+    }
+    if normalized_auth_mode == "ssh_key":
+        if not str(ssh_key or "").strip():
+            raise ValueError("SSH key is required.")
+        connect_kwargs["pkey"] = _ssh_private_key_from_text(str(ssh_key or ""))
+    else:
+        if not str(password or "").strip():
+            raise ValueError("Password is required.")
+        connect_kwargs["password"] = password
+
+    try:
+        client.connect(**connect_kwargs)
+        stdin, stdout, stderr = client.exec_command(command, timeout=180)
+        del stdin
+        exit_code = int(stdout.channel.recv_exit_status())
+        stdout_text = stdout.read().decode("utf-8", errors="replace")[-2000:]
+        stderr_text = stderr.read().decode("utf-8", errors="replace")[-2000:]
+    finally:
+        client.close()
+    return {
+        "exit_code": exit_code,
+        "stdout_tail": stdout_text,
+        "stderr_tail": stderr_text,
+    }
+
+
+def _ssh_exception_detail(error: Exception) -> str:
+    class_name = error.__class__.__name__.lower()
+    message = str(error).strip()
+    if "authentication" in class_name or "auth" in message.lower():
+        return "SSH authentication failed. Check the username, password, or SSH key."
+    if "timeout" in class_name or "timed out" in message.lower() or "timeout" in message.lower():
+        return "SSH connection timed out. Check the host, port, firewall, and network reachability."
+    if "no route" in message.lower() or "name or service not known" in message.lower() or "nodename" in message.lower():
+        return "SSH host could not be reached. Check the server address."
+    return f"Remote setup failed: {message}"
+
+
+def _ssh_setup_failure_detail(result: Dict[str, Any]) -> str:
+    output = f"{result.get('stdout_tail') or ''}\n{result.get('stderr_tail') or ''}".lower()
+    if "no such file or directory" in output and "scripts/agent_computer.sh" in output:
+        return "Remote setup failed because Agent Computer script was not found. Confirm the remote Empyralis checkout path."
+    if "cd:" in output and "no such file or directory" in output:
+        return "Remote setup failed because the remote Empyralis checkout path does not exist."
+    if "sudo" in output and ("permission" in output or "password" in output or "not allowed" in output):
+        return "Remote setup needs service-install permissions. Connect with a user that can install the Agent Computer service."
+    if "permission denied" in output:
+        return "Remote setup failed because the SSH user does not have permission to install or start Agent Computer."
+    if "command not found" in output and ("node" in output or "npm" in output or "cargo" in output):
+        return "Remote setup failed because required runtime tools are missing on the server."
+    return "Remote setup failed. Confirm the remote Empyralis checkout path, runtime tools, and SSH permissions."
+
+
 class GatewaySessionCreateRequest(BaseModel):
     gateway_id: str = Field(min_length=1)
     gateway_token: str = Field(min_length=1)
@@ -675,6 +832,119 @@ class GatewayToolInterruptRequest(BaseModel):
     reason: Optional[str] = None
     request_id: Optional[str] = None
     timeout_seconds: Optional[int] = Field(default=None, ge=1, le=120)
+
+
+_REMOTE_HARDWARE_CAPABILITY_PROBE = r'''
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+def entry(status, source, detail=""):
+    return {"status": status, "source": source, "detail": str(detail or "")}
+
+def screen_recording():
+    if sys.platform == "darwin":
+        try:
+            import Quartz
+            probe = getattr(Quartz, "CGPreflightScreenCaptureAccess", None)
+            if callable(probe):
+                return entry("granted" if bool(probe()) else "denied", "direct_probe", "macOS screen recording permission probe.")
+        except Exception as exc:
+            return entry("unknown", "direct_probe", exc)
+        return entry("unknown", "direct_probe", "macOS screen recording permission has not been confirmed yet.")
+    if sys.platform.startswith("win"):
+        return entry("granted", "os_default", "Windows desktop capture does not require a separate privacy grant for this local desktop flow.")
+    return entry("unsupported", "platform_capabilities", "Screen recording permission probing is not implemented on this platform.")
+
+def accessibility():
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", 'tell application "System Events" to get name of first process'],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return entry("granted", "osascript_probe", "macOS accessibility permission probe.")
+            error = (result.stderr or result.stdout or "").strip()
+            if "-1743" in error or "not authorized" in error.lower() or "not allowed" in error.lower():
+                return entry("denied", "osascript_probe", error)
+            return entry("unknown", "osascript_probe", error)
+        except Exception as exc:
+            return entry("unknown", "osascript_probe", exc)
+    if sys.platform.startswith("win"):
+        return entry("granted", "os_default", "Windows desktop automation does not require a separate accessibility privacy grant for this local flow.")
+    return entry("unsupported", "platform_capabilities", "Accessibility permission probing is not implemented on this platform.")
+
+def filesystem():
+    try:
+        probe_dir = Path(os.environ.get("EMPYRALIS_STATE_HOME") or Path.home() / ".empyralis" / "state") / "runtime" / "desktop_setup_probe"
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        probe_file = probe_dir / "write-test.tmp"
+        probe_file.write_text("ok", encoding="utf-8")
+        ok = probe_file.read_text(encoding="utf-8") == "ok"
+        probe_file.unlink(missing_ok=True)
+        return entry("granted" if ok else "denied", "local_probe", "Writable local state directory.")
+    except Exception as exc:
+        return entry("denied", "local_probe", exc)
+
+print(json.dumps({
+    "checks": [
+        {"id": "screen_recording", "name": "screen_recording", **screen_recording()},
+        {"id": "accessibility", "name": "accessibility", **accessibility()},
+        {"id": "filesystem", "name": "filesystem", **filesystem()},
+    ]
+}))
+'''.strip()
+
+
+def _remote_hardware_probe_command() -> str:
+    encoded = base64.b64encode(_REMOTE_HARDWARE_CAPABILITY_PROBE.encode("utf-8")).decode("ascii")
+    return f"python3 -c 'import base64; exec(base64.b64decode(\"{encoded}\"))'"
+
+
+def _default_hardware_capability_checks(status: str = "unknown") -> list[Dict[str, str]]:
+    return [
+        {"name": "screen_recording", "status": status},
+        {"name": "accessibility", "status": status},
+        {"name": "filesystem", "status": status},
+    ]
+
+
+def _normalize_hardware_capability_checks(payload: Dict[str, Any]) -> list[Dict[str, str]]:
+    by_name: Dict[str, str] = {}
+    for item in list(payload.get("checks") or []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("id") or "").strip().lower()
+        status_value = str(item.get("status") or "").strip().lower()
+        if name in {"screen_recording", "accessibility", "filesystem"} and status_value in {"granted", "denied", "unknown", "unsupported"}:
+            by_name[name] = status_value
+    return [
+        {"name": name, "status": by_name.get(name, "unknown")}
+        for name in ("screen_recording", "accessibility", "filesystem")
+    ]
+
+
+def _active_workspace_gateway_registration(workspace_id: str) -> Optional[Dict[str, Any]]:
+    active: list[Dict[str, Any]] = []
+    for registration in gateway_state_repository.list_workspace_gateway_registrations(workspace_id):
+        if not isinstance(registration, dict):
+            continue
+        if str(registration.get("status") or "").strip().lower() != "active":
+            continue
+        active.append(registration)
+    if not active:
+        return None
+    online = [
+        registration
+        for registration in active
+        if str(gateway_registry_service.gateway_registration_public_payload(registration).get("connection_status") or "").strip().lower() == "online"
+    ]
+    return (online or active)[0]
 
 
 class GatewayApprovalResolveRequest(BaseModel):
@@ -1128,6 +1398,83 @@ async def create_gateway_pairing_intent(
     return pairing
 
 
+@router.post("/gateway/pairings/ssh")
+async def create_gateway_ssh_pairing(
+    body: GatewaySshPairingRequest,
+    current_user=Depends(require_api_key),
+):
+    workspace_id = enforce_workspace_access(
+        current_user,
+        body.workspace_id,
+        minimum_role="member",
+    )
+    tenant_id = workspace_tenant_id(current_user, workspace_id)
+    pairing_token = str(body.pairing_token or "").strip()
+    pairing: Dict[str, Any] | None = None
+    if not pairing_token:
+        try:
+            pairing = gateway_pairing_service.create_gateway_pairing_intent(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                user_id=str((current_user or {}).get("user_id") or "").strip() or "unknown-user",
+                ttl_seconds=None,
+                display_name=f"{body.username}@{body.host}",
+                platform="linux",
+                metadata={
+                    "setup_source": "ssh",
+                    "host": body.host,
+                    "remote_root": body.remote_root or "~/Multi_Agent_Orchestrator_Project",
+                },
+                runtime_access_mode="full_access",
+                autonomous_agent_setup_warning_acknowledged=True,
+            )
+            pairing_token = str(pairing.get("pairing_token") or "").strip()
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 429 if "too many pending gateway pairing requests" in detail.lower() else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+    if not pairing_token:
+        raise HTTPException(status_code=400, detail="pairing_token is required.")
+
+    command = _remote_agent_computer_setup_command(
+        workspace_id=workspace_id,
+        pairing_token=pairing_token,
+        display_name=f"{body.username}@{body.host}",
+        remote_root=body.remote_root or "~/Multi_Agent_Orchestrator_Project",
+    )
+    try:
+        result = _run_remote_agent_computer_setup_via_ssh(
+            host=str(body.host).strip(),
+            port=int(body.port or 22),
+            username=str(body.username).strip(),
+            auth_mode=body.auth_mode,
+            password=body.password,
+            ssh_key=body.ssh_key,
+            command=command,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=_ssh_exception_detail(exc)) from exc
+    if int(result.get("exit_code") or 0) != 0:
+        raise HTTPException(
+            status_code=502,
+            detail=_ssh_setup_failure_detail(result),
+        )
+    return {
+        "ok": True,
+        "status": "setup_completed",
+        "workspace_id": workspace_id,
+        "host": body.host,
+        "port": int(body.port or 22),
+        "username": body.username,
+        "pairing": {
+            "created": pairing is not None,
+            "expires_at": pairing.get("expires_at") if isinstance(pairing, dict) else None,
+        },
+    }
+
+
 @router.post("/gateway/registrations")
 async def register_gateway(body: GatewayRegistrationRequest):
     try:
@@ -1174,6 +1521,66 @@ async def list_gateway_registrations(
         minimum_role="viewer",
     )
     return gateway_registry_service.list_workspace_gateways(workspace_id=resolved_workspace_id)
+
+
+@router.get("/gateway/hardware/capabilities")
+async def get_gateway_hardware_capabilities(
+    workspace_id: str = Query(..., min_length=1),
+    current_user=Depends(require_api_key),
+):
+    resolved_workspace_id = enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="member",
+    )
+    registration = _active_workspace_gateway_registration(resolved_workspace_id)
+    if not registration:
+        return {
+            "available": False,
+            "checks": [],
+        }
+    gateway_id = str(registration.get("gateway_id") or "").strip()
+    fallback_payload = machine_capability_check.desktop_setup_status(workspace_id=resolved_workspace_id)
+    try:
+        response = await gateway_execution_service.execute_tool_via_gateway(
+            gateway_id=gateway_id,
+            capability_id="shell.execute",
+            arguments={"command": _remote_hardware_probe_command()},
+            run_id=f"hardware-capability-probe-{gateway_id}-{int(datetime.now(timezone.utc).timestamp())}",
+            trace_id=f"hardware-capability-probe-{gateway_id}",
+            workspace_id=resolved_workspace_id,
+            timeout_seconds=15,
+            request_id=f"hardware-capability-probe-{gateway_id}",
+            runtime_access_mode="full_access",
+            empyralis_approved=True,
+        )
+        result = response.get("result") if isinstance(response.get("result"), dict) else {}
+        stdout = str(result.get("stdout") or "").strip()
+        payload = json.loads(stdout) if stdout else {}
+        checks = _normalize_hardware_capability_checks(payload if isinstance(payload, dict) else {})
+    except Exception:
+        checks = _normalize_hardware_capability_checks(fallback_payload if isinstance(fallback_payload, dict) else {})
+    return {
+        "available": True,
+        "gateway_id": gateway_id,
+        "checks": checks,
+    }
+
+
+@router.get("/gateway/hardware/activity/stream")
+async def stream_gateway_hardware_activity(
+    workspace_id: str = Query(..., min_length=1),
+    current_user=Depends(require_api_key),
+):
+    resolved_workspace_id = enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="member",
+    )
+    return EventSourceResponse(
+        hardware_activity_event_service.iter_hardware_action_sse(workspace_id=resolved_workspace_id),
+        ping=15,
+    )
 
 
 @router.post("/gateway/registrations/{gateway_id}/rotate-token")
@@ -1475,6 +1882,8 @@ async def execute_gateway_tool(
             request_id=str(body.request_id or "").strip() or None,
             screenshot_retention=gateway_policy.screenshot_retention,
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         detail = str(exc)
         status_code = 409 if "not currently connected" in detail.lower() else 400

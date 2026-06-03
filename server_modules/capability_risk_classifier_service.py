@@ -307,6 +307,8 @@ def _decision_from_rust_classifier(
     decision = _risk_decision_from_rust(rust_decision.get("decision"))
     next_action = str(rust_decision.get("next_action") or "").strip()
     expected_next_action = _RISK_DECISION_NEXT_ACTIONS.get(decision, "")
+    if not next_action and expected_next_action:
+        next_action = expected_next_action
     if next_action != expected_next_action:
         raise CapabilityRiskClassifierError(f"unexpected_next_action:{next_action or 'missing'}")
     scopes = tuple(

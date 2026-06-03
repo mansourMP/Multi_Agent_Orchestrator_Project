@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 STACK_DIR="${ROOT_DIR}/.orion-stack"
 STATE_DIR="${EMPYRALIS_AGENT_COMPUTER_STATE_DIR:-${STACK_DIR}/agent-computer}"
 LOG_DIR="${STACK_DIR}/logs"
@@ -37,6 +38,12 @@ Environment:
   EMPYRALIS_GATEWAY_PAIRING_TOKEN   Pairing token from Empyralis, used on first start.
   EMPYRALIS_GATEWAY_TOKEN           Existing paired-device token.
   EMPYRALIS_GATEWAY_API_URL         Control plane URL. Defaults to local dev runtime.
+  EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID
+                                      Optional workspace id used by status/start to warn when
+                                      this computer is paired to a different workspace.
+  EMPYRALIS_GATEWAY_ALLOW_WORKSPACE_MISMATCH=1
+                                      Diagnostic override. Allows starting the cloud connection
+                                      even when stored pairing state belongs to another workspace.
   EMPYRALIS_AGENT_COMPUTER_SERVICE_USER  User for Linux/macOS server service mode.
 EOF
 }
@@ -166,6 +173,9 @@ EOF
   fi
   if [[ -n "${EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET:-}" ]]; then
     echo "export EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET=$(shell_quote "${EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET}")" >> "${ENV_FILE}"
+  fi
+  if [[ -n "${EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID:-}" ]]; then
+    echo "export EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID=$(shell_quote "${EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID}")" >> "${ENV_FILE}"
   fi
   chmod 600 "${ENV_FILE}" 2>/dev/null || true
 }
@@ -332,6 +342,50 @@ has_pairing_material() {
   return 1
 }
 
+stored_gateway_workspace_id() {
+  local state_dir="${EMPYRALIS_GATEWAY_STATE_DIR:-${STATE_DIR}/edge}"
+  python3 - "${state_dir}" <<'PY'
+import json
+import pathlib
+import sys
+
+state_dir = pathlib.Path(sys.argv[1])
+
+def load_json(name: str) -> dict:
+    try:
+        payload = json.loads((state_dir / name).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+identity = load_json("identity.json")
+registration = load_json("registration.json")
+workspace_id = str(identity.get("workspaceId") or registration.get("workspace_id") or "").strip()
+if workspace_id:
+    print(workspace_id)
+PY
+}
+
+ensure_expected_gateway_workspace() {
+  local expected_workspace="${EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID:-}"
+  if [[ -z "${expected_workspace}" || "${EMPYRALIS_GATEWAY_ALLOW_WORKSPACE_MISMATCH:-}" == "1" ]]; then
+    return 0
+  fi
+  if [[ -n "${EMPYRALIS_GATEWAY_PAIRING_TOKEN:-}" ]]; then
+    return 0
+  fi
+  local actual_workspace
+  actual_workspace="$(stored_gateway_workspace_id || true)"
+  if [[ -n "${actual_workspace}" && "${actual_workspace}" != "${expected_workspace}" ]]; then
+    echo "[Agent Computer] Refusing to start cloud connection for the wrong workspace."
+    echo "[Agent Computer] Expected workspace: ${expected_workspace}"
+    echo "[Agent Computer] Stored pairing workspace: ${actual_workspace}"
+    echo "[Agent Computer] Re-pair this computer from the active workspace, or set EMPYRALIS_GATEWAY_ALLOW_WORKSPACE_MISMATCH=1 only for diagnostics."
+    return 1
+  fi
+  return 0
+}
+
 start_edge() {
   local pid
   pid="$(pid_from_file "${EDGE_PID_FILE}")"
@@ -345,6 +399,10 @@ start_edge() {
     echo "Pair it from Empyralis, then rerun:"
     echo "  EMPYRALIS_GATEWAY_PAIRING_TOKEN=... scripts/agent_computer.sh start"
     return 0
+  fi
+  if ! ensure_expected_gateway_workspace; then
+    echo "[Agent Computer] Cloud connection was not started."
+    return 2
   fi
   local node_bin
   if ! node_bin="$(resolve_node_bin)"; then
@@ -371,7 +429,10 @@ start_runtime() {
   ensure_installed
   load_runtime_env
   start_supervisor
-  start_edge
+  if ! start_edge; then
+    status_runtime || true
+    exit 2
+  fi
   status_runtime
 }
 
@@ -390,6 +451,8 @@ stop_pid_file() {
 stop_runtime() {
   stop_pid_file "cloud connection" "${EDGE_PID_FILE}"
   stop_pid_file "local runner" "${SUPERVISOR_PID_FILE}"
+  stop_unmanaged_processes "cloud connection" "${EDGE_ENTRY#${ROOT_DIR}/}" "${EDGE_PID_FILE}" "${EDGE_ENTRY#${ROOT_DIR}/}$"
+  stop_unmanaged_processes "local runner" "${SUPERVISOR_BIN#${ROOT_DIR}/}" "${SUPERVISOR_PID_FILE}" "${SUPERVISOR_BIN#${ROOT_DIR}/}$"
   echo "[Agent Computer] Stopped."
 }
 
@@ -405,11 +468,116 @@ status_line() {
   fi
 }
 
+unmanaged_process_status_line() {
+  local label="$1"
+  local pattern="$2"
+  local managed_file="$3"
+  local command_pattern="${4:-.*}"
+  local managed_pid
+  managed_pid="$(pid_from_file "${managed_file}")"
+  if is_pid_alive "${managed_pid}"; then
+    return 0
+  fi
+  local matches
+  matches="$(
+    ps -axo pid=,comm=,args= \
+      | awk -v runtime_pattern="${pattern}" -v command_pattern="${command_pattern}" '
+          index($0, runtime_pattern) > 0 && $0 ~ command_pattern { print $1 }
+        ' \
+      | tr '\n' ' ' \
+      | sed 's/[[:space:]]*$//'
+  )"
+  if [[ -n "${matches}" ]]; then
+    echo "${label}_unmanaged: running pid=${matches}"
+  fi
+}
+
+unmanaged_process_pids() {
+  local pattern="$1"
+  local managed_file="$2"
+  local command_pattern="${3:-.*}"
+  local managed_pid
+  managed_pid="$(pid_from_file "${managed_file}")"
+  ps -axo pid=,comm=,args= \
+    | awk -v runtime_pattern="${pattern}" -v command_pattern="${command_pattern}" -v managed_pid="${managed_pid}" '
+        index($0, runtime_pattern) > 0 && $0 ~ command_pattern {
+          pid=$1
+          if (managed_pid == "" || pid != managed_pid) {
+            print pid
+          }
+        }
+      '
+}
+
+stop_unmanaged_processes() {
+  local label="$1"
+  local pattern="$2"
+  local managed_file="$3"
+  local command_pattern="${4:-.*}"
+  local pid
+  while IFS= read -r pid; do
+    [[ -z "${pid}" ]] && continue
+    if is_pid_alive "${pid}"; then
+      echo "[Agent Computer] Stopping unmanaged ${label} (pid ${pid})..."
+      kill_tree "${pid}"
+    fi
+  done < <(unmanaged_process_pids "${pattern}" "${managed_file}" "${command_pattern}")
+}
+
+gateway_scope_status() {
+  local state_dir="${EMPYRALIS_GATEWAY_STATE_DIR:-${STATE_DIR}/edge}"
+  local expected_workspace="${EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID:-}"
+  python3 - "${state_dir}" "${expected_workspace}" <<'PY'
+import json
+import pathlib
+import sys
+
+state_dir = pathlib.Path(sys.argv[1])
+expected_workspace = str(sys.argv[2] or "").strip()
+
+def load_json(name: str) -> dict:
+    path = state_dir / name
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {"_unreadable": str(path)}
+    return payload if isinstance(payload, dict) else {}
+
+identity = load_json("identity.json")
+registration = load_json("registration.json")
+gateway_id = str(identity.get("gatewayId") or registration.get("gateway_id") or "").strip()
+device_id = str(identity.get("deviceId") or registration.get("device_id") or "").strip()
+tenant_id = str(identity.get("tenantId") or registration.get("tenant_id") or "").strip()
+workspace_id = str(identity.get("workspaceId") or registration.get("workspace_id") or "").strip()
+display_name = str(registration.get("display_name") or "").strip()
+
+if not gateway_id and not device_id and not workspace_id:
+    print(f"gateway_scope: unpaired ({state_dir})")
+else:
+    parts = [
+        f"workspace={workspace_id or 'unknown'}",
+        f"tenant={tenant_id or 'unknown'}",
+        f"gateway={gateway_id or 'unknown'}",
+        f"device={device_id or 'unknown'}",
+    ]
+    if display_name:
+        parts.append(f"name={display_name}")
+    print("gateway_scope: " + " ".join(parts))
+    if expected_workspace and workspace_id and expected_workspace != workspace_id:
+        print(f"gateway_scope_warning: expected workspace {expected_workspace}, but this Agent Computer is paired to {workspace_id}")
+PY
+}
+
 status_runtime() {
   load_env_if_present
   echo "== Agent Computer status =="
   status_line "local_runner" "${SUPERVISOR_PID_FILE}"
   status_line "cloud_connection" "${EDGE_PID_FILE}"
+  unmanaged_process_status_line "local_runner" "${SUPERVISOR_BIN#${ROOT_DIR}/}" "${SUPERVISOR_PID_FILE}" "${SUPERVISOR_BIN#${ROOT_DIR}/}$"
+  unmanaged_process_status_line "cloud_connection" "${EDGE_ENTRY#${ROOT_DIR}/}" "${EDGE_PID_FILE}" "${EDGE_ENTRY#${ROOT_DIR}/}$"
+  gateway_scope_status
   if curl -fsS "${SUPERVISOR_URL}/health" >/dev/null 2>&1; then
     echo "health: local runner ok (${SUPERVISOR_URL})"
   else
@@ -692,6 +860,11 @@ run_edge_forever() {
       sleep 30
       continue
     fi
+    if ! ensure_expected_gateway_workspace; then
+      echo "[Agent Computer] ${mode_label} is holding the local runner online, but cloud connection is blocked by workspace mismatch."
+      sleep 30
+      continue
+    fi
 
     local existing_pid
     existing_pid="$(pid_from_file "${EDGE_PID_FILE}")"
@@ -765,6 +938,11 @@ render_launchagent_plist() {
   </array>
   <key>WorkingDirectory</key>
   <string>${root_dir_xml}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

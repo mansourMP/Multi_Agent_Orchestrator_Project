@@ -43,10 +43,10 @@ def _credits_summary_line(credits_truth: Dict[str, Any]) -> str:
     hosted_enabled = bool(credits_truth.get("hosted_enabled"))
     reason = str(credits_truth.get("reason") or "").strip().lower()
     if hosted_enabled:
-        return "Empyralis credits: available"
+        return "Workspace AI: available"
     if reason:
-        return f"Empyralis credits: blocked ({reason.replace('_', ' ')})"
-    return "Empyralis credits: unavailable"
+        return f"Workspace AI: blocked ({reason.replace('_', ' ')})"
+    return "Workspace AI: unavailable"
 
 
 def is_public_generation_error_message(content: Any) -> bool:

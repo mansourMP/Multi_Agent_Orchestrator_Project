@@ -35,6 +35,7 @@ class DiscoveryFeedServiceTests(unittest.TestCase):
             visibility="public",
             creator_label="@sarah",
         )
+        mini_apps_service.approve_app_publication("source-ws", "public_budget")
         mini_apps_service.publish_app(
             "source-ws",
             name="Private Notes",
@@ -50,7 +51,7 @@ class DiscoveryFeedServiceTests(unittest.TestCase):
         item = feed["items"][0]
         self.assertEqual(item["type"], "public_app")
         self.assertEqual(item["title"], "Public Budget")
-        self.assertEqual(item["action"]["label"], "Clone App")
+        self.assertEqual(item["action"]["label"], "Clone Blueprint")
         self.assertNotIn("public_app_id", item)
         self.assertNotIn("package_id", item)
         self.assertNotIn("runtime_truth", item)
@@ -64,6 +65,7 @@ class DiscoveryFeedServiceTests(unittest.TestCase):
             visibility="public",
             creator_label="@sarah",
         )
+        mini_apps_service.approve_app_publication("source-ws", "public_budget")
         feed_item = discovery_feed_service.list_discovery_feed("target-ws", feed_filter="apps")["items"][0]
 
         adopted = discovery_feed_service.adopt_discovery_item(

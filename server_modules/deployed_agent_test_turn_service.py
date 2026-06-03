@@ -842,6 +842,18 @@ async def execute_test_turn(
         except Exception:
             pass
 
+    try:
+        from server_modules import agent_completion_notification_service
+
+        await agent_completion_notification_service.notify_completion(
+            workspace_id=workspace_id,
+            agent_name=_coerce_text(agent_record.get("name") or agent_record.get("label") or deployed_agent_id) or "Agent",
+            result_summary=reply,
+            artifact_url=None,
+        )
+    except Exception:
+        pass
+
     return DeployedAgentTestTurnResponse(
         reply=reply,
         policy_decisions=policy_decisions,

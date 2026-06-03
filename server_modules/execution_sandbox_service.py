@@ -741,7 +741,6 @@ def _run_hosted_worker(
     goal: str,
     scope: Dict[str, Any],
     runtime_profile: Dict[str, Any] | None,
-    seed_demo_if_empty: bool,
 ) -> Dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="empyralis-hosted-secure-") as tempdir:
         sandbox_root = Path(tempdir).resolve()
@@ -761,7 +760,6 @@ def _run_hosted_worker(
             "goal": goal,
             "runtime_profile": runtime_profile or {},
             "runtime_scope": scope,
-            "seed_demo_if_empty": bool(seed_demo_if_empty),
         }
         _write_read_only_base_image(image_root=image_root, payload=payload, scope=scope)
         output_file = outputs_root / "turn-result.json"
@@ -833,7 +831,6 @@ async def execute_hosted_customer_turn(
     workspace_id: str,
     goal: str,
     runtime_profile: Dict[str, Any] | None = None,
-    seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
     scope = runtime_scope(runtime_mode="hosted_secure", runtime_profile=runtime_profile)
     return await asyncio.to_thread(
@@ -844,5 +841,4 @@ async def execute_hosted_customer_turn(
         goal=goal,
         scope=scope,
         runtime_profile=runtime_profile,
-        seed_demo_if_empty=seed_demo_if_empty,
     )

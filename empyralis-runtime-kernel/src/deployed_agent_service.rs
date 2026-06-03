@@ -221,7 +221,10 @@ pub fn deployed_agent_service_decision_command(payload: &Value) -> Value {
     if operation == "recovery_action" {
         if !matches!(
             recovery_action.as_str(),
-            "disable_channels" | "clear_kill_switch" | "rebuild_runtime"
+            "disable_channels"
+                | "revoke_connector_access"
+                | "clear_kill_switch"
+                | "rebuild_runtime"
         ) {
             blocks.push("unsupported_recovery_action".to_string());
         }
@@ -511,7 +514,7 @@ fn mutating_operation(operation: &str) -> bool {
 }
 
 fn owner_required(operation: &str) -> bool {
-    !matches!(operation, "public_route" | "shop_evaluate")
+    !matches!(operation, "public_route" | "shop_evaluate" | "test_turn")
 }
 
 fn requires_agent_id(operation: &str) -> bool {

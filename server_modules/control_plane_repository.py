@@ -58,6 +58,20 @@ def _control_plane_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _control_plane_service_operation(operation: Any, record_type: Any) -> str:
+    normalized_operation = _control_plane_text(operation)
+    normalized_record_type = _control_plane_text(record_type).lower()
+    if normalized_record_type == "deployed_agent" and normalized_operation in {
+        "create",
+        "update",
+        "status_transition",
+        "archive",
+        "delete",
+    }:
+        return "deployed_agent_record_write"
+    return normalized_operation
+
+
 def _enforce_control_plane_service_decision(
     *,
     operation: str,
@@ -71,9 +85,10 @@ def _enforce_control_plane_service_decision(
     agent_id: str = "",
     **fields: Any,
 ) -> Dict[str, Any]:
+    normalized_operation = _control_plane_service_operation(operation, record_type)
     clean_actor_role = _control_plane_text(actor_role) or "admin"
     payload = {
-        "operation": operation,
+        "operation": normalized_operation,
         "record_type": record_type,
         "tenant_id": _control_plane_text(tenant_id),
         "workspace_id": _control_plane_text(workspace_id),
@@ -99,7 +114,7 @@ def _enforce_control_plane_service_decision(
         )
     except rust_runtime_kernel_client.RustKernelDecisionError as exc:
         reason = _control_plane_text(exc.reason) or "rust_control_plane_service_denied"
-        raise RuntimeError(f"Rust control-plane service blocked {operation}: {reason}")
+        raise RuntimeError(f"Rust control-plane service blocked {normalized_operation}: {reason}")
     allowed_next_actions = {
         "create": {"apply_control_plane_write"},
         "update": {"apply_control_plane_write"},

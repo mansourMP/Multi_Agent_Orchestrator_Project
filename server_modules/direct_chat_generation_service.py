@@ -648,6 +648,7 @@ def stream_provider_backed_direct_chat(
         for event in services.generate_chat_reply_stream_with_provider_fallback(
             context=context,
             metadata=metadata,
+            message=current_prompt,
             user_goal=current_prompt,
             system_prompt=system_prompt,
             prior_messages=messages or None,

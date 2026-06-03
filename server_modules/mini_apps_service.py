@@ -17,6 +17,7 @@ from server_modules import mini_app_host_service, rust_runtime_kernel_client, wo
 
 
 MINI_APP_CONTRACT_VERSION = 1
+APP_BLUEPRINT_VERSION = 1
 MAX_RETRIEVE_LIMIT = 200
 DEFAULT_RETRIEVE_LIMIT = 25
 UNLISTED_SHARE_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -265,6 +266,19 @@ def _default_app_entry(app_id: str) -> Dict[str, Any]:
         "publisher_id": None,
         "publisher_name": None,
         "publisher_domain": None,
+        "created_at": _utc_now_iso(),
+        "published_at": None,
+        "blueprint_version": APP_BLUEPRINT_VERSION,
+        "blueprint_revision": 1,
+        "blueprint_status": "workspace_private",
+        "blueprint_created_by": "empyralis" if _normalize_app_id(app_id) in FIRST_PARTY_MINI_APP_IDS else "human",
+        "blueprint_source": "original",
+        "blueprint_history": [],
+        "source_blueprint_id": None,
+        "cloned_from_public_app_id": None,
+        "cloned_from_workspace_id": None,
+        "cloned_from_app_id": None,
+        "cloned_from_name": None,
         "support_url": None,
         "privacy_url": None,
         "terms_url": None,
@@ -335,6 +349,19 @@ def _safe_read_state(workspace_id: str) -> Dict[str, Any]:
             "publisher_id": str(entry.get("publisher_id") or "").strip() or None,
             "publisher_name": str(entry.get("publisher_name") or "").strip() or None,
             "publisher_domain": _normalize_domain(entry.get("publisher_domain")),
+            "created_at": str(entry.get("created_at") or base["created_at"]).strip() or base["created_at"],
+            "published_at": str(entry.get("published_at") or "").strip() or None,
+            "blueprint_version": int(entry.get("blueprint_version") or APP_BLUEPRINT_VERSION),
+            "blueprint_revision": max(1, int(entry.get("blueprint_revision") or 1)),
+            "blueprint_status": str(entry.get("blueprint_status") or base["blueprint_status"]).strip().lower() or base["blueprint_status"],
+            "blueprint_created_by": str(entry.get("blueprint_created_by") or base["blueprint_created_by"]).strip().lower() or base["blueprint_created_by"],
+            "blueprint_source": str(entry.get("blueprint_source") or base["blueprint_source"]).strip().lower() or base["blueprint_source"],
+            "blueprint_history": list(entry.get("blueprint_history") or []) if isinstance(entry.get("blueprint_history"), list) else [],
+            "source_blueprint_id": str(entry.get("source_blueprint_id") or "").strip() or None,
+            "cloned_from_public_app_id": str(entry.get("cloned_from_public_app_id") or "").strip() or None,
+            "cloned_from_workspace_id": str(entry.get("cloned_from_workspace_id") or "").strip() or None,
+            "cloned_from_app_id": str(entry.get("cloned_from_app_id") or "").strip() or None,
+            "cloned_from_name": str(entry.get("cloned_from_name") or "").strip() or None,
             "support_url": _normalize_url(entry.get("support_url")),
             "privacy_url": _normalize_url(entry.get("privacy_url")),
             "terms_url": _normalize_url(entry.get("terms_url")),
@@ -446,6 +473,13 @@ def _safe_read_public_apps_index() -> Dict[str, Any]:
             "description": str(entry.get("description") or "").strip(),
             "icon_url": _normalize_url(entry.get("icon_url")),
             "creator_label": str(entry.get("creator_label") or "this workspace").strip() or "this workspace",
+            "blueprint": dict(entry.get("blueprint") or {}) if isinstance(entry.get("blueprint"), dict) else {},
+            "provenance": dict(entry.get("provenance") or {}) if isinstance(entry.get("provenance"), dict) else {},
+            "permission_summary": [
+                str(item or "").strip()
+                for item in list(entry.get("permission_summary") or [])
+                if str(item or "").strip()
+            ] if isinstance(entry.get("permission_summary"), list) else [],
             "source": {
                 "kind": str(source.get("kind") or "website").strip() or "website",
                 "url": _normalize_url(source.get("url")),
@@ -684,6 +718,19 @@ def _normalized_contract_payload(workspace_id: str, entry: Dict[str, Any]) -> Di
         "publisher_id": str(entry.get("publisher_id") or "").strip() or None,
         "publisher_name": str(entry.get("publisher_name") or "").strip() or None,
         "publisher_domain": _normalize_domain(entry.get("publisher_domain")),
+        "created_at": str(entry.get("created_at") or "").strip() or None,
+        "published_at": str(entry.get("published_at") or "").strip() or None,
+        "blueprint_version": int(entry.get("blueprint_version") or APP_BLUEPRINT_VERSION),
+        "blueprint_revision": max(1, int(entry.get("blueprint_revision") or 1)),
+        "blueprint_status": str(entry.get("blueprint_status") or "").strip().lower() or None,
+        "blueprint_created_by": str(entry.get("blueprint_created_by") or "").strip().lower() or None,
+        "blueprint_source": str(entry.get("blueprint_source") or "").strip().lower() or None,
+        "blueprint_history": list(entry.get("blueprint_history") or []) if isinstance(entry.get("blueprint_history"), list) else [],
+        "source_blueprint_id": str(entry.get("source_blueprint_id") or "").strip() or None,
+        "cloned_from_public_app_id": str(entry.get("cloned_from_public_app_id") or "").strip() or None,
+        "cloned_from_workspace_id": str(entry.get("cloned_from_workspace_id") or "").strip() or None,
+        "cloned_from_app_id": str(entry.get("cloned_from_app_id") or "").strip() or None,
+        "cloned_from_name": str(entry.get("cloned_from_name") or "").strip() or None,
         "support_url": _normalize_url(entry.get("support_url")),
         "privacy_url": _normalize_url(entry.get("privacy_url")),
         "terms_url": _normalize_url(entry.get("terms_url")),
@@ -727,6 +774,9 @@ def _normalized_contract_payload(workspace_id: str, entry: Dict[str, Any]) -> Di
             "install_path": f"/apps/{app_id}/install",
             "requires_permission_review": True,
         }
+    contract_payload["blueprint"] = _blueprint_payload(workspace_id, contract_payload)
+    contract_payload["provenance"] = _provenance_payload(contract_payload)
+    contract_payload["permission_summary"] = _permission_summary_from_contract(contract_payload)
     if hosted_fields.get("hosted_url"):
         contract_payload["hosted_url"] = hosted_fields["hosted_url"]
         manifest = mini_app_host_service.build_hosted_mini_app_manifest(
@@ -881,6 +931,11 @@ def upsert_mini_app_contract(
     verification_status: Any = None,
     official_claim: Any = None,
     domain_proof: Any = None,
+    blueprint_created_by: Any = None,
+    blueprint_source: Any = None,
+    blueprint_status: Any = None,
+    source_blueprint_id: Any = None,
+    published_at: Any = None,
     delivery_mode: Any = None,
     hosted_url: Any = None,
     embed_kind: Any = None,
@@ -942,6 +997,19 @@ def upsert_mini_app_contract(
         entry["official_claim"] = dict(official_claim)
     if isinstance(domain_proof, dict):
         entry["domain_proof"] = dict(domain_proof)
+    if blueprint_created_by is not None:
+        token = str(blueprint_created_by or "").strip().lower().replace("-", "_")
+        entry["blueprint_created_by"] = token if token in {"human", "sage", "agent", "import", "clone", "empyralis", "system"} else "human"
+    if blueprint_source is not None:
+        token = str(blueprint_source or "").strip().lower().replace("-", "_")
+        entry["blueprint_source"] = token if token in {"original", "sage", "agent", "import", "clone", "system"} else "original"
+    if blueprint_status is not None:
+        token = str(blueprint_status or "").strip().lower().replace("-", "_")
+        entry["blueprint_status"] = token if token in {"draft", "workspace_private", "publish_requested", "public_discoverable", "archived"} else "workspace_private"
+    if source_blueprint_id is not None:
+        entry["source_blueprint_id"] = str(source_blueprint_id or "").strip() or None
+    if published_at is not None:
+        entry["published_at"] = str(published_at or "").strip() or None
     if visibility is not None:
         normalized_visibility = str(visibility or "workspace_private").strip().lower() or "workspace_private"
         if normalized_visibility not in {"workspace_private", "unlisted_link"}:
@@ -1065,6 +1133,51 @@ def _contract_visibility_for_simple_app(value: Any) -> str:
     return "unlisted_link" if _normalize_simple_app_visibility(value) == "public" else "workspace_private"
 
 
+def _blueprint_status_for_simple_app(value: Any) -> str:
+    return "public_discoverable" if _normalize_simple_app_visibility(value) == "public" else "workspace_private"
+
+
+def _append_blueprint_history(
+    entry: Dict[str, Any],
+    *,
+    action: str,
+    actor_label: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    note: Optional[str] = None,
+) -> None:
+    history = list(entry.get("blueprint_history") or []) if isinstance(entry.get("blueprint_history"), list) else []
+    revision = max(1, int(entry.get("blueprint_revision") or 1))
+    history.append(
+        {
+            "revision": revision,
+            "action": str(action or "updated").strip() or "updated",
+            "actor_label": str(actor_label or "").strip() or None,
+            "actor_id": str(actor_id or "").strip() or None,
+            "note": str(note or "").strip() or None,
+            "at": _utc_now_iso(),
+        }
+    )
+    entry["blueprint_history"] = history[-50:]
+
+
+def _bump_blueprint_revision(
+    entry: Dict[str, Any],
+    *,
+    action: str,
+    actor_label: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    note: Optional[str] = None,
+) -> None:
+    entry["blueprint_revision"] = max(1, int(entry.get("blueprint_revision") or 1)) + 1
+    _append_blueprint_history(
+        entry,
+        action=action,
+        actor_label=actor_label,
+        actor_id=actor_id,
+        note=note,
+    )
+
+
 def _unique_simple_app_id(state: Dict[str, Any], name: str) -> str:
     base_app_id = _normalize_app_id(name)
     if not base_app_id:
@@ -1138,6 +1251,79 @@ def _simple_app_source(contract: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _permission_summary_from_contract(contract: Dict[str, Any]) -> List[str]:
+    permissions = {
+        str(item or "").strip().lower()
+        for item in list(contract.get("permissions") or [])
+        if str(item or "").strip()
+    }
+    ai_policy = dict(contract.get("ai_invoke_policy") or {}) if isinstance(contract.get("ai_invoke_policy"), dict) else {}
+    rows = []
+    if mini_app_host_service.APP_PERMISSION_AI_INVOKE in permissions and str(ai_policy.get("consent_status") or "").strip().lower() == "granted":
+        rows.append("AI can run while this app is open.")
+    else:
+        rows.append("AI is off until approved.")
+    if mini_app_host_service.APP_PERMISSION_RECORDS_WRITE in permissions:
+        rows.append("Can save app data.")
+    else:
+        rows.append("Does not save app data by default.")
+    if mini_app_host_service.APP_PERMISSION_BRIDGE_SAGE_REQUEST in permissions:
+        rows.append("Can ask Sage for approved help.")
+    else:
+        rows.append("No Sage bridge by default.")
+    runtime_access = str(contract.get("runtime_access") or "none").strip().lower()
+    rows.append("No computer or device access." if runtime_access == "none" else "Uses approved runtime access.")
+    return rows
+
+
+def _blueprint_payload(workspace_id: str, contract: Dict[str, Any], *, public_app_id: Optional[str] = None) -> Dict[str, Any]:
+    app_id = _normalize_app_id(contract.get("app_id"))
+    source_blueprint_id = str(contract.get("source_blueprint_id") or contract.get("cloned_from_public_app_id") or "").strip() or None
+    visibility = _normalize_simple_app_visibility(contract.get("visibility"))
+    status = str(contract.get("blueprint_status") or "").strip().lower() or _blueprint_status_for_simple_app(visibility)
+    if visibility == "public":
+        status = "public_discoverable"
+    if str(contract.get("install_status") or "").strip().lower() == "removed":
+        status = "archived"
+    created_by = str(contract.get("blueprint_created_by") or "").strip().lower()
+    if not created_by:
+        created_by = "empyralis" if app_id in FIRST_PARTY_MINI_APP_IDS else "human"
+    source = str(contract.get("blueprint_source") or "").strip().lower()
+    if not source:
+        source = "clone" if source_blueprint_id else "original"
+    return {
+        "version": int(contract.get("blueprint_version") or APP_BLUEPRINT_VERSION),
+        "id": public_app_id or f"{_normalize_workspace_id(workspace_id)}:{app_id}",
+        "revision": max(1, int(contract.get("blueprint_revision") or 1)),
+        "status": status,
+        "visibility": visibility,
+        "created_by": created_by,
+        "source": source,
+        "source_blueprint_id": source_blueprint_id,
+        "published_at": str(contract.get("published_at") or "").strip() or None,
+        "history_count": len(list(contract.get("blueprint_history") or [])) if isinstance(contract.get("blueprint_history"), list) else 0,
+    }
+
+
+def _provenance_payload(contract: Dict[str, Any]) -> Dict[str, Any]:
+    cloned_from = str(contract.get("cloned_from_public_app_id") or "").strip()
+    if cloned_from:
+        return {
+            "kind": "cloned",
+            "label": f"Cloned from {str(contract.get('cloned_from_name') or 'a public app').strip()}",
+            "source_blueprint_id": cloned_from,
+        }
+    app_id = _normalize_app_id(contract.get("app_id"))
+    if app_id in FIRST_PARTY_MINI_APP_IDS or str(contract.get("trust_tier") or "").strip().lower() == "first_party":
+        return {"kind": "empyralis", "label": "Built by Empyralis"}
+    created_by = str(contract.get("blueprint_created_by") or "human").strip().lower()
+    if created_by in {"sage", "agent"}:
+        return {"kind": created_by, "label": "Proposed by an agent"}
+    if created_by == "import":
+        return {"kind": "import", "label": "Imported blueprint"}
+    return {"kind": "human", "label": "Created in this workspace"}
+
+
 def _simple_app_card(workspace_id: str, contract: Dict[str, Any]) -> Dict[str, Any]:
     app_id = _normalize_app_id(contract.get("app_id"))
     permissions = {
@@ -1168,12 +1354,16 @@ def _simple_app_card(workspace_id: str, contract: Dict[str, Any]) -> Dict[str, A
             "label": _simple_app_creator_label(contract),
             "byline": f"by {_simple_app_creator_label(contract)}",
         },
+        "blueprint": _blueprint_payload(workspace_id, contract, public_app_id=public_app_id if product_visibility == "public" else None),
+        "provenance": _provenance_payload(contract),
+        "permission_summary": _permission_summary_from_contract(contract),
         "visibility": product_visibility,
         "visibility_label": "Public" if product_visibility == "public" else "Private",
         "source": _simple_app_source(contract),
         "open": open_target,
         "details_url": details_url,
         "installed": True,
+        "install_status": str(contract.get("install_status") or "installed").strip().lower() or "installed",
         "clone_available": False,
         "settings": {
             "ai_enabled": can_use_ai,
@@ -1201,6 +1391,9 @@ def _public_app_record_from_contract(workspace_id: str, contract: Dict[str, Any]
         "description": str(contract.get("description") or "").strip(),
         "icon_url": _normalize_url(contract.get("icon_url")),
         "creator_label": _simple_app_creator_label(contract),
+        "blueprint": _blueprint_payload(normalized_workspace_id, contract, public_app_id=public_app_id),
+        "provenance": _provenance_payload(contract),
+        "permission_summary": _permission_summary_from_contract(contract),
         "source": _simple_app_source(contract),
         "created_at": str(contract.get("created_at") or contract.get("updated_at") or "").strip() or _utc_now_iso(),
         "updated_at": str(contract.get("updated_at") or "").strip() or _utc_now_iso(),
@@ -1215,6 +1408,7 @@ def _sync_public_app_index_for_contract(workspace_id: str, contract: Dict[str, A
     items = dict(index.get("items") or {})
     is_public = (
         _normalize_simple_app_visibility(contract.get("visibility")) == "public"
+        and str(contract.get("blueprint_status") or "").strip().lower() == "public_discoverable"
         and str(contract.get("install_status") or "").strip().lower() != "removed"
     )
     if is_public:
@@ -1241,6 +1435,19 @@ def _public_app_feed_card(record: Dict[str, Any]) -> Dict[str, Any]:
             "label": creator_label,
             "byline": f"by {creator_label}",
         },
+        "blueprint": dict(record.get("blueprint") or {}) if isinstance(record.get("blueprint"), dict) else {
+            "version": APP_BLUEPRINT_VERSION,
+            "id": public_app_id,
+            "status": "public_discoverable",
+            "visibility": "public",
+            "created_by": "human",
+            "source": "original",
+        },
+        "provenance": dict(record.get("provenance") or {}) if isinstance(record.get("provenance"), dict) else {
+            "kind": "public",
+            "label": "Published app blueprint",
+        },
+        "permission_summary": list(record.get("permission_summary") or []) if isinstance(record.get("permission_summary"), list) else ["Review permissions before cloning."],
         "visibility": "public",
         "visibility_label": "Public",
         "source": {
@@ -1251,13 +1458,14 @@ def _public_app_feed_card(record: Dict[str, Any]) -> Dict[str, Any]:
         "open": None,
         "details_url": None,
         "installed": False,
+        "install_status": "available",
         "clone_available": True,
         "settings": None,
         "updated_at": str(record.get("updated_at") or "").strip() or None,
     }
 
 
-def list_apps(workspace_id: str) -> Dict[str, Any]:
+def list_apps(workspace_id: str, *, include_public_catalog: bool = False) -> Dict[str, Any]:
     normalized_workspace_id = _normalize_workspace_id(workspace_id)
     state = _safe_read_state(normalized_workspace_id)
     contracts = list_mini_app_contracts(normalized_workspace_id)
@@ -1289,7 +1497,7 @@ def list_apps(workspace_id: str) -> Dict[str, Any]:
         if public_app_id in cloned_public_ids:
             continue
         public_items.append(_public_app_feed_card(record))
-    items = local_items + public_items
+    items = local_items + public_items if include_public_catalog else local_items
     return {
         "workspace_id": normalized_workspace_id,
         "items": items,
@@ -1322,7 +1530,8 @@ def publish_app(
         raise ValueError("App name is required.")
     state = _safe_read_state(normalized_workspace_id)
     app_id = _unique_simple_app_id(state, clean_name)
-    source = _validate_simple_app_source_url(source_url, required=True)
+    source = _validate_simple_app_source_url(source_url, required=False)
+    requested_publication = _normalize_simple_app_visibility(visibility) == "public"
     contract = upsert_mini_app_contract(
         normalized_workspace_id,
         app_id,
@@ -1335,7 +1544,11 @@ def publish_app(
         delivery_mode="hosted" if source else "structured",
         runtime_type="private",
         runtime_mode="private",
-        visibility=_contract_visibility_for_simple_app(visibility),
+        visibility="workspace_private",
+        blueprint_created_by="human",
+        blueprint_source="original",
+        blueprint_status="publish_requested" if requested_publication else "workspace_private",
+        published_at=None,
         install_status="installed",
         permissions=[
             mini_app_host_service.APP_PERMISSION_SUMMARY_READ,
@@ -1350,6 +1563,19 @@ def publish_app(
             "per_invocation_credit_cap": DEFAULT_AI_INVOCATION_CREDIT_CAP,
         },
     )
+    state = _safe_read_state(normalized_workspace_id)
+    apps = dict(state.get("apps") or {})
+    entry = dict(apps.get(app_id) or {})
+    _append_blueprint_history(
+        entry,
+        action="publish_requested" if requested_publication else "created",
+        actor_label=creator_label,
+        actor_id=creator_id,
+        note="Requested Discovery review." if requested_publication else "Created workspace app blueprint.",
+    )
+    apps[app_id] = entry
+    _save_state(normalized_workspace_id, {"apps": apps})
+    contract = get_mini_app_contract(normalized_workspace_id, app_id)
     _sync_public_app_index_for_contract(normalized_workspace_id, contract)
     return _simple_app_card(normalized_workspace_id, contract)
 
@@ -1413,7 +1639,8 @@ def update_app_settings(
 
     clean_source_url = None
     if source_url is not None:
-        clean_source_url = _validate_simple_app_source_url(source_url, required=True)
+        clean_source_url = _validate_simple_app_source_url(source_url, required=False)
+    requested_publication = visibility is not None and _normalize_simple_app_visibility(visibility) == "public"
 
     contract = upsert_mini_app_contract(
         normalized_workspace_id,
@@ -1426,8 +1653,158 @@ def update_app_settings(
         permissions=permissions,
         bridge_contracts=bridge_contracts,
         ai_invoke_policy=policy,
-        visibility=_contract_visibility_for_simple_app(visibility) if visibility is not None else None,
+        visibility="workspace_private" if requested_publication else _contract_visibility_for_simple_app(visibility) if visibility is not None else None,
+        blueprint_status="publish_requested" if requested_publication else _blueprint_status_for_simple_app(visibility) if visibility is not None else None,
+        published_at=None if requested_publication else None,
     )
+    state = _safe_read_state(normalized_workspace_id)
+    apps = dict(state.get("apps") or {})
+    entry = dict(apps.get(_normalize_app_id(app_id)) or {})
+    _bump_blueprint_revision(
+        entry,
+        action="publish_requested" if requested_publication else "settings_updated",
+        note="Requested Discovery review." if requested_publication else "Updated app blueprint settings.",
+    )
+    apps[_normalize_app_id(app_id)] = entry
+    _save_state(normalized_workspace_id, {"apps": apps})
+    contract = get_mini_app_contract(normalized_workspace_id, app_id)
+    _sync_public_app_index_for_contract(normalized_workspace_id, contract)
+    return _simple_app_card(normalized_workspace_id, contract)
+
+
+def propose_app_blueprint(
+    workspace_id: str,
+    *,
+    name: str,
+    description: Optional[str] = None,
+    source_url: Optional[str] = None,
+    proposed_by: str = "agent",
+    creator_label: Optional[str] = None,
+    creator_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise ValueError("App name is required.")
+    state = _safe_read_state(normalized_workspace_id)
+    app_id = _unique_simple_app_id(state, clean_name)
+    source = _validate_simple_app_source_url(source_url, required=False)
+    source_token = str(proposed_by or "agent").strip().lower().replace("-", "_")
+    if source_token not in {"sage", "agent", "import", "human"}:
+        source_token = "agent"
+    contract = upsert_mini_app_contract(
+        normalized_workspace_id,
+        app_id,
+        label=clean_name,
+        description=str(description or "").strip(),
+        publisher_id=str(creator_id or "").strip() or None,
+        publisher_name=str(creator_label or source_token).strip() or source_token,
+        destination_url=source,
+        hosted_url=source,
+        delivery_mode="hosted" if source else "structured",
+        runtime_type="private",
+        runtime_mode="private",
+        visibility="workspace_private",
+        blueprint_created_by=source_token,
+        blueprint_source=source_token,
+        blueprint_status="draft",
+        install_status="pending",
+        permissions=[],
+        bridge_contracts={},
+        ai_invoke_policy={
+            "consent_required": True,
+            "consent_status": "not_granted",
+            "payer": "platform_credits",
+            "monthly_credit_cap": 0,
+            "per_invocation_credit_cap": 0,
+        },
+    )
+    state = _safe_read_state(normalized_workspace_id)
+    apps = dict(state.get("apps") or {})
+    entry = dict(apps.get(app_id) or {})
+    _append_blueprint_history(
+        entry,
+        action="proposed",
+        actor_label=creator_label,
+        actor_id=creator_id,
+        note=f"Draft app blueprint proposed by {source_token}.",
+    )
+    apps[app_id] = entry
+    _save_state(normalized_workspace_id, {"apps": apps})
+    return _simple_app_card(normalized_workspace_id, get_mini_app_contract(normalized_workspace_id, app_id))
+
+
+def request_app_publication(
+    workspace_id: str,
+    app_id: str,
+    *,
+    actor_label: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_app_id = _normalize_app_id(app_id)
+    existing = get_mini_app_contract(normalized_workspace_id, normalized_app_id)
+    if str(existing.get("install_status") or "").strip().lower() == "removed":
+        raise KeyError(f"App '{normalized_app_id}' was not found.")
+    upsert_mini_app_contract(
+        normalized_workspace_id,
+        normalized_app_id,
+        visibility="workspace_private",
+        blueprint_status="publish_requested",
+        install_status="installed",
+    )
+    state = _safe_read_state(normalized_workspace_id)
+    apps = dict(state.get("apps") or {})
+    entry = dict(apps.get(normalized_app_id) or {})
+    _bump_blueprint_revision(
+        entry,
+        action="publish_requested",
+        actor_label=actor_label,
+        actor_id=actor_id,
+        note=note or "Requested Discovery review.",
+    )
+    apps[normalized_app_id] = entry
+    _save_state(normalized_workspace_id, {"apps": apps})
+    contract = get_mini_app_contract(normalized_workspace_id, normalized_app_id)
+    _sync_public_app_index_for_contract(normalized_workspace_id, contract)
+    return _simple_app_card(normalized_workspace_id, contract)
+
+
+def approve_app_publication(
+    workspace_id: str,
+    app_id: str,
+    *,
+    actor_label: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = _normalize_workspace_id(workspace_id)
+    normalized_app_id = _normalize_app_id(app_id)
+    existing = get_mini_app_contract(normalized_workspace_id, normalized_app_id)
+    if str(existing.get("install_status") or "").strip().lower() == "removed":
+        raise KeyError(f"App '{normalized_app_id}' was not found.")
+    contract = upsert_mini_app_contract(
+        normalized_workspace_id,
+        normalized_app_id,
+        visibility="unlisted_link",
+        blueprint_status="public_discoverable",
+        published_at=_utc_now_iso(),
+        install_status="installed",
+    )
+    state = _safe_read_state(normalized_workspace_id)
+    apps = dict(state.get("apps") or {})
+    entry = dict(apps.get(normalized_app_id) or {})
+    _bump_blueprint_revision(
+        entry,
+        action="publication_approved",
+        actor_label=actor_label,
+        actor_id=actor_id,
+        note=note or "Approved for Discovery.",
+    )
+    apps[normalized_app_id] = entry
+    _save_state(normalized_workspace_id, {"apps": apps})
+    contract = get_mini_app_contract(normalized_workspace_id, normalized_app_id)
     _sync_public_app_index_for_contract(normalized_workspace_id, contract)
     return _simple_app_card(normalized_workspace_id, contract)
 
@@ -1461,9 +1838,8 @@ def clone_public_app(
         or _normalize_url(source_contract.get("destination_url"))
         or _normalize_url((record.get("source") or {}).get("url") if isinstance(record.get("source"), dict) else None)
     )
-    if not source_url:
-        raise ValueError("Only website apps can be cloned right now.")
-    source_url = _validate_simple_app_source_url(source_url, required=True)
+    if source_url:
+        source_url = _validate_simple_app_source_url(source_url, required=True)
     clean_name = str(record.get("name") or source_contract.get("label") or source_app_id).strip() or source_app_id
     state = _safe_read_state(normalized_workspace_id)
     app_id = _unique_simple_app_id(state, clean_name)
@@ -1477,9 +1853,13 @@ def clone_public_app(
         publisher_name=str(creator_label or "").strip() or None,
         destination_url=source_url,
         hosted_url=source_url,
-        delivery_mode="hosted",
+        delivery_mode="hosted" if source_url else "structured",
         runtime_type="private",
         runtime_mode="private",
+        blueprint_created_by="clone",
+        blueprint_source="clone",
+        blueprint_status="workspace_private",
+        source_blueprint_id=normalized_public_app_id,
         visibility="workspace_private",
         install_status="installed",
         permissions=[
@@ -1505,7 +1885,7 @@ def clone_public_app(
     entry["updated_at"] = _utc_now_iso()
     apps[app_id] = entry
     _save_state(normalized_workspace_id, {"apps": apps})
-    return _simple_app_card(normalized_workspace_id, contract)
+    return _simple_app_card(normalized_workspace_id, get_mini_app_contract(normalized_workspace_id, app_id))
 
 
 def get_hosted_mini_app_manifest(workspace_id: str, app_id: str, *, user_id: str = "") -> Dict[str, Any]:

@@ -742,6 +742,26 @@ def _enforce_deployed_virtual_runtime_decision(
 
 def _enforce_runtime_binding_decision(**payload: Any) -> Dict[str, Any]:
     operation = _text(payload.get("operation")) or "ensure_runtime_session"
+    raw_mode = _text(payload.get("studio_agent_mode")).lower()
+    mode_aliases = {
+        "cloud": "cloud_computer",
+        "cloud_computer_agent": "cloud_computer",
+        "sage_cloud_computer": "cloud_computer",
+        "local_gateway": "my_computer",
+        "local_companion": "my_computer",
+        "my_computer_agent": "my_computer",
+        "self_host_runtime": "self_hosted",
+        "self_hosted_agent": "self_hosted",
+    }
+    if raw_mode in mode_aliases:
+        payload["studio_agent_mode"] = mode_aliases[raw_mode]
+    if not _text(payload.get("studio_agent_mode")):
+        if operation == "ensure_cloud_runtime_session":
+            payload["studio_agent_mode"] = "cloud_computer"
+        elif operation == "ensure_self_hosted_runtime_session":
+            payload["studio_agent_mode"] = "self_hosted"
+        elif operation == "ensure_my_computer_runtime_session":
+            payload["studio_agent_mode"] = "my_computer"
     try:
         decision = rust_runtime_kernel_client.run_runtime_kernel_enforced(
             "runtime-binding-decision",
@@ -1740,7 +1760,10 @@ async def ensure_self_hosted_runtime_session_binding(
         filesystem_scope=_text(binding_contract.get("filesystem_scope")) or "none",
         workspace_scoped_filesystem_allowed=_text(binding_contract.get("filesystem_scope")).lower() != "workspace_scoped"
         or _text(binding_contract.get("workspace_id")) == resolved_workspace_id,
-        domain_allowlist_present=bool(_coerce_list(binding_contract.get("domain_allowlist"))),
+        domain_allowlist_present=bool(
+            _coerce_list(binding_contract.get("domain_allowlist"))
+            or _coerce_list(binding_contract.get("allowed_domains"))
+        ),
         session_recording_enabled=bool(_coerce_dict(binding_contract.get("approval_policy")) or True),
     )
     if _text(binding_decision.get("next_action")) == "reuse_runtime_session":
@@ -1787,6 +1810,14 @@ async def ensure_self_hosted_runtime_session_binding(
         agent_allowed_on_node=True,
         active_sessions=0,
         max_concurrent_sessions=0,
+        filesystem_scope=_text(binding_contract.get("filesystem_scope")) or "none",
+        workspace_scoped_filesystem_allowed=_text(binding_contract.get("filesystem_scope")).lower() != "workspace_scoped"
+        or _text(binding_contract.get("workspace_id")) == resolved_workspace_id,
+        domain_allowlist_present=bool(
+            _coerce_list(binding_contract.get("domain_allowlist"))
+            or _coerce_list(binding_contract.get("allowed_domains"))
+        ),
+        session_recording_enabled=bool(_coerce_dict(binding_contract.get("approval_policy")) or True),
     )
     payload = build_deployed_agent_self_hosted_runtime_payload(
         deployed_agent,
@@ -2036,6 +2067,7 @@ async def execute_bound_cloud_runtime_tool_call(
             command=_coerce_dict(argument_payload).get("command"),
         )
     except RuntimeError as exc:
+        reason = str(exc)
         await _append_cloud_runtime_audit_event(
             deployed_agent=deployed_agent,
             tenant_id=tenant_id,
@@ -2053,10 +2085,47 @@ async def execute_bound_cloud_runtime_tool_call(
                 "runtime_session_id": runtime_session_id,
                 "connector_id": _text(connector_id).lower() or None,
                 "action_id": _text(action_id).lower() or None,
-                "reason": str(exc),
+                "reason": reason,
             },
             metadata={"runtime_session_binding": _RUNTIME_BINDING_CLOUD},
         )
+        lowered_reason = reason.lower()
+        if (
+            kill_state.get("deployment_state") in {"paused", "suspended", "archived"}
+            or bool(kill_state.get("kill_switch_active"))
+            or bool(kill_state.get("workspace_emergency_stop_active"))
+            or any(
+            token in lowered_reason
+            for token in (
+                "agent_paused",
+                "agent_suspended",
+                "agent_archived",
+                "kill_switch_active",
+                "workspace_emergency_stop",
+            )
+            )
+        ):
+            await _append_cloud_runtime_audit_event(
+                deployed_agent=deployed_agent,
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+                run_id=resolved_run_id,
+                thread_id=resolved_thread_id or runtime_session_id,
+                session_key=runtime_session_id,
+                action="deployed_agent_cloud_runtime_kill_state_rejected",
+                title="Cloud Computer kill-state rejected action",
+                summary="Cloud Computer runtime rejected an action because the deployed agent is paused, suspended, archived, or emergency-stopped.",
+                status="blocked",
+                event_class="blocked_action",
+                review_required=True,
+                payload={
+                    "runtime_session_id": runtime_session_id,
+                    "connector_id": _text(connector_id).lower() or None,
+                    "action_id": _text(action_id).lower() or None,
+                    "reason": reason,
+                },
+                metadata={"runtime_session_binding": _RUNTIME_BINDING_CLOUD},
+            )
         raise
     python_runtime_action, runtime_action_args = _cloud_runtime_tool_action(
         connector_id=connector_id,

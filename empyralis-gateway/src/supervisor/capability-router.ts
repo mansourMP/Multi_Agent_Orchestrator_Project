@@ -5,6 +5,7 @@ import type {
 } from "../protocol/types";
 import { GatewayBrowserRuntime } from "../browser/runtime";
 import { PersonalChannelRuntimeRegistry } from "../channels/personal-runtime";
+import { ExternalAgentProxyRuntime } from "../external-agent/proxy-runtime";
 import {
   agentComputerSystemServiceModeEnabled,
   agentComputerUserSessionBridgeEnabled,
@@ -17,7 +18,7 @@ import { GatewaySupervisorClient } from "./client";
 
 const RUN_EXECUTOR_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-type ExecutorName = "browser" | "personal_channel" | "supervisor";
+type ExecutorName = "browser" | "external_agent_proxy" | "personal_channel" | "supervisor";
 
 function requireObject(value: unknown, message: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -41,6 +42,7 @@ export class GatewayCapabilityRouter {
     private readonly supervisorClient: GatewaySupervisorClient,
     private readonly browserRuntime?: GatewayBrowserRuntime,
     private readonly personalChannelRuntimes = new PersonalChannelRuntimeRegistry(),
+    private readonly externalAgentProxyRuntime = new ExternalAgentProxyRuntime(),
   ) {}
 
   supportedCapabilities(): string[] {
@@ -51,6 +53,7 @@ export class GatewayCapabilityRouter {
         ? filterCapabilitiesByDesktopPermission(this.browserRuntime?.requestedCapabilities() ?? [])
         : []),
       ...this.personalChannelRuntimes.requestedCapabilities(),
+      ...this.externalAgentProxyRuntime.requestedCapabilities(),
     ];
   }
 
@@ -80,6 +83,18 @@ export class GatewayCapabilityRouter {
     if (this.browserRuntime?.supportsCapability(capabilityId)) {
       this.trackExecutor(runId, "browser");
       const result = await this.browserRuntime.handleCapabilityInvoke(
+        frame as unknown as GatewayRequestEnvelope<GatewayToolInvokePayload>,
+      );
+      return {
+        request_id: frame.id,
+        capability_id: capabilityId,
+        run_id: runId,
+        result,
+      };
+    }
+    if (this.externalAgentProxyRuntime.supportsCapability(capabilityId)) {
+      this.trackExecutor(runId, "external_agent_proxy");
+      const result = await this.externalAgentProxyRuntime.handleCapabilityInvoke(
         frame as unknown as GatewayRequestEnvelope<GatewayToolInvokePayload>,
       );
       return {

@@ -203,6 +203,7 @@ from server_modules.routes_billing import router as billing_router
 from server_modules.routes_builder import router as builder_router
 from server_modules.routes_connectors import router as connectors_router
 from server_modules.routes_deployed_agents import router as deployed_agents_router
+from server_modules.routes_discovery import router as discovery_router
 from server_modules.routes_gateway import router as gateway_router
 from server_modules.routes_health import router as health_router
 from server_modules.routes_marketplace import router as marketplace_router
@@ -325,6 +326,7 @@ app.include_router(billing_router, prefix="/api")
 app.include_router(deployed_agents_router, prefix="/api")
 app.include_router(agent_traces_router, prefix="/api")
 app.include_router(platform_analytics_router, prefix="/api")
+app.include_router(discovery_router, prefix="/api")
 app.include_router(marketplace_router, prefix="/api")
 app.include_router(pilot_router, prefix="/api")
 app.include_router(studio_router, prefix="/api")

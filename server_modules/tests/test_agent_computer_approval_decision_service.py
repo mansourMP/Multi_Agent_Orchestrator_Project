@@ -85,6 +85,18 @@ class AgentComputerApprovalDecisionServiceTests(unittest.TestCase):
                     "owner_visible": True,
                 },
             }
+        if command == "runtime-state-store-decision":
+            operation = str(payload.get("operation") or "persist_runtime_state").strip()
+            next_action = {
+                "upsert_approval_memory_rule": "write_approval_memory_rule",
+                "consume_approval_memory_rule": "consume_approval_memory_rule",
+            }.get(operation, operation)
+            return {
+                "ok": True,
+                "decision": "allow",
+                "reason": "runtime_state_store_allowed",
+                "next_action": next_action,
+            }
         raise AssertionError(f"unexpected Rust command {command}")
 
     def _risk_response(self, decision: str, risk_class: str, capability: str, action_class: str) -> dict:

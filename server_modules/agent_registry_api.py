@@ -250,7 +250,6 @@ class AgentCustomerInventoryPreviewRequest(BaseModel):
     customer_message: str
     hard_context: Optional[str] = None
     operational_policy: Optional[str] = None
-    seed_demo_if_empty: bool = False
 
 
 class AgentCustomerPreviewRequest(BaseModel):
@@ -260,7 +259,6 @@ class AgentCustomerPreviewRequest(BaseModel):
     customer_message: str
     manifest: AgentManifest
     policy_context: Dict[str, Any] = Field(default_factory=dict)
-    seed_demo_if_empty: bool = False
 
 
 class AgentArtifactExportRequest(BaseModel):
@@ -285,7 +283,6 @@ class AgentChannelInboundRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     allow_master_fallback: bool = True
     privileged_runtime_approved: bool = False
-    seed_demo_if_empty: bool = False
 
 
 class PersonalContextEventPublishRequest(BaseModel):
@@ -1395,7 +1392,6 @@ def register_agent_registry_routes(app) -> None:
             agent_label=preview_manifest.identity.name,
             hard_context=preview_manifest.bible.hard_context,
             operational_policy=preview_manifest.bible.operational_policy,
-            seed_demo_if_empty=bool(body.seed_demo_if_empty),
         )
         return {
             "workspace_id": resolved_workspace_id,
@@ -1438,7 +1434,6 @@ def register_agent_registry_routes(app) -> None:
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
             goal=str(body.customer_message or "").strip(),
-            seed_demo_if_empty=bool(body.seed_demo_if_empty),
             runtime_mode=runtime_mode,
             runtime_profile=runtime_profile,
             privileged_runtime_approved=bool(_coerce_dict(body.policy_context).get("privileged_runtime_approved")),
@@ -1477,7 +1472,6 @@ def register_agent_registry_routes(app) -> None:
                 metadata=_coerce_dict(body.metadata),
                 allow_master_fallback=bool(body.allow_master_fallback),
                 privileged_runtime_approved=bool(body.privileged_runtime_approved),
-                seed_demo_if_empty=bool(body.seed_demo_if_empty),
             )
         except Exception as error:
             _raise_channel_route_error(error)

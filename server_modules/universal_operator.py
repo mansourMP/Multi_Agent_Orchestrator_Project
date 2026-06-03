@@ -253,7 +253,6 @@ async def execute_customer_turn(
     tenant_id: str,
     workspace_id: str,
     goal: str,
-    seed_demo_if_empty: bool = False,
     runtime_mode: str = "hosted_secure",
     runtime_profile: dict[str, Any] | None = None,
     privileged_runtime_approved: bool = False,
@@ -298,14 +297,12 @@ async def execute_customer_turn(
             workspace_id=workspace_id,
             goal=goal,
             runtime_profile=runtime_profile,
-            seed_demo_if_empty=seed_demo_if_empty,
         )
     return await execute_customer_turn_in_process(
         manifest=manifest,
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         goal=goal,
-        seed_demo_if_empty=seed_demo_if_empty,
         runtime_mode=normalized_runtime_mode,
         runtime_profile=runtime_profile,
         privileged_runtime_approved=privileged_runtime_approved,
@@ -323,7 +320,6 @@ async def execute_customer_turn_in_process(
     tenant_id: str,
     workspace_id: str,
     goal: str,
-    seed_demo_if_empty: bool = False,
     runtime_mode: str = "hosted_secure",
     runtime_profile: dict[str, Any] | None = None,
     privileged_runtime_approved: bool = False,
@@ -451,7 +447,6 @@ async def execute_customer_turn_in_process(
                     agent_label=manifest.identity.name,
                     hard_context=manifest.bible.hard_context,
                     operational_policy=manifest.bible.operational_policy,
-                    seed_demo_if_empty=seed_demo_if_empty,
                 )
                 tool_status = str(skill_result.get("status") or "").strip() or None
                 draft_reply = str(skill_result.get("reply") or "").strip() or _direct_reply(manifest, goal)

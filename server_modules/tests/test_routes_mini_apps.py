@@ -280,7 +280,8 @@ async def test_apps_facade_publishes_clean_cards_and_settings(monkeypatch: pytes
             assert created["app_id"] == "budget_tracker"
             assert created["name"] == "Budget Tracker"
             assert created["creator"]["byline"] == "by @sarah"
-            assert created["visibility"] == "public"
+            assert created["visibility"] == "private"
+            assert created["blueprint"]["status"] == "publish_requested"
             assert created["source"] == {
                 "kind": "website",
                 "url": "https://apps.example.com/budget",
@@ -291,7 +292,8 @@ async def test_apps_facade_publishes_clean_cards_and_settings(monkeypatch: pytes
             assert "bridge_contracts" not in created
 
             raw_contract = mini_apps_service.get_mini_app_contract("ws-1", "budget_tracker")
-            assert raw_contract["visibility"] == "unlisted_link"
+            assert raw_contract["visibility"] == "workspace_private"
+            assert raw_contract["blueprint_status"] == "publish_requested"
             assert raw_contract["runtime_type"] == "private"
             assert raw_contract["delivery_mode"] == "hosted"
             assert raw_contract["hosted_app"]["allowed_origins"] == ["https://apps.example.com"]
@@ -366,7 +368,7 @@ async def test_apps_facade_clones_public_apps(monkeypatch: pytest.MonkeyPatch):
 
     with tempfile.TemporaryDirectory(prefix="apps-routes-clone-") as tmpdir:
         monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
-        source_card = mini_apps_service.publish_app(
+        mini_apps_service.publish_app(
             "source-ws",
             name="Budget Tracker",
             description="Track daily spending.",
@@ -374,13 +376,14 @@ async def test_apps_facade_clones_public_apps(monkeypatch: pytest.MonkeyPatch):
             visibility="public",
             creator_label="@sarah",
         )
+        source_card = mini_apps_service.approve_app_publication("source-ws", "budget_tracker")
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             list_response = await client.get("/api/workspaces/target-ws/apps")
             assert list_response.status_code == 200
             public_cards = [item for item in list_response.json()["items"] if item.get("clone_available")]
-            assert public_cards[0]["public_app_id"] == source_card["public_app_id"]
+            assert public_cards == []
 
             clone_response = await client.post(
                 "/api/workspaces/target-ws/apps/clone",
@@ -397,6 +400,60 @@ async def test_apps_facade_clones_public_apps(monkeypatch: pytest.MonkeyPatch):
             items = after_clone_response.json()["items"]
             assert [item["name"] for item in items] == ["Budget Tracker"]
             assert items[0]["installed"] is True
+
+
+@pytest.mark.anyio
+async def test_apps_blueprint_proposal_and_publication_approval(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {
+        "user_id": "owner-1",
+        "email": "owner@example.com",
+    }
+    monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+
+    with tempfile.TemporaryDirectory(prefix="apps-routes-blueprint-") as tmpdir:
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            proposal_response = await client.post(
+                "/api/workspaces/ws-1/apps/proposals",
+                json={
+                    "name": "Lead Intake",
+                    "description": "Capture and qualify inbound leads.",
+                    "proposed_by": "agent",
+                },
+            )
+            assert proposal_response.status_code == 200
+            proposal = proposal_response.json()
+            assert proposal["blueprint"]["status"] == "draft"
+            assert proposal["install_status"] == "pending"
+            assert proposal["provenance"]["kind"] == "agent"
+
+            request_response = await client.post(
+                "/api/workspaces/ws-1/apps/lead_intake/publish-request",
+                json={"note": "Ready for workspace owner review."},
+            )
+            assert request_response.status_code == 200
+            requested = request_response.json()
+            assert requested["blueprint"]["status"] == "publish_requested"
+            assert requested["visibility"] == "private"
+            public_before_approval = mini_apps_service.list_apps("other-ws", include_public_catalog=True)
+            assert not [item for item in public_before_approval["items"] if item.get("clone_available")]
+
+            approve_response = await client.post(
+                "/api/workspaces/ws-1/apps/lead_intake/approve-publication",
+                json={"note": "Approved."},
+            )
+            assert approve_response.status_code == 200
+            approved = approve_response.json()
+            assert approved["blueprint"]["status"] == "public_discoverable"
+            assert approved["visibility"] == "public"
+            assert approved["blueprint"]["revision"] >= 3
+
+            public_after_approval = mini_apps_service.list_apps("other-ws", include_public_catalog=True)
+            cloneable = [item for item in public_after_approval["items"] if item.get("clone_available")]
+            assert cloneable[0]["public_app_id"] == approved["public_app_id"]
+            assert cloneable[0]["permission_summary"]
 
 
 @pytest.mark.anyio
@@ -871,7 +928,7 @@ async def test_mini_app_invoke_route_blocks_monthly_cap_overspend(monkeypatch: p
         monthly_rows=[
             {
                 "source_surface": "mini_app_invoke",
-                "completed_at": "2026-05-10T00:00:00Z",
+                "completed_at": routes_mini_apps._current_month_start_iso(),
                 "metadata": {
                     "app_id": "writing",
                     "usage_accounting": {"retail_credits_charged": 498},

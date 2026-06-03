@@ -69,7 +69,7 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "admin_security_features_enabled": False,
         "mobile_push_enabled": False,
         "cloud_services_enabled": True,
-        "mobile_app_enabled": False,
+        "mobile_app_enabled": True,
         "approvals_enabled": False,
         "artifacts_enabled": False,
         "advanced_features_enabled": False,
@@ -1177,7 +1177,7 @@ def enforce_mobile_app_access(
         install=install,
         entitlement_key="mobile_app_enabled",
         reason="mobile_app_unavailable",
-        message="Mobile app access is available on paid plans only. Use web or Telegram/WhatsApp on the free plan.",
+        message="Mobile app access is not enabled for this workspace yet.",
     )
 
 

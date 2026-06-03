@@ -169,7 +169,6 @@ def _context_from_prepared(prepared: Dict[str, Any] | ChannelRoutingContext) -> 
         health_safety_context=coerce_dict(payload.get("health_safety_context")) or {"enabled": False},
         allow_master_fallback=bool(payload.get("allow_master_fallback", False)),
         privileged_runtime_approved=bool(payload.get("privileged_runtime_approved", False)),
-        seed_demo_if_empty=bool(payload.get("seed_demo_if_empty", False)),
     )
 
 
@@ -194,7 +193,6 @@ def prepare_canonical_channel_turn(
     request_id: Optional[str] = None,
     allow_master_fallback: bool = False,
     privileged_runtime_approved: bool = False,
-    seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
     context = build_routing_context(
         tenant_id=tenant_id,
@@ -216,7 +214,6 @@ def prepare_canonical_channel_turn(
         request_id=request_id,
         allow_master_fallback=allow_master_fallback,
         privileged_runtime_approved=privileged_runtime_approved,
-        seed_demo_if_empty=seed_demo_if_empty,
     )
     return context_to_compat_dict(context)
 
@@ -284,7 +281,6 @@ async def route_transport_channel_message(
     runtime_profile_id: Optional[str] = None,
     allow_master_fallback: bool = False,
     privileged_runtime_approved: bool = False,
-    seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
     context = build_routing_context(
         tenant_id=tenant_id,
@@ -305,7 +301,6 @@ async def route_transport_channel_message(
         runtime_profile_id=runtime_profile_id,
         allow_master_fallback=allow_master_fallback,
         privileged_runtime_approved=privileged_runtime_approved,
-        seed_demo_if_empty=seed_demo_if_empty,
     )
     incident_result = check_incident_state(context=context)
     if incident_result is not None:
@@ -348,7 +343,6 @@ async def route_inbound_channel_message(
     metadata: Optional[Dict[str, Any]] = None,
     allow_master_fallback: bool = False,
     privileged_runtime_approved: bool = False,
-    seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
     resolved_channel_key, resolved_endpoint_key, resolved_message = assert_inbound_allowed(
         tenant_id=tenant_id,
@@ -370,7 +364,6 @@ async def route_inbound_channel_message(
         metadata=metadata,
         allow_master_fallback=allow_master_fallback,
         privileged_runtime_approved=privileged_runtime_approved,
-        seed_demo_if_empty=seed_demo_if_empty,
     )
     _enforce_public_deployed_agent_route_decision(context=context)
     inbound_event = await record_inbound_message(

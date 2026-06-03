@@ -55,6 +55,8 @@ def _enforce_personal_gateway_config_decision(
         or metadata.get("runtime_session_id")
         or ""
     ).strip()
+    if not session_id:
+        session_id = str(gateway_id or registration.get("gateway_id") or "").strip()
     payload = {
         "operation": "tool_execute",
         "tenant_id": str(registration.get("tenant_id") or "default").strip() or "default",
@@ -115,6 +117,8 @@ def _enforce_personal_channel_dispatch_decision(
         or metadata.get("runtime_session_id")
         or ""
     ).strip()
+    if not session_id:
+        session_id = str(gateway_id or registration.get("gateway_id") or "").strip()
     payload = {
         "operation": "protocol_route",
         "tenant_id": str(registration.get("tenant_id") or "default").strip() or "default",

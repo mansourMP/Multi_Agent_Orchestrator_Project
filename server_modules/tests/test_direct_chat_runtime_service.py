@@ -499,7 +499,7 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(payload["reply"], "Mock provider reply.")
         self.assertFalse(payload.get("interventions"))
 
-    def test_collect_direct_operator_reply_answers_capability_question_from_tool_catalog(self) -> None:
+    def test_collect_direct_operator_reply_keeps_generic_capability_question_as_sage_chat(self) -> None:
         prepared = SimpleNamespace(
             normalized_message="what can you do here right now?",
             normalized_workspace_id="default",
@@ -576,11 +576,8 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["mode"], "answer")
-        self.assertIn("Here is what I can actually do", payload["reply"])
-        self.assertIn("Google Workspace", payload["reply"])
-        self.assertIn("Telegram", payload["reply"])
-        self.assertIn("Tool availability is based on gateway status", payload["reply"])
-        self.assertEqual(captured, {})
+        self.assertEqual(payload["reply"], "I can help with connected apps, channels, and available tools from this workspace.")
+        self.assertEqual(captured.get("message"), "what can you do here right now?")
 
     def test_build_direct_operator_reply_returns_explicit_provider_unavailable_when_not_ready(self) -> None:
         prepared = SimpleNamespace(

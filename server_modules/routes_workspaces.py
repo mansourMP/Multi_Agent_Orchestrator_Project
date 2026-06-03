@@ -20,6 +20,7 @@ from server_modules.workspace_ai_route_service import (
     update_workspace_default_ai_route,
 )
 from server_modules.workspace_channel_operations_service import (
+    CHANNEL_PROVIDERS,
     build_workspace_channel_operations,
 )
 from server_modules.workspace_bootstrap_service import build_workspace_bootstrap
@@ -99,6 +100,24 @@ def _require_workspace_default_route(value: Any, *, workspace_id: Optional[str] 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _workspace_settings_fields_set(body: BaseModel) -> set[str]:
+    fields = getattr(body, "model_fields_set", None)
+    if fields is None:
+        fields = getattr(body, "__fields_set__", set())
+    return {str(item) for item in (fields or set())}
+
+
+def _require_notification_channel_id(value: Any) -> str:
+    token = str(value or "").strip()
+    if not token:
+        return ""
+    prefix = token.split(":", 1)[0].strip()
+    allowed_prefixes = {str(item or "").strip() for item in CHANNEL_PROVIDERS}
+    if prefix not in allowed_prefixes:
+        raise HTTPException(status_code=400, detail="notification_channel_id must start with a known connector or channel type.")
+    return token
 
 
 def _control_plane_actor_id(current_user: Any, user: Optional[Dict[str, Any]] = None) -> str:
@@ -241,6 +260,10 @@ class WorkspaceUpdateRequest(BaseModel):
     preferred_shell_profile: Optional[str] = None
     default_route: Optional[str] = None
     setup_completed: Optional[bool] = None
+
+
+class WorkspaceSettingsUpdateRequest(BaseModel):
+    notification_channel_id: Optional[str] = None
 
 
 class WorkspaceInviteRequest(BaseModel):
@@ -426,6 +449,53 @@ async def update_workspace(
     if not isinstance(workspace_record, dict):
         raise HTTPException(status_code=404, detail="Workspace not found.")
     return _workspace_summary_payload(workspace_record)
+
+
+@router.patch("/workspaces/{workspace_id}/settings")
+async def update_workspace_settings(
+    workspace_id: str,
+    body: WorkspaceSettingsUpdateRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="owner",
+    )
+    supplied_fields = _workspace_settings_fields_set(body)
+    if "notification_channel_id" not in supplied_fields:
+        raise HTTPException(status_code=400, detail="At least one workspace settings field must be supplied.")
+    workspace_record = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace_record, dict):
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    metadata = _coerce_dict(workspace_record.get("metadata"))
+    settings = _coerce_dict(metadata.get("settings"))
+    notification_channel_id = _require_notification_channel_id(body.notification_channel_id)
+    if notification_channel_id:
+        settings["notification_channel_id"] = notification_channel_id
+        metadata["notification_channel_id"] = notification_channel_id
+    else:
+        settings.pop("notification_channel_id", None)
+        metadata.pop("notification_channel_id", None)
+    metadata["settings"] = settings
+    updated = await control_plane_repository.update_workspace_profile(
+        resolved_workspace_id,
+        {
+            "metadata": metadata,
+            "actor_id": _control_plane_actor_id(current_user),
+            "actor_role": "owner",
+        },
+    )
+    if not isinstance(updated, dict):
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    return {
+        "workspace_id": resolved_workspace_id,
+        "settings": {
+            "notification_channel_id": notification_channel_id or None,
+        },
+    }
 
 
 @router.get("/workspaces/{workspace_id}/bootstrap")

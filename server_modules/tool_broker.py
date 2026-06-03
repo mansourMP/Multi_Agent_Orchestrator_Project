@@ -383,7 +383,6 @@ async def execute_skill(
     agent_label: str,
     hard_context: str,
     operational_policy: str,
-    seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
     source_event_id = agent_action_metering_service.build_source_event_id(
         source_surface="tool_broker_skill",
@@ -512,7 +511,6 @@ async def execute_skill(
                 agent_label=agent_label,
                 hard_context=hard_context,
                 operational_policy=operational_policy,
-                seed_demo_if_empty=seed_demo_if_empty,
             )
             await agent_action_metering_service.record_completed(
                 **common_event,

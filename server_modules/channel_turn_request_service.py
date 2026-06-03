@@ -195,7 +195,6 @@ def build_channel_turn_request(
     runtime_profile_id: Optional[str],
     request_id: Optional[str],
     privileged_runtime_approved: bool,
-    seed_demo_if_empty: bool,
     prior_messages: Optional[list[dict[str, Any]]] = None,
     business_plan: Optional[str] = None,
 ) -> Any:
@@ -240,7 +239,6 @@ def build_channel_turn_request(
         "machine_id": str(runtime_profile.get("machine_id") or "").strip() or None,
         "agent_role": agent_role_token(install=install, manifest=manifest),
         "agent_role_source": "channel_owner_binding",
-        "seed_demo_if_empty": bool(seed_demo_if_empty),
         "selected_tool_ids": selected_tool_ids or None,
         "tools": requested_tools or None,
     }
@@ -307,7 +305,6 @@ def build_routing_context(
     runtime_profile_id: Optional[str] = None,
     request_id: Optional[str] = None,
     privileged_runtime_approved: bool = False,
-    seed_demo_if_empty: bool = False,
     allow_master_fallback: bool = False,
     validate_preflight: bool = True,
 ) -> ChannelRoutingContext:
@@ -383,7 +380,6 @@ def build_routing_context(
         runtime_profile_id=resolved_runtime_profile_id,
         request_id=request_id,
         privileged_runtime_approved=privileged_runtime_approved,
-        seed_demo_if_empty=seed_demo_if_empty,
         prior_messages=None,
         business_plan=None,
     )
@@ -411,7 +407,6 @@ def build_routing_context(
         connector_id=channel_connector_id(install=install_payload, metadata=shared_metadata),
         allow_master_fallback=bool(allow_master_fallback),
         privileged_runtime_approved=bool(privileged_runtime_approved),
-        seed_demo_if_empty=bool(seed_demo_if_empty),
     )
 
 
@@ -498,7 +493,6 @@ def rebuild_turn_request(
         runtime_profile_id=context.runtime_profile_id,
         request_id=request_id,
         privileged_runtime_approved=context.privileged_runtime_approved,
-        seed_demo_if_empty=context.seed_demo_if_empty,
         prior_messages=next_prior_messages if isinstance(next_prior_messages, list) else None,
         business_plan=str(next_business_plan or "").strip() or None,
     )

@@ -93,10 +93,7 @@ class ConfigurationError(RuntimeError):
 
 
 def _share_token_secret() -> bytes:
-    secret = (
-        os.getenv("EMPYRALIS_MINI_APP_SHARE_SECRET")
-        or os.getenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET")
-    )
+    secret = os.getenv("EMPYRALIS_MINI_APP_SHARE_SECRET")
     if not secret:
         raise ConfigurationError(
             "EMPYRALIS_MINI_APP_SHARE_SECRET is required. Set this environment variable before creating mini-app share tokens."

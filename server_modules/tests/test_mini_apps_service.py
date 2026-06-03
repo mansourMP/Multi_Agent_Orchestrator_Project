@@ -26,6 +26,21 @@ class MiniAppsServiceTests(unittest.TestCase):
         self._workspace_patch.stop()
         self._tmpdir.cleanup()
 
+    def test_share_token_secret_requires_exact_share_secret(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(mini_apps_service.ConfigurationError):
+                mini_apps_service.issue_unlisted_share_token(workspace_id="ws-1", app_id="budget_tracker")
+
+    def test_share_token_secret_rejects_legacy_launch_secret_alias(self) -> None:
+        with patch.dict("os.environ", {"EMPYRALIS_MINI_APP_LAUNCH_SECRET": "legacy-secret"}, clear=True):
+            with self.assertRaises(mini_apps_service.ConfigurationError):
+                mini_apps_service.issue_unlisted_share_token(workspace_id="ws-1", app_id="budget_tracker")
+
+    def test_share_token_secret_accepts_required_share_secret(self) -> None:
+        with patch.dict("os.environ", {"EMPYRALIS_MINI_APP_SHARE_SECRET": "s" * 40}, clear=True):
+            issued = mini_apps_service.issue_unlisted_share_token(workspace_id="ws-1", app_id="budget_tracker")
+        self.assertIn("token", issued)
+
     def test_upsert_and_list_contracts_preserve_shared_contract_shape(self) -> None:
         mini_apps_service.upsert_mini_app_contract(
             "ws-1",

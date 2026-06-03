@@ -114,6 +114,44 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertEqual(service.extract_first_url("Check example.com/docs please"), "https://example.com/docs")
         self.assertEqual(service.extract_first_path_reference("Open ./docs/README.md now"), "./docs/README.md")
 
+    def test_hardware_screenshot_trace_metadata_exposes_artifact(self) -> None:
+        metadata = service.build_direct_tool_trace_metadata(
+            "hardware",
+            "action",
+            {
+                "runtime_target": "user_device_gateway",
+                "action": "screenshot.capture",
+                "arguments": {},
+            },
+            result_text=json.dumps(
+                {
+                    "status": "completed",
+                    "artifacts": ["artifact-screenshot-1"],
+                    "runtime_session": {"gateway_id": "gw-1"},
+                }
+            ),
+        )
+
+        self.assertEqual(metadata["capability_id"], "screenshot.capture")
+        self.assertEqual(metadata["result_summary"], "Captured screenshot from Agent Computer.")
+        self.assertEqual(metadata["browser_screenshot"]["artifact_id"], "artifact-screenshot-1")
+        self.assertEqual(metadata["browser_screenshot"]["caption"], "Agent Computer screenshot")
+
+    def test_hardware_offline_trace_metadata_uses_actionable_summary(self) -> None:
+        metadata = service.build_direct_tool_trace_metadata(
+            "hardware",
+            "action",
+            {
+                "runtime_target": "user_device_gateway",
+                "action": "screenshot.capture",
+                "arguments": {},
+            },
+            result_text=json.dumps({"status": "offline", "reason": "gateway_offline"}),
+        )
+
+        self.assertIsNone(metadata["browser_screenshot"])
+        self.assertEqual(metadata["result_summary"], "Agent Computer is not connected. Open Hardware to connect this Mac.")
+
     def test_execute_single_direct_tool_call_handles_memory_tools(self) -> None:
         callbacks = _callbacks()
 

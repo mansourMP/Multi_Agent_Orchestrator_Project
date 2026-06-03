@@ -52,7 +52,7 @@ def count_definitions_in_file(
         return None
     if len(counts) == 1:
         return f"{target} defines {counts[0]}."
-        return f"{target} defines {counts[0]} and {counts[1]}."
+    return f"{target} defines {counts[0]} and {counts[1]}."
 
 
 class NoProviderRustGateError(RuntimeError):

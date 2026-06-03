@@ -2,7 +2,7 @@ use rand::RngCore;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -15,6 +15,13 @@ const STATUS_URL: &str = "http://127.0.0.1:7790/status";
 const SESSION_VERIFY_TIMEOUT: Duration = Duration::from_secs(30);
 const SESSION_VERIFY_INTERVAL: Duration = Duration::from_secs(3);
 
+#[derive(Clone, Default)]
+pub struct ConnectOptions {
+    pub pairing_token: Option<String>,
+    pub workspace_id: Option<String>,
+    pub gateway_api_url: Option<String>,
+}
+
 #[derive(Clone, Serialize)]
 pub struct TrayStatus {
     pub state: String,
@@ -23,6 +30,7 @@ pub struct TrayStatus {
     pub gateway_running: bool,
     pub supervisor_adopted: bool,
     pub gateway_adopted: bool,
+    pub desired_connected: bool,
     pub session_verified: bool,
     pub heartbeat_fresh: bool,
     pub session_status: String,
@@ -37,6 +45,10 @@ struct ManagedProcesses {
     gateway: Option<Child>,
     adopted_supervisor_pid: Option<u32>,
     adopted_gateway_pid: Option<u32>,
+    desired_connected: bool,
+    pairing_token: Option<String>,
+    workspace_id: Option<String>,
+    gateway_api_url: Option<String>,
     session_verified: bool,
     heartbeat_fresh: bool,
     session_status: String,
@@ -46,6 +58,7 @@ struct ManagedProcesses {
 pub struct ProcessManager {
     state: Mutex<ManagedProcesses>,
     backend_url: String,
+    gateway_api_url: String,
     workspace_id: String,
     api_key: String,
 }
@@ -57,6 +70,8 @@ impl ProcessManager {
             backend_url: env_value("EMPYRALIS_BACKEND_URL")
                 .or_else(|| env_value("EMPYRALIS_API_URL"))
                 .unwrap_or_else(|| "http://127.0.0.1:8001".to_string()),
+            gateway_api_url: env_value("EMPYRALIS_GATEWAY_API_URL")
+                .unwrap_or_else(|| "http://127.0.0.1:8001/api".to_string()),
             workspace_id: env_value("EMPYRALIS_WORKSPACE_ID")
                 .or_else(|| env_value("EXPO_PUBLIC_WORKSPACE_ID"))
                 .unwrap_or_else(|| "ws-1".to_string()),
@@ -67,18 +82,30 @@ impl ProcessManager {
     }
 
     pub fn connect_device(&self) -> Result<TrayStatus, String> {
-        self.start_supervisor()?;
-        self.start_gateway()?;
-        Ok(self.status())
+        self.connect_device_with_options(ConnectOptions::default())
+    }
+
+    pub fn connect_device_with_options(&self, options: ConnectOptions) -> Result<TrayStatus, String> {
+        self.apply_connect_options(options)?;
+        self.set_desired_connected(true)?;
+        match self.start_gateway() {
+            Ok(status) => Ok(status),
+            Err(error) => {
+                self.record_error(error.clone());
+                Err(error)
+            }
+        }
     }
 
     pub fn disconnect_device(&self) -> Result<TrayStatus, String> {
+        self.set_desired_connected(false)?;
         self.stop_gateway()?;
         self.stop_supervisor()?;
         Ok(self.status())
     }
 
     pub fn start_gateway(&self) -> Result<TrayStatus, String> {
+        self.set_desired_connected(true)?;
         self.start_supervisor()?;
         self.ensure_gateway_dist()?;
 
@@ -101,14 +128,18 @@ impl ProcessManager {
         let node = node_binary();
         let gateway_entry = self.repo_root().join("empyralis-gateway/dist/index.js");
         let secret = self.supervisor_secret()?;
+        let launch = self.gateway_launch_options()?;
         let child = Command::new(node)
             .arg(gateway_entry)
             .current_dir(self.repo_root())
             .env("EMPYRALIS_SUPERVISOR_SECRET", secret)
             .env("EMPYRALIS_SUPERVISOR_URL", SUPERVISOR_URL)
+            .env("EMPYRALIS_GATEWAY_API_URL", launch.gateway_api_url)
             .env("EMPYRALIS_GATEWAY_STATE_DIR", &gateway_state)
             .env("EMPYRALIS_GATEWAY_DISPLAY_NAME", self.device_name())
+            .env("EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID", launch.workspace_id)
             .env("EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT", self.repo_root())
+            .env("EMPYRALIS_GATEWAY_PAIRING_TOKEN", launch.pairing_token.unwrap_or_default())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -130,11 +161,15 @@ impl ProcessManager {
     }
 
     pub fn stop_gateway(&self) -> Result<TrayStatus, String> {
+        self.set_desired_connected(false)?;
         let mut guard = self.lock_state()?;
         stop_child(&mut guard.gateway);
         if let Some(pid) = guard.adopted_gateway_pid.take() {
             let _ = terminate_pid(pid);
         }
+        guard.session_verified = false;
+        guard.heartbeat_fresh = false;
+        guard.session_status = "none".to_string();
         Ok(self.status_from_guard(&guard))
     }
 
@@ -149,7 +184,10 @@ impl ProcessManager {
 
     pub fn status(&self) -> TrayStatus {
         match self.lock_state() {
-            Ok(guard) => self.status_from_guard(&guard),
+            Ok(mut guard) => {
+                refresh_process_state(&mut guard);
+                self.status_from_guard(&guard)
+            }
             Err(error) => TrayStatus {
                 state: "error".to_string(),
                 device_name: self.device_name(),
@@ -157,6 +195,7 @@ impl ProcessManager {
                 gateway_running: false,
                 supervisor_adopted: false,
                 gateway_adopted: false,
+                desired_connected: false,
                 session_verified: false,
                 heartbeat_fresh: false,
                 session_status: "none".to_string(),
@@ -165,6 +204,31 @@ impl ProcessManager {
                 error: Some(error),
             },
         }
+    }
+
+    pub fn maintain_connection(&self) {
+        let should_recover = match self.lock_state() {
+            Ok(mut guard) => {
+                refresh_process_state(&mut guard);
+                guard.desired_connected
+            }
+            Err(_) => false,
+        };
+        if !should_recover {
+            return;
+        }
+
+        let status = self.status();
+        if !status.supervisor_running || !status.gateway_running {
+            self.record_error("Recovering hardware connection...".to_string());
+            if let Err(error) = self.start_gateway() {
+                self.record_error(error);
+            }
+            return;
+        }
+
+        let result = self.poll_session_once();
+        self.update_session_verification(result);
     }
 
     fn start_supervisor(&self) -> Result<(), String> {
@@ -222,17 +286,17 @@ impl ProcessManager {
         let state = if let Some(error) = guard.last_error.as_ref() {
             if !error.is_empty() {
                 "error"
-            } else if gateway_running {
+            } else if guard.session_verified && gateway_running {
                 "active"
-            } else if supervisor_running {
-                "connected"
+            } else if guard.desired_connected && (gateway_running || supervisor_running) {
+                "connecting"
             } else {
                 "idle"
             }
-        } else if gateway_running {
+        } else if guard.session_verified && gateway_running {
             "active"
-        } else if supervisor_running {
-            "connected"
+        } else if guard.desired_connected && (gateway_running || supervisor_running) {
+            "connecting"
         } else {
             "idle"
         };
@@ -244,6 +308,7 @@ impl ProcessManager {
             gateway_running,
             supervisor_adopted: guard.adopted_supervisor_pid.is_some(),
             gateway_adopted: guard.adopted_gateway_pid.is_some(),
+            desired_connected: guard.desired_connected,
             session_verified: guard.session_verified,
             heartbeat_fresh: guard.heartbeat_fresh,
             session_status: if guard.session_status.is_empty() {
@@ -284,13 +349,62 @@ impl ProcessManager {
         verified
     }
 
+    fn set_desired_connected(&self, desired: bool) -> Result<(), String> {
+        let mut guard = self.lock_state()?;
+        guard.desired_connected = desired;
+        if !desired {
+            guard.last_error = None;
+            guard.session_verified = false;
+            guard.heartbeat_fresh = false;
+            guard.session_status = "none".to_string();
+        }
+        Ok(())
+    }
+
+    fn apply_connect_options(&self, options: ConnectOptions) -> Result<(), String> {
+        let mut guard = self.lock_state()?;
+        if let Some(pairing_token) = clean_option(options.pairing_token) {
+            guard.pairing_token = Some(pairing_token);
+        }
+        if let Some(workspace_id) = clean_option(options.workspace_id) {
+            guard.workspace_id = Some(workspace_id);
+        }
+        if let Some(gateway_api_url) = clean_option(options.gateway_api_url) {
+            guard.gateway_api_url = Some(gateway_api_url);
+        }
+        Ok(())
+    }
+
+    fn gateway_launch_options(&self) -> Result<GatewayLaunchOptions, String> {
+        let guard = self.lock_state()?;
+        Ok(GatewayLaunchOptions {
+            pairing_token: guard.pairing_token.clone(),
+            workspace_id: guard
+                .workspace_id
+                .clone()
+                .unwrap_or_else(|| self.workspace_id.clone()),
+            gateway_api_url: guard
+                .gateway_api_url
+                .clone()
+                .unwrap_or_else(|| self.gateway_api_url.clone()),
+        })
+    }
+
+    fn record_error(&self, error: String) {
+        if let Ok(mut guard) = self.lock_state() {
+            guard.last_error = Some(error);
+            guard.session_verified = false;
+            guard.heartbeat_fresh = false;
+        }
+    }
+
     fn poll_session_once(&self) -> SessionVerification {
+        let local_verification = self.poll_local_gateway_session_once();
+        if local_verification.session_verified {
+            return local_verification;
+        }
         if self.backend_url.trim().is_empty() || self.workspace_id.trim().is_empty() || self.api_key.trim().is_empty() {
-            return SessionVerification {
-                session_verified: false,
-                heartbeat_fresh: false,
-                session_status: "none".to_string(),
-            };
+            return local_verification;
         }
         let url = format!(
             "{}/api/gateway/registrations?workspace_id={}",
@@ -307,27 +421,69 @@ impl ProcessManager {
             .arg(&url)
             .output();
         let Ok(output) = output else {
-            return SessionVerification {
-                session_verified: false,
-                heartbeat_fresh: false,
-                session_status: "none".to_string(),
-            };
+            return local_verification;
         };
         if !output.status.success() {
+            return local_verification;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) else {
+            return local_verification;
+        };
+        let backend_verification = session_verification_from_payload(&value);
+        if backend_verification.session_verified {
+            backend_verification
+        } else if local_verification.heartbeat_fresh {
+            local_verification
+        } else {
+            backend_verification
+        }
+    }
+
+    fn poll_local_gateway_session_once(&self) -> SessionVerification {
+        let checkpoint_path = self.gateway_state_dir().join("checkpoints.json");
+        let journal_path = self.gateway_state_dir().join("journal.ndjson");
+        let checkpoint_payload = fs::read_to_string(&checkpoint_path).ok();
+        let checkpoint_value = checkpoint_payload
+            .as_deref()
+            .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+            .unwrap_or(Value::Null);
+        let session_id = checkpoint_value
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let health_state = checkpoint_value
+            .get("healthState")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if session_id.is_empty() {
             return SessionVerification {
                 session_verified: false,
                 heartbeat_fresh: false,
                 session_status: "none".to_string(),
             };
         }
-        let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) else {
+        let journal_fresh = fs::metadata(&journal_path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .map(|age| age <= Duration::from_secs(45))
+            .unwrap_or(false);
+        let heartbeat_acknowledged = journal_fresh && recent_journal_has_heartbeat_ack(&journal_path);
+        if health_state == "online" && heartbeat_acknowledged {
             return SessionVerification {
-                session_verified: false,
-                heartbeat_fresh: false,
-                session_status: "none".to_string(),
+                session_verified: true,
+                heartbeat_fresh: true,
+                session_status: "active".to_string(),
             };
-        };
-        session_verification_from_payload(&value)
+        }
+        SessionVerification {
+            session_verified: false,
+            heartbeat_fresh: heartbeat_acknowledged,
+            session_status: if health_state == "online" { "stale".to_string() } else { "none".to_string() },
+        }
     }
 
     fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, ManagedProcesses>, String> {
@@ -535,6 +691,12 @@ struct SessionVerification {
     session_status: String,
 }
 
+struct GatewayLaunchOptions {
+    pairing_token: Option<String>,
+    workspace_id: String,
+    gateway_api_url: String,
+}
+
 fn session_verification_from_payload(value: &Value) -> SessionVerification {
     let items = value
         .get("items")
@@ -575,11 +737,55 @@ fn session_verification_from_payload(value: &Value) -> SessionVerification {
     }
 }
 
+fn recent_journal_has_heartbeat_ack(path: &Path) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let reader = BufReader::new(file);
+    let mut lines = Vec::new();
+    for line in reader.lines().map_while(Result::ok) {
+        lines.push(line);
+    }
+    let tail_start = lines.len().saturating_sub(80);
+    let mut saw_response_after = false;
+    for line in lines[tail_start..].iter().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let direction = value
+            .get("direction")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        let message_type = value
+            .get("messageType")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if direction == "inbound" && message_type == "response" {
+            saw_response_after = true;
+            continue;
+        }
+        if direction == "outbound" && message_type == "gateway.heartbeat" && saw_response_after {
+            return true;
+        }
+    }
+    false
+}
+
 fn env_value(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn clean_option(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
 }
 
 fn percent_encode_query(value: &str) -> String {
@@ -618,6 +824,51 @@ fn supervisor_healthy() -> bool {
 
 fn process_still_running(child: &Child) -> bool {
     process_alive(child.id())
+}
+
+fn refresh_process_state(guard: &mut ManagedProcesses) {
+    if guard
+        .supervisor
+        .as_mut()
+        .map(child_has_exited)
+        .unwrap_or(false)
+    {
+        guard.supervisor = None;
+        guard.session_verified = false;
+        guard.heartbeat_fresh = false;
+    }
+    if guard
+        .gateway
+        .as_mut()
+        .map(child_has_exited)
+        .unwrap_or(false)
+    {
+        guard.gateway = None;
+        guard.session_verified = false;
+        guard.heartbeat_fresh = false;
+    }
+    if guard
+        .adopted_supervisor_pid
+        .map(|pid| !process_alive(pid))
+        .unwrap_or(false)
+    {
+        guard.adopted_supervisor_pid = None;
+        guard.session_verified = false;
+        guard.heartbeat_fresh = false;
+    }
+    if guard
+        .adopted_gateway_pid
+        .map(|pid| !process_alive(pid))
+        .unwrap_or(false)
+    {
+        guard.adopted_gateway_pid = None;
+        guard.session_verified = false;
+        guard.heartbeat_fresh = false;
+    }
+}
+
+fn child_has_exited(child: &mut Child) -> bool {
+    matches!(child.try_wait(), Ok(Some(_)))
 }
 
 fn process_alive(pid: u32) -> bool {

@@ -4,6 +4,8 @@ mod status;
 mod tray_icon;
 
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use process_manager::ProcessManager;
 use tauri::{Manager, RunEvent};
@@ -31,6 +33,11 @@ fn main() {
 
             status::start_status_server(manager.clone(), app.handle().clone());
             tray_icon::install(app.handle().clone(), manager.clone())?;
+            let recovery_manager = manager.clone();
+            thread::spawn(move || loop {
+                recovery_manager.maintain_connection();
+                thread::sleep(Duration::from_secs(3));
+            });
 
             if let Some(window) = app.get_webview_window(POPOVER_LABEL) {
                 let _ = window.hide();

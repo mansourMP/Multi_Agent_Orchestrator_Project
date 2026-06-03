@@ -79,6 +79,10 @@ button {
   background: var(--app-warning);
 }
 
+.hardware-card__dot.is-connecting {
+  background: var(--app-warning);
+}
+
 .hardware-card__dot.is-error {
   background: var(--app-danger);
 }
@@ -113,6 +117,10 @@ button {
 }
 
 .hardware-card__status.is-active {
+  color: var(--app-warning);
+}
+
+.hardware-card__status.is-connecting {
   color: var(--app-warning);
 }
 

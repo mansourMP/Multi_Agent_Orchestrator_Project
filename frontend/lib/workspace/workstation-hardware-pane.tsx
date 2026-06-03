@@ -359,6 +359,14 @@ function gatewayApiUrl(): string {
   return '';
 }
 
+function gatewayControlPlaneApiUrl(): string {
+  const baseUrl = gatewayApiUrl().replace(/\/+$/, '');
+  if (!baseUrl) {
+    return '';
+  }
+  return baseUrl.endsWith('/api') ? baseUrl : `${baseUrl}/api`;
+}
+
 function readPairingIntent(payload: unknown): PairingIntentRecord | null {
   const record = readRecord(payload);
   const intent = readRecord(record?.intent) ?? record;
@@ -848,7 +856,26 @@ export function WorkstationHardwarePane() {
     setLocalConnectError(null);
     setStatusMessage(null);
     try {
-      const response = await fetchJsonWithTimeout<TrayLocalStatus & { error?: string }>(TRAY_CONNECT_URL, { method: 'POST' }, 30_000);
+      const intent = await createPairingIntent('this_device');
+      if (!intent?.pairing_token) {
+        throw new Error('Could not create a hardware pairing token.');
+      }
+      const response = await fetchJsonWithTimeout<TrayLocalStatus & { error?: string }>(
+        TRAY_CONNECT_URL,
+        {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            pairing_token: intent.pairing_token,
+            workspace_id: workspaceId,
+            gateway_api_url: gatewayControlPlaneApiUrl(),
+          }),
+        },
+        30_000,
+      );
       if (response.ok === false) {
         throw new Error(response.error || 'Could not connect this Mac.');
       }

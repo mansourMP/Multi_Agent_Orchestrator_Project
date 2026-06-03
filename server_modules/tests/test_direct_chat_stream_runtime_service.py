@@ -79,7 +79,7 @@ class DirectChatStreamRuntimeServiceTests(unittest.TestCase):
         self.assertIn("build_direct_operator_reply", captured)
         self.assertIn("build_chat_turn_event_stream", captured)
 
-    def test_build_imported_direct_chat_execution_services_imports_operator_chat_module(self):
+    def test_build_imported_direct_chat_execution_services_imports_direct_chat_runtime_exports_module(self):
         captured = {}
 
         result = runtime_service.build_imported_direct_chat_execution_services(
@@ -88,7 +88,7 @@ class DirectChatStreamRuntimeServiceTests(unittest.TestCase):
             session_manager_enabled=lambda: True,
             session_manager_factory=lambda: "manager",
             import_module=lambda name, fromlist=(): type(
-                "OperatorChatModule",
+                "DirectChatRuntimeExportsModule",
                 (),
                 {
                     "build_direct_operator_reply": staticmethod(lambda *args, **kwargs: {}),

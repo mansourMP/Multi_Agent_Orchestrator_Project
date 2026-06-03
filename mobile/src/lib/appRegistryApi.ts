@@ -24,6 +24,23 @@ export type MiniAppContract = {
   delivery_mode?: "structured" | "hosted" | string;
   visibility?: "workspace_private" | "unlisted_link" | string;
   install_status?: "installed" | "pending" | "removed" | string;
+  blueprint?: {
+    version?: number | null;
+    revision?: number | null;
+    status?: string | null;
+    visibility?: string | null;
+    created_by?: string | null;
+    source?: string | null;
+    source_blueprint_id?: string | null;
+    published_at?: string | null;
+    history_count?: number | null;
+  } | null;
+  provenance?: {
+    kind?: string | null;
+    label?: string | null;
+    source_blueprint_id?: string | null;
+  } | null;
+  permission_summary?: string[];
   memory_scope?: string | null;
   trust_tier?: "user_private" | "first_party" | "reviewed_partner" | "public_untrusted_url" | string | null;
   background_ai_allowed?: boolean | null;
@@ -73,6 +90,44 @@ export type MiniAppSharePreview = {
     hosted_url?: string | null;
     expires_at?: number | null;
   };
+};
+
+export type DiscoveryFeedItem = {
+  id: string;
+  type: "public_app" | "agent_template" | "mcp" | "skill" | "bundle" | string;
+  title: string;
+  description?: string | null;
+  summary?: string | null;
+  actor?: {
+    label?: string | null;
+    byline?: string | null;
+  } | null;
+  components?: string[];
+  badges?: string[];
+  permission_summary?: string[];
+  blueprint?: {
+    status?: string | null;
+    source?: string | null;
+    created_by?: string | null;
+  } | null;
+  provenance?: {
+    label?: string | null;
+  } | null;
+  installed?: boolean;
+  action?: {
+    kind?: string | null;
+    label?: string | null;
+    enabled?: boolean;
+  } | null;
+};
+
+export type DiscoveryFeedPayload = {
+  items?: DiscoveryFeedItem[];
+};
+
+export type DiscoveryAdoptPayload = {
+  app_id?: string | null;
+  open_url?: string | null;
 };
 
 type RegisterMiniAppRequest = {
@@ -262,7 +317,46 @@ export const appRegistryApi = {
   getAppManifest(session: MobileSession, appId: string) {
     return requestRuntime<{ item?: any }>(session, `/apps/manifest/${encodeURIComponent(appId)}`);
   },
+  listWorkspaceApps(session: MobileSession) {
+    const workspaceId = String(session.workspaceId || "").trim();
+    if (!workspaceId) {
+      throw new Error("Apps are not ready for this session yet.");
+    }
+    return requestRuntime<{ items?: MiniAppContract[] }>(
+      session,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/apps`,
+    );
+  },
   listMiniApps(session: MobileSession) {
+    const workspaceId = String(session.workspaceId || "").trim();
+    if (!workspaceId) {
+      throw new Error("Mini apps are not ready for this session yet.");
+    }
+    return appRegistryApi.listWorkspaceApps(session);
+  },
+  listDiscoveryFeed(session: MobileSession, filter: string = "all") {
+    const workspaceId = String(session.workspaceId || "").trim();
+    if (!workspaceId) {
+      throw new Error("Discovery is not ready for this session yet.");
+    }
+    const query = new URLSearchParams({ filter }).toString();
+    return requestRuntime<DiscoveryFeedPayload>(
+      session,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/discovery/feed?${query}`,
+    );
+  },
+  adoptDiscoveryItem(session: MobileSession, feedItemId: string) {
+    const workspaceId = String(session.workspaceId || "").trim();
+    if (!workspaceId) {
+      throw new Error("Discovery is not ready for this session yet.");
+    }
+    return requestRuntime<DiscoveryAdoptPayload>(
+      session,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/discovery/items/${encodeURIComponent(feedItemId)}/adopt`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+  },
+  listHostedMiniApps(session: MobileSession) {
     const workspaceId = String(session.workspaceId || "").trim();
     if (!workspaceId) {
       throw new Error("Mini apps are not ready for this session yet.");

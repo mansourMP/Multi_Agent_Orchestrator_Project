@@ -1,5 +1,5 @@
 import React from "react";
-import { ScrollView, Switch, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -30,8 +30,6 @@ export default function RegisterMiniAppScreen() {
   const [slug, setSlug] = React.useState("");
   const [hostedUrl, setHostedUrl] = React.useState("");
   const [description, setDescription] = React.useState("");
-  const [allowAi, setAllowAi] = React.useState(false);
-  const [allowSageBridge, setAllowSageBridge] = React.useState(false);
   const [error, setError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
 
@@ -51,25 +49,15 @@ export default function RegisterMiniAppScreen() {
         description: description.trim(),
         hosted_url: hostedUrl.trim(),
         allowed_origins: [allowedOrigin],
-        permissions: [
-          ...(allowAi ? ["app.ai.invoke"] : []),
-          ...(allowSageBridge ? ["app.bridge.sage.request"] : []),
-        ],
-        ai_invoke_policy: {
-          consent_required: true,
-          consent_status: allowAi ? "granted" : "not_granted",
-          payer: "platform_credits",
-          monthly_credit_cap: allowAi ? 500 : 0,
-          per_invocation_credit_cap: allowAi ? 50 : 0,
-        },
+        permissions: [],
         trust_tier: "user_private",
         background_ai_allowed: false,
-        bridge_contracts: allowSageBridge ? { app_to_sage: ["summary_request"] } : {},
+        bridge_contracts: {},
         visibility: "workspace_private",
       });
       router.replace(`/apps/${effectiveSlug}/home`);
     } catch (submissionError) {
-      setError(submissionError instanceof Error ? submissionError.message : "Tool registration failed.");
+      setError(submissionError instanceof Error ? submissionError.message : "App registration failed.");
     } finally {
       setSaving(false);
     }
@@ -92,10 +80,10 @@ export default function RegisterMiniAppScreen() {
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={{ fontSize: 22, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>
-            Register tool
+            Create app
           </Text>
           <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>
-            Workspace-private by default.
+            Private to this workspace by default.
           </Text>
         </View>
       </View>
@@ -104,28 +92,15 @@ export default function RegisterMiniAppScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: Math.max(insets.bottom, 18) + 24, gap: 14 }}
       >
-        <Field label="Tool name" value={name} onChangeText={setName} placeholder="Inventory Helper" />
-        <Field label="Tool id" value={slug} onChangeText={setSlug} placeholder={slugify(name) || "inventory_helper"} />
-        <Field label="Hosted URL" value={hostedUrl} onChangeText={setHostedUrl} placeholder="https://example.com/app" />
+        <Field label="App name" value={name} onChangeText={setName} placeholder="Inventory Helper" />
+        <Field label="App id" value={slug} onChangeText={setSlug} placeholder={slugify(name) || "inventory_helper"} />
+        <Field label="App source URL" value={hostedUrl} onChangeText={setHostedUrl} placeholder="https://example.com/app" />
         <Field
           label="Description"
           value={description}
           onChangeText={setDescription}
-          placeholder="What this tool helps with."
+          placeholder="What this app helps with."
           multiline
-        />
-
-        <PermissionRow
-          label="Allow AI invoke"
-          detail="The tool can spend workspace/platform credits through configured providers."
-          value={allowAi}
-          onValueChange={setAllowAi}
-        />
-        <PermissionRow
-          label="Allow Sage bridge"
-          detail="The tool can request a governed Sage summary through an explicit bridge contract."
-          value={allowSageBridge}
-          onValueChange={setAllowSageBridge}
         />
 
         <View
@@ -142,7 +117,7 @@ export default function RegisterMiniAppScreen() {
             Contract defaults
           </Text>
           <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
-            Memory is denied by default. Origins are explicit. Public sharing starts as unlisted links later, not marketplace listing.
+            Access is private by default. Origins are explicit. Discovery listing requires review later.
           </Text>
           {allowedOrigin ? (
             <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>Allowed origin: {allowedOrigin}</Text>
@@ -170,7 +145,7 @@ export default function RegisterMiniAppScreen() {
               color: canSave ? theme.colors.background : theme.colors.textSecondary,
             }}
           >
-            {saving ? "Registering..." : "Register tool"}
+            {saving ? "Creating..." : "Create app"}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -214,40 +189,6 @@ function Field({
           textAlignVertical: multiline ? "top" : "center",
         }}
       />
-    </View>
-  );
-}
-
-function PermissionRow({
-  label,
-  detail,
-  value,
-  onValueChange,
-}: {
-  label: string;
-  detail: string;
-  value: boolean;
-  onValueChange: (value: boolean) => void;
-}) {
-  const theme = useTheme();
-  return (
-    <View
-      style={{
-        padding: 14,
-        borderRadius: 18,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.card,
-        flexDirection: "row",
-        gap: 12,
-        alignItems: "center",
-      }}
-    >
-      <View style={{ flex: 1, gap: 4 }}>
-        <Text style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{label}</Text>
-        <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>{detail}</Text>
-      </View>
-      <Switch value={value} onValueChange={onValueChange} />
     </View>
   );
 }

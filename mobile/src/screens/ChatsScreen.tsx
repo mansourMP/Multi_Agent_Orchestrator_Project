@@ -201,8 +201,8 @@ export default function ChatsScreen() {
   const sageSubtitle = sageSession?.messages[sageSession.messages.length - 1]?.speech?.trim()
     || "Your personal AI assistant";
   const headerSubtitle = connected
-    ? "Open Sage or the Business Agents you are building."
-    : "Pair this phone with your workspace to load Sage and your builds.";
+    ? "Ask Sage, continue recent work, or open workspace agents."
+    : "Pair this phone with your workspace to load Sage and your work.";
 
   return (
     <ScrollView
@@ -211,7 +211,7 @@ export default function ChatsScreen() {
       showsVerticalScrollIndicator={false}
     >
       <PrimaryScreenHeader
-        title="Build"
+        title="Sage"
         subtitle={headerSubtitle}
         action={{
           accessibilityLabel: "Start a new Sage thread",

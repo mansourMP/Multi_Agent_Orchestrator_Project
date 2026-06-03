@@ -2,6 +2,13 @@
   "name": "empyralis-root",
   "private": true,
   "scripts": {
+    "mobile:go": "npm run mobile:go --prefix mobile",
+    "mobile:dev": "npm run mobile:dev --prefix mobile",
+    "mobile:ios": "npm run mobile:ios --prefix mobile",
+    "tray:dev": "npm run dev --prefix apps/empyralis-tray",
+    "tray:tauri:dev": "npm run tauri:dev --prefix apps/empyralis-tray",
+    "tray:build": "npm run tauri:build --prefix apps/empyralis-tray",
+    "tray:build:dmg": "bash scripts/build_empyralis_tray_dmg.sh",
     "tauri:dev": "cd src-tauri && cargo tauri dev",
     "tauri:build": "npm run build --prefix frontend && cd src-tauri && cargo tauri build",
     "tauri:build:release": "python3 scripts/write_tauri_release_config.py && npm run build --prefix frontend && cd src-tauri && cargo tauri build --config tauri.release.conf.json"

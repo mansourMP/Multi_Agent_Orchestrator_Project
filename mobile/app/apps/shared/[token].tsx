@@ -11,13 +11,13 @@ import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 function permissionLabel(value: string) {
   const token = String(value || "").trim();
   const labels: Record<string, string> = {
-    "app.ai.invoke": "Can use workspace AI credits",
-    "app.summary.read": "Can read its own tool summary",
+    "app.ai.invoke": "Can use approved AI actions",
+    "app.summary.read": "Can read its own app summary",
     "app.bridge.sage.request": "Can ask Sage through an approved bridge",
     "app.bridge.specialist.request": "Can request a specialist bridge",
     "app.connector.invoke": "Can use approved connector bridge",
-    "app.records.write": "Can write tool-owned records",
-    "app.records.read.raw": "Can read tool-owned raw records",
+    "app.records.write": "Can write app-owned records",
+    "app.records.read.raw": "Can read app-owned raw records",
   };
   return labels[token] || token.replace(/^app\./, "").replace(/[._-]+/g, " ");
 }
@@ -49,7 +49,7 @@ export default function SharedMiniAppInstallScreen() {
         }
       } catch (previewError) {
         if (active) {
-          setError(previewError instanceof Error ? previewError.message : "This tool link could not be opened.");
+          setError(previewError instanceof Error ? previewError.message : "This app link could not be opened.");
         }
       } finally {
         if (active) {
@@ -73,7 +73,7 @@ export default function SharedMiniAppInstallScreen() {
       const installed = await appRegistryApi.installSharedMiniApp(session, token);
       router.replace(`/apps/${installed.app_id}/home`);
     } catch (installError) {
-      setError(installError instanceof Error ? installError.message : "Tool install failed.");
+      setError(installError instanceof Error ? installError.message : "App install failed.");
     } finally {
       setInstalling(false);
     }
@@ -100,7 +100,7 @@ export default function SharedMiniAppInstallScreen() {
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={{ fontSize: 22, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>
-            Review tool
+            Review app
           </Text>
           <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>
             Unlisted link install.
@@ -126,10 +126,10 @@ export default function SharedMiniAppInstallScreen() {
           }}
         >
           <Text style={{ fontSize: 24, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>
-            {loading ? "Loading..." : app?.label || "Tool"}
+            {loading ? "Loading..." : app?.label || "App"}
           </Text>
           <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
-            {app?.description || "Review what this tool can access before adding it to your workspace."}
+            {app?.description || "Review what this app can access before adding it to your workspace."}
           </Text>
         </View>
 
@@ -153,8 +153,8 @@ export default function SharedMiniAppInstallScreen() {
           )}
         </ReviewSection>
 
-        <ReviewSection title="Credits">
-          <ReviewText>AI actions use workspace/platform credits only if this app has AI invoke permission.</ReviewText>
+        <ReviewSection title="Access">
+          <ReviewText>AI actions require explicit permission before this app can use them.</ReviewText>
         </ReviewSection>
 
         {error ? <Text style={{ fontSize: 13, color: theme.colors.error }}>{error}</Text> : null}
@@ -178,7 +178,7 @@ export default function SharedMiniAppInstallScreen() {
               color: preview && !installing ? theme.colors.background : theme.colors.textSecondary,
             }}
           >
-            {installing ? "Installing..." : "Add tool"}
+            {installing ? "Installing..." : "Add app"}
           </Text>
         </TouchableOpacity>
       </ScrollView>

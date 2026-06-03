@@ -33,9 +33,6 @@ export function CoreStatusBar({ variant = "bar", offlineOnly = false, style }: C
   const gatewayApprovals = Number((gatewayDoctor.doctor?.approvals as { pending_count?: number } | undefined)?.pending_count ?? 0);
   const gatewayNeedsAttention = ["offline", "blocked", "degraded"].includes(gatewayStatus);
   const gatewayConnected = gatewayStatus === "healthy";
-  const modelLabel =
-    (data?.runtime?.model_name || data?.runtime?.model || data?.runtime?.modelId || data?.runtime?.model_id) ??
-    (runtimeOk ? "Ready" : "Unavailable");
   const workspaceLabel = session?.workspaceId || "default";
   const statusLabel = isLoading ? "Connecting..." : connected ? "Core Connected" : "Core Offline";
   const dotColor = gatewayDoctor.gateway
@@ -128,7 +125,7 @@ export function CoreStatusBar({ variant = "bar", offlineOnly = false, style }: C
         </View>
         <View style={{ marginTop: 8 }}>
           <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>
-            {gatewayNeedsAttention || !connected ? bannerDetail : `Model: ${String(modelLabel)}`}
+            {gatewayNeedsAttention || !connected ? bannerDetail : "Runtime ready"}
           </Text>
           {!gatewayNeedsAttention && connected ? (
             <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginTop: 4 }}>
@@ -190,7 +187,7 @@ export function CoreStatusBar({ variant = "bar", offlineOnly = false, style }: C
     );
   }
 
-  const modelReady = isLoading ? "Checking model..." : runtimeOk ? "Model Ready" : "Model Unavailable";
+  const runtimeReady = isLoading ? "Checking runtime..." : runtimeOk ? "Runtime Ready" : "Runtime Unavailable";
 
   return (
     <View
@@ -216,7 +213,7 @@ export function CoreStatusBar({ variant = "bar", offlineOnly = false, style }: C
           <Text style={{ fontSize: 13, color: theme.colors.text }}>{statusLabel}</Text>
         </View>
         {connected ? (
-          <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{modelReady}</Text>
+          <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{runtimeReady}</Text>
         ) : (
           <TouchableOpacity
             onPress={() => router.push(actionHref)}

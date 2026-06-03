@@ -43,8 +43,6 @@ type FlashcardsTab = "create" | "cards";
 type AppMenuDetails = {
   historyItems?: string[];
   historyEmpty?: string;
-  modelSummary?: string;
-  creditSummary?: string;
 };
 
 export default function AppHomeScreen() {
@@ -130,9 +128,7 @@ function CaloriesAppScreen({ onBack }: { onBack: () => void }) {
       }
       menuDetails={{
         historyItems: records.slice(0, 3).map((record) => String(record.meal_label || record.summary || "Meal tracked")),
-        historyEmpty: "Tracked meals will appear after this tool runs.",
-        modelSummary: "No model used yet.",
-        creditSummary: "Usage will appear after this tool runs.",
+        historyEmpty: "Tracked meals will appear after this app runs.",
       }}
     >
       {tab === "main" ? (
@@ -297,12 +293,7 @@ function FlashcardsAppScreen({ onBack }: { onBack: () => void }) {
       }
       menuDetails={{
         historyItems: decks.slice(0, 3).map((deck) => `${deck} deck`),
-        historyEmpty: "Generated or reviewed cards will appear after this tool runs.",
-        modelSummary:
-          lastRun?.provider || lastRun?.model
-            ? [lastRun.provider, lastRun.model].filter(Boolean).join(" · ")
-            : "No model used yet.",
-        creditSummary: summarizeUsage(lastRun?.usage),
+        historyEmpty: "Generated or reviewed cards will appear after this app runs.",
       }}
     >
       {tab === "create" ? (
@@ -432,33 +423,33 @@ function HostedRegisteredAppScreen({ appId, onBack }: { appId: string; onBack: (
       onBack={onBack}
       bottomInset={insets.bottom}
       menuDetails={{
-        historyEmpty: "History will appear after this tool runs.",
-        creditSummary: "Usage will appear after this tool runs.",
+        historyEmpty: "Recent activity will appear after this app runs.",
       }}
     >
-      <View style={{ gap: 16, paddingTop: 12 }}>
+      <View style={{ gap: 16, paddingTop: 18 }}>
         <View
           style={{
-            padding: 18,
-            borderRadius: 24,
+            minHeight: 280,
+            padding: 22,
+            borderRadius: 30,
             borderWidth: 1,
             borderColor: theme.colors.border,
-            backgroundColor: theme.colors.surface,
-            gap: 10,
+            backgroundColor: theme.colors.card,
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 12,
           }}
         >
-          <Text style={{ fontSize: 20, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-            {loading ? "Loading tool..." : title}
+          <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={64} />
+          <Text style={{ fontSize: 24, fontFamily: "Fraunces_700Bold", color: theme.colors.text, textAlign: "center" }}>
+            {loading ? "Opening..." : title}
           </Text>
-          <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
-            {contract?.description || "This hosted tool is registered to your workspace."}
-          </Text>
-          <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
-            Memory is denied by default. Bridge, provider, and connector access stay explicit.
+          <Text style={{ maxWidth: 260, fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary, textAlign: "center" }}>
+            {contract?.description || "Blank workspace app."}
           </Text>
           {hostedUrl ? (
             <PrimaryButton
-              label="Open hosted tool"
+              label="Open website"
               onPress={() => {
                 void Linking.openURL(hostedUrl);
               }}
@@ -470,73 +461,26 @@ function HostedRegisteredAppScreen({ appId, onBack }: { appId: string; onBack: (
   );
 }
 
-function summarizeUsage(usage: unknown): string {
-  if (!usage || typeof usage !== "object") {
-    return "Usage will appear after this tool runs.";
-  }
-  const payload = usage as Record<string, any>;
-  const accounting = payload.usage_accounting && typeof payload.usage_accounting === "object"
-    ? payload.usage_accounting as Record<string, any>
-    : payload;
-  const credits =
-    accounting.retail_credits_charged ??
-    accounting.credits ??
-    accounting.credit_cost ??
-    accounting.cost_credits;
-  if (credits !== undefined && credits !== null) {
-    const parsed = Number(credits);
-    return Number.isFinite(parsed) ? `${Math.round(parsed).toLocaleString()} credits` : `${String(credits)} credits`;
-  }
-  const providerCost = accounting.provider_cost_usd ?? accounting.estimated_cost_usd;
-  if (providerCost !== undefined && providerCost !== null) {
-    const parsed = Number(providerCost);
-    if (Number.isFinite(parsed)) {
-      return parsed < 0.01 ? "Under $0.01 provider cost" : `$${parsed.toFixed(2)} provider cost`;
-    }
-  }
-  const tokens = accounting.total_tokens ?? accounting.tokens;
-  if (tokens !== undefined && tokens !== null) {
-    const parsed = Number(tokens);
-    return Number.isFinite(parsed) ? `${Math.round(parsed).toLocaleString()} tokens` : `${String(tokens)} tokens`;
-  }
-  return "Usage recorded for this run.";
-}
-
 function summarizeAiInvokePolicy(contract: MiniAppContract | null): string[] {
   const policy = contract?.ai_invoke_policy;
   if (!policy) {
-    return ["AI is not granted for this tool."];
+    return ["AI is not enabled for this app."];
   }
   const status = String(policy.consent_status || "").toLowerCase();
-  const rows = [
-    status === "granted" ? "AI permission granted." : "AI permission not granted.",
-    `Payer: ${String(policy.payer || "platform_credits").replace(/_/g, " ")}`,
+  return [
+    status === "granted"
+      ? "AI can run while this app is open."
+      : "AI is not granted for this app yet.",
   ];
-  if (policy.monthly_credit_cap !== undefined && policy.monthly_credit_cap !== null) {
-    rows.push(`Monthly cap: ${Number(policy.monthly_credit_cap).toLocaleString()} credits`);
-  }
-  if (policy.per_invocation_credit_cap !== undefined && policy.per_invocation_credit_cap !== null) {
-    rows.push(`Per run cap: ${Number(policy.per_invocation_credit_cap).toLocaleString()} credits`);
-  }
-  return rows;
 }
 
 function summarizeTrustPolicy(contract: MiniAppContract | null): string[] {
-  const tier = String(contract?.trust_tier || "user_private").replace(/_/g, " ");
-  const background = contract?.background_ai_allowed ? "Background AI allowed." : "AI only while this tool is open.";
-  const runtime = contract?.runtime_access && contract.runtime_access !== "none" ? String(contract.runtime_access) : "No computer or local runtime access.";
-  return [`Trust: ${tier}`, background, runtime];
+  const visibility = contract?.visibility === "unlisted_link" ? "Shareable by private link." : "Private to this workspace.";
+  const background = contract?.background_ai_allowed ? "Can continue approved work in the background." : "Works only while open.";
+  const runtime = contract?.runtime_access && contract.runtime_access !== "none" ? "Uses approved runtime access." : "No computer or device access.";
+  return [visibility, background, runtime];
 }
 
-function modelSummaryFromContract(contract: MiniAppContract | null): string {
-  const policy = contract?.ai_invoke_policy;
-  const provider = String(policy?.provider || "").trim();
-  const model = String(policy?.model || "").trim();
-  if (provider || model) {
-    return [provider, model].filter(Boolean).join(" · ");
-  }
-  return "Resolved when this tool runs.";
-}
 
 function AppFrame({
   appId,
@@ -602,7 +546,7 @@ function AppFrame({
           },
         });
       } catch (error) {
-        console.warn("Tool share link failed", error);
+        console.warn("App share link failed", error);
       }
     }
     try {
@@ -610,48 +554,73 @@ function AppFrame({
         message: `${title}\nOpen in Empyralis: ${sharePath}`,
       });
     } catch (error) {
-      console.warn("Tool share failed", error);
+      console.warn("App share failed", error);
     }
   }, [appId, contract, session, title]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: "#050505" }}>
       <View
         style={{
           paddingTop: insets.top + 12,
           paddingHorizontal: 20,
-          paddingBottom: 12,
+          paddingBottom: 26,
           flexDirection: "row",
           alignItems: "center",
           gap: 12,
+          backgroundColor: "#050505",
         }}
       >
-        <BackButton onPress={onBack} />
-        <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={40} />
-        <Text style={{ flex: 1, fontSize: 18, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
         <TouchableOpacity
           activeOpacity={0.86}
-          onPress={() => setMenuOpen(true)}
+          onPress={onBack}
           accessibilityRole="button"
-          accessibilityLabel="Open tool menu"
+          accessibilityLabel="Back"
           style={{
             width: 40,
             height: 40,
             borderRadius: 20,
-            borderWidth: 1,
-            borderColor: theme.colors.border,
-            backgroundColor: theme.colors.surface,
+            backgroundColor: "rgba(255,255,255,0.10)",
             alignItems: "center",
             justifyContent: "center",
           }}
         >
-          <Ionicons name="ellipsis-horizontal" size={20} color={theme.colors.text} />
+          <Ionicons name="chevron-back" size={21} color="#FFFFFF" />
+        </TouchableOpacity>
+        <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={40} />
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "rgba(255,255,255,0.56)", fontFamily: "DMSans_700Bold" }}>
+            Application
+          </Text>
+          <Text style={{ fontSize: 20, fontFamily: "Fraunces_700Bold", color: "#FFFFFF" }}>{title}</Text>
+        </View>
+        <TouchableOpacity
+          activeOpacity={0.86}
+          onPress={() => setMenuOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Open app details"
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: "rgba(255,255,255,0.10)",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name="information-circle-outline" size={20} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
 
       <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}
+        style={{
+          flex: 1,
+          backgroundColor: theme.colors.background,
+          borderTopLeftRadius: 30,
+          borderTopRightRadius: 30,
+          marginTop: -10,
+        }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 24 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -704,65 +673,99 @@ function MiniAppMenuModal({
 }) {
   const theme = useTheme();
   const permissions = Array.isArray(contract?.permissions) ? contract.permissions : [];
-  const memoryLabel =
-    contract?.memory_scope === "none_by_default" || !contract?.memory_scope
-      ? "No Sage memory by default."
-      : String(contract.memory_scope);
-  const creditLabel = details?.creditSummary || "Usage will appear after this tool runs.";
   const historyItems = details?.historyItems || [];
-  const aiPolicyRows = summarizeAiInvokePolicy(contract);
+  const technicalRows = [
+    ...summarizeTrustPolicy(contract),
+    ...summarizeAiInvokePolicy(contract),
+  ];
+  const permissionSummaryRows = Array.isArray(contract?.permission_summary) ? contract.permission_summary : [];
+  const permissionRows = permissionSummaryRows.length
+    ? permissionSummaryRows
+    : permissions.length
+      ? permissions.map((permission) => String(permission).replace(/^app\./, "").replace(/[._-]+/g, " "))
+      : ["No extra permissions granted."];
+  const blueprintStatus = String(contract?.blueprint?.status || "workspace_private").replace(/[._-]+/g, " ");
+  const blueprintRows = [
+    `${blueprintStatus.charAt(0).toUpperCase()}${blueprintStatus.slice(1)}`,
+    contract?.blueprint?.revision ? `Revision ${contract.blueprint.revision}` : "Revision 1",
+    contract?.provenance?.label || "Created in this workspace",
+  ];
   return (
-    <Modal animationType="fade" visible={visible} transparent onRequestClose={onClose}>
+    <Modal animationType="slide" visible={visible} transparent onRequestClose={onClose}>
       <Pressable
         onPress={onClose}
         style={{
           flex: 1,
-          backgroundColor: "rgba(0,0,0,0.28)",
+          backgroundColor: "rgba(0,0,0,0.22)",
           justifyContent: "flex-end",
         }}
       >
         <Pressable
           onPress={(event) => event.stopPropagation()}
           style={{
-            margin: 14,
-            padding: 18,
-            borderRadius: 26,
+            marginHorizontal: 10,
+            marginBottom: 10,
+            maxHeight: "74%",
+            paddingHorizontal: 18,
+            paddingTop: 10,
+            paddingBottom: 18,
+            borderRadius: 34,
             borderWidth: 1,
             borderColor: theme.colors.border,
-            backgroundColor: theme.colors.card,
-            gap: 16,
+            backgroundColor: theme.colors.background,
+            gap: 14,
+            shadowColor: "#000000",
+            shadowOpacity: 0.18,
+            shadowRadius: 30,
+            shadowOffset: { width: 0, height: -10 },
+            elevation: 12,
           }}
         >
+          <View
+            style={{
+              alignSelf: "center",
+              width: 42,
+              height: 5,
+              borderRadius: 999,
+              backgroundColor: theme.colors.border,
+              marginBottom: 6,
+            }}
+          />
           <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={42} />
+            <BrandedAppIcon appId={appId} icon={getCatalogApp(appId)?.icon || "apps"} size={48} />
             <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 18, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
-              <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
-                {contract?.delivery_mode === "hosted" ? "Hosted tool" : "Tool"}
-              </Text>
+              <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
+              <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>Workspace app</Text>
             </View>
-            <TouchableOpacity onPress={onClose} accessibilityRole="button" accessibilityLabel="Close tool menu">
-              <Ionicons name="close" size={22} color={theme.colors.textSecondary} />
+            <TouchableOpacity
+              onPress={onClose}
+              accessibilityRole="button"
+              accessibilityLabel="Close app menu"
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 19,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: theme.colors.surface,
+              }}
+            >
+              <Ionicons name="close" size={21} color={theme.colors.textSecondary} />
             </TouchableOpacity>
           </View>
 
+          <MenuSection icon="layers-outline" title="Blueprint" rows={blueprintRows} />
           <MenuSection
             icon="time-outline"
-            title="History"
-            rows={historyItems.length ? historyItems : [details?.historyEmpty || "History will appear after this tool runs."]}
+            title="Recent activity"
+            rows={historyItems.length ? historyItems : [details?.historyEmpty || "Recent activity will appear after this app runs."]}
           />
-          <MenuSection icon="sparkles-outline" title="Memory" rows={[memoryLabel]} />
-          <MenuSection icon="shield-outline" title="Trust" rows={summarizeTrustPolicy(contract)} />
-          <MenuSection icon="hardware-chip-outline" title="Model/provider" rows={[details?.modelSummary || modelSummaryFromContract(contract)]} />
-          <MenuSection icon="wallet-outline" title="Credits" rows={[creditLabel]} />
-          <MenuSection icon="speedometer-outline" title="AI budget" rows={aiPolicyRows} />
-          <MenuSection
-            icon="shield-checkmark-outline"
-            title="Permissions"
-            rows={permissions.length ? permissions : ["No additional tool permissions granted."]}
-          />
+          <MenuSection icon="shield-checkmark-outline" title="Access" rows={technicalRows} />
+          <MenuSection icon="lock-closed-outline" title="Permissions" rows={permissionRows} />
 
-          <SecondaryButton label="Share" onPress={onShare} />
+          <View style={{ flexDirection: "row", gap: 10, paddingTop: 2 }}>
+            <SecondaryButton label="Share app" onPress={onShare} />
+          </View>
         </Pressable>
       </Pressable>
     </Modal>
@@ -780,12 +783,31 @@ function MenuSection({
 }) {
   const theme = useTheme();
   return (
-    <View style={{ flexDirection: "row", gap: 12 }}>
-      <Ionicons name={icon} size={20} color={theme.colors.textSecondary} />
+    <View
+      style={{
+        flexDirection: "row",
+        gap: 12,
+        padding: 12,
+        borderRadius: 18,
+        backgroundColor: theme.colors.surface,
+      }}
+    >
+      <View
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 16,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: theme.colors.card,
+        }}
+      >
+        <Ionicons name={icon} size={18} color={theme.colors.textSecondary} />
+      </View>
       <View style={{ flex: 1, gap: 4 }}>
-        <Text style={{ fontSize: 12, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
+        <Text style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{title}</Text>
         {rows.map((row, index) => (
-          <Text key={`${title}-${index}`} style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
+          <Text key={`${title}-${index}`} style={{ fontSize: 12.5, lineHeight: 18, color: theme.colors.textSecondary }}>
             {row}
           </Text>
         ))}
@@ -1265,7 +1287,7 @@ function UnavailableAppScreen({ appName, onBack }: { appName: string; onBack: ()
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background, paddingTop: insets.top + 16, paddingHorizontal: 20, gap: 18 }}>
       <BackButton onPress={onBack} />
-      <EmptyState title={`${appName} is not in beta`} detail="This tool stays hidden until it has a real product surface." />
+      <EmptyState title={`${appName} is not in beta`} detail="This app stays hidden until it has a real product surface." />
     </View>
   );
 }

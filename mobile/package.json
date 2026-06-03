@@ -5,9 +5,15 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
+    "mobile:go": "node scripts/platform-dev-env.mjs go",
+    "mobile:dev": "node scripts/platform-dev-env.mjs dev",
+    "mobile:ios": "node scripts/platform-dev-env.mjs ios",
     "ios": "expo run:ios",
+    "eas:login": "npx --yes eas-cli login",
+    "ios:cloud": "npx --yes eas-cli build -p ios --profile preview",
     "android": "expo run:android",
     "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },
   "dependencies": {

@@ -3,7 +3,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useEffect } from "react";
-import { AppState } from "react-native";
+import { AppState, Text, View } from "react-native";
 import * as Notifications from "expo-notifications";
 import * as Font from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
@@ -58,9 +58,7 @@ export default function RootLayout() {
       } catch (e) {
         console.warn('Database init error:', e);
       } finally {
-        if (fontsLoaded) {
-          await SplashScreen.hideAsync();
-        }
+        await SplashScreen.hideAsync();
       }
     }
     prepare();
@@ -87,7 +85,7 @@ export default function RootLayout() {
     };
   }, []);
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded) return <BootFallback label="Starting Empyralis" detail="Loading the mobile interface." />;
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -169,6 +167,26 @@ export default function RootLayout() {
         </ThemeProvider>
       </QueryClientProvider>
     </GestureHandlerRootView>
+  );
+}
+
+function BootFallback({ label, detail }: { label: string; detail: string }) {
+  return (
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: "#0F1115",
+        justifyContent: "center",
+        paddingHorizontal: 28,
+      }}
+    >
+      <Text style={{ color: "#F5F1EA", fontSize: 32, fontWeight: "800", letterSpacing: -0.8 }}>
+        {label}
+      </Text>
+      <Text style={{ color: "#9B9790", fontSize: 16, lineHeight: 24, marginTop: 10 }}>
+        {detail}
+      </Text>
+    </View>
   );
 }
 

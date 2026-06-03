@@ -10,4 +10,5 @@ paths = [
   '''^server_modules/quota_policy_service\.py$''',
   '''^server_modules/tests/''',
   '''^frontend/lib/skills\.ts$''',
+  '''^mobile/ios/Podfile\.lock$''',
 ]

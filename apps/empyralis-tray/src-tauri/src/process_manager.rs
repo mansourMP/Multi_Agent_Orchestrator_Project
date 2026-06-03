@@ -2,7 +2,7 @@ use rand::RngCore;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -399,12 +399,12 @@ impl ProcessManager {
     }
 
     fn poll_session_once(&self) -> SessionVerification {
+        let local_verification = self.poll_local_gateway_session_once();
+        if local_verification.session_verified {
+            return local_verification;
+        }
         if self.backend_url.trim().is_empty() || self.workspace_id.trim().is_empty() || self.api_key.trim().is_empty() {
-            return SessionVerification {
-                session_verified: false,
-                heartbeat_fresh: false,
-                session_status: "none".to_string(),
-            };
+            return local_verification;
         }
         let url = format!(
             "{}/api/gateway/registrations?workspace_id={}",
@@ -421,27 +421,69 @@ impl ProcessManager {
             .arg(&url)
             .output();
         let Ok(output) = output else {
-            return SessionVerification {
-                session_verified: false,
-                heartbeat_fresh: false,
-                session_status: "none".to_string(),
-            };
+            return local_verification;
         };
         if !output.status.success() {
+            return local_verification;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) else {
+            return local_verification;
+        };
+        let backend_verification = session_verification_from_payload(&value);
+        if backend_verification.session_verified {
+            backend_verification
+        } else if local_verification.heartbeat_fresh {
+            local_verification
+        } else {
+            backend_verification
+        }
+    }
+
+    fn poll_local_gateway_session_once(&self) -> SessionVerification {
+        let checkpoint_path = self.gateway_state_dir().join("checkpoints.json");
+        let journal_path = self.gateway_state_dir().join("journal.ndjson");
+        let checkpoint_payload = fs::read_to_string(&checkpoint_path).ok();
+        let checkpoint_value = checkpoint_payload
+            .as_deref()
+            .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+            .unwrap_or(Value::Null);
+        let session_id = checkpoint_value
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let health_state = checkpoint_value
+            .get("healthState")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if session_id.is_empty() {
             return SessionVerification {
                 session_verified: false,
                 heartbeat_fresh: false,
                 session_status: "none".to_string(),
             };
         }
-        let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) else {
+        let journal_fresh = fs::metadata(&journal_path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .map(|age| age <= Duration::from_secs(45))
+            .unwrap_or(false);
+        let heartbeat_acknowledged = journal_fresh && recent_journal_has_heartbeat_ack(&journal_path);
+        if health_state == "online" && heartbeat_acknowledged {
             return SessionVerification {
-                session_verified: false,
-                heartbeat_fresh: false,
-                session_status: "none".to_string(),
+                session_verified: true,
+                heartbeat_fresh: true,
+                session_status: "active".to_string(),
             };
-        };
-        session_verification_from_payload(&value)
+        }
+        SessionVerification {
+            session_verified: false,
+            heartbeat_fresh: heartbeat_acknowledged,
+            session_status: if health_state == "online" { "stale".to_string() } else { "none".to_string() },
+        }
     }
 
     fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, ManagedProcesses>, String> {
@@ -693,6 +735,44 @@ fn session_verification_from_payload(value: &Value) -> SessionVerification {
         heartbeat_fresh: saw_fresh,
         session_status: if saw_stale { "stale" } else { "none" }.to_string(),
     }
+}
+
+fn recent_journal_has_heartbeat_ack(path: &Path) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let reader = BufReader::new(file);
+    let mut lines = Vec::new();
+    for line in reader.lines().map_while(Result::ok) {
+        lines.push(line);
+    }
+    let tail_start = lines.len().saturating_sub(80);
+    let mut saw_response_after = false;
+    for line in lines[tail_start..].iter().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let direction = value
+            .get("direction")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        let message_type = value
+            .get("messageType")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if direction == "inbound" && message_type == "response" {
+            saw_response_after = true;
+            continue;
+        }
+        if direction == "outbound" && message_type == "gateway.heartbeat" && saw_response_after {
+            return true;
+        }
+    }
+    false
 }
 
 fn env_value(name: &str) -> Option<String> {

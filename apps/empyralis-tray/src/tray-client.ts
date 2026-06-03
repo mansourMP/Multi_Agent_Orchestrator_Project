@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 
-export type TrayStatusState = 'idle' | 'connected' | 'active' | 'error';
+export type TrayStatusState = 'idle' | 'connecting' | 'connected' | 'active' | 'error';
 
 export type TrayStatus = {
   state: TrayStatusState;
@@ -9,6 +9,7 @@ export type TrayStatus = {
   gateway_running: boolean;
   supervisor_adopted: boolean;
   gateway_adopted: boolean;
+  desired_connected?: boolean;
   session_verified?: boolean;
   heartbeat_fresh?: boolean;
   session_status?: string;

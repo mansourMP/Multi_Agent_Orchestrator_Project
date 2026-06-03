@@ -23,6 +23,7 @@ pub struct TrayStatus {
     pub gateway_running: bool,
     pub supervisor_adopted: bool,
     pub gateway_adopted: bool,
+    pub desired_connected: bool,
     pub session_verified: bool,
     pub heartbeat_fresh: bool,
     pub session_status: String,
@@ -37,6 +38,7 @@ struct ManagedProcesses {
     gateway: Option<Child>,
     adopted_supervisor_pid: Option<u32>,
     adopted_gateway_pid: Option<u32>,
+    desired_connected: bool,
     session_verified: bool,
     heartbeat_fresh: bool,
     session_status: String,
@@ -67,18 +69,25 @@ impl ProcessManager {
     }
 
     pub fn connect_device(&self) -> Result<TrayStatus, String> {
-        self.start_supervisor()?;
-        self.start_gateway()?;
-        Ok(self.status())
+        self.set_desired_connected(true)?;
+        match self.start_gateway() {
+            Ok(status) => Ok(status),
+            Err(error) => {
+                self.record_error(error.clone());
+                Err(error)
+            }
+        }
     }
 
     pub fn disconnect_device(&self) -> Result<TrayStatus, String> {
+        self.set_desired_connected(false)?;
         self.stop_gateway()?;
         self.stop_supervisor()?;
         Ok(self.status())
     }
 
     pub fn start_gateway(&self) -> Result<TrayStatus, String> {
+        self.set_desired_connected(true)?;
         self.start_supervisor()?;
         self.ensure_gateway_dist()?;
 
@@ -130,11 +139,15 @@ impl ProcessManager {
     }
 
     pub fn stop_gateway(&self) -> Result<TrayStatus, String> {
+        self.set_desired_connected(false)?;
         let mut guard = self.lock_state()?;
         stop_child(&mut guard.gateway);
         if let Some(pid) = guard.adopted_gateway_pid.take() {
             let _ = terminate_pid(pid);
         }
+        guard.session_verified = false;
+        guard.heartbeat_fresh = false;
+        guard.session_status = "none".to_string();
         Ok(self.status_from_guard(&guard))
     }
 
@@ -149,7 +162,10 @@ impl ProcessManager {
 
     pub fn status(&self) -> TrayStatus {
         match self.lock_state() {
-            Ok(guard) => self.status_from_guard(&guard),
+            Ok(mut guard) => {
+                refresh_process_state(&mut guard);
+                self.status_from_guard(&guard)
+            }
             Err(error) => TrayStatus {
                 state: "error".to_string(),
                 device_name: self.device_name(),
@@ -157,6 +173,7 @@ impl ProcessManager {
                 gateway_running: false,
                 supervisor_adopted: false,
                 gateway_adopted: false,
+                desired_connected: false,
                 session_verified: false,
                 heartbeat_fresh: false,
                 session_status: "none".to_string(),
@@ -165,6 +182,31 @@ impl ProcessManager {
                 error: Some(error),
             },
         }
+    }
+
+    pub fn maintain_connection(&self) {
+        let should_recover = match self.lock_state() {
+            Ok(mut guard) => {
+                refresh_process_state(&mut guard);
+                guard.desired_connected
+            }
+            Err(_) => false,
+        };
+        if !should_recover {
+            return;
+        }
+
+        let status = self.status();
+        if !status.supervisor_running || !status.gateway_running {
+            self.record_error("Recovering hardware connection...".to_string());
+            if let Err(error) = self.start_gateway() {
+                self.record_error(error);
+            }
+            return;
+        }
+
+        let result = self.poll_session_once();
+        self.update_session_verification(result);
     }
 
     fn start_supervisor(&self) -> Result<(), String> {
@@ -222,17 +264,17 @@ impl ProcessManager {
         let state = if let Some(error) = guard.last_error.as_ref() {
             if !error.is_empty() {
                 "error"
-            } else if gateway_running {
+            } else if guard.session_verified && gateway_running {
                 "active"
-            } else if supervisor_running {
-                "connected"
+            } else if gateway_running || supervisor_running || guard.desired_connected {
+                "connecting"
             } else {
                 "idle"
             }
-        } else if gateway_running {
+        } else if guard.session_verified && gateway_running {
             "active"
-        } else if supervisor_running {
-            "connected"
+        } else if gateway_running || supervisor_running || guard.desired_connected {
+            "connecting"
         } else {
             "idle"
         };
@@ -244,6 +286,7 @@ impl ProcessManager {
             gateway_running,
             supervisor_adopted: guard.adopted_supervisor_pid.is_some(),
             gateway_adopted: guard.adopted_gateway_pid.is_some(),
+            desired_connected: guard.desired_connected,
             session_verified: guard.session_verified,
             heartbeat_fresh: guard.heartbeat_fresh,
             session_status: if guard.session_status.is_empty() {
@@ -282,6 +325,26 @@ impl ProcessManager {
             }
         }
         verified
+    }
+
+    fn set_desired_connected(&self, desired: bool) -> Result<(), String> {
+        let mut guard = self.lock_state()?;
+        guard.desired_connected = desired;
+        if !desired {
+            guard.last_error = None;
+            guard.session_verified = false;
+            guard.heartbeat_fresh = false;
+            guard.session_status = "none".to_string();
+        }
+        Ok(())
+    }
+
+    fn record_error(&self, error: String) {
+        if let Ok(mut guard) = self.lock_state() {
+            guard.last_error = Some(error);
+            guard.session_verified = false;
+            guard.heartbeat_fresh = false;
+        }
     }
 
     fn poll_session_once(&self) -> SessionVerification {
@@ -618,6 +681,51 @@ fn supervisor_healthy() -> bool {
 
 fn process_still_running(child: &Child) -> bool {
     process_alive(child.id())
+}
+
+fn refresh_process_state(guard: &mut ManagedProcesses) {
+    if guard
+        .supervisor
+        .as_mut()
+        .map(child_has_exited)
+        .unwrap_or(false)
+    {
+        guard.supervisor = None;
+        guard.session_verified = false;
+        guard.heartbeat_fresh = false;
+    }
+    if guard
+        .gateway
+        .as_mut()
+        .map(child_has_exited)
+        .unwrap_or(false)
+    {
+        guard.gateway = None;
+        guard.session_verified = false;
+        guard.heartbeat_fresh = false;
+    }
+    if guard
+        .adopted_supervisor_pid
+        .map(|pid| !process_alive(pid))
+        .unwrap_or(false)
+    {
+        guard.adopted_supervisor_pid = None;
+        guard.session_verified = false;
+        guard.heartbeat_fresh = false;
+    }
+    if guard
+        .adopted_gateway_pid
+        .map(|pid| !process_alive(pid))
+        .unwrap_or(false)
+    {
+        guard.adopted_gateway_pid = None;
+        guard.session_verified = false;
+        guard.heartbeat_fresh = false;
+    }
+}
+
+fn child_has_exited(child: &mut Child) -> bool {
+    matches!(child.try_wait(), Ok(Some(_)))
 }
 
 fn process_alive(pid: u32) -> bool {

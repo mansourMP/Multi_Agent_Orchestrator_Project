@@ -100,7 +100,7 @@ fn action_body(result: Result<TrayStatus, String>) -> String {
 }
 
 fn status_json(status: TrayStatus) -> Value {
-    let connected = status.supervisor_running || status.gateway_running || status.state == "connected" || status.state == "active";
+    let connected = status.session_verified;
     let mut value = serde_json::to_value(status).unwrap_or_else(|_| json!({}));
     if let Value::Object(ref mut object) = value {
         object.insert("ok".to_string(), json!(true));

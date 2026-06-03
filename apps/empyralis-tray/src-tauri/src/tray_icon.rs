@@ -74,6 +74,7 @@ pub fn install<R: Runtime>(app: AppHandle<R>, manager: Arc<ProcessManager>) -> R
             let status = manager.status();
             let icon = match status.state.as_str() {
                 "active" => icon_active(frame.fetch_add(1, Ordering::Relaxed) % 3),
+                "connecting" => icon_active(frame.fetch_add(1, Ordering::Relaxed) % 2),
                 "connected" => icon_connected(),
                 _ => icon_idle(),
             };
@@ -82,7 +83,11 @@ pub fn install<R: Runtime>(app: AppHandle<R>, manager: Arc<ProcessManager>) -> R
             } else {
                 update_tray_icon(&app_for_timer, &manager);
             }
-            thread::sleep(Duration::from_millis(if status.state == "active" { 450 } else { 1400 }));
+            thread::sleep(Duration::from_millis(match status.state.as_str() {
+                "active" => 120,
+                "connecting" => 700,
+                _ => 1400,
+            }));
         }
     });
 
@@ -105,6 +110,7 @@ fn update_tray_icon<R: Runtime>(app: &AppHandle<R>, manager: &ProcessManager) {
     let status = manager.status();
     let icon = match status.state.as_str() {
         "active" => icon_active(0),
+        "connecting" => icon_active(0),
         "connected" => icon_connected(),
         _ => icon_idle(),
     };

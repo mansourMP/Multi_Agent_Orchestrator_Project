@@ -21,7 +21,7 @@ function statusLabel(status: TrayStatus | null, loading: boolean): string {
   if (status.session_verified || status.state === 'connected') {
     return 'Connected';
   }
-  if (status.state === 'connecting' || status.desired_connected || status.gateway_running || status.supervisor_running) {
+  if (status.state === 'connecting' || status.desired_connected) {
     return 'Connecting';
   }
   return 'Idle';

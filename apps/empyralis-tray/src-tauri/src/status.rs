@@ -1,4 +1,4 @@
-use crate::process_manager::{ProcessManager, TrayStatus};
+use crate::process_manager::{ConnectOptions, ProcessManager, TrayStatus};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -42,7 +42,7 @@ fn handle_stream(mut stream: TcpStream, manager: Arc<ProcessManager>, app_handle
 
     let (status, body) = match (method, path) {
         ("GET", "/status") => ("200 OK", status_body(&manager)),
-        ("POST", "/connect") => ("200 OK", action_body(manager.connect_device())),
+        ("POST", "/connect") => ("200 OK", connect_body(&manager, &request)),
         ("POST", "/disconnect") => ("200 OK", action_body(manager.disconnect_device())),
         ("POST", "/gateway/start") => ("200 OK", action_body(manager.start_gateway())),
         ("POST", "/gateway/stop") => ("200 OK", action_body(manager.stop_gateway())),
@@ -67,6 +67,29 @@ fn launch_at_login_body(manager: &ProcessManager, request: &str) -> String {
     let enabled = body.get("enabled").and_then(Value::as_bool).unwrap_or(false);
     action_body(manager.set_launch_at_login(enabled))
 }
+
+fn connect_body(manager: &ProcessManager, request: &str) -> String {
+    let body = request_json_body(request);
+    let options = ConnectOptions {
+        pairing_token: body
+            .get("pairing_token")
+            .or_else(|| body.get("pairingToken"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        workspace_id: body
+            .get("workspace_id")
+            .or_else(|| body.get("workspaceId"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        gateway_api_url: body
+            .get("gateway_api_url")
+            .or_else(|| body.get("gatewayApiUrl"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    };
+    action_body(manager.connect_device_with_options(options))
+}
+
 
 fn notify_body(app_handle: &AppHandle, request: &str) -> String {
     let body = request_json_body(request);

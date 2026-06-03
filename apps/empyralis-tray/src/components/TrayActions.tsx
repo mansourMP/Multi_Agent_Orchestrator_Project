@@ -27,7 +27,7 @@ export function TrayActions({
   return (
     <section className="tray-actions" aria-label="Hardware controls">
       <AppButton disabled={busy} onClick={connected ? onDisconnect : onConnect}>
-        {connected ? 'Disconnect device' : processRunning ? 'Reconnect device' : 'Connect this device'}
+        {connected ? 'Disconnect device' : status?.desired_connected && processRunning ? 'Reconnect device' : 'Connect this device'}
       </AppButton>
       <AppButton disabled={busy} onClick={gatewayRunning ? onStopGateway : onStartGateway}>
         {gatewayRunning ? 'Stop Gateway' : 'Start Gateway'}

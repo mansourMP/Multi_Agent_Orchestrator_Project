@@ -15,6 +15,13 @@ const STATUS_URL: &str = "http://127.0.0.1:7790/status";
 const SESSION_VERIFY_TIMEOUT: Duration = Duration::from_secs(30);
 const SESSION_VERIFY_INTERVAL: Duration = Duration::from_secs(3);
 
+#[derive(Clone, Default)]
+pub struct ConnectOptions {
+    pub pairing_token: Option<String>,
+    pub workspace_id: Option<String>,
+    pub gateway_api_url: Option<String>,
+}
+
 #[derive(Clone, Serialize)]
 pub struct TrayStatus {
     pub state: String,
@@ -39,6 +46,9 @@ struct ManagedProcesses {
     adopted_supervisor_pid: Option<u32>,
     adopted_gateway_pid: Option<u32>,
     desired_connected: bool,
+    pairing_token: Option<String>,
+    workspace_id: Option<String>,
+    gateway_api_url: Option<String>,
     session_verified: bool,
     heartbeat_fresh: bool,
     session_status: String,
@@ -48,6 +58,7 @@ struct ManagedProcesses {
 pub struct ProcessManager {
     state: Mutex<ManagedProcesses>,
     backend_url: String,
+    gateway_api_url: String,
     workspace_id: String,
     api_key: String,
 }
@@ -59,6 +70,8 @@ impl ProcessManager {
             backend_url: env_value("EMPYRALIS_BACKEND_URL")
                 .or_else(|| env_value("EMPYRALIS_API_URL"))
                 .unwrap_or_else(|| "http://127.0.0.1:8001".to_string()),
+            gateway_api_url: env_value("EMPYRALIS_GATEWAY_API_URL")
+                .unwrap_or_else(|| "http://127.0.0.1:8001/api".to_string()),
             workspace_id: env_value("EMPYRALIS_WORKSPACE_ID")
                 .or_else(|| env_value("EXPO_PUBLIC_WORKSPACE_ID"))
                 .unwrap_or_else(|| "ws-1".to_string()),
@@ -69,6 +82,11 @@ impl ProcessManager {
     }
 
     pub fn connect_device(&self) -> Result<TrayStatus, String> {
+        self.connect_device_with_options(ConnectOptions::default())
+    }
+
+    pub fn connect_device_with_options(&self, options: ConnectOptions) -> Result<TrayStatus, String> {
+        self.apply_connect_options(options)?;
         self.set_desired_connected(true)?;
         match self.start_gateway() {
             Ok(status) => Ok(status),
@@ -110,14 +128,18 @@ impl ProcessManager {
         let node = node_binary();
         let gateway_entry = self.repo_root().join("empyralis-gateway/dist/index.js");
         let secret = self.supervisor_secret()?;
+        let launch = self.gateway_launch_options()?;
         let child = Command::new(node)
             .arg(gateway_entry)
             .current_dir(self.repo_root())
             .env("EMPYRALIS_SUPERVISOR_SECRET", secret)
             .env("EMPYRALIS_SUPERVISOR_URL", SUPERVISOR_URL)
+            .env("EMPYRALIS_GATEWAY_API_URL", launch.gateway_api_url)
             .env("EMPYRALIS_GATEWAY_STATE_DIR", &gateway_state)
             .env("EMPYRALIS_GATEWAY_DISPLAY_NAME", self.device_name())
+            .env("EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID", launch.workspace_id)
             .env("EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT", self.repo_root())
+            .env("EMPYRALIS_GATEWAY_PAIRING_TOKEN", launch.pairing_token.unwrap_or_default())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -266,14 +288,14 @@ impl ProcessManager {
                 "error"
             } else if guard.session_verified && gateway_running {
                 "active"
-            } else if gateway_running || supervisor_running || guard.desired_connected {
+            } else if guard.desired_connected && (gateway_running || supervisor_running) {
                 "connecting"
             } else {
                 "idle"
             }
         } else if guard.session_verified && gateway_running {
             "active"
-        } else if gateway_running || supervisor_running || guard.desired_connected {
+        } else if guard.desired_connected && (gateway_running || supervisor_running) {
             "connecting"
         } else {
             "idle"
@@ -337,6 +359,35 @@ impl ProcessManager {
             guard.session_status = "none".to_string();
         }
         Ok(())
+    }
+
+    fn apply_connect_options(&self, options: ConnectOptions) -> Result<(), String> {
+        let mut guard = self.lock_state()?;
+        if let Some(pairing_token) = clean_option(options.pairing_token) {
+            guard.pairing_token = Some(pairing_token);
+        }
+        if let Some(workspace_id) = clean_option(options.workspace_id) {
+            guard.workspace_id = Some(workspace_id);
+        }
+        if let Some(gateway_api_url) = clean_option(options.gateway_api_url) {
+            guard.gateway_api_url = Some(gateway_api_url);
+        }
+        Ok(())
+    }
+
+    fn gateway_launch_options(&self) -> Result<GatewayLaunchOptions, String> {
+        let guard = self.lock_state()?;
+        Ok(GatewayLaunchOptions {
+            pairing_token: guard.pairing_token.clone(),
+            workspace_id: guard
+                .workspace_id
+                .clone()
+                .unwrap_or_else(|| self.workspace_id.clone()),
+            gateway_api_url: guard
+                .gateway_api_url
+                .clone()
+                .unwrap_or_else(|| self.gateway_api_url.clone()),
+        })
     }
 
     fn record_error(&self, error: String) {
@@ -598,6 +649,12 @@ struct SessionVerification {
     session_status: String,
 }
 
+struct GatewayLaunchOptions {
+    pairing_token: Option<String>,
+    workspace_id: String,
+    gateway_api_url: String,
+}
+
 fn session_verification_from_payload(value: &Value) -> SessionVerification {
     let items = value
         .get("items")
@@ -643,6 +700,12 @@ fn env_value(name: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn clean_option(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
 }
 
 fn percent_encode_query(value: &str) -> String {

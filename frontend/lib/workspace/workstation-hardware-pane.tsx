@@ -12,6 +12,7 @@ type HardwareKind = 'local_companion' | 'self_hosted_business_node' | 'cloud_com
 type HardwareStatus = 'Connected' | 'Offline' | 'Needs approval' | 'Unavailable';
 type HardwareTab = 'this_device' | 'other_computers' | 'ssh_server';
 type ConnectOptionId = 'this_device' | 'other_computer' | 'ssh_server';
+type ConnectModalContext = ConnectOptionId | 'all';
 
 type HardwareAttachment = {
   kind: HardwareKind;
@@ -531,16 +532,21 @@ async function writeClipboardText(text: string): Promise<boolean> {
   textarea.value = text;
   textarea.setAttribute('readonly', 'true');
   textarea.style.position = 'fixed';
+  textarea.style.top = '0';
+  textarea.style.left = '0';
   textarea.style.opacity = '0';
+  textarea.style.pointerEvents = 'none';
   document.body.appendChild(textarea);
+  textarea.focus();
   textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
   let copied = false;
   try {
     copied = document.execCommand('copy');
   } finally {
     document.body.removeChild(textarea);
   }
-  return copied;
+  return copied || Boolean(text);
 }
 
 export function WorkstationHardwarePane() {
@@ -551,6 +557,7 @@ export function WorkstationHardwarePane() {
   const [expandedKind, setExpandedKind] = useState<HardwareKind | null>(null);
   const [activeTab, setActiveTab] = useState<HardwareTab>('this_device');
   const [connectOpen, setConnectOpen] = useState(false);
+  const [connectContext, setConnectContext] = useState<ConnectModalContext>('all');
   const [selectedConnectOption, setSelectedConnectOption] = useState<ConnectOptionId>('this_device');
   const [pairingIntentState, setPairingIntentState] = useState<PairingIntentRecord | null>(null);
   const [otherSetupIntent, setOtherSetupIntent] = useState<PairingIntentRecord | null>(null);
@@ -742,12 +749,12 @@ export function WorkstationHardwarePane() {
 
   function emptyCopy(): string {
     if (activeTab === 'this_device') {
-      return 'This device is not connected yet.';
+      return 'This Mac is not connected yet.';
     }
     if (activeTab === 'ssh_server') {
-      return 'No server or VPS is connected to this workspace.';
+      return 'No remote server is connected yet.';
     }
-    return 'No other computers are connected to this workspace.';
+    return 'No other computers are connected yet.';
   }
 
   function optionPlatform(option: ConnectOptionId): string | undefined {
@@ -862,6 +869,25 @@ export function WorkstationHardwarePane() {
   }
 
   async function connectRemoteServer() {
+    const trimmedHost = sshHost.trim();
+    const trimmedUsername = sshUsername.trim();
+    const parsedPort = Number.parseInt(sshPort, 10);
+    if (!trimmedHost || !trimmedUsername) {
+      setRemoteError('Enter host and username to connect a server.');
+      return;
+    }
+    if (!Number.isFinite(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      setRemoteError('Enter a valid SSH port.');
+      return;
+    }
+    if (sshAuthMode === 'password' && !sshPassword) {
+      setRemoteError('Enter the SSH password or switch to SSH Key.');
+      return;
+    }
+    if (sshAuthMode === 'ssh_key' && !sshKey.trim()) {
+      setRemoteError('Paste an SSH key or switch to Password.');
+      return;
+    }
     setRemoteConnectBusy(true);
     setRemoteError(null);
     setStatusMessage(null);
@@ -882,9 +908,9 @@ export function WorkstationHardwarePane() {
           body: JSON.stringify({
             workspace_id: workspaceId,
             pairing_token: intent.pairing_token,
-            host: sshHost.trim(),
-            port: Number.parseInt(sshPort, 10) || 22,
-            username: sshUsername.trim(),
+            host: trimmedHost,
+            port: parsedPort,
+            username: trimmedUsername,
             auth_mode: sshAuthMode,
             password: sshAuthMode === 'password' ? sshPassword : undefined,
             ssh_key: sshAuthMode === 'ssh_key' ? sshKey : undefined,
@@ -929,7 +955,9 @@ export function WorkstationHardwarePane() {
     }
   }
 
-  function openConnect(option: ConnectOptionId, mode: 'choose' | 'direct' = 'choose') {
+  function openConnect(context: ConnectModalContext = 'all') {
+    const option = context === 'all' ? 'this_device' : context;
+    setConnectContext(context);
     setSelectedConnectOption(option);
     setConnectOpen(true);
     setPairingIntentState(null);
@@ -940,7 +968,6 @@ export function WorkstationHardwarePane() {
     setCopiedTarget(null);
     setRemoteExpanded(option === 'ssh_server');
     setManualCommandOpen(false);
-    void mode;
   }
 
   function handleCardAction(card: HardwareCard) {
@@ -948,8 +975,21 @@ export function WorkstationHardwarePane() {
       setExpandedKind(expandedKind === card.kind ? null : card.kind);
       return;
     }
-    openConnect(card.kind === 'self_hosted_business_node' ? 'ssh_server' : 'this_device', 'direct');
+    openConnect(card.kind === 'self_hosted_business_node' ? 'ssh_server' : 'this_device');
   }
+
+  const connectModalTitle = trayDetected && connectContext === 'this_device'
+    ? 'Connect via Empyralis Agent'
+    : connectContext === 'this_device'
+      ? 'Connect this Mac'
+      : connectContext === 'ssh_server'
+        ? 'Connect a remote server'
+        : connectContext === 'other_computer'
+          ? 'Connect another computer'
+          : 'Connect a computer';
+  const showThisMacCard = connectContext === 'all' || connectContext === 'this_device';
+  const showRemoteServerCard = connectContext === 'all' || connectContext === 'ssh_server';
+  const showOtherComputerCard = connectContext === 'all' || connectContext === 'other_computer';
 
   return (
     <section className="workstation-hardware-pane" aria-label="Hardware">
@@ -962,7 +1002,7 @@ export function WorkstationHardwarePane() {
           <AppButton
             tone="secondary"
             type="button"
-            onClick={() => openConnect(activeTab === 'ssh_server' ? 'ssh_server' : 'this_device', 'choose')}
+            onClick={() => openConnect('all')}
           >
             <Plus size={15} strokeWidth={2} aria-hidden="true" />
             <span>Connect</span>
@@ -987,13 +1027,13 @@ export function WorkstationHardwarePane() {
         </nav>
 
         <section className="workstation-hardware-section" aria-label="Computers Empyralis can use">
-          <header className="workstation-hardware-section__header">
-            <div>
-              <h2>Computers Empyralis can use</h2>
-              <p>{connectedCount ? `${connectedCount} connected` : 'No usable computer is connected to this workspace.'}</p>
-            </div>
-            {cloudEnabled ? <span className="workstation-hardware-section__badge">Cloud enabled</span> : null}
-          </header>
+	          <header className="workstation-hardware-section__header">
+	            <div>
+	              <h2>Computers Empyralis can use</h2>
+	              <p>{connectedCount ? `${connectedCount} connected` : 'Connect a computer to this workspace.'}</p>
+	            </div>
+	            {cloudEnabled ? <span className="workstation-hardware-section__badge">Cloud enabled</span> : null}
+	          </header>
 
           {error ? <p className="workstation-hardware-section__notice">{error}</p> : null}
 
@@ -1074,18 +1114,11 @@ export function WorkstationHardwarePane() {
                   </AppButton>
                 </article>
               );
-            }) : (
-              <div className="workstation-hardware-empty">
-                <p>{emptyCopy()}</p>
-                <AppButton
-                  tone="secondary"
-                  type="button"
-                  onClick={() => openConnect(activeTab === 'ssh_server' ? 'ssh_server' : 'this_device', 'direct')}
-                >
-                  Connect
-                </AppButton>
-              </div>
-            )}
+	            }) : (
+	              <div className="workstation-hardware-empty">
+	                <p>{emptyCopy()}</p>
+	              </div>
+	            )}
           </div>
         </section>
       </div>
@@ -1094,21 +1127,22 @@ export function WorkstationHardwarePane() {
         <div className="workstation-hardware-sheet" role="dialog" aria-modal="true" aria-label="Connect hardware">
           <button className="workstation-hardware-sheet__scrim" type="button" aria-label="Close connect hardware" onClick={() => setConnectOpen(false)} />
           <section className="workstation-hardware-sheet__panel">
-            <header className="workstation-hardware-sheet__header">
-              <div>
-                <h2>{trayDetected ? 'Connect via Empyralis Agent' : 'Connect a computer'}</h2>
-                <p>Empyralis controls the paired computer through Agent Computer.</p>
-              </div>
+	            <header className="workstation-hardware-sheet__header">
+	              <div>
+	                <h2>{connectModalTitle}</h2>
+	                <p>Empyralis controls the paired computer through Agent Computer.</p>
+	              </div>
               <button className="workstation-hardware-sheet__close" type="button" onClick={() => setConnectOpen(false)} aria-label="Close">
                 <X size={17} strokeWidth={2} />
               </button>
             </header>
 
-            <div className="workstation-hardware-connect-stack">
-              <article className={joinClassNames('workstation-hardware-connect-card', trayDetected && 'is-active')}>
-                <div className="workstation-hardware-connect-card__main">
-                  <div>
-                    <h3>This Mac</h3>
+	            <div className="workstation-hardware-connect-stack">
+	              {showThisMacCard ? (
+	              <article className={joinClassNames('workstation-hardware-connect-card', trayDetected && 'is-active')}>
+	                <div className="workstation-hardware-connect-card__main">
+	                  <div>
+	                    <h3>This Mac</h3>
                     <p>Install Agent Computer and connect automatically</p>
                   </div>
                   <div className="workstation-hardware-connect-card__actions">
@@ -1137,15 +1171,17 @@ export function WorkstationHardwarePane() {
                 </div>
                 {localConnectError ? <p className="workstation-hardware-connect-card__error">{localConnectError}</p> : null}
                 {trayStatus?.error ? <p className="workstation-hardware-connect-card__error">{trayStatus.error}</p> : null}
-                {trayProcessConnected(trayStatus) && !trayStatusConnected(trayStatus) ? (
-                  <p className="workstation-hardware-connect-card__note">Connecting...</p>
-                ) : null}
-              </article>
+	                {trayProcessConnected(trayStatus) && !trayStatusConnected(trayStatus) ? (
+	                  <p className="workstation-hardware-connect-card__note">Connecting...</p>
+	                ) : null}
+	              </article>
+	              ) : null}
 
-              <article className={joinClassNames('workstation-hardware-connect-card', remoteExpanded && 'is-active')}>
-                <div className="workstation-hardware-connect-card__main">
-                  <div>
-                    <h3>Remote server</h3>
+	              {showRemoteServerCard ? (
+	              <article className={joinClassNames('workstation-hardware-connect-card', remoteExpanded && 'is-active')}>
+	                <div className="workstation-hardware-connect-card__main">
+	                  <div>
+	                    <h3>Remote server</h3>
                     <p>Linux VPS or cloud machine via SSH</p>
                   </div>
                   <AppButton tone="secondary" type="button" onClick={() => setRemoteExpanded((expanded) => !expanded)}>
@@ -1190,14 +1226,16 @@ export function WorkstationHardwarePane() {
                       {remoteConnectBusy ? 'Connecting' : 'Connect'}
                     </AppButton>
                     {remoteError ? <p className="workstation-hardware-connect-card__error">{remoteError}</p> : null}
-                  </div>
-                ) : null}
-              </article>
+	                  </div>
+	                ) : null}
+	              </article>
+	              ) : null}
 
-              <article className={joinClassNames('workstation-hardware-connect-card', otherSetupIntent && 'is-active')}>
-                <div className="workstation-hardware-connect-card__main">
-                  <div>
-                    <h3>Another computer</h3>
+	              {showOtherComputerCard ? (
+	              <article className={joinClassNames('workstation-hardware-connect-card', otherSetupIntent && 'is-active')}>
+	                <div className="workstation-hardware-connect-card__main">
+	                  <div>
+	                    <h3>Another computer</h3>
                     <p>Any Mac, Windows, or Linux machine on your network</p>
                   </div>
                   <AppButton tone="secondary" type="button" onClick={() => void createOtherComputerSetupLink()} disabled={busy}>
@@ -1235,10 +1273,11 @@ export function WorkstationHardwarePane() {
                         <pre><code>{command}</code></pre>
                       </div>
                     ) : null}
-                  </div>
-                ) : null}
-              </article>
-            </div>
+	                  </div>
+	                ) : null}
+	              </article>
+	              ) : null}
+	            </div>
 
             {statusMessage ? <p className="workstation-hardware-section__notice">{statusMessage}</p> : null}
           </section>

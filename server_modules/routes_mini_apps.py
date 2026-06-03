@@ -323,12 +323,7 @@ def _b64url_decode(token: str) -> bytes:
 
 
 def _active_session_secret() -> bytes:
-    secret = (
-        os.getenv("EMPYRALIS_MINI_APP_ACTIVE_SESSION_SECRET")
-        or os.getenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET")
-        or os.getenv("ORION_JWT_SECRET")
-        or os.getenv("ORION_SECRET_KEY")
-    )
+    secret = os.getenv("EMPYRALIS_MINI_APP_ACTIVE_SESSION_SECRET")
     if not secret:
         environment = str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
         if environment not in {"", "dev", "development", "local", "test", "testing"}:

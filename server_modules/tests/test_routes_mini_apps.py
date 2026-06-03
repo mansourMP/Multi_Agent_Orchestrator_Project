@@ -159,6 +159,22 @@ def test_active_session_secret_fails_closed_in_production_without_real_secret():
             routes_mini_apps._active_session_secret()
 
 
+def test_active_session_secret_rejects_legacy_secret_aliases_in_production():
+    for legacy_secret_name in ("EMPYRALIS_MINI_APP_LAUNCH_SECRET", "ORION_JWT_SECRET", "ORION_SECRET_KEY"):
+        with patch.dict(os.environ, {"ORION_ENV": "production", legacy_secret_name: "legacy-secret"}, clear=True):
+            with pytest.raises(RuntimeError):
+                routes_mini_apps._active_session_secret()
+
+
+def test_active_session_secret_requires_exact_active_session_secret_in_production():
+    with patch.dict(
+        os.environ,
+        {"ORION_ENV": "production", "EMPYRALIS_MINI_APP_ACTIVE_SESSION_SECRET": "a" * 40},
+        clear=True,
+    ):
+        assert routes_mini_apps._active_session_secret() == b"a" * 40
+
+
 def test_active_session_secret_keeps_local_dev_fallback_compatibility():
     with patch.dict(os.environ, {"ORION_ENV": "local"}, clear=True):
         assert routes_mini_apps._active_session_secret().startswith(b"empyralis-mini-app-active-session")
@@ -477,6 +493,7 @@ async def test_unlisted_mini_app_share_preview_and_install(monkeypatch: pytest.M
     app = _build_app()
     app.dependency_overrides[routes_mini_apps.get_current_user] = lambda: {"user_id": "user-1"}
     monkeypatch.setattr(routes_mini_apps.auth_module, "enforce_workspace_access", lambda current_user, workspace_id, minimum_role="viewer": workspace_id)
+    monkeypatch.setenv("EMPYRALIS_MINI_APP_SHARE_SECRET", "s" * 40)
 
     with tempfile.TemporaryDirectory(prefix="mini-app-routes-") as tmpdir:
         monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", Path(tmpdir) / "workspace")

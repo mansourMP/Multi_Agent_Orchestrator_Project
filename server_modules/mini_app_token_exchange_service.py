@@ -20,18 +20,24 @@ SCOPE_CATALOG: Set[str] = {
     "agent:create",
     "webhook:write",
 }
-EXCHANGE_SECRET = (
-    os.getenv("EMPYRALIS_MINI_APP_EXCHANGE_SECRET")
-    or os.getenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET")
-    or os.getenv("ORION_JWT_SECRET")
-    or os.getenv("ORION_SECRET_KEY")
-    or "empyralis-mini-app-exchange-local-dev-secret"
-).encode("utf-8")
 
 _used_jti_cache: Dict[str, float] = {}
 _JTI_CACHE_LOCK = __import__("threading").Lock()
 _JTI_MAX_CACHE_SIZE = 10_000
 _MAX_JTI_AGE_SECONDS = max(EXCHANGE_TOKEN_TTL_SECONDS, 30 * 60)
+
+
+class ConfigurationError(RuntimeError):
+    pass
+
+
+def _exchange_secret() -> bytes:
+    secret = os.getenv("EMPYRALIS_MINI_APP_EXCHANGE_SECRET")
+    if not secret:
+        raise ConfigurationError(
+            "EMPYRALIS_MINI_APP_EXCHANGE_SECRET is required. Set this environment variable before issuing mini-app exchange tokens."
+        )
+    return secret.encode("utf-8")
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -94,7 +100,7 @@ def issue_access_token(
     }
     payload_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     body = _b64url_encode(payload_bytes)
-    signature = hmac.new(EXCHANGE_SECRET, body.encode("ascii"), hashlib.sha256).digest()
+    signature = hmac.new(_exchange_secret(), body.encode("ascii"), hashlib.sha256).digest()
     return {
         "access_token": f"{body}.{_b64url_encode(signature)}",
         "token_type": "Bearer",
@@ -109,7 +115,7 @@ def verify_access_token(token: str) -> Dict[str, Any]:
     if not raw_token or "." not in raw_token:
         raise PermissionError("Access token is required.")
     body, signature = raw_token.split(".", 1)
-    expected = _b64url_encode(hmac.new(EXCHANGE_SECRET, body.encode("ascii"), hashlib.sha256).digest())
+    expected = _b64url_encode(hmac.new(_exchange_secret(), body.encode("ascii"), hashlib.sha256).digest())
     if not hmac.compare_digest(signature, expected):
         raise PermissionError("Access token signature is invalid.")
     try:

@@ -57,6 +57,30 @@ Provider names such as OpenClaw, NemoClaw, Hermes, A2A, MCP, laptop-local agents
 }
 ```
 
+Provider-owned child agents can also be declared as a small manifest summary so
+Studio can render the left trail before fetching the full `sub_agents` section.
+This applies equally to OpenClaw, Hermes, NemoClaw, A2A, MCP, and custom HTTPS
+connections:
+
+```json
+{
+  "sub_agents": [
+    {
+      "id": "researcher",
+      "name": "Research worker",
+      "status": "ready",
+      "summary": "Handles web research inside the external runtime.",
+      "capabilities": ["chat", "knowledge_read"]
+    }
+  ]
+}
+```
+
+These children remain external-owned. They are not native Studio agents and do
+not inherit native Agent Computer execution. The connected-provider root can be
+shown as `OpenClaw Agents`, `Hermes Agents`, `NemoClaw Agents`, or a custom
+connection name, with child rows nested underneath.
+
 ## Security Rules
 
 - The browser never calls external endpoints directly.

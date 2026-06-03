@@ -130,49 +130,15 @@ test.describe('gateway surface aliases', () => {
 });
 
 test.describe('Agent Computer policy settings', () => {
-  test('shows the three access modes and saves Custom policy fields', async ({ page }) => {
-    const mock = await mockAgentComputerSettings(page);
+  test('routes Agent Computer management to the Hardware surface', async ({ page }) => {
+    await mockAgentComputerSettings(page);
     await loginAsOwner(page);
 
-    await page.goto('/w/ws-1/settings?section=devices');
+    await page.goto('/w/ws-1/hardware');
 
-    await expect(page.getByRole('heading', { name: /^Agent Computer$/ })).toBeVisible();
-    await expect(page.getByText('Selected local runtime for Sage.')).toBeVisible();
-    await expect(page.getByText('Guarded until saved')).toBeVisible();
-
-    await page.getByRole('button', { name: 'Manage computer' }).click();
-    await page.getByRole('button', { name: 'Manual setup' }).click();
-
-    const runtimeMode = page.getByLabel('Runtime mode');
-    const modeLabels = await runtimeMode.locator('option').allTextContents();
-    expect(modeLabels).toEqual(expect.arrayContaining(['Default Guarded', 'Autonomous Full Access', 'Custom']));
-
-    await expect(page.getByText('Custom access policy')).toBeVisible();
-    await expect(page.getByLabel('Terminal policy')).toBeVisible();
-    await expect(page.getByLabel('Network policy')).toBeVisible();
-    await expect(page.getByLabel('Browser access')).toBeVisible();
-    await expect(page.getByLabel('App access')).toBeVisible();
-
-    await page.getByRole('textbox', { name: /Allowed folders/i }).fill('/Users/mansur/Projects');
-    await page.getByRole('button', { name: 'Add folder' }).click();
-    await page.getByRole('textbox', { name: /Blocked folders/i }).fill('/Users/mansur/Projects/secrets');
-    await page.getByRole('button', { name: 'Block folder' }).click();
-    await page.getByPlaceholder('example.com').fill('api.example.com');
-    await page.getByRole('button', { name: 'Add domain' }).click();
-    await page.getByLabel('Max runtime seconds').fill('3600');
-    await page.getByLabel('Max budget dollars').fill('5');
-
-    await page.getByRole('button', { name: 'Save custom policy' }).click();
-
-    await expect.poll(() => mock.savedPolicy()).not.toBeNull();
-    await expect(page.getByText('Custom saved').first()).toBeVisible();
-    expect(mock.savedPolicy()).toMatchObject({
-      autonomy_mode: 'trusted_workstation',
-      filesystem_scope: ['/Users/mansur/Projects'],
-      blocked_filesystem_scope: ['/Users/mansur/Projects/secrets'],
-      domain_allowlist: ['api.example.com'],
-      max_runtime_seconds: 3600,
-      max_budget_cents: 500,
-    });
+    await expect(page).toHaveURL(/\/w\/ws-1\/hardware$/);
+    await expect(page.getByRole('heading', { name: /^Hardware$/ })).toBeVisible();
+    await expect(page.getByText('The computers Empyralis can use.')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Connect$/ })).toBeVisible();
   });
 });

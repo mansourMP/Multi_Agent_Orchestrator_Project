@@ -115,7 +115,7 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page).not.toHaveURL(/\/w\/ws-1\/admin$/);
   });
 
-  test('global account and This Computer settings routes resolve into workspace settings sections', async ({ page }) => {
+  test('global account settings route resolves into workspace settings and hardware is a first-class workspace route', async ({ page }) => {
     await loginAsOwner(page);
 
     await page.goto('/settings/account');
@@ -126,9 +126,9 @@ test.describe('account shell and bootstrap resilience', () => {
     await expect(page.getByRole('button', { name: /manage billing/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /log out/i })).toBeVisible();
 
-    await page.goto('/settings/devices');
-    await expect(page).toHaveURL(/\/w\/ws-1\/settings\?section=devices$/);
-    await expect(page.locator('h1').filter({ hasText: /^This Computer$/ })).toBeVisible();
+    await page.goto('/w/ws-1/hardware');
+    await expect(page).toHaveURL(/\/w\/ws-1\/hardware$/);
+    await expect(page.locator('h1').filter({ hasText: /^Hardware$/ })).toBeVisible();
   });
 
   test('sage top navigation exposes the five IA surfaces and moves approvals into a badge', async ({ page }) => {

@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { loadAccountShellSessionSafely } from '@/lib/server/load-account-shell-session';
 import { resolvePrimaryProductWorkspaceId } from '@/lib/shell/workspace-membership-model';
 
-export type AccountSettingsSection = 'account' | 'devices';
+export type AccountSettingsSection = 'account';
 
 export async function redirectToWorkspaceSettings(section: AccountSettingsSection): Promise<never> {
   const session = await loadAccountShellSessionSafely();

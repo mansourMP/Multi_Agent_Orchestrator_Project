@@ -169,7 +169,7 @@ def register_sage_chat_routes(app) -> None:
         resolved_workspace_id = enforce_workspace_access(
             current_user,
             body.workspace_id,
-            minimum_role="admin",
+            minimum_role="member",
         )
         tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
 
@@ -206,7 +206,7 @@ def register_sage_chat_routes(app) -> None:
         resolved_workspace_id = enforce_workspace_access(
             current_user,
             body.workspace_id,
-            minimum_role="admin",
+            minimum_role="member",
         )
         tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
         try:
@@ -242,7 +242,7 @@ def register_sage_chat_routes(app) -> None:
         resolved_workspace_id = enforce_workspace_access(
             current_user,
             body.workspace_id,
-            minimum_role="viewer",
+            minimum_role="member",
         )
         tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
         actor_user_id = _coerce_text((current_user or {}).get("user_id"))
@@ -367,7 +367,7 @@ def register_sage_chat_routes(app) -> None:
         resolved_workspace_id = enforce_workspace_access(
             current_user,
             body.workspace_id,
-            minimum_role="admin",
+            minimum_role="member",
         )
         tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
         actor_user_id = _coerce_text((current_user or {}).get("user_id"))

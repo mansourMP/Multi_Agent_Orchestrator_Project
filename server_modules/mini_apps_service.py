@@ -35,8 +35,8 @@ FIRST_PARTY_MINI_APP_IDS = {
     "flashcards",
 }
 FIRST_PARTY_APP_OPEN_PATHS = {
-    "calorie_tracking": "/mini-apps/official/calorie-tracking",
-    "flashcards": "/mini-apps/official/flashcards",
+    "calorie_tracking": "calorie_tracking",
+    "flashcards": "flashcards",
 }
 APP_RUNTIME_TYPES = {"link", "platform", "community", "private"}
 APP_RUNTIME_TYPE_ALIASES = {
@@ -87,14 +87,19 @@ def _b64url_decode(token: str) -> bytes:
     return base64.urlsafe_b64decode((token + padding).encode("ascii"))
 
 
+class ConfigurationError(RuntimeError):
+    pass
+
+
 def _share_token_secret() -> bytes:
     secret = (
         os.getenv("EMPYRALIS_MINI_APP_SHARE_SECRET")
         or os.getenv("EMPYRALIS_MINI_APP_LAUNCH_SECRET")
-        or os.getenv("ORION_JWT_SECRET")
-        or os.getenv("ORION_SECRET_KEY")
-        or "empyralis-mini-app-share-local-dev-secret"
     )
+    if not secret:
+        raise ConfigurationError(
+            "EMPYRALIS_MINI_APP_SHARE_SECRET is required. Set this environment variable before creating mini-app share tokens."
+        )
     return secret.encode("utf-8")
 
 
@@ -1093,7 +1098,7 @@ def _simple_app_open_target(workspace_id: str, contract: Dict[str, Any]) -> Dict
     if app_id in FIRST_PARTY_APP_OPEN_PATHS:
         return {
             "kind": "internal",
-            "url": FIRST_PARTY_APP_OPEN_PATHS[app_id],
+            "url": f"/w/{_normalize_workspace_id(workspace_id)}/applications/{FIRST_PARTY_APP_OPEN_PATHS[app_id]}",
         }
     if runtime_type == "link" and destination_url:
         return {
@@ -1150,7 +1155,7 @@ def _simple_app_card(workspace_id: str, contract: Dict[str, Any]) -> Dict[str, A
         and int(ai_policy.get("monthly_credit_cap") or 0) > 0
         and int(ai_policy.get("per_invocation_credit_cap") or 0) > 0
     )
-    details_url = FIRST_PARTY_APP_OPEN_PATHS.get(app_id) or f"/w/{_normalize_workspace_id(workspace_id)}/applications/{app_id}?details=1"
+    details_url = f"/w/{_normalize_workspace_id(workspace_id)}/applications/{FIRST_PARTY_APP_OPEN_PATHS.get(app_id) or app_id}?details=1"
     public_app_id = _public_app_id(workspace_id, app_id)
     return {
         "feed_id": f"local:{app_id}",

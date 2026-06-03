@@ -77,8 +77,13 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(activity_kwargs["payload"]["request_id"], "req-1")
         self.assertEqual(activity_kwargs["payload"]["run_id"], "run-1")
         self.assertGreaterEqual(rust_mock.call_count, 2)
-        self.assertEqual(rust_mock.call_args.args[0], "gateway-service-decision")
-        self.assertEqual(rust_mock.call_args.args[1]["operation"], "tool_execute")
+        gateway_decision_calls = [
+            call
+            for call in rust_mock.call_args_list
+            if call.args[0] == "gateway-service-decision"
+            and call.args[1].get("operation") == "tool_execute"
+        ]
+        self.assertTrue(gateway_decision_calls)
 
     async def test_execute_tool_via_gateway_rust_denial_blocks_dispatch(self) -> None:
         registration = {

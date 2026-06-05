@@ -4,11 +4,98 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from server_modules import (
+    artifact_service,
+    direct_chat_provider_service,
     empyralis_model_tier_contract,
     empyralis_model_tier_routing_service,
     entitlements_service,
     provider_profiles,
 )
+
+TEXT_ATTACHMENT_EXTENSIONS = {
+    ".txt",
+    ".md",
+    ".markdown",
+    ".json",
+    ".csv",
+    ".tsv",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".html",
+    ".css",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".py",
+    ".rs",
+    ".go",
+    ".java",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".sh",
+    ".sql",
+}
+MAX_ATTACHMENT_CONTEXT_CHARS = 12000
+MAX_ATTACHMENT_CONTEXT_PER_FILE_CHARS = 4000
+
+
+def _attachment_context_block(attachments: Any, *, workspace_id: str) -> str:
+    if not isinstance(attachments, list) or not attachments:
+        return ""
+    blocks: List[str] = []
+    consumed = 0
+    normalized_workspace_id = str(workspace_id or "").strip()
+    for attachment in attachments:
+        uri = str(getattr(attachment, "uri", "") or "").strip()
+        name = str(getattr(attachment, "name", "") or "").strip()
+        metadata = getattr(attachment, "metadata", None)
+        metadata = metadata if isinstance(metadata, dict) else {}
+        artifact_id = (
+            str(metadata.get("artifact_id") or "").strip()
+            or str(artifact_service.artifact_id_from_reference(uri) or "").strip()
+        )
+        if not artifact_id:
+            continue
+        payload = artifact_service.load_artifact_metadata_by_id(artifact_id)
+        if not isinstance(payload, dict):
+            continue
+        artifact_workspace_id = str(payload.get("workspace_id") or "").strip()
+        if normalized_workspace_id and artifact_workspace_id and artifact_workspace_id != normalized_workspace_id:
+            continue
+        file_name = (
+            name
+            or str(payload.get("file_name") or "").strip()
+            or str(payload.get("label") or "").strip()
+            or artifact_id
+        )
+        content_type = artifact_service.artifact_content_type(payload, file_name)
+        suffix = file_name.lower().rsplit(".", 1)
+        extension = f".{suffix[-1]}" if len(suffix) > 1 else ""
+        line = f"- {file_name} ({content_type or 'file'}, artifact_id={artifact_id})"
+        text_preview = ""
+        if content_type.startswith("text/") or extension in TEXT_ATTACHMENT_EXTENSIONS:
+            path = artifact_service.resolve_artifact_content_path_by_id(artifact_id)
+            if path is not None:
+                try:
+                    text_preview = path.read_text(encoding="utf-8", errors="replace").strip()
+                except Exception:
+                    text_preview = ""
+        if text_preview:
+            remaining = MAX_ATTACHMENT_CONTEXT_CHARS - consumed
+            if remaining <= 0:
+                break
+            excerpt = text_preview[: min(MAX_ATTACHMENT_CONTEXT_PER_FILE_CHARS, remaining)].rstrip()
+            consumed += len(excerpt)
+            blocks.append(f"{line}\n```text\n{excerpt}\n```")
+        else:
+            blocks.append(line)
+    if not blocks:
+        return ""
+    return "Attached files for this turn:\n" + "\n".join(blocks)
 from server_modules import session_transcript_store
 from server_modules.conversation_memory_policy import (
     DIRECT_CHAT_PROFILE,
@@ -50,6 +137,33 @@ def _highest_allowed_empyralis_tier(
         if isinstance(record, dict) and bool(record.get("enabled")):
             return candidate
     return None
+
+
+def _availability_local_tools_available(availability: Dict[str, Any]) -> bool:
+    if not isinstance(availability, dict):
+        return False
+    capability_truth = availability.get("capability_truth")
+    if isinstance(capability_truth, dict):
+        my_computer = capability_truth.get("my_computer")
+        if isinstance(my_computer, dict) and "local_tools_available" in my_computer:
+            return bool(my_computer.get("local_tools_available"))
+    return (
+        str(availability.get("connection_mode") or "").strip().lower() == "local_companion"
+        and bool(availability.get("local_gateway_online"))
+    )
+
+
+def _filter_builtin_tools_for_availability(
+    tools: List[Dict[str, Any]],
+    availability: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    if _availability_local_tools_available(availability):
+        return tools
+    return [
+        tool
+        for tool in tools
+        if str(tool.get("name") or "").strip() != "hardware__action"
+    ]
 
 
 def prepare_direct_chat_request(
@@ -109,15 +223,24 @@ def prepare_direct_chat_request(
         if resolved_turn_request is not None
         else str(thread_id or "").strip()
     )
+    if resolved_turn_request is not None:
+        attachment_context = _attachment_context_block(
+            list(resolved_turn_request.attachments or []),
+            workspace_id=normalized_workspace_id,
+        )
+        if attachment_context:
+            normalized_message = f"{normalized_message}\n\n{attachment_context}".strip()
     session_key = direct_chat_session_key_fn(normalized_workspace_id, normalized_thread_id)
     normalized_requested_provider = str(requested_provider or "").strip().lower()
     normalized_requested_model = str(requested_model or "").strip()
+    current_turn_requested_provider = bool(normalized_requested_provider)
+    current_turn_requested_model = bool(normalized_requested_model)
     resolved_chat_max_iterations = resolved_chat_iteration_limit_fn(max_iterations)
 
     session_model_preference = session_model_preference_fn(session_key)
-    if session_model_preference.get("provider"):
+    if not current_turn_requested_provider and session_model_preference.get("provider"):
         normalized_requested_provider = str(session_model_preference.get("provider") or "").strip().lower()
-    if session_model_preference.get("model"):
+    if not current_turn_requested_model and session_model_preference.get("model"):
         normalized_requested_model = str(session_model_preference.get("model") or "").strip()
 
     normalized_reasoning_effort = normalize_reasoning_effort_fn(reasoning_effort)
@@ -154,6 +277,9 @@ def prepare_direct_chat_request(
         slash_command_name = ""
         slash_remainder = ""
 
+    selected_model_unavailable_tier = ""
+    selected_model_unavailable_model = ""
+    selected_model_unavailable_reason = ""
     migrated_public_tier = empyralis_model_tier_routing_service.infer_migrated_public_tier_from_legacy_selection(
         requested_provider=normalized_requested_provider,
         requested_model=normalized_requested_model,
@@ -229,16 +355,35 @@ def prepare_direct_chat_request(
             requested_public_tier in empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS
             and not requested_tier_enabled
         ):
-            fallback_tier = _highest_allowed_empyralis_tier(tier_policy)
-            if fallback_tier and fallback_tier != requested_public_tier:
-                empyralis_tier_route = empyralis_model_tier_routing_service.resolve_backend_provider_model_for_tier(
-                    fallback_tier
-                )
-                normalized_requested_provider = str(empyralis_tier_route.get("provider") or "").strip().lower()
-                normalized_requested_model = str(empyralis_tier_route.get("model") or "").strip()
-                normalized_reasoning_effort = normalize_reasoning_effort_fn(
-                    str(empyralis_tier_route.get("reasoning_effort") or "")
-                )
+            selected_model_unavailable_tier = requested_public_tier
+            resolved_turn_metadata = {
+                **resolved_turn_metadata,
+                "selected_model_unavailable": True,
+                "selected_model_unavailable_reason": "tier_disabled",
+                "selected_model_unavailable_tier": requested_public_tier,
+            }
+
+    if not normalized_requested_provider and normalized_requested_model:
+        inferred_provider = direct_chat_provider_service.provider_for_model(normalized_requested_model)
+        if inferred_provider:
+            normalized_requested_provider = inferred_provider
+            if "/" in normalized_requested_model:
+                model_provider_prefix, model_id = normalized_requested_model.split("/", 1)
+                normalized_prefix = model_provider_prefix.strip().lower()
+                if (
+                    normalized_prefix == inferred_provider
+                    or (normalized_prefix == "openai-codex" and inferred_provider == "codex_cli")
+                ):
+                    normalized_requested_model = model_id.strip()
+        else:
+            selected_model_unavailable_model = normalized_requested_model
+            selected_model_unavailable_reason = "unknown_provider_for_selected_model"
+            resolved_turn_metadata = {
+                **resolved_turn_metadata,
+                "selected_model_unavailable": True,
+                "selected_model_unavailable_reason": selected_model_unavailable_reason,
+                "selected_model_unavailable_model": selected_model_unavailable_model,
+            }
 
     base_direct_chat_policy = get_memory_policy_profile(DIRECT_CHAT_PROFILE)
     context_window_tokens = provider_profiles.context_window_for_model(
@@ -288,6 +433,14 @@ def prepare_direct_chat_request(
     proactive_suggestions = build_proactive_suggestions_fn(normalized_workspace_id) if not normalized_prior_messages else []
     tool_loop_session_key = direct_tool_session_key_fn(normalized_workspace_id, normalized_thread_id)
     availability_override = dict(availability) if isinstance(availability, dict) else {}
+    if selected_model_unavailable_tier:
+        availability_override["selected_model_unavailable"] = True
+        availability_override["selected_model_unavailable_reason"] = "tier_disabled"
+        availability_override["selected_model_unavailable_tier"] = selected_model_unavailable_tier
+    if selected_model_unavailable_model:
+        availability_override["selected_model_unavailable"] = True
+        availability_override["selected_model_unavailable_reason"] = selected_model_unavailable_reason or "selected_model_unavailable"
+        availability_override["selected_model_unavailable_model"] = selected_model_unavailable_model
     if resolved_turn_request is not None:
         source_token = str(
             resolved_turn_metadata.get("source")
@@ -310,7 +463,23 @@ def prepare_direct_chat_request(
     tool_capabilities = context_tool_capabilities_fn(availability_payload)
     tools = build_direct_chat_tools_fn(tool_capabilities)
     tools.extend(build_local_direct_chat_tools_fn(availability_payload))
-    tools.extend(build_builtin_direct_chat_tools_fn())
+    tools.extend(
+        _filter_builtin_tools_for_availability(
+            build_builtin_direct_chat_tools_fn(),
+            availability_payload,
+        )
+    )
+    deduped_tools: List[Dict[str, Any]] = []
+    seen_tool_names: set[str] = set()
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        tool_name = str(tool.get("name") or "").strip()
+        if not tool_name or tool_name in seen_tool_names:
+            continue
+        seen_tool_names.add(tool_name)
+        deduped_tools.append(tool)
+    tools = deduped_tools
     approved_action_payload = normalize_direct_approved_action_fn(approved_action)
     base_context_used = build_context_used_fn(
         workspace_id=normalized_workspace_id,

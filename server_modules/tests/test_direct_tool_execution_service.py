@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from server_modules import direct_tool_execution_service as service
+from server_modules import skills_service
 from server_modules import tool_broker_guard_service
 
 
@@ -136,6 +137,47 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertEqual(metadata["result_summary"], "Captured screenshot from Agent Computer.")
         self.assertEqual(metadata["browser_screenshot"]["artifact_id"], "artifact-screenshot-1")
         self.assertEqual(metadata["browser_screenshot"]["caption"], "Agent Computer screenshot")
+
+    def test_direct_screenshot_trace_metadata_exposes_artifact(self) -> None:
+        metadata = service.build_direct_tool_trace_metadata(
+            "screenshot",
+            "capture",
+            {},
+            result_text=json.dumps(
+                {
+                    "status": "completed",
+                    "artifacts": ["artifact-direct-screenshot-1"],
+                }
+            ),
+        )
+
+        self.assertEqual(metadata["capability_id"], "screenshot.capture")
+        self.assertEqual(metadata["result_summary"], "Captured screenshot from Agent Computer.")
+        self.assertEqual(metadata["browser_screenshot"]["artifact_id"], "artifact-direct-screenshot-1")
+        self.assertEqual(metadata["browser_screenshot"]["caption"], "Agent Computer screenshot")
+
+    def test_direct_screenshot_trace_metadata_finds_nested_artifact(self) -> None:
+        metadata = service.build_direct_tool_trace_metadata(
+            "screenshot",
+            "capture",
+            {},
+            result_text=json.dumps(
+                {
+                    "result": {
+                        "summary": "Captured primary display.",
+                        "result_data": {
+                            "child_result": {
+                                "outputs": {
+                                    "artifacts": [{"id": "artifact-nested-screenshot-1"}]
+                                }
+                            }
+                        },
+                    },
+                }
+            ),
+        )
+
+        self.assertEqual(metadata["browser_screenshot"]["artifact_id"], "artifact-nested-screenshot-1")
 
     def test_hardware_offline_trace_metadata_uses_actionable_summary(self) -> None:
         metadata = service.build_direct_tool_trace_metadata(
@@ -626,6 +668,102 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
 
         browser_adapter.assert_not_called()
 
+    def test_direct_gateway_screenshot_uses_unique_protocol_request_ids(self) -> None:
+        callbacks = _callbacks()
+        captured_request_ids: list[str] = []
+        formatted_results: list[dict] = []
+
+        def _fake_gateway_execute(**kwargs):
+            captured_request_ids.append(str(kwargs.get("request_id") or ""))
+            return {
+                "gateway_id": "gateway-1",
+                "run_id": str(kwargs.get("run_id") or ""),
+                "status": "completed",
+                "result": {
+                    "images": [
+                        {
+                            "artifact_id": "artifact-direct-gateway-screenshot-1",
+                            "uri": "artifact://artifact-direct-gateway-screenshot-1",
+                            "mime_type": "image/png",
+                            "data_base64": "raw-image-bytes-must-not-reach-chat",
+                        }
+                    ],
+                    "artifacts": [
+                        {
+                            "artifact_id": "artifact-direct-gateway-screenshot-1",
+                            "uri": "artifact://artifact-direct-gateway-screenshot-1",
+                        }
+                    ],
+                },
+            }
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ), patch(
+            "server_modules.skills_service._resolve_direct_tool_gateway_id",
+            return_value="gateway-1",
+        ), patch(
+            "server_modules.skills_service._execute_direct_tool_via_gateway",
+            side_effect=_fake_gateway_execute,
+        ):
+            for _ in range(2):
+                result_text = service.execute_single_direct_tool_call(
+                    tool_call={"name": "screenshot__capture", "arguments": {}},
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={"tenant_id": "tenant-1", "request_id": "parent-request"},
+                )
+                formatted_results.append(json.loads(result_text))
+
+        self.assertEqual(len(captured_request_ids), 2)
+        self.assertEqual(len(set(captured_request_ids)), 2)
+        self.assertNotIn("parent-request", captured_request_ids)
+        for payload in formatted_results:
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["summary"], "Captured screenshot from Agent Computer.")
+            self.assertEqual(payload["result"]["artifacts"][0]["artifact_id"], "artifact-direct-gateway-screenshot-1")
+            self.assertEqual(payload["result"]["images"][0]["artifact_id"], "artifact-direct-gateway-screenshot-1")
+            self.assertNotIn("data_base64", json.dumps(payload))
+
+    def test_hardware_action_uses_unique_protocol_request_ids(self) -> None:
+        callbacks = service.DirectToolExecutionCallbacks(
+            **{
+                **vars(_callbacks()),
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+        captured_request_ids: list[str] = []
+
+        async def _fake_hardware_action(**kwargs):
+            captured_request_ids.append(str(kwargs.get("request_id") or ""))
+            return {"status": "completed", "execution": {"result": {"summary": "captured"}}}
+
+        with patch(
+            "server_modules.direct_tool_execution_service.security_audit_service.emit_security_audit_event"
+        ), patch(
+            "server_modules.skills_service._resolve_direct_tool_gateway_id",
+            return_value="gateway-1",
+        ), patch(
+            "server_modules.hardware_action_broker_service.execute_hardware_action",
+            new=AsyncMock(side_effect=_fake_hardware_action),
+        ):
+            for _ in range(2):
+                service.execute_single_direct_tool_call(
+                    tool_call={
+                        "name": "hardware__action",
+                        "arguments": {"action": "screenshot.capture"},
+                    },
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={"tenant_id": "tenant-1", "request_id": "parent-request"},
+                )
+
+        self.assertEqual(len(captured_request_ids), 2)
+        self.assertEqual(len(set(captured_request_ids)), 2)
+        self.assertNotIn("parent-request", captured_request_ids)
+
     def test_execute_single_direct_tool_call_uses_broker_guard_for_execute_actions(self) -> None:
         callbacks = _callbacks()
         callbacks = service.DirectToolExecutionCallbacks(
@@ -752,6 +890,40 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(raw, "one\n\ntwo")
+
+    def test_hardware_action_screenshot_result_strips_base64(self) -> None:
+        raw = skills_service._format_hardware_action_result(
+            {
+                "status": "completed",
+                "runtime_session": {
+                    "canonical_runtime_target": "user_device_gateway",
+                    "runtime_access_mode": "default_guarded",
+                    "state": "ready",
+                    "gateway_id": "gateway-1",
+                    "device_id": "device-1",
+                },
+                "execution": {
+                    "result": {
+                        "images": [
+                            {
+                                "data_base64": "very-large-image",
+                                "mime_type": "image/png",
+                                "width": 1,
+                                "height": 1,
+                            }
+                        ]
+                    }
+                },
+            }
+        )
+
+        payload = json.loads(raw)
+        self.assertEqual(payload["status"], "completed")
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["summary"], "Captured screenshot from Agent Computer.")
+        self.assertEqual(payload["result"]["image_count"], 1)
+        self.assertEqual(payload["result"]["images"][0]["mime_type"], "image/png")
+        self.assertNotIn("data_base64", json.dumps(payload))
 
 
 if __name__ == "__main__":

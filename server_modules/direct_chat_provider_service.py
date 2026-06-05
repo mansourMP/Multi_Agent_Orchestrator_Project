@@ -12,19 +12,31 @@ from scripts.orion_local_worker_llm import (
     provider_has_key,
 )
 from server_modules import entitlements_service
+from server_modules import empyralis_model_tier_contract
 from server_modules import provider_profiles
 from server_modules.provider_profiles import _build_provider_credential_candidates, normalize_auth_mode
 from server_modules import skills_service
 
 
 CHANNEL_CAPABILITY_IDS = {
-    "telegram_bot",
-    "whatsapp",
-    "slack",
-    "discord_bot",
-    "google_workspace",
-    "microsoft_365",
-    "smtp",
+    "telegram_personal",
+    "whatsapp_personal",
+    "signal_personal",
+    "imessage_personal",
+    "wechat_personal",
+}
+EMPYRALIS_PROVIDER_ALIASES = {
+    "empyralis",
+    "empyralis_managed",
+    "workspace_ai",
+    "workspace-ai",
+    "platform_ai",
+    "platform-ai",
+}
+LOCAL_RUNTIME_PROVIDER_IDS = {
+    "codex_cli",
+    "claude_code_cli",
+    "ollama",
 }
 
 
@@ -98,6 +110,41 @@ def _byok_provider_options() -> List[Dict[str, Any]]:
     return options
 
 
+def _default_empyralis_internal_provider() -> str:
+    contract = empyralis_model_tier_contract.model_tier_contract("light", fallback="light")
+    return str(contract.internal_provider or "deepseek").strip().lower() or "deepseek"
+
+
+def provider_for_model(model: str) -> str:
+    model_token = str(model or "").strip()
+    if not model_token:
+        return ""
+    provider_prefix = ""
+    model_id = model_token
+    if "/" in model_token:
+        provider_prefix, model_id = model_token.split("/", 1)
+        provider_prefix = provider_prefix.strip().lower()
+        model_id = model_id.strip()
+        if provider_prefix == "openai-codex":
+            return "codex_cli"
+        if provider_prefix in provider_profiles.PROVIDER_CATALOG:
+            return provider_prefix
+    normalized_model = model_id.lower()
+    matches: List[str] = []
+    for provider_id, entry in provider_profiles.PROVIDER_CATALOG.items():
+        if not isinstance(entry, dict):
+            continue
+        candidates = [
+            str(item or "").strip()
+            for item in [entry.get("default_model"), *(entry.get("models") if isinstance(entry.get("models"), list) else [])]
+            if str(item or "").strip()
+        ]
+        if any(candidate.lower() == normalized_model for candidate in candidates):
+            matches.append("codex_cli" if provider_id == "openai-codex" else provider_id)
+    unique_matches = list(dict.fromkeys(matches))
+    return unique_matches[0] if len(unique_matches) == 1 else ""
+
+
 _LOCAL_WORKER_FALLBACK_ENVS = {"dev", "development", "local", "test", "testing"}
 
 
@@ -133,10 +180,19 @@ def _workspace_local_worker_online_exact(workspace_id: str) -> bool:
 
 def _workspace_local_worker_online(workspace_id: str) -> bool:
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
-    if _workspace_local_worker_online_exact(normalized_workspace_id):
-        return True
-    if normalized_workspace_id != "default" and _local_worker_fallback_enabled():
-        return _workspace_local_worker_online_exact("default")
+    return _workspace_local_worker_online_exact(normalized_workspace_id)
+
+
+def _agent_computer_runtime_usable(tool_capabilities: Any) -> bool:
+    if not isinstance(tool_capabilities, list):
+        return False
+    for item in tool_capabilities:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id") or "").strip().lower() != "agent_computer":
+            continue
+        if bool(item.get("connected")) and item.get("runtime_usable") is True:
+            return True
     return False
 
 
@@ -182,7 +238,7 @@ def build_capability_truth(
                 }
             )
 
-    local_tools_online = bool(runtime_ok and (local_gateway_online or local_worker_online))
+    local_tools_online = bool(runtime_ok and local_gateway_online)
     setup_actions: List[Dict[str, str]] = []
     credential_plane = str(provider_truth.get("credential_plane") or "").strip().lower()
     hosted_enabled = bool(provider_truth.get("hosted_ai_enabled"))
@@ -197,17 +253,17 @@ def build_capability_truth(
         _append_setup_action(
             setup_actions,
             action_id="connect_my_computer",
-            label="Connect My Computer",
-            href="/integrations",
-            reason="My Computer is offline.",
+            label="Open Hardware",
+            href=f"/w/{normalized_workspace_id}/hardware",
+            reason="Agent Computer is offline.",
         )
     if credential_plane == "local_runtime" and local_gateway_online and not runtime_ok:
         _append_setup_action(
             setup_actions,
             action_id="restart_local_runtime",
-            label="Open My Computer",
-            href="/integrations",
-            reason="My Computer is connected, but local runtime is not healthy.",
+            label="Open Hardware",
+            href=f"/w/{normalized_workspace_id}/hardware",
+            reason="Agent Computer is connected, but local execution is not healthy.",
         )
     if not ai_ready and credential_plane != "local_runtime":
         if hosted_enabled:
@@ -290,7 +346,7 @@ def build_capability_truth(
             ]
             if local_tools_online
             else [],
-            "required_state": "My Computer online",
+            "required_state": "Agent Computer online",
         },
         "connected_apps": connected_apps,
         "channels": channels,
@@ -593,6 +649,14 @@ def preferred_provider(
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
     requested = str(requested_provider or "").strip().lower()
     normalized_requested = "codex_cli" if requested == "openai-codex" else requested
+    if normalized_requested in {"auto", "default"}:
+        normalized_requested = ""
+    if normalized_requested in EMPYRALIS_PROVIDER_ALIASES:
+        internal_provider = _default_empyralis_internal_provider()
+        internal_credentials = direct_chat_credentials_fn(normalized_workspace_id, internal_provider)
+        return internal_provider, internal_credentials
+    if normalized_requested and normalized_requested not in supported_providers:
+        return normalized_requested, {}
     if normalized_requested in supported_providers:
         if normalized_requested == "codex_cli" and not provider_runtime_usable_fn(normalized_workspace_id, "codex_cli"):
             return normalized_requested, {}
@@ -670,13 +734,30 @@ def provider_unavailable_response(
     if provider == "codex_cli":
         return {
             "reply": "",
-            "actions": [connect_action("Connect", "/connect-ai")],
+            "actions": [connect_action("Open Hardware", "/hardware")],
             "mode": "connect",
             "interventions": [
                 build_intervention(
                     "connect_required",
-                    "Workspace AI account is not ready",
-                    detail="Connect the workspace AI account to use model-backed chat in this workspace.",
+                    "Codex/OpenAI is not available",
+                    detail=detail or "Connect and verify Agent Computer before using the selected local Codex/OpenAI runtime.",
+                    severity="warning",
+                    status="waiting",
+                    code="provider_unavailable",
+                    metadata={"provider": provider},
+                )
+            ],
+        }
+    if provider in LOCAL_RUNTIME_PROVIDER_IDS:
+        return {
+            "reply": "",
+            "actions": [connect_action("Open Hardware", "/hardware")],
+            "mode": "connect",
+            "interventions": [
+                build_intervention(
+                    "connect_required",
+                    f"{label} is not available",
+                    detail=detail or f"{label} is selected for chat but the local runner is not available through Agent Computer.",
                     severity="warning",
                     status="waiting",
                     code="provider_unavailable",
@@ -686,15 +767,15 @@ def provider_unavailable_response(
         }
     return {
         "reply": "",
-        "actions": [connect_action("Connect", "/connect-ai")],
+        "actions": [connect_action("Configure model", "/integrations")],
         "mode": "connect",
         "interventions": [
             build_intervention(
                 "connect_required",
                 f"{label} is not available",
                 detail=(
-                    f"{label} is selected for chat but is not available right now. "
-                    "Connect this computer, switch to Workspace AI, or add your own API key."
+                    detail
+                    or f"{label} is selected for chat but is not available right now. Configure this provider or choose a different model explicitly."
                 ),
                 severity="warning",
                 status="waiting",
@@ -754,6 +835,10 @@ def resolve_direct_chat_availability(
     runtime_state = str(provider_truth.get("runtime_state") or "").strip().lower()
     local_gateway_online = workspace_live_gateway_available_fn(normalized_workspace_id)
     local_worker_online = _workspace_local_worker_online(normalized_workspace_id)
+    agent_computer_runtime_ok = _agent_computer_runtime_usable(tool_capabilities)
+    if agent_computer_runtime_ok:
+        runtime_ok = True
+        local_gateway_online = True
     if credential_plane == "local_runtime" and (runtime_state != "active" or not local_gateway_online):
         ai_ready = False
     connection_mode = ""

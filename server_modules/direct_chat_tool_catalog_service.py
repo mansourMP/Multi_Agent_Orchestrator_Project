@@ -99,15 +99,46 @@ def message_can_use_direct_connector_tools(message: str, *, provider: str, tools
     if callbacks.mentions_any(compact, callbacks.smtp_keywords) or callbacks.is_obvious_smtp_write_request(compact):
         return any(str(item.get("name") or "").startswith("smtp__") for item in tools)
     if callbacks.mentions_any(compact, callbacks.telegram_keywords):
-        return any(str(item.get("name") or "").startswith("telegram_bot__") for item in tools)
+        return any(str(item.get("name") or "").startswith("telegram_personal__") for item in tools)
     if callbacks.mentions_any(compact, callbacks.slack_keywords):
         return any(str(item.get("name") or "").startswith("slack__") for item in tools)
     if callbacks.mentions_any(compact, callbacks.discord_keywords):
-        return any(str(item.get("name") or "").startswith("discord_bot__") for item in tools)
+        return False
     if callbacks.mentions_any(compact, callbacks.dropbox_keywords):
         return any(str(item.get("name") or "").startswith("dropbox__") for item in tools)
     if callbacks.mentions_any(compact, callbacks.s3_keywords):
         return any(str(item.get("name") or "").startswith("s3__") for item in tools)
+    return False
+
+
+def can_use_direct_connector_tools(message: str, tools: List[Dict[str, Any]]) -> bool:
+    """Compatibility helper for older direct-chat runtime call sites.
+
+    This does not choose or execute a connector action. It only decides whether
+    connector tools are relevant enough to expose to the model for this message.
+    """
+    if not tools:
+        return False
+    compact = re.sub(r"\s+", " ", str(message or "").strip()).lower()
+    if not compact:
+        return False
+    tool_names = {str(item.get("name") or "").strip() for item in tools}
+
+    def has_any(tokens: Sequence[str]) -> bool:
+        return any(token in compact for token in tokens)
+
+    if has_any(("gmail", "email", "mail", "inbox", "calendar", "drive", "google workspace")):
+        return any(name.startswith(("google_workspace__", "smtp__")) for name in tool_names)
+    if has_any(("telegram", "tg")):
+        return any(name.startswith("telegram_personal__") for name in tool_names)
+    if has_any(("slack",)):
+        return any(name.startswith("slack__") for name in tool_names)
+    if has_any(("discord",)):
+        return False
+    if has_any(("dropbox",)):
+        return any(name.startswith("dropbox__") for name in tool_names)
+    if has_any(("s3", "bucket")):
+        return any(name.startswith("s3__") for name in tool_names)
     return False
 
 
@@ -454,7 +485,7 @@ def _tool_group_label(name: str) -> str:
         return "Web"
     if connector in {"image"} or normalized == "generate_image":
         return "Media"
-    if connector in {"telegram_bot", "smtp", "google_workspace", "microsoft_365", "slack", "discord_bot"}:
+    if connector in {"telegram_personal", "whatsapp_personal", "smtp", "google_workspace", "microsoft_365", "slack"}:
         return "Communication"
     if connector in {"memory", "llm", "sage_service"}:
         return "Data"
@@ -465,6 +496,9 @@ def _tool_label(tool: Dict[str, Any]) -> str:
     name = str(tool.get("name") or "").strip()
     description = str(tool.get("description") or "").strip()
     if not name:
+        return ""
+    connector = name.split("__", 1)[0] if "__" in name else name
+    if connector in {"telegram_bot", "discord_bot"}:
         return ""
     if description:
         return description
@@ -495,12 +529,8 @@ def _collect_state_labels(items: Any, *, limit: int = 4) -> str:
         state = item.get("runtime_usable")
         if state is True:
             summary = label
-        elif state is False:
-            summary = f"{label} (not ready)"
-        elif item.get("connected"):
-            summary = f"{label} (connected)"
         else:
-            summary = f"{label} (not connected)"
+            continue
         if summary in labels:
             continue
         labels.append(summary)
@@ -593,13 +623,11 @@ def direct_chat_tool_inventory_reply(tools: List[Dict[str, Any]], availability_p
         lines.extend(f"- {entry}" for entry in entries)
     lines.append("")
     if gateway_online:
-        lines.append("This Device capabilities are available through the paired Agent Computer.")
+        lines.append("Agent Computer capabilities are available through the paired computer.")
     elif cloud_computer_online:
-        lines.append(
-            "Computer capabilities are available through Sage Cloud Computer. This Device still requires a paired Agent Computer."
-        )
+        lines.append("Hosted computer capabilities are enabled for this workspace.")
     else:
-        lines.append("This Device capabilities require Agent Computer to be online. Sage Cloud Computer can run cloud-side computer tasks only when enabled.")
+        lines.append("Agent Computer capabilities require a verified paired computer in Hardware.")
     if setup_actions:
         labels = [
             _public_setup_label(str(item.get("label") or "").strip())

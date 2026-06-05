@@ -125,7 +125,7 @@ def connector_write_preview_allowed(
 ) -> bool:
     compact = compact_text_fn(message)
     if is_obvious_telegram_write_request_fn(compact):
-        return tool_runtime_usable_fn(availability, "telegram_bot") is True
+        return tool_runtime_usable_fn(availability, "telegram_personal") is True
     if is_obvious_google_write_request_fn(compact):
         return (
             tool_runtime_usable_fn(availability, "google_workspace") is True
@@ -217,7 +217,7 @@ def suggest_actions(
         return actions
     for tool_id, keywords in (
         ("google_workspace", google_workspace_keywords),
-        ("telegram_bot", telegram_keywords),
+        ("telegram_personal", telegram_keywords),
         ("slack", slack_keywords),
         ("dropbox", dropbox_keywords),
         ("s3", s3_keywords),

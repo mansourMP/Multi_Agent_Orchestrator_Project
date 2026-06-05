@@ -168,7 +168,12 @@ def gateway_registration_execution_readiness(
     if connection_status != "online":
         return False, "gateway_unhealthy"
     reported_health = _text(status_payload.get("reported_health_state")).lower()
-    if reported_health in {"degraded", "offline", "unhealthy", "error", "blocked"}:
+    # A gateway can report an overall degraded state because unrelated checks
+    # failed (for example provider reachability, personal messaging, or quota)
+    # while the requested hardware capability is still live and explicitly
+    # ready. Block only hard health failures here; capability readiness below is
+    # the action-specific fail-closed gate.
+    if reported_health in {"offline", "unhealthy", "error", "blocked"}:
         return False, "gateway_unhealthy"
     if not _heartbeat_capability_ready(
         registration=registration,

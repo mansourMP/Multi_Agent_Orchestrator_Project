@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Cloud, Monitor, Server, Settings } from 'lucide-react';
+import { Activity, Gauge, Monitor, Settings, ShieldCheck } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { joinClassNames } from '@/lib/ui/primitives';
@@ -41,6 +41,17 @@ type HardwareSummary = {
   icon: LucideIcon;
   detail: string;
 };
+
+type HardwareMenuRow = {
+  id: string;
+  label: string;
+  detail: string;
+  state: string;
+  tone: HardwareSummary['tone'];
+  icon: LucideIcon;
+};
+
+const HIDDEN_INFRASTRUCTURE_DETAIL_PATTERN = /\b(cloud|vps|server|hosted|not enabled|self[-\s]?hosted|runtime target)\b/i;
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -82,6 +93,14 @@ function humanizeToken(value: string, fallback = ''): string {
     .join(' ');
 }
 
+function safeHardwareDetail(value: string, fallback: string): string {
+  const detail = readString(value);
+  if (!detail || HIDDEN_INFRASTRUCTURE_DETAIL_PATTERN.test(detail)) {
+    return fallback;
+  }
+  return detail;
+}
+
 function normalizeNativeRuntime(value: unknown): HardwareNativeRuntime | null {
   const record = readRecord(value);
   const os = readString(record.os);
@@ -104,7 +123,7 @@ function normalizeNativeRuntime(value: unknown): HardwareNativeRuntime | null {
 function normalizeHardwareAttachments(payload: unknown): HardwareAttachment[] {
   const record = readRecord(payload);
   const attachments = Array.isArray(record.attachments) ? record.attachments : [];
-  const agentComputerKinds = new Set(['local_companion', 'cloud_computer', 'self_hosted_business_node']);
+  const agentComputerKinds = new Set(['local_companion']);
 
   return attachments.flatMap((entry) => {
     const attachment = readRecord(entry);
@@ -184,13 +203,6 @@ function friendlyOsName(os: string): string {
 }
 
 function hardwareLabelForAttachment(attachment: HardwareAttachment): string {
-  if (attachment.attachmentKind === 'cloud_computer') {
-    return 'Cloud Computer';
-  }
-  if (attachment.attachmentKind === 'self_hosted_business_node') {
-    return 'Server/VPS';
-  }
-
   const os = inferredOsForAttachment(attachment);
   if (os === 'darwin') {
     return 'Agent Computer';
@@ -205,13 +217,8 @@ function hardwareLabelForAttachment(attachment: HardwareAttachment): string {
 }
 
 function iconForAttachment(attachment: HardwareAttachment | null, target: WorkspaceBootstrapRuntimeTarget | null): LucideIcon {
-  const kind = attachment?.attachmentKind ?? target?.id ?? target?.canonicalId ?? '';
-  if (kind === 'cloud_computer' || kind === 'sage_cloud_computer' || kind === 'empyralis_cloud_computer') {
-    return Cloud;
-  }
-  if (kind === 'self_hosted_business_node' || kind === 'self_host_runtime' || kind === 'self_hosted_node') {
-    return Server;
-  }
+  void attachment;
+  void target;
   return Monitor;
 }
 
@@ -219,20 +226,41 @@ function selectHardwareAttachment(attachments: HardwareAttachment[]): HardwareAt
   const byKind = (kind: string) => attachments.filter((item) => item.attachmentKind === kind);
   return byKind('local_companion').find((item) => item.online)
     ?? byKind('local_companion')[0]
-    ?? byKind('self_hosted_business_node').find((item) => item.online)
-    ?? byKind('self_hosted_business_node')[0]
-    ?? byKind('cloud_computer').find((item) => item.online)
-    ?? byKind('cloud_computer')[0]
     ?? null;
 }
 
 function selectHardwareTarget(targets: WorkspaceBootstrapRuntimeTarget[]): WorkspaceBootstrapRuntimeTarget | null {
-  const hardwareTargets = targets.filter((target) => target.id !== 'cloud_default');
+  const hardwareTargets = targets.filter((target) => {
+    const id = readString(target.id).toLowerCase();
+    const canonicalId = readString(target.canonicalId).toLowerCase();
+    const kind = readString(target.kind).toLowerCase();
+    const status = readString(target.status).toLowerCase();
+    const isLocalAgentComputer = [
+      id,
+      canonicalId,
+      kind,
+    ].some((value) => (
+      value === 'local_companion'
+      || value === 'agent_computer'
+      || value === 'user_device_gateway'
+      || value === 'this_device'
+      || value === 'this_mac'
+    ));
+
+    if (!isLocalAgentComputer) {
+      return false;
+    }
+    return Boolean(
+      target.available
+      || target.online
+      || target.healthy
+      || target.preferred
+      || ['ready', 'online', 'healthy', 'available', 'connected'].includes(status),
+    );
+  });
   return hardwareTargets.find((target) => target.preferred)
     ?? hardwareTargets.find((target) => target.online)
     ?? hardwareTargets[0]
-    ?? targets.find((target) => target.preferred)
-    ?? targets[0]
     ?? null;
 }
 
@@ -268,61 +296,80 @@ function buildSummary(
         : 'degraded'
       : target.status;
     return {
-      label: target.id === 'cloud_default' ? 'Cloud' : target.publicLabel || target.label,
+      label: 'Hardware',
       popoverTitle: target.publicLabel || target.label,
       status,
       statusLabel: target.statusLabel || humanizeToken(status, target.available ? 'Available' : 'Offline'),
       tone: toneForStatus(status, target.online, target.healthy),
       icon: iconForAttachment(null, target),
-      detail: target.statusReason || target.description || target.kind,
+      detail: safeHardwareDetail(target.statusReason || target.description || target.kind, 'Connect this Mac in Hardware.'),
     };
   }
 
   return {
-    label: 'Computer',
-    popoverTitle: 'Agent Computer',
+    label: 'Hardware',
+    popoverTitle: 'Hardware',
     status: error ? 'unavailable' : 'unknown',
     statusLabel: error ? 'Unavailable' : 'Unknown',
     tone: error ? 'warning' : 'muted',
     icon: Monitor,
-    detail: error || 'No runtime target reported.',
+    detail: error || 'Connect this Mac in Hardware.',
   };
 }
 
 function topbarStateLabel(summary: HardwareSummary): string {
   if (summary.status === 'online') {
-    return 'In use';
+    return 'Connected';
   }
   if (summary.status === 'degraded') {
     return 'Needs attention';
   }
+  if (['offline', 'unknown', 'unavailable', 'missing'].includes(summary.status)) {
+    return 'Offline';
+  }
   return summary.statusLabel;
 }
 
-function lowerHardwareLabel(label: string): string {
-  if (label === 'Agent Computer') {
-    return 'Agent Computer';
-  }
-  if (label === 'This Mac') {
-    return 'this Mac';
-  }
-  if (label === 'This Device') {
-    return 'this device';
-  }
-  return label;
-}
-
-function hardwareUsageMessage(summary: HardwareSummary): string {
-  if (summary.status === 'online') {
-    return `Empyralis is using ${lowerHardwareLabel(summary.label)} through Agent Computer connection and local execution.`;
-  }
-  if (summary.status === 'degraded') {
-    return `${summary.label} is connected, but its connection or local execution needs attention.`;
-  }
-  if (summary.status === 'offline') {
-    return `${summary.label} is connected to this workspace, but its connection and local execution are not available right now.`;
-  }
-  return summary.detail || 'Computer status is managed by Agent Computer connection and local execution.';
+function buildHardwareMenuRows(summary: HardwareSummary, stateLabel: string): HardwareMenuRow[] {
+  const connected = summary.status === 'online';
+  const needsAttention = summary.tone === 'warning' || summary.tone === 'danger';
+  const localDetail = connected
+    ? safeHardwareDetail(summary.detail, 'Verified with this workspace.')
+    : safeHardwareDetail(summary.detail, 'Connect this Mac in Hardware.');
+  return [
+    {
+      id: 'this-mac',
+      label: 'This Mac',
+      detail: localDetail,
+      state: stateLabel,
+      tone: summary.tone,
+      icon: Monitor,
+    },
+    {
+      id: 'permissions',
+      label: 'Permissions',
+      detail: connected || summary.status === 'degraded' ? 'Screen, input, and file access.' : 'Checked after this Mac connects.',
+      state: needsAttention ? 'Review' : connected ? 'OK' : 'Pending',
+      tone: needsAttention ? summary.tone : connected ? 'ready' : 'muted',
+      icon: ShieldCheck,
+    },
+    {
+      id: 'usage',
+      label: 'Usage',
+      detail: connected ? 'Computer sessions and actions from this workspace.' : 'Usage appears after Agent Computer connects.',
+      state: connected ? 'Live' : 'Offline',
+      tone: connected ? 'ready' : 'muted',
+      icon: Gauge,
+    },
+    {
+      id: 'recent-activity',
+      label: 'Recent activity',
+      detail: connected ? 'Hardware actions from this workspace.' : 'Shown after Agent Computer connects.',
+      state: connected ? 'Idle' : 'Offline',
+      tone: 'muted',
+      icon: Activity,
+    },
+  ];
 }
 
 export function WorkstationHardwareStatus({
@@ -394,6 +441,10 @@ export function WorkstationHardwareStatus({
   );
   const StatusIcon = summary.icon;
   const stateLabel = topbarStateLabel(summary);
+  const hardwareMenuRows = useMemo(
+    () => buildHardwareMenuRows(summary, stateLabel),
+    [stateLabel, summary],
+  );
 
   return (
     <div
@@ -419,26 +470,34 @@ export function WorkstationHardwareStatus({
         <section
           className="workstation-hardware-status__popover"
           role="dialog"
-          aria-label="Agent Computer status"
+          aria-label="Hardware status"
         >
-          <header className="workstation-hardware-status__header">
-            <div className="workstation-hardware-status__header-copy">
-              <strong>Empyralis computer use</strong>
-              <span>{hardwareUsageMessage(summary)}</span>
-            </div>
-            <span className={joinClassNames('workstation-hardware-status__badge', `workstation-hardware-status__badge--${summary.tone}`)}>
-              {stateLabel}
-            </span>
-          </header>
-
-          <div className="workstation-hardware-status__summary">
-            <span>
-              <strong>{summary.label}</strong>
-              <small>{summary.detail || 'Governed runtime'}</small>
-            </span>
-            <span className={joinClassNames('workstation-hardware-status__row-state', `workstation-hardware-status__row-state--${summary.tone}`)}>
-              {stateLabel}
-            </span>
+          <div className="workstation-hardware-status__menu" aria-label="Hardware status sections">
+            {hardwareMenuRows.map((row) => {
+              const RowIcon = row.icon;
+              return (
+                <Link
+                  key={row.id}
+                  href={hardwareHref}
+                  className={joinClassNames(
+                    'workstation-hardware-status__row',
+                    row.id === 'this-mac' && 'workstation-hardware-status__row--selected',
+                  )}
+                  onClick={() => setOpen(false)}
+                >
+                  <span className="workstation-hardware-status__row-icon" aria-hidden="true">
+                    <RowIcon size={14} strokeWidth={1.9} />
+                  </span>
+                  <span className="workstation-hardware-status__row-copy">
+                    <strong>{row.label}</strong>
+                    <small>{row.detail}</small>
+                  </span>
+                  <span className={joinClassNames('workstation-hardware-status__row-state', `workstation-hardware-status__row-state--${row.tone}`)}>
+                    {row.state}
+                  </span>
+                </Link>
+              );
+            })}
           </div>
 
           {error ? <p className="workstation-hardware-status__notice">{error}</p> : null}

@@ -1958,6 +1958,55 @@ def register_agent_workspace_routes(app) -> None:
             current_user=current_user,
         )
 
+    @app.post("/artifacts/uploads", dependencies=[Depends(require_api_key)])
+    async def upload_artifact(
+        request: Request,
+        workspace_id: Optional[str] = None,
+        file_name: Optional[str] = None,
+        current_user=Depends(require_api_key),
+    ):
+        resolved_workspace_id = _normalize_workspace_id(workspace_id)
+        _ensure_artifacts_access_for_workspace(resolved_workspace_id)
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            resolved_workspace_id,
+            minimum_role="member",
+        )
+        content = await request.body()
+        if not content:
+            raise HTTPException(status_code=400, detail="File content is required.")
+        if len(content) > 25 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File is too large.")
+        resolved_name = str(file_name or "").strip() or "upload.bin"
+        tenant_id = str((current_user or {}).get("tenant_id") or (current_user or {}).get("tenant") or "").strip() or None
+        record = artifact_service.store_artifact_bytes(
+            content,
+            run_id=f"sage-upload-{_utc_now_iso().replace(':', '-').replace('.', '-')}",
+            kind="user_attachment",
+            file_name=resolved_name,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            label=resolved_name,
+            content_type=str(request.headers.get("content-type") or "").split(";", 1)[0].strip() or None,
+            metadata={
+                "source": "sage_composer",
+                "uploaded_by": str((current_user or {}).get("user_id") or (current_user or {}).get("email") or "").strip() or None,
+            },
+        )
+        payload = record.as_payload()
+        return {
+            "ok": True,
+            "artifact_id": payload.get("artifact_id"),
+            "workspace_id": payload.get("workspace_id"),
+            "uri": payload.get("uri"),
+            "kind": payload.get("kind"),
+            "label": payload.get("label") or resolved_name,
+            "file_name": payload.get("file_name") or resolved_name,
+            "media_type": payload.get("mime_type") or payload.get("content_type"),
+            "byte_size": payload.get("byte_size"),
+            "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        }
+
     @app.get("/artifacts/workspace", dependencies=[Depends(require_api_key)], response_model=ApiArtifactListResponse)
     async def get_workspace_artifacts(
         workspace_id: Optional[str] = None,

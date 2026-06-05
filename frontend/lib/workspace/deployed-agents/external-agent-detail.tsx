@@ -285,12 +285,12 @@ function localConnectorStatusHint(localConnector: Record<string, unknown>): stri
   }
   const state = readString(localConnector.binding_state, 'missing_agent_computer');
   if (state === 'bound' && !localConnector.proxy_available) {
-    return 'Bound, Agent Computer bridge disabled';
+    return 'Bound, bridge unavailable';
   }
   if (readString(localConnector.binding_message)) {
     return readString(localConnector.binding_message);
   }
-  return 'Local runtimes require an approved Agent Computer bridge';
+  return 'Local runtimes require an approved Agent Computer';
 }
 
 export const ConnectedExternalAgentDetailView = memo(({
@@ -1184,7 +1184,7 @@ export const ConnectedExternalAgentDetailView = memo(({
                       <AppSurfaceStat label="External agent" value={providerLabel} hint="Declared connection type" />
                       <AppSurfaceStat label="Trust state" value={humanizeToken(trustState, 'Unverified')} hint="Verified after manifest refresh" />
                       <AppSurfaceStat label="Chat" value={hasChat ? 'Available' : 'Not exposed'} hint="Declared chat support" />
-                      <AppSurfaceStat label="Endpoint" value={readString(endpointRefs.chat_url) ? 'Empyralis bridge' : 'Missing'} hint="External endpoint never called from browser" />
+                      <AppSurfaceStat label="Endpoint" value={readString(endpointRefs.chat_url) ? 'Empyralis bridge' : 'Missing'} hint="External endpoint is never called from the browser" />
                       <AppSurfaceStat label="Protocols" value={protocols.length > 0 ? protocols.join(', ') : 'Custom HTTP'} hint="Adapter hints only" />
                       <AppSurfaceStat
                         label="Agent Computer"
@@ -1195,9 +1195,9 @@ export const ConnectedExternalAgentDetailView = memo(({
                     {localConnector.required ? (
                       <ListDetailPanel
                         className="studio-panel studio-panel--detail"
-                        eyebrow="Agent Computer bridge"
+                        eyebrow="Agent Computer"
                         title={readString(localConnector.agent_computer_label, 'Agent Computer required')}
-                        subtitle="Local network endpoints stay blocked unless they are routed through a verified Agent Computer bridge."
+                        subtitle="Local network endpoints stay blocked unless they are routed through a verified Agent Computer."
                       >
                         <div className="studio-agent-overview__grid">
                           <div className="studio-agent-overview__card">
@@ -1205,14 +1205,14 @@ export const ConnectedExternalAgentDetailView = memo(({
                             <div>
                               <strong>{humanizeToken(localConnector.binding_state, 'Needs Agent Computer')}</strong>
                               <span>{readString(localConnector.binding_message, 'Choose an Agent Computer before local runtime access is possible.')}</span>
-                              <span>{localConnector.proxy_available ? 'Agent Computer bridge enabled' : 'Agent Computer bridge not enabled yet'}</span>
+                              <span>{localConnector.proxy_available ? 'Ready' : 'Bridge unavailable'}</span>
                             </div>
                           </div>
                           <div className="studio-agent-overview__card">
                             <div className="studio-agent-overview__card-icon"><Cable size={15} aria-hidden="true" /></div>
                             <div>
-                              <strong>{humanizeToken(localConnector.mode, 'Agent Computer bridge')}</strong>
-                              <span>Uses an approved Agent Computer bridge for local runtime access.</span>
+                              <strong>{humanizeToken(localConnector.mode, 'Agent Computer')}</strong>
+                              <span>Uses an approved Agent Computer for local runtime access.</span>
                               <span>{readString(localConnector.attachment_kind) ? 'Agent Computer selected' : 'No Agent Computer selected'}</span>
                             </div>
                           </div>

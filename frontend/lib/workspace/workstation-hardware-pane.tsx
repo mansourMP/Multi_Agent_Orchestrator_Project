@@ -65,6 +65,7 @@ type TrayLocalStatus = {
   state?: string;
   supervisor_running?: boolean;
   gateway_running?: boolean;
+  workspace_id?: string | null;
   error?: string | null;
 };
 
@@ -89,6 +90,26 @@ type HardwareActivityEvent = {
   timestamp?: string | null;
 };
 
+type HardwareSessionPayload = {
+  available?: boolean;
+  connected?: boolean;
+  session_verified?: boolean;
+  status?: string | null;
+  workspace_id?: string | null;
+  gateway_id?: string | null;
+  device_id?: string | null;
+  device_name?: string | null;
+  platform?: string | null;
+  capabilities?: string[];
+  last_seen_at?: string | null;
+  last_heartbeat_at?: string | null;
+  heartbeat_fresh?: boolean;
+  heartbeat_age_seconds?: number | null;
+  latest_session_status?: string | null;
+  connection_status?: string | null;
+  reason?: string | null;
+};
+
 type SshAuthMode = 'password' | 'ssh_key';
 
 const TRAY_STATUS_URL = 'http://127.0.0.1:7790/status';
@@ -109,9 +130,9 @@ const HARDWARE_KINDS: Array<{
   },
   {
     kind: 'self_hosted_business_node',
-    title: 'Server/VPS',
+    title: 'Remote server',
     typeLabel: 'Remote server',
-    description: 'Connect a server or VPS with the Agent Computer gateway.',
+    description: 'Connect your own server with Empyralis Agent.',
   },
   {
     kind: 'cloud_computer',
@@ -290,6 +311,11 @@ function publicHardwareReason(rawReason: string, status: HardwareStatus, workspa
     }
     return '';
   }
+  if (normalized.includes('no_active_gateway_registration') || normalized.includes('hardware_session_unavailable')) {
+    return kind === 'local_companion'
+      ? `This Mac is not connected to ${workspaceId}.`
+      : 'No computer is connected to this workspace yet.';
+  }
   if (normalized.includes('workspace')) {
     return `This computer is paired to another workspace. Reconnect it to ${workspaceId}.`;
   }
@@ -420,8 +446,38 @@ function setupLink(intent: PairingIntentRecord, workspaceId: string): string {
   return `https://empyralis.io/setup?${params.toString()}`;
 }
 
-function trayStatusConnected(status: TrayLocalStatus | null): boolean {
-  return trayProcessConnected(status) && status?.session_verified === true;
+function normalizeWorkspaceScope(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+function workspaceScopeMatches(payloadWorkspaceId: unknown, workspaceId: string): boolean {
+  const currentWorkspaceId = normalizeWorkspaceScope(workspaceId);
+  const payloadScope = normalizeWorkspaceScope(payloadWorkspaceId);
+  return Boolean(currentWorkspaceId && payloadScope && payloadScope === currentWorkspaceId);
+}
+
+function trayWorkspaceMismatch(status: TrayLocalStatus | null, workspaceId: string): string {
+  const trayWorkspaceId = normalizeWorkspaceScope(status?.workspace_id);
+  const currentWorkspaceId = normalizeWorkspaceScope(workspaceId);
+  if (!trayWorkspaceId || !currentWorkspaceId || trayWorkspaceId === currentWorkspaceId) {
+    return '';
+  }
+  return trayWorkspaceId;
+}
+
+function trayStatusConnected(status: TrayLocalStatus | null, workspaceId: string): boolean {
+  return trayProcessConnected(status)
+    && status?.session_verified === true
+    && workspaceScopeMatches(status.workspace_id, workspaceId);
+}
+
+function hardwareSessionConnected(session: HardwareSessionPayload | null, workspaceId: string): boolean {
+  return Boolean(
+    session?.available
+    && session?.connected
+    && session?.session_verified
+    && workspaceScopeMatches(session.workspace_id, workspaceId),
+  );
 }
 
 function trayProcessConnected(status: TrayLocalStatus | null): boolean {
@@ -576,6 +632,7 @@ export function WorkstationHardwarePane() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [copiedTarget, setCopiedTarget] = useState<'setup' | 'command' | null>(null);
   const [trayStatus, setTrayStatus] = useState<TrayLocalStatus | null>(null);
+  const [hardwareSession, setHardwareSession] = useState<HardwareSessionPayload | null>(null);
   const [capabilityChecks, setCapabilityChecks] = useState<HardwareCapabilityCheck[]>([]);
   const [hardwareActivity, setHardwareActivity] = useState<HardwareActivityEvent[]>([]);
   const [trayDetected, setTrayDetected] = useState<boolean | null>(null);
@@ -605,6 +662,29 @@ export function WorkstationHardwarePane() {
     }
   }
 
+  async function refreshHardwareSession(): Promise<HardwareSessionPayload | null> {
+    try {
+      const payload = await fetchJsonWithTimeout<HardwareSessionPayload>(
+        `/api/gateway/hardware/session?workspace_id=${encodeURIComponent(workspaceId)}`,
+        { method: 'GET' },
+        5_000,
+      );
+      setHardwareSession(payload);
+      return payload;
+    } catch {
+      const payload: HardwareSessionPayload = {
+        available: false,
+        connected: false,
+        session_verified: false,
+        status: 'offline',
+        workspace_id: workspaceId,
+        reason: 'hardware_session_unavailable',
+      };
+      setHardwareSession(payload);
+      return payload;
+    }
+  }
+
   async function refreshHardwareCapabilities(): Promise<void> {
     try {
       const payload = await fetchJsonWithTimeout<HardwareCapabilityPayload>(
@@ -621,25 +701,47 @@ export function WorkstationHardwarePane() {
   useEffect(() => {
     let active = true;
     setError(null);
-    services.client
-      .listRuntimeAttachments()
-      .then((payload) => {
+    Promise.all([
+      services.client.listRuntimeAttachments(),
+      fetchJsonWithTimeout<HardwareSessionPayload>(
+        `/api/gateway/hardware/session?workspace_id=${encodeURIComponent(workspaceId)}`,
+        { method: 'GET' },
+        5_000,
+      ).catch(() => null),
+    ])
+      .then(([attachmentsPayload, sessionPayload]) => {
         if (!active) {
           return;
         }
-        setAttachments(normalizeAttachments(payload));
+        setAttachments(normalizeAttachments(attachmentsPayload));
+        setHardwareSession(sessionPayload ?? {
+          available: false,
+          connected: false,
+          session_verified: false,
+          status: 'offline',
+          workspace_id: workspaceId,
+          reason: 'hardware_session_unavailable',
+        });
       })
       .catch(() => {
         if (!active) {
           return;
         }
         setAttachments([]);
+        setHardwareSession({
+          available: false,
+          connected: false,
+          session_verified: false,
+          status: 'offline',
+          workspace_id: workspaceId,
+          reason: 'hardware_session_unavailable',
+        });
         setError('Hardware status is unavailable right now.');
       });
     return () => {
       active = false;
     };
-  }, [services.client]);
+  }, [services.client, workspaceId]);
 
   useEffect(() => {
     void detectTrayAgent();
@@ -653,15 +755,15 @@ export function WorkstationHardwarePane() {
   }, [connectOpen]);
 
   useEffect(() => {
-    if (!trayStatusConnected(trayStatus)) {
+    if (!hardwareSessionConnected(hardwareSession, workspaceId)) {
       setCapabilityChecks([]);
       return;
     }
     void refreshHardwareCapabilities();
-  }, [trayStatus?.connected, trayStatus?.session_verified, workspaceId]);
+  }, [hardwareSession?.connected, hardwareSession?.session_verified, workspaceId]);
 
   useEffect(() => {
-    if (!trayStatusConnected(trayStatus) || typeof EventSource === 'undefined') {
+    if (!hardwareSessionConnected(hardwareSession, workspaceId) || typeof EventSource === 'undefined') {
       setHardwareActivity([]);
       return;
     }
@@ -686,7 +788,7 @@ export function WorkstationHardwarePane() {
       source.removeEventListener('hardware_action', handleHardwareAction as EventListener);
       source.close();
     };
-  }, [trayStatus?.connected, trayStatus?.session_verified, workspaceId]);
+  }, [hardwareSession?.connected, hardwareSession?.session_verified, workspaceId]);
 
   const targets = useMemo(
     () => (bootstrap.runtime.runtimeTargets ?? []).map(normalizeTarget).filter((item): item is HardwareTarget => Boolean(item)),
@@ -698,21 +800,51 @@ export function WorkstationHardwarePane() {
       HARDWARE_KINDS.map((metadata) => {
         const attachment = attachments.find((item) => item.kind === metadata.kind) ?? null;
         const target = targets.find((item) => item.kind === metadata.kind) ?? null;
-        return buildCard(metadata, attachment, target, workspaceLabel);
+        const card = buildCard(metadata, attachment, target, workspaceLabel);
+        if (metadata.kind !== 'local_companion' || !hardwareSession) {
+          return card;
+        }
+        const sessionConnected = hardwareSessionConnected(hardwareSession, workspaceId);
+        const sessionStatus: HardwareStatus = sessionConnected ? 'Connected' : 'Offline';
+        const sessionReason = publicHardwareReason(
+          String(hardwareSession.reason || ''),
+          sessionStatus,
+          workspaceLabel,
+          metadata.kind,
+        );
+        return {
+          ...card,
+          name: String(hardwareSession.device_name || 'This Mac'),
+          description: sessionConnected
+            ? 'Verified with this workspace.'
+            : sessionReason || 'This Mac is not connected to this workspace.',
+          status: sessionStatus,
+          actionLabel: actionForStatus(sessionStatus),
+          reason: sessionReason || String(hardwareSession.reason || ''),
+          capabilities: Array.isArray(hardwareSession.capabilities) && hardwareSession.capabilities.length
+            ? hardwareSession.capabilities
+            : card.capabilities,
+          known: true,
+        };
       }),
-    [attachments, targets, workspaceLabel],
+    [attachments, hardwareSession, targets, workspaceLabel],
   );
 
   const localCard = cards.find((card) => card.kind === 'local_companion') ?? null;
   const serverCard = cards.find((card) => card.kind === 'self_hosted_business_node') ?? null;
   const cloudCard = cards.find((card) => card.kind === 'cloud_computer') ?? null;
   const connectedCount = cards.filter((card) => card.status === 'Connected').length;
+  const serverEnabled = Boolean(serverCard && serverCard.known && serverCard.status !== 'Unavailable');
+  const hardwareTabs = useMemo(
+    () => HARDWARE_TABS.filter((tab) => tab.id !== 'ssh_server' || serverEnabled),
+    [serverEnabled],
+  );
   const visibleCards = useMemo(() => {
     if (activeTab === 'this_device') {
       return localCard ? [localCard] : [];
     }
     if (activeTab === 'ssh_server') {
-      return serverCard && serverCard.known && serverCard.status !== 'Unavailable' ? [serverCard] : [];
+      return serverEnabled && serverCard ? [serverCard] : [];
     }
     return cards.filter((card) => (
       card.kind !== 'local_companion'
@@ -720,10 +852,16 @@ export function WorkstationHardwarePane() {
       && card.known
       && card.status !== 'Unavailable'
     ));
-  }, [activeTab, cards, localCard, serverCard]);
+  }, [activeTab, cards, localCard, serverCard, serverEnabled]);
   const cloudEnabled = Boolean(cloudCard && cloudCard.known && cloudCard.status !== 'Unavailable');
   const command = otherSetupIntent ? pairingCommand(otherSetupIntent, workspaceId, 'other_computer') : pairingIntentState ? pairingCommand(pairingIntentState, workspaceId, selectedConnectOption) : '';
   const generatedSetupLink = otherSetupIntent ? setupLink(otherSetupIntent, workspaceId) : '';
+
+  useEffect(() => {
+    if (activeTab === 'ssh_server' && !serverEnabled) {
+      setActiveTab('this_device');
+    }
+  }, [activeTab, serverEnabled]);
 
   useEffect(() => {
     let active = true;
@@ -795,7 +933,7 @@ export function WorkstationHardwarePane() {
           body: JSON.stringify({
             workspace_id: workspaceId,
             display_name: option === 'ssh_server'
-              ? 'Server/VPS'
+              ? 'Remote server'
               : option === 'other_computer'
                 ? 'Other computer'
                 : 'This device',
@@ -841,9 +979,27 @@ export function WorkstationHardwarePane() {
       try {
         const status = await fetchJsonWithTimeout<TrayLocalStatus>(TRAY_STATUS_URL, { method: 'GET' }, 1_500);
         setTrayStatus(status);
-        if (trayStatusConnected(status)) {
+        if (trayStatusConnected(status, workspaceId)) {
           return status;
         }
+      } catch {
+        setTrayStatus(null);
+      }
+    }
+    return null;
+  }
+
+  async function pollHardwareSessionVerification(): Promise<HardwareSessionPayload | null> {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      await wait(2_000);
+      const session = await refreshHardwareSession();
+      if (hardwareSessionConnected(session, workspaceId)) {
+        return session;
+      }
+      try {
+        const status = await fetchJsonWithTimeout<TrayLocalStatus>(TRAY_STATUS_URL, { method: 'GET' }, 1_500);
+        setTrayStatus(status);
       } catch {
         setTrayStatus(null);
       }
@@ -879,9 +1035,13 @@ export function WorkstationHardwarePane() {
       if (response.ok === false) {
         throw new Error(response.error || 'Could not connect this Mac.');
       }
+      const wrongTrayWorkspace = trayWorkspaceMismatch(response, workspaceId);
+      if (response.session_verified === true && wrongTrayWorkspace) {
+        throw new Error(`Empyralis Agent is connected to ${wrongTrayWorkspace}. Reconnect it to ${workspaceId}.`);
+      }
       setTrayStatus(response);
-      const connectedStatus = trayStatusConnected(response) ? response : await pollTrayConnection();
-      if (!connectedStatus) {
+      const verifiedSession = await pollHardwareSessionVerification();
+      if (!verifiedSession) {
         setLocalConnectError('Connection timed out');
         return;
       }
@@ -983,8 +1143,9 @@ export function WorkstationHardwarePane() {
   }
 
   function openConnect(context: ConnectModalContext = 'all') {
-    const option = context === 'all' ? 'this_device' : context;
-    setConnectContext(context);
+    const safeContext = context === 'ssh_server' && !serverEnabled ? 'all' : context;
+    const option = safeContext === 'all' ? 'this_device' : safeContext;
+    setConnectContext(safeContext);
     setSelectedConnectOption(option);
     setConnectOpen(true);
     setPairingIntentState(null);
@@ -1015,8 +1176,24 @@ export function WorkstationHardwarePane() {
           ? 'Connect another computer'
           : 'Connect a computer';
   const showThisMacCard = connectContext === 'all' || connectContext === 'this_device';
-  const showRemoteServerCard = connectContext === 'all' || connectContext === 'ssh_server';
+  const showRemoteServerCard = serverEnabled && (connectContext === 'all' || connectContext === 'ssh_server');
   const showOtherComputerCard = connectContext === 'all' || connectContext === 'other_computer';
+  const thisMacTrayWorkspaceMismatch = trayWorkspaceMismatch(trayStatus, workspaceId);
+  const thisMacConnected = trayStatusConnected(trayStatus, workspaceId);
+  const thisMacProcessRunning = trayProcessConnected(trayStatus);
+  const thisMacNeedsReconnect = Boolean(thisMacTrayWorkspaceMismatch || (thisMacProcessRunning && !thisMacConnected));
+  const thisMacActionLabel = localConnectBusy
+    ? 'Connecting'
+    : thisMacConnected
+      ? 'Connected'
+      : thisMacNeedsReconnect
+        ? 'Reconnect'
+        : 'Connect';
+  const thisMacStatusNote = thisMacTrayWorkspaceMismatch
+    ? `Empyralis Agent is connected to ${thisMacTrayWorkspaceMismatch}. Reconnect it to ${workspaceId}.`
+    : thisMacProcessRunning && !thisMacConnected
+      ? 'Empyralis Agent is running. Waiting for this workspace to verify.'
+      : '';
 
   return (
     <section className="workstation-hardware-pane" aria-label="Hardware">
@@ -1037,7 +1214,7 @@ export function WorkstationHardwarePane() {
         </header>
 
         <nav className="workstation-hardware-tabs" aria-label="Hardware connection type">
-          {HARDWARE_TABS.map((tab) => (
+          {hardwareTabs.map((tab) => (
             <button
               key={tab.id}
               className={joinClassNames(
@@ -1076,7 +1253,7 @@ export function WorkstationHardwarePane() {
                   <div className="workstation-hardware-row__copy">
                     <h3>{card.name}</h3>
                     <p>{card.description}</p>
-                    {card.kind === 'local_companion' && trayStatusConnected(trayStatus) && capabilityChecks.length ? (
+                    {card.kind === 'local_companion' && hardwareSessionConnected(hardwareSession, workspaceId) && capabilityChecks.length ? (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', color: 'var(--color-text-muted)', fontSize: '0.78rem' }}>
                         {capabilityChecks.map((check) => {
                           const fixTarget = capabilityFixTarget(check.name);
@@ -1095,7 +1272,7 @@ export function WorkstationHardwarePane() {
                         })}
                       </div>
                     ) : null}
-                    {card.kind === 'local_companion' && trayStatusConnected(trayStatus) ? (
+                    {card.kind === 'local_companion' && hardwareSessionConnected(hardwareSession, workspaceId) ? (
                       <div className="workstation-hardware-activity" aria-live="polite">
                         <div className="workstation-hardware-activity__header">Recent activity</div>
                         {hardwareActivity.length ? (
@@ -1174,9 +1351,9 @@ export function WorkstationHardwarePane() {
                   </div>
                   <div className="workstation-hardware-connect-card__actions">
                     {trayDetected ? (
-                      <AppButton tone="primary" type="button" onClick={() => void connectThisMac()} disabled={localConnectBusy}>
+                      <AppButton tone="primary" type="button" onClick={() => void connectThisMac()} disabled={localConnectBusy || thisMacConnected}>
                         {localConnectBusy ? <span className="workstation-hardware-spinner" aria-hidden="true" /> : null}
-                        {localConnectBusy ? 'Connecting' : 'Connect'}
+                        {thisMacActionLabel}
                       </AppButton>
                     ) : (
                       <>
@@ -1198,8 +1375,8 @@ export function WorkstationHardwarePane() {
                 </div>
                 {localConnectError ? <p className="workstation-hardware-connect-card__error">{localConnectError}</p> : null}
                 {trayStatus?.error ? <p className="workstation-hardware-connect-card__error">{trayStatus.error}</p> : null}
-	                {trayProcessConnected(trayStatus) && !trayStatusConnected(trayStatus) ? (
-	                  <p className="workstation-hardware-connect-card__note">Connecting...</p>
+	                {thisMacStatusNote ? (
+	                  <p className="workstation-hardware-connect-card__note">{thisMacStatusNote}</p>
 	                ) : null}
 	              </article>
 	              ) : null}
@@ -1209,7 +1386,7 @@ export function WorkstationHardwarePane() {
 	                <div className="workstation-hardware-connect-card__main">
 	                  <div>
 	                    <h3>Remote server</h3>
-                    <p>Linux VPS or cloud machine via SSH</p>
+                    <p>Connect your own Linux server via SSH</p>
                   </div>
                   <AppButton tone="secondary" type="button" onClick={() => setRemoteExpanded((expanded) => !expanded)}>
                     Configure

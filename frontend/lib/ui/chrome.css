@@ -3611,17 +3611,6 @@ body[data-emp-theme='dark'] .app-auth-divider > span[aria-hidden="true"] {
   color: var(--text-secondary);
 }
 
-.sage-canvas-hardware__option--manage::before {
-  content: "";
-  position: absolute;
-  top: -4px;
-  left: 8px;
-  right: 8px;
-  height: 1px;
-  background: var(--border, var(--border-default));
-  pointer-events: none;
-}
-
 .sage-canvas-model__model-list {
   max-height: calc(min(58vh, 520px) - 36px);
   overflow-y: auto;
@@ -4413,7 +4402,34 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
 }
 
 .app-chat-thinking-row__toggle {
+  position: relative;
   cursor: pointer;
+}
+
+.app-chat-thinking-row--streaming .app-chat-thinking-row__toggle {
+  color: var(--text-primary);
+}
+
+.app-chat-thinking-row--streaming .app-chat-thinking-row__toggle::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 0;
+  bottom: -5px;
+  height: 1px;
+  border-radius: var(--radius-full);
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--text-primary) 14%, transparent) 28%,
+      color-mix(in srgb, var(--text-primary) 58%, transparent) 50%,
+      color-mix(in srgb, var(--text-primary) 14%, transparent) 72%,
+      transparent 100%
+    );
+  background-size: 220% 100%;
+  animation: sage-thinking-sweep 1.35s var(--app-ease-standard, ease) infinite;
+  pointer-events: none;
 }
 
 .app-chat-thinking-row__label,
@@ -4426,6 +4442,10 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
 .app-chat-thinking-row__label {
   color: var(--text-primary);
   font-weight: var(--app-weight-semibold);
+}
+
+.app-chat-thinking-row--streaming .app-chat-thinking-row__label {
+  animation: sage-thinking-text-glow 1.7s ease-in-out infinite;
 }
 
 .app-chat-thinking-row__pulse {
@@ -4806,6 +4826,7 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
 }
 
 .app-agent-trace-summary {
+  position: relative;
   max-width: 100%;
   min-height: 28px;
   display: inline-flex;
@@ -4825,6 +4846,32 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
     background-color var(--transition),
     border-color var(--transition),
     color var(--transition);
+}
+
+.app-agent-trace-turn--streaming .app-agent-trace-summary {
+  color: var(--text-primary);
+}
+
+.app-agent-trace-turn--streaming .app-agent-trace-summary::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 0;
+  bottom: -5px;
+  height: 1px;
+  border-radius: var(--radius-full);
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--text-primary) 14%, transparent) 28%,
+      color-mix(in srgb, var(--text-primary) 58%, transparent) 50%,
+      color-mix(in srgb, var(--text-primary) 14%, transparent) 72%,
+      transparent 100%
+    );
+  background-size: 220% 100%;
+  animation: sage-thinking-sweep 1.35s var(--app-ease-standard, ease) infinite;
+  pointer-events: none;
 }
 
 .app-agent-trace-summary:hover,
@@ -5225,6 +5272,16 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
   50% {
     opacity: 1;
     text-shadow: 0 0 5px color-mix(in srgb, currentColor 34%, transparent);
+  }
+}
+
+@keyframes sage-thinking-sweep {
+  from {
+    background-position: 160% 0;
+  }
+
+  to {
+    background-position: -60% 0;
   }
 }
 
@@ -7676,6 +7733,7 @@ body.theme-light .app-chat-composer__hardware-menu-icon {
 
 .app-chat-composer__send {
   flex: 0 0 auto;
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -7698,7 +7756,7 @@ body.theme-light .app-chat-composer__hardware-menu-icon {
 }
 
 .app-chat-composer__voice {
-  margin-left: auto;
+  margin-left: 0;
   width: 42px;
   min-width: 42px;
   height: 42px;
@@ -9037,142 +9095,157 @@ body[data-workstation-app-surface='open'] .app-shell-viewport {
 
 .workstation-hardware-status__popover {
   position: absolute;
-  top: calc(100% + 10px);
+  top: calc(100% + 8px);
   right: 0;
   z-index: var(--z-overlay);
-  width: min(340px, calc(100vw - 32px));
-  max-height: min(640px, calc(100vh - 92px));
+  width: min(300px, calc(100vw - 32px));
+  max-height: min(520px, calc(100vh - 92px));
   display: grid;
-  gap: var(--app-space-4);
-  padding: var(--app-space-4);
+  gap: 4px;
+  padding: 8px;
   overflow-y: auto;
-  border: 1px solid color-mix(in srgb, var(--app-border-default) 84%, transparent 16%);
-  border-radius: var(--app-radius-lg);
-  background: color-mix(in srgb, var(--app-bg-panel-elevated) 94%, var(--app-bg-panel) 6%);
-  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--border, var(--border-default));
+  border-radius: 6px;
+  background: var(--card, var(--app-bg-panel, #ffffff));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  animation: app-chat-menu-popover-in 220ms var(--app-ease-standard, cubic-bezier(0.16, 1, 0.3, 1)) both;
 }
 
-.workstation-hardware-status__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--app-space-3);
-  padding-bottom: var(--app-space-3);
-  border-bottom: 1px solid color-mix(in srgb, var(--app-border-default) 72%, transparent 28%);
-}
-
-.workstation-hardware-status__header-copy {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.workstation-hardware-status__header-copy strong {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: var(--app-font-13);
-  font-weight: var(--app-weight-semibold);
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workstation-hardware-status__header-copy span,
-.workstation-hardware-status__notice {
-  color: var(--text-tertiary);
-  font-size: var(--app-font-12);
-  line-height: 1.35;
-}
-
-.workstation-hardware-status__badge,
 .workstation-hardware-status__row-state {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 24px;
-  padding: 0 8px;
-  border-radius: var(--app-radius-lg);
-  border: 1px solid color-mix(in srgb, var(--app-border-default) 82%, transparent);
-  background: color-mix(in srgb, var(--app-bg-panel) 90%, transparent);
+  min-height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-tertiary);
-  font-size: var(--app-font-11);
+  font-size: 11px;
   font-weight: var(--app-weight-semibold);
   white-space: nowrap;
 }
 
-.workstation-hardware-status__badge--ready,
 .workstation-hardware-status__row-state--ready {
-  border-color: color-mix(in srgb, var(--app-success) 30%, transparent);
-  background: color-mix(in srgb, var(--app-success-muted) 76%, transparent);
   color: var(--app-success);
 }
 
-.workstation-hardware-status__badge--warning,
 .workstation-hardware-status__row-state--warning {
-  border-color: color-mix(in srgb, var(--app-warning) 32%, transparent);
-  background: color-mix(in srgb, var(--app-warning-muted) 76%, transparent);
   color: var(--app-warning);
 }
 
-.workstation-hardware-status__badge--danger,
 .workstation-hardware-status__row-state--danger {
-  border-color: color-mix(in srgb, var(--app-danger) 32%, transparent);
-  background: color-mix(in srgb, var(--app-danger-muted) 76%, transparent);
   color: var(--app-danger);
 }
 
-.workstation-hardware-status__summary {
-  min-height: 44px;
+.workstation-hardware-status__menu {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--app-space-3);
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--app-border-default) 70%, transparent 30%);
-  border-radius: var(--app-radius-md);
-  background: color-mix(in srgb, var(--app-bg-panel) 72%, transparent);
+  gap: 4px;
 }
 
-.workstation-hardware-status__summary > span:first-child {
+.workstation-hardware-status__row {
+  width: 100%;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground, var(--text-primary));
+  text-decoration: none;
+  cursor: pointer;
+  animation: sage-menu-row-in 180ms var(--app-ease-standard, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  transition:
+    background-color 140ms var(--app-ease-standard, cubic-bezier(0.16, 1, 0.3, 1)),
+    color 140ms var(--app-ease-standard, cubic-bezier(0.16, 1, 0.3, 1)),
+    transform 140ms var(--app-ease-standard, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.workstation-hardware-status__row:hover {
+  background: var(--workstation-shell-row-hover, color-mix(in srgb, var(--app-text-primary, var(--foreground)) 4%, transparent));
+  transform: translateY(-1px);
+}
+
+.workstation-hardware-status__row--selected {
+  background: var(--workstation-shell-row-selected, color-mix(in srgb, var(--app-text-primary, var(--foreground)) 7%, transparent));
+  color: var(--text-primary);
+}
+
+.workstation-hardware-status__row-icon {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted-foreground, var(--text-secondary));
+  transition:
+    background-color 140ms var(--app-ease-standard, cubic-bezier(0.16, 1, 0.3, 1)),
+    color 140ms var(--app-ease-standard, cubic-bezier(0.16, 1, 0.3, 1)),
+    transform 140ms var(--app-ease-standard, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.workstation-hardware-status__row:hover .workstation-hardware-status__row-icon,
+.workstation-hardware-status__row:focus-visible .workstation-hardware-status__row-icon,
+.workstation-hardware-status__row--selected .workstation-hardware-status__row-icon {
+  background: color-mix(in srgb, var(--app-text-primary, var(--foreground)) 12%, transparent);
+  color: var(--text-primary);
+  transform: scale(1.04);
+}
+
+.workstation-hardware-status__row-copy {
   min-width: 0;
   display: grid;
   gap: 2px;
 }
 
-.workstation-hardware-status__summary strong {
+.workstation-hardware-status__row-copy strong {
   overflow: hidden;
   color: var(--text-primary);
-  font-size: var(--app-font-13);
+  font-size: 13px;
   font-weight: var(--app-weight-semibold);
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workstation-hardware-status__summary small {
+.workstation-hardware-status__row-copy small {
+  overflow: hidden;
   color: var(--text-tertiary);
-  font-size: var(--app-font-12);
+  font-size: 11px;
   line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workstation-hardware-status__notice {
   margin: 0;
-  padding: var(--app-space-3);
-  border: 1px solid color-mix(in srgb, var(--app-warning) 30%, transparent);
-  border-radius: var(--app-radius-md);
-  background: color-mix(in srgb, var(--app-bg-panel) 78%, transparent);
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--workstation-shell-row-hover, color-mix(in srgb, var(--app-text-primary, var(--foreground)) 4%, transparent));
   color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .workstation-hardware-status__settings {
-  min-height: 34px;
-  display: inline-flex;
+  min-height: 42px;
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border-radius: var(--app-radius-md);
+  justify-content: flex-start;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
   color: var(--text-secondary);
-  font-size: var(--app-font-12);
+  font-size: 13px;
   font-weight: var(--app-weight-semibold);
   text-decoration: none;
   transition:
@@ -9181,7 +9254,28 @@ body[data-workstation-app-surface='open'] .app-shell-viewport {
 }
 
 .workstation-hardware-status__settings:hover {
-  background: color-mix(in srgb, var(--app-bg-panel) 82%, transparent);
+  background: var(--workstation-shell-row-hover, color-mix(in srgb, var(--app-text-primary, var(--foreground)) 4%, transparent));
+  color: var(--text-primary);
+}
+
+:root[data-emp-theme='light'] .workstation-hardware-status__popover,
+body[data-emp-theme='light'] .workstation-hardware-status__popover,
+body.theme-light .workstation-hardware-status__popover {
+  background: #ffffff;
+}
+
+body[data-emp-theme='dark'] .workstation-hardware-status__popover {
+  background: #202020;
+}
+
+body[data-emp-theme='dark'] .workstation-hardware-status__row--selected {
+  background: #2f2f2f;
+  color: #ffffff;
+}
+
+body[data-emp-theme='light'] .workstation-hardware-status__row--selected,
+body.theme-light .workstation-hardware-status__row--selected {
+  background: var(--workstation-shell-row-selected, color-mix(in srgb, var(--app-text-primary) 7%, transparent));
   color: var(--text-primary);
 }
 

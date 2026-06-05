@@ -266,13 +266,10 @@ class OperatorChatTests(unittest.TestCase):
         "operator_chat_under_test.execute_single_direct_tool_call",
         return_value="1. Top headline\nURL: https://example.com\nSnippet: Example AI headline",
     )
-    @patch(
-        "operator_chat_under_test.generate_chat_reply_stream_with_provider_fallback",
-        side_effect=AssertionError("generation path should not run for obvious direct tool prompts"),
-    )
+    @patch("operator_chat_under_test.generate_chat_reply_stream_with_provider_fallback")
     @patch("operator_chat_under_test.supports_direct_message_native_chat", return_value=False)
     @patch("operator_chat_under_test.provider_has_key", return_value=False)
-    def test_obvious_direct_tool_prompt_bypasses_generation(
+    def test_obvious_direct_tool_prompt_uses_selected_model_generation(
         self,
         _provider_has_key,
         _supports_direct_message_native_chat,
@@ -280,6 +277,25 @@ class OperatorChatTests(unittest.TestCase):
         _execute_single_direct_tool_call,
         _capabilities,
     ):
+        def fake_stream(**kwargs):
+            self.assertTrue(kwargs["context"].get("disable_provider_fallback"))
+            self.assertEqual(kwargs["context"].get("provider"), "openai")
+
+            def _iterator():
+                yield {
+                    "type": "result",
+                    "reply": "I can search for that through the connected tools.",
+                    "usage_masked": {"provider": "openai", "model": "gpt-5.4"},
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                    "attempted_providers": "openai",
+                    "error": "",
+                    "tool_calls": [],
+                }
+
+            return _iterator()
+
+        _generate_chat_reply_stream_with_provider_fallback.side_effect = fake_stream
         payload = build_direct_operator_reply(
             message="Search for today's top AI news headline",
             workspace_id="default",
@@ -289,8 +305,9 @@ class OperatorChatTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["mode"], "answer")
-        self.assertIn("Top headline", payload["reply"])
-        self.assertEqual(payload["context_used"]["fallback_reason"], "obvious_direct_tool_execution")
+        self.assertIn("connected tools", payload["reply"])
+        _execute_single_direct_tool_call.assert_not_called()
+        self.assertFalse(payload["context_used"].get("fallback_used"))
 
     @patch("operator_chat_under_test.can_auto_start_run_handoff", return_value=False)
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
@@ -718,7 +735,7 @@ class OperatorChatTests(unittest.TestCase):
             "approval_required_actions": [],
         }],
     )
-    def test_capability_question_uses_tool_catalog_reply(self, _capabilities, _provider_has_key, generate_reply):
+    def test_capability_question_uses_selected_model_with_tool_catalog_context(self, _capabilities, _provider_has_key, generate_reply):
         payload = build_direct_operator_reply(
             message="What can you do in this environment?",
             workspace_id="default",
@@ -727,10 +744,10 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIn("Here is what Sage can do", payload["reply"])
+        self.assertEqual(payload["reply"], "I can access Google Workspace here.")
         self.assertIn("Google Workspace", payload["reply"])
         self.assertEqual(payload["mode"], "answer")
-        generate_reply.assert_not_called()
+        generate_reply.assert_called()
 
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
     @patch(
@@ -1038,14 +1055,14 @@ class OperatorChatTests(unittest.TestCase):
         )
 
         self.assertEqual(events[0]["type"], "step")
-        self.assertEqual(events[0]["label"], "Waiting for your laptop")
+        self.assertEqual(events[0]["label"], "Waiting for Agent Computer")
         self.assertEqual(events[0]["detail"], "Mansur's MacBook Air")
         self.assertEqual(events[-1]["type"], "final")
         self.assertIntervention(
             events[-1]["payload"],
             "run_handoff",
             title="Durable run in progress",
-            detail_contains="waiting for your laptop to become available",
+            detail_contains="waiting for Agent Computer to become available",
         )
 
     @patch("operator_chat_under_test.direct_chat_run_snapshot")

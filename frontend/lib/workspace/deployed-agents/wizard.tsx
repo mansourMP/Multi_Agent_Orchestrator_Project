@@ -114,8 +114,8 @@ type ExternalAgentFormState = {
 
 const EXTERNAL_PROVIDER_OPTIONS: Array<{ value: ExternalProviderKind; label: string; hint: string }> = [
   { value: 'openclaw', label: 'OpenClaw', hint: 'Use this for OpenClaw-style local or remote agent runtimes.' },
-  { value: 'hermes', label: 'Hermes', hint: 'Use this for Hermes-compatible agent runtimes.' },
-  { value: 'nemoclaw', label: 'NemoClaw', hint: 'Use this for NemoClaw-compatible agent runtimes.' },
+  { value: 'hermes', label: 'Hermes', hint: 'Adapter slot. Configure a real Hermes runtime before connecting.' },
+  { value: 'nemoclaw', label: 'NemoClaw', hint: 'Adapter slot. Configure a real NemoClaw runtime before connecting.' },
   { value: 'custom_http', label: 'Custom HTTPS agent', hint: 'Use this for a provider-neutral external agent manifest.' },
   { value: 'mcp', label: 'MCP server', hint: 'Use this for a governed remote MCP capability surface.' },
   { value: 'a2a', label: 'A2A agent', hint: 'Use this for Agent-to-Agent compatible runtimes.' },
@@ -213,7 +213,7 @@ function localExternalProviderReadinessLabel(providerKind: ExternalProviderKind)
     return 'OpenClaw can use the selected Agent Computer bridge without exposing a local URL.';
   }
   if (providerKind === 'hermes' || providerKind === 'nemoclaw') {
-    return 'Adapter slot only. Configure the local adapter on the selected Agent Computer before connecting.';
+    return 'Adapter not configured until a real local endpoint or manifest is provided.';
   }
   return 'Configure the local adapter on the selected Agent Computer before connecting.';
 }
@@ -554,7 +554,7 @@ export function AgentWizard({
         && !localRuntimeBaseUrl(externalAgentForm.providerKind, externalAgentForm.baseUrl)
         && !externalAgentForm.chatUrl.trim()
       ) {
-        setWizardErrorMessage('Configure this provider on the selected Agent Computer before connecting it.');
+        setWizardErrorMessage('Adapter not configured. Add the local endpoint or manifest for this runtime before connecting it.');
         return;
       }
       const manifestForCreate = externalAgentForm.connectionMode === 'agent_computer'

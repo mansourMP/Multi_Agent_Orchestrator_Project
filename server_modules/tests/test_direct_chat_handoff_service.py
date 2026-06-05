@@ -96,13 +96,13 @@ class DirectChatHandoffServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(events[0]["type"], "step")
-        self.assertEqual(events[0]["label"], "Waiting for your laptop")
+        self.assertEqual(events[0]["label"], "Waiting for Agent Computer")
         self.assertEqual(events[-1]["type"], "final")
         self.assertEqual(events[-1]["payload"]["reply"], "")
         self.assertEqual(events[-1]["payload"]["interventions"][0]["kind"], "run_handoff")
         self.assertEqual(
             events[-1]["payload"]["interventions"][0]["detail"],
-            "The durable run is waiting for your laptop to become available.",
+            "The durable run is waiting for Agent Computer to become available.",
         )
 
 

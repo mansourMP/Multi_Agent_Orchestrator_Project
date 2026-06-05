@@ -27,6 +27,7 @@ from server_modules.agent_turn import (
     bind_agent_turn_metadata,
     resolve_agent_turn_request,
 )
+from server_modules import empyralis_model_tier_contract
 from server_modules import usage_accounting_service
 from server_modules.usage_reporting import build_usage_record
 
@@ -46,6 +47,14 @@ SUPPORTED_PROVIDERS = (
     "azure_openai",
     "custom_openai_compatible",
 )
+EMPYRALIS_PROVIDER_ALIASES = {
+    "empyralis",
+    "empyralis_managed",
+    "workspace_ai",
+    "workspace-ai",
+    "platform_ai",
+    "platform-ai",
+}
 
 BYOK_FIRST_OPENAI_COMPATIBLE_PROVIDERS = {
     "groq",
@@ -54,6 +63,19 @@ BYOK_FIRST_OPENAI_COMPATIBLE_PROVIDERS = {
     "custom_openai_compatible",
 }
 LOCAL_CLI_AUTH_MODES = {"local_cli", "local_subscription", "subscription_cli", "claude_code_cli"}
+
+
+def _empyralis_tier_backend_route(requested_provider: Any, requested_model: Any) -> tuple[str, str]:
+    provider_token = str(requested_provider or "").strip().lower()
+    if provider_token not in EMPYRALIS_PROVIDER_ALIASES:
+        return "", ""
+    tier = empyralis_model_tier_contract.normalize_model_tier(requested_model, fallback="light")
+    contract = empyralis_model_tier_contract.model_tier_contract(tier, fallback="light")
+    provider = str(contract.internal_provider or "").strip().lower()
+    model = str(contract.internal_model or "").strip()
+    return provider, model
+
+
 AUTH_SCOPE_ERROR_MARKERS = (
     "api.responses.write",
     "missing scopes",
@@ -76,8 +98,9 @@ ANTHROPIC_RETIRED_MODEL_ALIASES = {
 }
 _RETRY_AFTER_RE = re.compile(r"(?:retry[-_ ]after)\D*(\d+)", re.IGNORECASE)
 _RETRY_SECONDS_RE = re.compile(r"(\d+)\s*(?:s|sec|secs|second|seconds)\b", re.IGNORECASE)
-_DSML_PREFIX_RE = r"<\s*\|\s*\|\s*DSML\s*\|\s*\|\s*"
-_DSML_CLOSE_PREFIX_RE = r"<\s*/\s*\|\s*\|\s*DSML\s*\|\s*\|\s*"
+_DSML_PIPE_RE = r"[\|｜]"
+_DSML_PREFIX_RE = r"<\s*" + _DSML_PIPE_RE + r"\s*" + _DSML_PIPE_RE + r"\s*DSML\s*" + _DSML_PIPE_RE + r"\s*" + _DSML_PIPE_RE + r"\s*"
+_DSML_CLOSE_PREFIX_RE = r"<\s*/\s*" + _DSML_PIPE_RE + r"\s*" + _DSML_PIPE_RE + r"\s*DSML\s*" + _DSML_PIPE_RE + r"\s*" + _DSML_PIPE_RE + r"\s*"
 _DSML_TOOL_BLOCK_RE = re.compile(
     _DSML_PREFIX_RE + r"tool_calls\s*>.*",
     re.IGNORECASE | re.DOTALL,
@@ -96,6 +119,10 @@ _DSML_PARAMETER_RE = re.compile(
     + r"parameter\s*>",
     re.IGNORECASE | re.DOTALL,
 )
+_INLINE_FUNCTION_TOOL_RE = re.compile(
+    r"<\s*function\s*>\s*([a-zA-Z0-9_.:-]+)\s*<\s*/\s*function\s*>",
+    re.IGNORECASE,
+)
 
 
 def _normalize_dsml_tool_name(name: str) -> str:
@@ -106,6 +133,9 @@ def _normalize_dsml_tool_name(name: str) -> str:
         "shell": "shell__exec",
         "terminal": "shell__exec",
         "zsh": "shell__exec",
+        "screenshot": "screenshot__capture",
+        "screen_capture": "screenshot__capture",
+        "capture_screenshot": "screenshot__capture",
     }
     return aliases.get(normalized, normalized)
 
@@ -118,7 +148,7 @@ def extract_dsml_tool_calls_from_text(value: Any) -> Tuple[str, List[Dict[str, A
     output text. That text must never be rendered to users.
     """
     raw = str(value or "")
-    if not raw or not _DSML_TOOL_BLOCK_RE.search(raw):
+    if not raw or not (_DSML_TOOL_BLOCK_RE.search(raw) or _INLINE_FUNCTION_TOOL_RE.search(raw)):
         return raw, []
 
     tool_calls: List[Dict[str, Any]] = []
@@ -147,6 +177,11 @@ def extract_dsml_tool_calls_from_text(value: Any) -> Tuple[str, List[Dict[str, A
         tool_calls.append({"name": tool_name, "arguments": arguments})
 
     cleaned = _DSML_TOOL_BLOCK_RE.sub("", raw).strip()
+    for function_match in _INLINE_FUNCTION_TOOL_RE.finditer(raw):
+        tool_name = _normalize_dsml_tool_name(function_match.group(1))
+        if tool_name:
+            tool_calls.append({"name": tool_name, "arguments": {}})
+    cleaned = _INLINE_FUNCTION_TOOL_RE.sub("", cleaned).strip()
     return cleaned, tool_calls
 
 
@@ -1190,17 +1225,50 @@ def codex_cli_supports_model(model: Any) -> bool:
     return normalized.startswith("gpt-5") or "codex" in normalized
 
 
-def coerce_requested_model_for_provider(requested_model: Any, provider: str) -> str:
+def strict_model_routing_enabled(context: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
+    return str(
+        metadata.get("strict_model_routing")
+        or context.get("strict_model_routing")
+        or metadata.get("disable_model_fallback")
+        or context.get("disable_model_fallback")
+        or metadata.get("disable_provider_fallback")
+        or context.get("disable_provider_fallback")
+        or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def strict_model_result_mismatch(expected_model: Any, actual_model: Any) -> bool:
+    expected = str(expected_model or "").strip().lower()
+    actual = str(actual_model or "").strip().lower()
+    return bool(expected and actual and expected != actual)
+
+
+def coerce_requested_model_for_provider(
+    requested_model: Any,
+    provider: str,
+    *,
+    strict_model_routing: bool = False,
+) -> str:
     model = str(requested_model or "").strip()
     pid = str(provider or "").strip().lower()
+    if pid == "deepseek":
+        tier_token = model.lower().replace("-", "_")
+        if tier_token in empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS:
+            model = str(
+                empyralis_model_tier_contract.model_tier_contract(tier_token, fallback="light").internal_model
+                or ""
+            ).strip()
+        if strict_model_routing and model:
+            return model
+        return model if model in {"deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-pro"} else default_openai_compatible_model("deepseek")
+    if strict_model_routing and model:
+        return model
     if pid == "codex_cli":
         return model if codex_cli_supports_model(model) else default_codex_model()
     if pid == "claude_code_cli":
         return normalize_anthropic_model(model)
     if pid == "anthropic":
         return normalize_anthropic_model(model)
-    if pid == "deepseek":
-        return model if model in {"deepseek-chat", "deepseek-reasoner"} else default_openai_compatible_model("deepseek")
     if pid == "ollama_cloud":
         return model or ((os.getenv("ORION_LOCAL_WORKER_OLLAMA_CLOUD_MODEL") or "gpt-oss:120b").strip() or "gpt-oss:120b")
     return model
@@ -3531,17 +3599,22 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
         "off",
     }
     context_provider = resolve_requested_provider(context, metadata)
+    requested_model = resolve_requested_model(context, metadata)
+    disable_fallback = strict_model_routing_enabled(context, metadata)
+    tier_provider, tier_model = _empyralis_tier_backend_route(context_provider, requested_model)
+    if tier_provider:
+        tier_context = {**context, "provider": tier_provider, "model": tier_model or requested_model}
+        return [tier_provider] if provider_has_usable_credentials(tier_provider, tier_context, metadata) else []
     explicit_requested_provider = context_provider if context_provider in SUPPORTED_PROVIDERS else ""
     explicit_requested_provider_has_credentials = bool(
         explicit_requested_provider
         and provider_has_usable_credentials(explicit_requested_provider, context, metadata)
     )
+    if explicit_requested_provider:
+        return [explicit_requested_provider] if explicit_requested_provider_has_credentials else []
+    if disable_fallback:
+        return []
     run_source = str(metadata.get("source") or context.get("source") or "").strip().lower()
-    disable_fallback = str(
-        metadata.get("disable_provider_fallback")
-        or context.get("disable_provider_fallback")
-        or ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
     configured_fallback_provider = str(
         metadata.get("fallback_provider")
         or context.get("fallback_provider")
@@ -3623,6 +3696,7 @@ def generate_pack_with_provider_fallback(
     last_error = "no provider credentials available"
     requested_provider = resolve_requested_provider(context, metadata)
     requested_model = resolve_requested_model(context, metadata)
+    strict_model_routing = strict_model_routing_enabled(context, metadata)
     credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
 
     def _run_json_with_limits(
@@ -3662,7 +3736,11 @@ def generate_pack_with_provider_fallback(
             attempted=attempted,
             reason="provider_order_for_run",
         )
-        provider_model = coerce_requested_model_for_provider(requested_model, provider)
+        provider_model = coerce_requested_model_for_provider(
+            requested_model,
+            provider,
+            strict_model_routing=strict_model_routing,
+        )
         if provider == "codex_cli":
             result, usage, model, provider_error = _run_json_with_limits(
                 provider,
@@ -3776,6 +3854,7 @@ def generate_chat_reply_with_provider_fallback(
     prefer_openai_chat = should_use_openai_chat_completions(context, metadata)
     requested_provider = resolve_requested_provider(context, metadata)
     requested_model = resolve_requested_model(context, metadata)
+    strict_model_routing = strict_model_routing_enabled(context, metadata)
     requested_reasoning_effort = resolve_requested_reasoning_effort(context, metadata)
     credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
 
@@ -3791,6 +3870,8 @@ def generate_chat_reply_with_provider_fallback(
             result = call_fn()
             text, usage, model, provider_error = result
             if text:
+                if strict_model_routing and strict_model_result_mismatch(provider_model, model):
+                    return "", usage, model, f"model_mismatch:{provider_model}->{model}"
                 return text, usage, model, ""
             last_result = result
             if not _should_retry_provider_error(
@@ -3816,7 +3897,11 @@ def generate_chat_reply_with_provider_fallback(
             attempted=attempted,
             reason="provider_order_for_run",
         )
-        provider_model = coerce_requested_model_for_provider(requested_model, provider)
+        provider_model = coerce_requested_model_for_provider(
+            requested_model,
+            provider,
+            strict_model_routing=strict_model_routing,
+        )
         if provider == "codex_cli":
             text, usage, model, provider_error = _run_text_with_limits(
                 provider,
@@ -4014,15 +4099,19 @@ def generate_chat_reply_for_turn_request(
 def generate_chat_reply_stream_with_provider_fallback(
     context: Dict[str, Any],
     metadata: Dict[str, Any],
-    user_goal: str,
-    system_prompt: Optional[str],
+    user_goal: str = "",
+    system_prompt: Optional[str] = None,
     prior_messages: Any = None,
+    message: Optional[str] = None,
 ) -> Iterator[Dict[str, Any]]:
+    if message is not None and not str(user_goal or "").strip():
+        user_goal = str(message or "")
     attempted: list[str] = []
     last_error = "no provider credentials available"
     prefer_openai_chat = should_use_openai_chat_completions(context, metadata)
     requested_provider = resolve_requested_provider(context, metadata)
     requested_model = resolve_requested_model(context, metadata)
+    strict_model_routing = strict_model_routing_enabled(context, metadata)
     requested_reasoning_effort = resolve_requested_reasoning_effort(context, metadata)
     credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
     requested_tools = resolve_requested_tools(context, metadata)
@@ -4039,6 +4128,8 @@ def generate_chat_reply_stream_with_provider_fallback(
             result = call_fn()
             text, usage, model, provider_error = result
             if text:
+                if strict_model_routing and strict_model_result_mismatch(provider_model, model):
+                    return "", usage, model, f"model_mismatch:{provider_model}->{model}"
                 return text, usage, model, ""
             last_result = result
             if not _should_retry_provider_error(
@@ -4075,6 +4166,15 @@ def generate_chat_reply_stream_with_provider_fallback(
         for attempt_index in range(max_attempts):
             result = call_fn()
             if bool(result.get("ok")):
+                if strict_model_routing and strict_model_result_mismatch(provider_model, result.get("model")):
+                    return {
+                        **dict(result or {}),
+                        "ok": False,
+                        "text": "",
+                        "deltas": [],
+                        "tool_calls": [],
+                        "error": f"model_mismatch:{provider_model}->{str(result.get('model') or '').strip()}",
+                    }
                 return result
             last_result = dict(result or {})
             provider_error = str(last_result.get("error") or "").strip()
@@ -4102,7 +4202,11 @@ def generate_chat_reply_stream_with_provider_fallback(
             attempted=attempted,
             reason="provider_order_for_run",
         )
-        provider_model = coerce_requested_model_for_provider(requested_model, provider)
+        provider_model = coerce_requested_model_for_provider(
+            requested_model,
+            provider,
+            strict_model_routing=strict_model_routing,
+        )
 
         if provider == "codex_cli":
             policy = _provider_limit_policy("codex_cli", provider_model)

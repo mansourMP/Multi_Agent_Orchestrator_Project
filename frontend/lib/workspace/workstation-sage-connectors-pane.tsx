@@ -436,7 +436,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['Servers', 'DMs'],
     summary: 'Discord is a future communication integration. Keep it planned until the personal-agent core and channel safety are hardened.',
     setupHint: 'Prioritize Telegram, WhatsApp, and Signal first. Add Discord when there is real demand.',
-    surfaceScope: 'all',
+    surfaceScope: 'studio_only',
   },
   {
     id: 'github',
@@ -2105,13 +2105,15 @@ export function WorkstationSageConnectorsPane({
   }, [doctor, personalChannelSurfaceByKey, selectedGateway, telegramPersonal, whatsappPersonal]);
 
   const communicationPersonalCards = useMemo(
-    () => personalCards.filter((card) =>
-      card.id === 'telegram_personal'
-      || card.id === 'whatsapp_personal'
-      || card.id === 'signal_personal'
-      || card.id === 'imessage_personal'
-      || card.id === 'wechat_personal',
-    ),
+    () => personalCards.filter((card) => {
+      if (card.id === 'telegram_personal' || card.id === 'whatsapp_personal') {
+        return true;
+      }
+      if (card.id === 'signal_personal' || card.id === 'imessage_personal' || card.id === 'wechat_personal') {
+        return card.statusTone === 'connected' || !/bridge required/i.test(card.statusLabel);
+      }
+      return false;
+    }),
     [personalCards],
   );
 

@@ -238,6 +238,7 @@ export function ChatComposer({
   onDismissSmallModelWarning,
   slashCommands = [],
   onSlashCommandSelect,
+  voiceEnabled = false,
   onVoiceTranscribe,
 }: {
   draft: string;
@@ -268,6 +269,7 @@ export function ChatComposer({
   slashCommands?: readonly ComposerSlashCommand[];
   onSlashCommandSelect?: (command: ComposerSlashCommand) => void;
   actionMenuItems?: readonly ComposerActionMenuItem[];
+  voiceEnabled?: boolean;
   onVoiceTranscribe?: (audio: Blob) => Promise<string>;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -309,7 +311,8 @@ export function ChatComposer({
     [reasoningOptions],
   );
   const showInlineReasoningToggle = false;
-  const voiceSupported = typeof onVoiceTranscribe === 'function'
+  const voiceSupported = voiceEnabled
+    && typeof onVoiceTranscribe === 'function'
     && typeof window !== 'undefined'
     && typeof navigator !== 'undefined'
     && Boolean(navigator.mediaDevices?.getUserMedia)
@@ -912,22 +915,24 @@ export function ChatComposer({
             {modelControl}
           </div>
 
-          <button
-            type="button"
-            className={joinClassNames(
-              'app-chat-composer__voice',
-              voiceState === 'recording' && 'app-chat-composer__voice--recording',
-            )}
-            disabled={busy || voiceState === 'transcribing'}
-            aria-label={voiceState === 'recording' ? 'Stop voice recording' : 'Record voice'}
-            onClick={handleVoiceButton}
-          >
-            {voiceState === 'recording' ? (
-              <MicOff size={17} strokeWidth={2.1} aria-hidden="true" />
-            ) : (
-              <Mic size={17} strokeWidth={2.1} aria-hidden="true" />
-            )}
-          </button>
+          {voiceEnabled ? (
+            <button
+              type="button"
+              className={joinClassNames(
+                'app-chat-composer__voice',
+                voiceState === 'recording' && 'app-chat-composer__voice--recording',
+              )}
+              disabled={busy || voiceState === 'transcribing'}
+              aria-label={voiceState === 'recording' ? 'Stop voice recording' : 'Record voice'}
+              onClick={handleVoiceButton}
+            >
+              {voiceState === 'recording' ? (
+                <MicOff size={17} strokeWidth={2.1} aria-hidden="true" />
+              ) : (
+                <Mic size={17} strokeWidth={2.1} aria-hidden="true" />
+              )}
+            </button>
+          ) : null}
 
           <AppButton
             type={busy ? 'button' : 'submit'}

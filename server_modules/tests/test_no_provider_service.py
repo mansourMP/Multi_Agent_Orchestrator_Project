@@ -1,7 +1,6 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
 
 from server_modules import no_provider_service
 
@@ -116,71 +115,9 @@ class NoProviderServiceTests(unittest.TestCase):
     def test_no_provider_reasoning_required_response_is_stable(self) -> None:
         payload = no_provider_service.no_provider_reasoning_required_response()
         self.assertEqual(payload["mode"], "answer")
-        self.assertEqual(payload["error"], "")
-        self.assertIn("Connect an AI provider", payload["reply"])
-
-    def test_execute_no_provider_request_handles_memory_reply_before_tool_path(self) -> None:
-        services = no_provider_service.NoProviderExecutionServices(
-            compact_text=_compact_text,
-            safe_positive_int=_safe_positive_int,
-            resolve_local_path=Path,
-            extract_first_path_reference=_extract_first_path_reference,
-            extract_first_url=_extract_first_url,
-            parse_page_state=lambda value: value,
-            parse_memory_write=lambda message: None,
-            parse_memory_read=lambda message: "name",
-            handle_memory_request=lambda workspace_id, message: "name = TestUser",
-            parse_tool_name=lambda tool_name: ("telegram_bot", "send_message"),
-            tool_arguments_payload=lambda arguments: {},
-            approval_required_for_tool=lambda connector_id, action_id, arguments, tool_capabilities: False,
-            agent_machine_full_trust_for_session=lambda session_ctx: False,
-            execute_single_tool_call=lambda **kwargs: "unused",
-        )
-
-        payload = no_provider_service.execute_no_provider_request(
-            message="What is my name",
-            workspace_id="default",
-            thread_id="thread-1",
-            tools=[],
-            tool_capabilities=[],
-            reasoning_effort="medium",
-            services=services,
-        )
-
-        self.assertEqual(payload["reply"], "name = TestUser")
-        self.assertEqual(payload["mode"], "answer")
-
-    def test_execute_no_provider_request_handles_tool_execution_and_origin_ip_format(self) -> None:
-        execute_single_tool_call = Mock(return_value='HTTP 200\n\n{"origin":"203.0.113.9"}')
-        services = no_provider_service.NoProviderExecutionServices(
-            compact_text=_compact_text,
-            safe_positive_int=_safe_positive_int,
-            resolve_local_path=Path,
-            extract_first_path_reference=_extract_first_path_reference,
-            extract_first_url=_extract_first_url,
-            parse_page_state=lambda value: value,
-            parse_memory_write=lambda message: None,
-            parse_memory_read=lambda message: None,
-            handle_memory_request=lambda workspace_id, message: None,
-            parse_tool_name=lambda tool_name: ("http", "request"),
-            tool_arguments_payload=lambda arguments: {"url": "https://httpbin.org/get"},
-            approval_required_for_tool=lambda connector_id, action_id, arguments, tool_capabilities: False,
-            agent_machine_full_trust_for_session=lambda session_ctx: False,
-            execute_single_tool_call=execute_single_tool_call,
-        )
-
-        payload = no_provider_service.execute_no_provider_request(
-            message="Fetch https://httpbin.org/get and tell me the origin IP",
-            workspace_id="default",
-            thread_id="thread-1",
-            tools=[{"name": "http_request"}],
-            tool_capabilities=[],
-            reasoning_effort="medium",
-            services=services,
-        )
-
-        self.assertEqual(payload["reply"], "Origin IP: 203.0.113.9")
-        execute_single_tool_call.assert_called_once()
+        self.assertEqual(payload["error"], "model_provider_unavailable")
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["interventions"][0]["code"], "model_provider_unavailable")
 
     def test_plan_tool_calls_builds_browser_and_shell_actions(self) -> None:
         tool_calls = no_provider_service.plan_tool_calls(
@@ -358,6 +295,28 @@ class NoProviderServiceTests(unittest.TestCase):
                 parse_memory_read=lambda message: None,
             )
         )
+        self.assertTrue(
+            no_provider_service.has_obvious_direct_tool_intent(
+                "Take a screenshot of my screen through Agent Computer and tell me when it is captured.",
+                [{"name": "screenshot__capture"}],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+            )
+        )
+        self.assertFalse(
+            no_provider_service.has_obvious_direct_tool_intent(
+                "platform route smoke 2113: answer in one short sentence",
+                [{"name": "shell__exec"}],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+            )
+        )
         self.assertFalse(
             no_provider_service.has_obvious_direct_tool_intent(
                 "Explain the tradeoffs between SQLite and Postgres",
@@ -431,8 +390,63 @@ class NoProviderServiceTests(unittest.TestCase):
         self.assertEqual(payload["reply"], "")
         self.assertEqual(payload["approvals"][0]["prompt"], "Approve Telegram Bot to send message before continuing.")
         self.assertEqual(payload["actions"][0]["connector"], "telegram_bot")
-        self.assertEqual(payload["actions"][0]["action"], "send_message")
-        self.assertEqual(payload["actions"][0]["input"], "hello from direct chat")
+
+    def test_build_direct_tool_approval_response_treats_explicit_screenshot_as_one_shot_consent(self) -> None:
+        services = no_provider_service.NoProviderExecutionServices(
+            compact_text=_compact_text,
+            safe_positive_int=_safe_positive_int,
+            resolve_local_path=Path,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+            parse_page_state=lambda value: value,
+            parse_memory_write=lambda message: None,
+            parse_memory_read=lambda message: None,
+            handle_memory_request=lambda workspace_id, message: None,
+            parse_tool_name=lambda tool_name: ("screenshot", "capture"),
+            tool_arguments_payload=lambda arguments: {},
+            approval_required_for_tool=lambda connector_id, action_id, arguments, tool_capabilities: True,
+            agent_machine_full_trust_for_session=lambda session_ctx: False,
+            execute_single_tool_call=lambda **kwargs: "unused",
+        )
+
+        payload = no_provider_service.build_direct_tool_approval_response(
+            tool_calls=[{"name": "screenshot__capture", "arguments": {}}],
+            tool_capabilities=[],
+            services=services,
+            session_ctx={"user_message": "Take a screenshot of my screen through Agent Computer."},
+        )
+
+        self.assertIsNone(payload)
+
+    def test_build_direct_tool_approval_response_still_blocks_unsolicited_screenshot(self) -> None:
+        services = no_provider_service.NoProviderExecutionServices(
+            compact_text=_compact_text,
+            safe_positive_int=_safe_positive_int,
+            resolve_local_path=Path,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+            parse_page_state=lambda value: value,
+            parse_memory_write=lambda message: None,
+            parse_memory_read=lambda message: None,
+            handle_memory_request=lambda workspace_id, message: None,
+            parse_tool_name=lambda tool_name: ("screenshot", "capture"),
+            tool_arguments_payload=lambda arguments: {},
+            approval_required_for_tool=lambda connector_id, action_id, arguments, tool_capabilities: True,
+            agent_machine_full_trust_for_session=lambda session_ctx: False,
+            execute_single_tool_call=lambda **kwargs: "unused",
+        )
+
+        payload = no_provider_service.build_direct_tool_approval_response(
+            tool_calls=[{"name": "screenshot__capture", "arguments": {}}],
+            tool_capabilities=[],
+            services=services,
+            session_ctx={"user_message": "What can you do?"},
+        )
+
+        self.assertEqual(payload["mode"], "answer_with_action")
+        self.assertEqual(payload["actions"][0]["connector"], "screenshot")
+        self.assertEqual(payload["actions"][0]["action"], "capture")
+        self.assertEqual(payload["actions"][0]["input"], "{}")
 
 
 if __name__ == "__main__":

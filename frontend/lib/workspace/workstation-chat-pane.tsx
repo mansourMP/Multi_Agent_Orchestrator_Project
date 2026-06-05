@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, ChevronRight, Cloud, Monitor, Settings, SlidersHorizontal } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Monitor } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
@@ -16,7 +16,6 @@ import {
   ChatComposer,
   type ComposerCapabilityItem,
   type ComposerCapabilitySubItem,
-  type ComposerComputerStatus,
   type ComposerPreRunCostEstimate,
   type ComposerSlashCommand,
 } from '@/lib/workspace/chat-composer';
@@ -65,6 +64,7 @@ import {
   type WorkstationSageProfileRecord,
   type WorkstationSessionActor,
   type WorkstationSessionRecord,
+  type WorkstationTurnAttachment,
   type WorkstationTurnStreamAbortHandle,
   type WorkstationTurnResponse,
   type WorkspaceAiRoutePayload,
@@ -128,6 +128,7 @@ import {
   mergeTraceEvents,
   isTerminalTraceEvent,
   normalizeTraceStreamEvent,
+  normalizeTraceEventType,
   buildLiveTraceRecord,
   isTextEditingTarget,
   isSyntheticTranscriptMessage,
@@ -202,6 +203,128 @@ import type {
   ChatRuntimeTrustZone
 } from '@/lib/workspace/workstation-chat-pane-model';
 
+const TRAY_STATUS_URL = 'http://127.0.0.1:7790/status';
+const TRAY_CONNECT_URL = 'http://127.0.0.1:7790/connect';
+
+type TrayLocalStatus = {
+  ok?: boolean;
+  connected?: boolean;
+  session_verified?: boolean;
+  heartbeat_fresh?: boolean;
+  session_status?: string;
+  state?: string;
+  supervisor_running?: boolean;
+  gateway_running?: boolean;
+  workspace_id?: string | null;
+  error?: string | null;
+};
+
+type PairingIntentRecord = {
+  pairing_token?: string | null;
+  display_name?: string | null;
+  platform?: string | null;
+  expires_at?: string | null;
+  metadata?: unknown;
+};
+
+function trayProcessAvailable(status: TrayLocalStatus | null): boolean {
+  return Boolean(
+    status?.ok
+    || status?.connected
+    || status?.gateway_running
+    || status?.supervisor_running
+    || status?.state === 'active'
+    || status?.state === 'connecting',
+  );
+}
+
+function trayWorkspaceMismatch(status: TrayLocalStatus | null, workspaceId: string): string {
+  const trayWorkspaceId = readString(status?.workspace_id).trim();
+  const currentWorkspaceId = readString(workspaceId).trim();
+  if (!trayWorkspaceId || !currentWorkspaceId || trayWorkspaceId === currentWorkspaceId) {
+    return '';
+  }
+  return trayWorkspaceId;
+}
+
+function trayVerifiedForWorkspace(status: TrayLocalStatus | null, workspaceId: string): boolean {
+  return Boolean(
+    status?.connected === true
+    && status?.session_verified === true
+    && !trayWorkspaceMismatch(status, workspaceId),
+  );
+}
+
+function gatewayApiUrlForTray(): string {
+  const configured = (
+    process.env.NEXT_PUBLIC_ORION_API_URL
+    || process.env.NEXT_PUBLIC_API_URL
+    || process.env.NEXT_PUBLIC_PLATFORM_URL
+    || ''
+  ).trim();
+  const baseUrl = configured || (typeof window !== 'undefined' ? window.location.origin : '');
+  const normalized = baseUrl.replace(/\/+$/, '');
+  if (!normalized) {
+    return '';
+  }
+  return normalized.endsWith('/api') ? normalized : `${normalized}/api`;
+}
+
+function detectHardwarePlatformForTray(): string | undefined {
+  if (typeof navigator === 'undefined') {
+    return undefined;
+  }
+  const token = `${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`.toLowerCase();
+  if (token.includes('mac')) {
+    return 'macos';
+  }
+  if (token.includes('win')) {
+    return 'windows';
+  }
+  if (token.includes('linux')) {
+    return 'linux';
+  }
+  return undefined;
+}
+
+function readPairingIntent(payload: unknown): PairingIntentRecord | null {
+  const record = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null;
+  const rawIntent = record?.intent;
+  const intent = rawIntent && typeof rawIntent === 'object' && !Array.isArray(rawIntent)
+    ? rawIntent as Record<string, unknown>
+    : record;
+  const pairingToken = readString(intent?.pairing_token || intent?.token);
+  if (!pairingToken) {
+    return null;
+  }
+  return {
+    pairing_token: pairingToken,
+    display_name: readString(intent?.display_name || intent?.displayName || intent?.name),
+    platform: readString(intent?.platform),
+    expires_at: readString(intent?.expires_at || intent?.expiresAt),
+    metadata: intent?.metadata,
+  };
+}
+
+async function fetchTrayJson<T>(url: string, init: RequestInit = {}, timeoutMs = 1_500): Promise<T> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Request failed with ${response.status}`);
+    }
+    return await response.json() as T;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 type SageComposerSkillRecord = {
   id: string;
   name: string;
@@ -240,12 +363,6 @@ const SAGE_CONNECTOR_MENU_SHORTCUTS: readonly SageConnectorMenuShortcut[] = [
     iconSrc: '/brand-assets/apps/google-drive.svg?v=3',
   },
   {
-    id: 'telegram_bot',
-    title: 'Telegram',
-    connectorIds: ['telegram_bot', 'telegram'],
-    iconSrc: '/brand-assets/channels/telegram.svg?v=3',
-  },
-  {
     id: 'github',
     title: 'GitHub',
     connectorIds: ['github'],
@@ -263,7 +380,6 @@ const SAGE_EMPTY_STATE_PROMPTS = [
   'Summarize this workspace',
   'Start a new plan',
   'Show my active work',
-  'Check Agent Computer status',
   'Help me build an app',
 ] as const;
 
@@ -431,8 +547,8 @@ function buildSageConnectorMenuItems(
           id: `connector:${credentialId}:${shortcut.id}`,
           title: shortcut.title,
           iconSrc: shortcut.iconSrc,
-          itemType: 'toggle',
-          enabled: true,
+          status: 'Connected',
+          statusTone: 'ready',
           onSelect: onOpenConnectors,
         });
       }
@@ -442,23 +558,13 @@ function buildSageConnectorMenuItems(
       id: `connector:${credentialId}`,
       title: readString(credential.label) || readableMenuLabel(connectorToken),
       detail: readableMenuLabel(connectorToken),
-      itemType: 'toggle',
-      enabled: true,
+      status: 'Connected',
+      statusTone: 'ready',
       onSelect: onOpenConnectors,
     });
   }
 
-  const suggestedItems = SAGE_CONNECTOR_MENU_SHORTCUTS
-    .filter((shortcut) => !connectedShortcutIds.has(shortcut.id))
-    .map((shortcut) => ({
-      id: `connector_suggestion:${shortcut.id}`,
-      title: shortcut.title,
-      status: 'Connect',
-      statusTone: 'setup' as const,
-      iconSrc: shortcut.iconSrc,
-      onSelect: onOpenConnectors,
-    }));
-  const appItems = [...connectedItems, ...unknownConnectorItems, ...suggestedItems];
+  const appItems = [...connectedItems, ...unknownConnectorItems];
   const visibleItems = appItems.slice(0, SAGE_MENU_VISIBLE_LIMIT);
   if (appItems.length > SAGE_MENU_VISIBLE_LIMIT) {
     visibleItems.push({
@@ -626,13 +732,86 @@ function typedTimelineEventFromStreamEvent(event: { event: string; payload: Reco
   };
 }
 
-function HardwareOptionIcon({ value }: { value: string }) {
-  const Icon = value === 'auto'
-    ? SlidersHorizontal
-    : value === 'local'
-      ? Monitor
-      : Cloud;
-  return <Icon className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />;
+function humanizeTraceToken(value: string): string {
+  return readString(value)
+    .replace(/__/g, ' ')
+    .replace(/[_\-.]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function traceToolDescriptor(data: Record<string, unknown>): { kind: string; activeLabel: string; doneLabel: string; failedLabel: string; detail: string } {
+  const toolName = readString(data.tool_name);
+  const capabilityId = readString(data.capability_id);
+  const connectorId = readString(data.connector_id);
+  const summary = readString(data.summary);
+  const haystack = `${toolName} ${capabilityId} ${connectorId} ${summary}`.toLowerCase();
+  if (/screenshot|screen\s*capture|screen\.capture/.test(haystack)) {
+    return {
+      kind: 'screenshot',
+      activeLabel: 'Taking screenshot',
+      doneLabel: 'Screenshot captured',
+      failedLabel: 'Screenshot failed',
+      detail: summary,
+    };
+  }
+  if (/computer.*system.*info|system[_\s.-]?info|systeminfo/.test(haystack)) {
+    return {
+      kind: 'computer',
+      activeLabel: 'Reading computer info',
+      doneLabel: 'Computer info ready',
+      failedLabel: 'Computer info failed',
+      detail: summary,
+    };
+  }
+  if (/shell|command|terminal|powershell|systeminfo|keyboard|mouse|window|app\.focus|computer|hardware|gateway/.test(haystack)) {
+    const isCommand = /shell|command|terminal|powershell|systeminfo/.test(haystack);
+    return {
+      kind: 'computer',
+      activeLabel: isCommand ? 'Running command' : 'Using Agent Computer',
+      doneLabel: isCommand ? 'Command completed' : 'Agent Computer completed',
+      failedLabel: isCommand ? 'Command failed' : 'Agent Computer failed',
+      detail: summary,
+    };
+  }
+  if (/telegram|whatsapp|signal|imessage|wechat|gmail|email|calendar|slack|discord|channel|message/.test(haystack)) {
+    const isSend = /send|sent|reply|post|dispatch|message\.sent|message queued|outbound/.test(haystack);
+    return {
+      kind: 'connector',
+      activeLabel: isSend ? 'Sending channel message' : 'Reading channel',
+      doneLabel: isSend ? 'Channel message sent' : 'Channel read completed',
+      failedLabel: isSend ? 'Channel send failed' : 'Channel read failed',
+      detail: summary,
+    };
+  }
+  if (/file|filesystem|artifact|attachment/.test(haystack)) {
+    return {
+      kind: 'file',
+      activeLabel: 'Using file',
+      doneLabel: 'File action completed',
+      failedLabel: 'File action failed',
+      detail: summary,
+    };
+  }
+  if (/browser|web|page|url/.test(haystack)) {
+    return {
+      kind: 'browser',
+      activeLabel: 'Using browser',
+      doneLabel: 'Browser action completed',
+      failedLabel: 'Browser action failed',
+      detail: summary,
+    };
+  }
+  const label = humanizeTraceToken(toolName || capabilityId || connectorId) || 'Using tool';
+  return {
+    kind: 'tool',
+    activeLabel: label,
+    doneLabel: `${label} completed`,
+    failedLabel: `${label} failed`,
+    detail: summary,
+  };
 }
 
 export function WorkstationChatPane() {
@@ -643,8 +822,16 @@ export function WorkstationChatPane() {
   const notificationsConnectionState = useWorkstationStreamSelector((state) => state.notifications.connectionState);
   const desktop = useWorkstationDesktopBridge();
   const router = useRouter();
+  const workspaceId = bootstrap.workspace.id;
+  const sageFileAttachmentsEnabled = Boolean(
+    bootstrap.capabilities.artifacts_enabled
+    || bootstrap.entitlements.flags.artifacts_enabled,
+  );
   const [workspaceCommandPaletteOpen, setWorkspaceCommandPaletteOpen] = useState(false);
   const [legacyTraceEventsByTraceId, setLegacyTraceEventsByTraceId] = useState<Record<string, TimelineProjectionEvent[]>>({});
+  const [hardwareSessionPayload, setHardwareSessionPayload] = useState<Record<string, unknown> | null>(null);
+  const [trayLocalStatus, setTrayLocalStatus] = useState<TrayLocalStatus | null>(null);
+  const [trayReconnectBusy, setTrayReconnectBusy] = useState(false);
   const pendingLegacyTraceIdsRef = useRef<Set<string>>(new Set());
   const actor = useMemo<WorkstationSessionActor>(() => ({
     type: 'user',
@@ -777,6 +964,7 @@ export function WorkstationChatPane() {
   const [billingSummary, setBillingSummary] = useState<Record<string, unknown> | null>(null);
   const [workspaceAiRoute, setWorkspaceAiRoute] = useState<WorkspaceAiRoutePayload | null>(null);
   const [sageComposerSkills, setSageComposerSkills] = useState<SageComposerSkillRecord[]>([]);
+  const [composerAttachments, setComposerAttachments] = useState<WorkstationTurnAttachment[]>([]);
   const submitInFlightRef = useRef(false);
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
   const streamAbortRequestedRef = useRef(false);
@@ -880,7 +1068,7 @@ export function WorkstationChatPane() {
   const refreshBrowserGatewayReadiness = useCallback(async () => {
     const doctorPayload = await services.queryClient.run('chat:gateway-readiness', async () => {
       const registrationsPayload = await services.client.requestJson<Record<string, unknown>>({
-        path: `/api/gateway/registrations?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}`,
+        path: `/api/gateway/registrations?workspace_id=${encodeURIComponent(workspaceId)}`,
         allowStatuses: [404],
       });
       const registrations = Array.isArray(registrationsPayload?.items)
@@ -899,7 +1087,113 @@ export function WorkstationChatPane() {
       });
     }).catch(() => null);
     setBrowserGatewayDoctor(doctorPayload && typeof doctorPayload === 'object' ? doctorPayload : null);
-  }, [bootstrap.workspace.id, services.client, services.queryClient]);
+  }, [services.client, services.queryClient, workspaceId]);
+
+  const refreshVerifiedHardwareSession = useCallback(async () => {
+    const payload = await services.client.requestJson<Record<string, unknown>>({
+      path: `/api/gateway/hardware/session?workspace_id=${encodeURIComponent(workspaceId)}`,
+      allowStatuses: [401, 403, 404],
+    }).catch(() => null);
+    setHardwareSessionPayload(payload && typeof payload === 'object' ? payload : null);
+    return payload && typeof payload === 'object' ? payload : null;
+  }, [services.client, workspaceId]);
+
+  const refreshTrayLocalStatus = useCallback(async () => {
+    if (typeof window === 'undefined') {
+      return null;
+    }
+    const payload = await fetchTrayJson<TrayLocalStatus>(TRAY_STATUS_URL, { method: 'GET' }, 700)
+      .catch(() => null);
+    setTrayLocalStatus(payload);
+    return payload;
+  }, []);
+
+  const createAgentComputerPairingIntent = useCallback(async (): Promise<PairingIntentRecord | null> => {
+    const payload = await services.client.requestJson<unknown>({
+      path: '/api/gateway/pairings/intents',
+      init: {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          display_name: 'This device',
+          platform: detectHardwarePlatformForTray(),
+          runtime_access_mode: 'default_guarded',
+          autonomous_agent_setup_warning_acknowledged: false,
+        }),
+      },
+    });
+    return readPairingIntent(payload);
+  }, [services.client, workspaceId]);
+
+  const reconnectAgentComputerToWorkspace = useCallback(async () => {
+    setTrayReconnectBusy(true);
+    setStatusMessage(null);
+    setSendFailureNotice(null);
+    try {
+      const intent = await createAgentComputerPairingIntent();
+      if (!intent?.pairing_token) {
+        throw new Error('Could not create an Agent Computer pairing token.');
+      }
+      const connectPayload = await fetchTrayJson<TrayLocalStatus & { error?: string }>(
+        TRAY_CONNECT_URL,
+        {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            pairing_token: intent.pairing_token,
+            workspace_id: workspaceId,
+            gateway_api_url: gatewayApiUrlForTray(),
+          }),
+        },
+        30_000,
+      );
+      if (connectPayload.ok === false) {
+        throw new Error(connectPayload.error || 'Agent Computer could not reconnect.');
+      }
+      setTrayLocalStatus(connectPayload);
+
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const session = await refreshVerifiedHardwareSession();
+        const trayStatus = await refreshTrayLocalStatus();
+        const sessionVerified = Boolean(
+          session?.available
+          && session?.connected
+          && session?.session_verified
+          && readString(session.workspace_id) === workspaceId,
+        );
+        if (sessionVerified || trayVerifiedForWorkspace(trayStatus, workspaceId)) {
+          setStatusMessage('Agent Computer is connected to this workspace.');
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+      }
+      throw new Error('Agent Computer is running, but this workspace was not verified yet.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Agent Computer reconnect failed.';
+      setSendFailureNotice({
+        message,
+        retryable: true,
+        actions: [{ label: 'Open Hardware', target: 'hardware' }],
+      });
+    } finally {
+      setTrayReconnectBusy(false);
+    }
+  }, [
+    createAgentComputerPairingIntent,
+    refreshTrayLocalStatus,
+    refreshVerifiedHardwareSession,
+    setSendFailureNotice,
+    setStatusMessage,
+    workspaceId,
+  ]);
 
   const refreshBillingSummary = useCallback(async () => {
     const payload = await services.queryClient.run('chat:billing-summary', async () => {
@@ -907,6 +1201,14 @@ export function WorkstationChatPane() {
     }).catch(() => null);
     setBillingSummary(payload && typeof payload === 'object' ? payload : null);
   }, [services.client, services.queryClient]);
+
+  useEffect(() => {
+    void refreshVerifiedHardwareSession();
+  }, [activityVersion, refreshVerifiedHardwareSession]);
+
+  useEffect(() => {
+    void refreshTrayLocalStatus();
+  }, [activityVersion, refreshTrayLocalStatus]);
 
   const persistSelectedModelPreference = useCallback(async (nextModelId: string) => {
     const sortedProfiles = sortProviderProfiles(providerProfiles).filter((profile) => {
@@ -1377,7 +1679,9 @@ export function WorkstationChatPane() {
     setHasEnteredConversationFlow(true);
     const nextThreadId = `thread-${Date.now()}`;
     const previousThread = summarizeThreadForHistory(threadRef.current, activeThreadIdRef.current || activeThreadId);
+    const turnAttachments = [...composerAttachments];
     setDraft('');
+    setComposerAttachments([]);
     setStatusMessage(null);
     updatePendingUserMessage(null);
     setStreamingAssistantText('');
@@ -1659,16 +1963,28 @@ export function WorkstationChatPane() {
     () => localCompanionTarget(bootstrap.runtime.runtimeTargets),
     [bootstrap.runtime.runtimeTargets],
   );
-  const localCompanionOnline = Boolean(
+  const localCompanionBootstrapOnline = Boolean(
     localRuntimeTarget
     && localRuntimeTarget.online,
   );
-  const localCompanionConnected = Boolean(
+  const localCompanionBootstrapConnected = Boolean(
     localRuntimeTarget
     && localRuntimeTarget.available
     && localRuntimeTarget.online
     && localRuntimeTarget.healthy,
   );
+  const localHardwareSessionVerified = Boolean(
+    hardwareSessionPayload
+    && hardwareSessionPayload.available
+    && hardwareSessionPayload.connected
+    && hardwareSessionPayload.session_verified
+    && String(hardwareSessionPayload.workspace_id || '').trim() === workspaceId,
+  );
+  const trayMismatchWorkspace = trayWorkspaceMismatch(trayLocalStatus, workspaceId);
+  const trayAvailable = trayProcessAvailable(trayLocalStatus);
+  const trayVerifiedCurrentWorkspace = trayVerifiedForWorkspace(trayLocalStatus, workspaceId);
+  const localCompanionOnline = Boolean(localCompanionBootstrapOnline && localHardwareSessionVerified);
+  const localCompanionConnected = Boolean(localCompanionBootstrapConnected && localHardwareSessionVerified);
   const gatewayReadinessOnline = readString(browserGatewayDoctor?.status).toLowerCase() === 'healthy';
   const localToolingOnline = localCompanionConnected;
   const gatewayToolingOnline = useMemo(
@@ -1684,7 +2000,19 @@ export function WorkstationChatPane() {
     [modelOptions, providerCatalog, providerProfiles],
   );
   const selectedModelOption = useMemo(
-    () => modelOptions.find((option) => option.id === selectedModel) ?? modelOptions[0] ?? {
+    () => modelOptions.find((option) => option.id === selectedModel) ?? (selectedModel && selectedModel !== 'default' ? {
+      id: selectedModel,
+      label: selectedModel,
+      providerId: null,
+      providerLabel: null,
+      supportsReasoning: false,
+      reasoningLevels: ['medium'],
+      contextWindowTokens: null,
+      routeProviderId: null,
+      routeModelId: selectedModel,
+      defaultReasoningEffort: 'medium',
+      uiSection: 'system',
+    } : modelOptions[0] ?? {
       id: 'default',
       label: 'Auto route',
       providerId: null,
@@ -1696,14 +2024,16 @@ export function WorkstationChatPane() {
       routeModelId: null,
       defaultReasoningEffort: 'medium',
       uiSection: 'system',
-    },
+    }),
+    [modelOptions, selectedModel],
+  );
+  const selectedModelKnown = useMemo(
+    () => modelOptions.some((option) => option.id === selectedModel),
     [modelOptions, selectedModel],
   );
   const effectiveSelectedModel = useMemo(
-    () => modelOptions.some((option) => option.id === selectedModel)
-      ? selectedModel
-      : selectedModelOption.id,
-    [modelOptions, selectedModel, selectedModelOption.id],
+    () => selectedModel || selectedModelOption.id,
+    [selectedModel, selectedModelOption.id],
   );
   const selectedProviderContext = useMemo(
     () => resolveProviderModelContext({
@@ -1957,23 +2287,12 @@ export function WorkstationChatPane() {
       case 'open_usage':
         router.push(`${settingsHref}?section=usage`);
         return;
-      case 'open_tools':
-        router.push(`${integrationsHref}?section=connections`);
-        return;
-      case 'open_runtime':
-        router.push(`${integrationsHref}?section=ai-runtime`);
-        return;
-      case 'run_doctor':
-        void refreshBrowserGatewayReadiness();
-        setStatusMessage('Sage setup check refreshed. Open Agent Computer status for readiness checks.');
-        router.push(gatewayHref);
-        return;
       case 'open_status':
       default:
-        setStatusMessage(`${runtimeStatus.label}. Open Agent Computer status for readiness checks.`);
-        router.push(gatewayHref);
+        setStatusMessage(`${runtimeStatus.label}. Open Hardware for Agent Computer status.`);
+        router.push(hardwareHref);
     }
-  }, [gatewayHref, integrationsHref, refreshBrowserGatewayReadiness, router, runtimeStatus.label, setDraft, setStatusMessage, settingsHref]);
+  }, [hardwareHref, integrationsHref, router, runtimeStatus.label, setDraft, setStatusMessage, settingsHref]);
   const handleWorkspaceCommandSelect = useCallback((command: SageWorkspaceCommandMetadata) => {
     setWorkspaceCommandPaletteOpen(false);
     if (command.routeId === 'approvals') {
@@ -1985,6 +2304,9 @@ export function WorkstationChatPane() {
       router.push(href);
     }
   }, [routeManifest.routeIndex, router, setIsApprovalsSheetOpen]);
+  const handleEmptyStatePromptSelect = useCallback((prompt: string) => {
+    setDraft(prompt);
+  }, [setDraft]);
   const memoryMeta = assistantTurnCount > 0
     ? `${assistantTurnCount} Sage repl${assistantTurnCount === 1 ? 'y' : 'ies'} retained`
     : 'The first turn will establish memory';
@@ -1992,73 +2314,19 @@ export function WorkstationChatPane() {
   const pendingDeleteMemory = pendingDeleteMemoryId
     ? memoryItems.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null
     : null;
-  const [selectedHardwareTarget, setSelectedHardwareTarget] = useState<'auto' | 'cloud' | 'local'>('auto');
   const [modelCanvasPickerOpen, setModelCanvasPickerOpen] = useState(false);
   const [modelPickerSubpanel, setModelPickerSubpanel] = useState<'model' | 'provider' | null>(null);
-  const [hardwareCanvasPickerOpen, setHardwareCanvasPickerOpen] = useState(false);
   const [activeModelPickerProviderId, setActiveModelPickerProviderId] = useState<SageModelPickerProviderId>('empyralis');
   const [expandedModelPickerProviderIds, setExpandedModelPickerProviderIds] = useState<readonly SageModelPickerProviderId[]>([]);
   const modelCanvasPickerRef = useRef<HTMLDivElement | null>(null);
-  const hardwareCanvasPickerRef = useRef<HTMLDivElement | null>(null);
   const statusNotice = useMemo(
     () => (statusMessage ? classifyStatusNotice(statusMessage) : null),
     [statusMessage],
   );
   const localRuntimeTargetId = localCompanionOnline ? readString(localRuntimeTarget?.id) : null;
-  const hardwareOptions = useMemo<NonNullable<ComposerComputerStatus['options']>>(
-    () => {
-      const options: NonNullable<ComposerComputerStatus['options']> = [
-        {
-          value: 'auto',
-          label: 'Auto',
-          detail: localCompanionConnected
-            ? 'Use Agent Computer only when the turn needs it.'
-            : 'Use hosted chat unless Agent Computer comes online.',
-        },
-        {
-          value: 'cloud',
-          label: 'Cloud',
-          detail: 'Use the selected tier without local computer tools.',
-        },
-      ];
-
-      options.push({
-        value: 'local',
-        label: 'Agent Computer',
-        detail: localCompanionConnected
-          ? readString(localRuntimeTarget?.sampleAttachmentLabel || localRuntimeTarget?.label) || 'Ready'
-          : readString(localRuntimeTarget?.statusLabel) || 'Offline',
-        disabled: !localCompanionConnected,
-      });
-
-      return options;
-    },
-    [localCompanionConnected, localRuntimeTarget],
-  );
-  useEffect(() => {
-    const selectedOption = hardwareOptions.find((option) => option.value === selectedHardwareTarget);
-    if (!selectedOption || selectedOption.disabled) {
-      setSelectedHardwareTarget('auto');
-    }
-  }, [hardwareOptions, selectedHardwareTarget]);
   const selectedHardwareRuntimeTarget = useMemo(() => {
-    if (selectedHardwareTarget === 'cloud') {
-      return 'cloud';
-    }
-    if (selectedHardwareTarget === 'local') {
-      return localCompanionConnected && localRuntimeTargetId ? localRuntimeTargetId : 'cloud';
-    }
-    return localCompanionConnected && localRuntimeTargetId ? localRuntimeTargetId : 'cloud';
-  }, [localCompanionConnected, localRuntimeTargetId, selectedHardwareTarget]);
-  const selectedHardwareLabel = useMemo(() => {
-    if (selectedHardwareTarget === 'local') {
-      return 'Agent Computer';
-    }
-    if (selectedHardwareTarget === 'cloud') {
-      return 'Cloud';
-    }
-    return 'Auto';
-  }, [selectedHardwareTarget]);
+    return localCompanionConnected && localRuntimeTargetId ? localRuntimeTargetId : null;
+  }, [localCompanionConnected, localRuntimeTargetId]);
   const canvasModelOptions = useMemo<SageCompanyModelOption[]>(
     () => ([
       { id: 'light', label: 'Light' },
@@ -2200,19 +2468,8 @@ export function WorkstationChatPane() {
       visibleModels: expanded ? [...initialModels, ...overflowModels] : initialModels,
     };
   }, [activeModelPickerProvider, expandedModelPickerProviderIds]);
-  const handleHardwareTargetChange = useCallback((nextValue: string) => {
-    if (
-      nextValue !== 'auto'
-      && nextValue !== 'cloud'
-      && nextValue !== 'local'
-    ) {
-      return;
-    }
-    setSelectedHardwareTarget(nextValue);
-    setHardwareCanvasPickerOpen(false);
-  }, []);
   useEffect(() => {
-    if (!hardwareCanvasPickerOpen && !modelCanvasPickerOpen) {
+    if (!modelCanvasPickerOpen) {
       return undefined;
     }
     const handlePointerDown = (event: PointerEvent) => {
@@ -2220,40 +2477,54 @@ export function WorkstationChatPane() {
       if (!(target instanceof Node)) {
         return;
       }
-      if (
-        hardwareCanvasPickerRef.current?.contains(target)
-        || modelCanvasPickerRef.current?.contains(target)
-      ) {
+      if (modelCanvasPickerRef.current?.contains(target)) {
         return;
       }
       setModelCanvasPickerOpen(false);
       setModelPickerSubpanel(null);
-      setHardwareCanvasPickerOpen(false);
     };
     window.addEventListener('pointerdown', handlePointerDown);
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
     };
-  }, [hardwareCanvasPickerOpen, modelCanvasPickerOpen]);
+  }, [modelCanvasPickerOpen]);
   const handleReasoningEffortChange = useCallback((nextValue: string) => {
     if (selectedModelOption.reasoningLevels.includes(nextValue as ChatReasoningEffort)) {
       setReasoningEffort(nextValue as ChatReasoningEffort);
     }
   }, [selectedModelOption.reasoningLevels, setReasoningEffort]);
-  const seedDraftIfEmpty = useCallback((nextDraft: string) => {
-    setDraft((current) => (current.trim() ? current : nextDraft));
-  }, [setDraft]);
-  const handleComposerFilesSelected = useCallback((selectedFiles: File[]) => {
+  const handleComposerFilesSelected = useCallback(async (selectedFiles: File[]) => {
     if (selectedFiles.length === 0) {
       return;
     }
-    const fileNames = selectedFiles.map((file) => file.name.trim()).filter(Boolean);
-    const visibleNames = fileNames.slice(0, 3).join(', ');
-    const extraCount = Math.max(0, fileNames.length - 3);
-    const fileLabel = extraCount > 0 ? `${visibleNames}, +${extraCount} more` : visibleNames || `${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'}`;
-    seedDraftIfEmpty(`Use ${fileLabel} as context: `);
-    setStatusMessage(`${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'} selected. Tell Sage what to do with them.`);
-  }, [seedDraftIfEmpty, setStatusMessage]);
+    setStatusMessage(`Uploading ${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'}...`);
+    try {
+      const uploadedAttachments = await Promise.all(selectedFiles.map(async (file) => {
+        const payload = await services.client.uploadArtifact({ file });
+        const artifactId = readString(payload.artifact_id) || readString(payload.id);
+        const fileName = readString(payload.file_name) || readString(payload.label) || file.name || 'upload.bin';
+        const uri = readString(payload.uri) || (artifactId ? `artifact://${artifactId}/${encodeURIComponent(fileName)}` : '');
+        if (!uri) {
+          throw new Error('Uploaded file did not return an artifact reference.');
+        }
+        return {
+          kind: 'file',
+          uri,
+          name: fileName,
+          metadata: {
+            artifact_id: artifactId || undefined,
+            media_type: readString(payload.media_type) || file.type || undefined,
+            byte_size: typeof payload.byte_size === 'number' ? payload.byte_size : file.size,
+            source: 'sage_composer',
+          },
+        } satisfies WorkstationTurnAttachment;
+      }));
+      setComposerAttachments((current) => [...current, ...uploadedAttachments]);
+      setStatusMessage(`${uploadedAttachments.length} file${uploadedAttachments.length === 1 ? '' : 's'} attached. Send a message when ready.`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'File upload failed.');
+    }
+  }, [services.client, setStatusMessage]);
   const sageCapabilityItems = useMemo<ComposerCapabilityItem[]>(() => {
     const openPlugins = () => {
       router.push(`${integrationsHref}?section=plugins`);
@@ -2262,12 +2533,13 @@ export function WorkstationChatPane() {
       router.push(`${integrationsHref}?section=connections`);
     };
     const allSkillItems: ComposerCapabilitySubItem[] = [...sageComposerSkills]
+      .filter((skill) => skill.activeNow)
       .sort((first, second) => first.name.localeCompare(second.name))
       .map((skill) => ({
         id: `skill:${skill.id}`,
         title: skill.name,
-        status: skill.activeNow ? 'On' : skill.statusLabel,
-        statusTone: skill.activeNow ? 'ready' as const : 'setup' as const,
+        status: 'On',
+        statusTone: 'ready' as const,
         onSelect: openPlugins,
       }));
     const skillItems = allSkillItems.slice(0, SAGE_MENU_VISIBLE_LIMIT);
@@ -2281,6 +2553,16 @@ export function WorkstationChatPane() {
     const connectorMenuItems = buildSageConnectorMenuItems(connectorCredentials, openConnectors);
     return [
       {
+        id: 'computer',
+        title: 'Hardware',
+        status: localCompanionConnected ? 'Connected' : 'Offline',
+        statusTone: localCompanionConnected ? 'ready' : 'setup',
+        icon: Monitor,
+        onSelect: () => {
+          router.push(hardwareHref);
+        },
+      },
+      {
         id: 'connectors',
         title: 'Connectors',
         submenuTitle: 'Connectors',
@@ -2290,11 +2572,6 @@ export function WorkstationChatPane() {
             id: 'manage_connectors',
             title: 'Manage connectors',
             dividerBefore: true,
-            onSelect: openConnectors,
-          },
-          {
-            id: 'add_connector',
-            title: 'Add connector',
             onSelect: openConnectors,
           },
         ],
@@ -2312,16 +2589,11 @@ export function WorkstationChatPane() {
             dividerBefore: skillItems.length > 0,
             onSelect: openPlugins,
           },
-          {
-            id: 'add_skills',
-            title: 'Add skill',
-            onSelect: openPlugins,
-          },
         ],
         onSelect: () => undefined,
       },
     ];
-  }, [connectorCredentials, integrationsHref, router, sageComposerSkills]);
+  }, [connectorCredentials, hardwareHref, integrationsHref, localCompanionConnected, router, sageComposerSkills]);
   const defaultReasoningEffort = useMemo<ChatReasoningEffort>(
     () => (selectedModelOption.defaultReasoningEffort
       && selectedModelOption.reasoningLevels.includes(selectedModelOption.defaultReasoningEffort)
@@ -2371,9 +2643,9 @@ export function WorkstationChatPane() {
     if (!localToolingOnline) {
       pills.push({
         id: 'gateway',
-        label: 'Agent Computer: Offline',
+        label: 'This Mac: Offline',
         tone: 'danger',
-        target: 'integrations',
+        target: 'hardware',
       });
     }
     const browserPill = browserReadinessPill(browserGatewayDoctor, {
@@ -2383,7 +2655,7 @@ export function WorkstationChatPane() {
       pills.push(browserPill);
     }
     return pills;
-  }, [browserGatewayDoctor, localToolingOnline, selectedProviderContext.providerLabel]);
+  }, [browserGatewayDoctor, gatewayReadinessOnline, localToolingOnline, selectedProviderContext.providerLabel]);
   const hostedCreditState = useMemo(
     () => normalizeHostedCreditStateForChat(billingSummary),
     [billingSummary],
@@ -2457,13 +2729,16 @@ export function WorkstationChatPane() {
     if (isPersistingModelSelection) {
       return;
     }
+    if (selectedModel && selectedModel !== 'default' && !selectedModelKnown) {
+      return;
+    }
     const nextSelectedModel = modelOptions.some((option) => option.id === persistedSelectedModelId)
       ? persistedSelectedModelId
       : modelOptions[0]?.id ?? '';
     if (nextSelectedModel !== selectedModel) {
       setSelectedModel(nextSelectedModel);
     }
-  }, [isPersistingModelSelection, modelOptions, persistedSelectedModelId, selectedModel]);
+  }, [isPersistingModelSelection, modelOptions, persistedSelectedModelId, selectedModel, selectedModelKnown]);
 
   useEffect(() => {
     if (!selectedModelOption.reasoningLevels.includes(reasoningEffort)) {
@@ -2554,8 +2829,29 @@ export function WorkstationChatPane() {
     setShowProjectedAssistant(false);
     setTimelineSettled(true);
     finalizePartialAssistantResponse(activeThreadIdRef.current);
-    setLiveTimelineEvents([]);
-    setLiveActivitySteps([]);
+    setLiveTimelineEvents((current) => (
+      current.some((item) => readString(readObject(item.payload).id) === 'turn-stopped')
+        ? current
+        : [...current, {
+            type: 'step',
+            payload: {
+              id: 'turn-stopped',
+              label: 'Stopped',
+              detail: 'Turn stopped by user',
+              status: 'done',
+              kind: 'thinking',
+            },
+          }]
+    ));
+    setLiveActivitySteps((current) => upsertLiveActivityStep(settleLiveActivitySteps(current, 'done'), {
+      id: 'turn-stopped',
+      kind: 'thinking',
+      label: 'Stopped',
+      detail: 'Turn stopped by user',
+      status: 'done',
+      toolCallId: null,
+      createdAt: new Date().toISOString(),
+    }));
     setLiveTrace(null);
     streamInFlightRef.current = false;
     submitInFlightRef.current = false;
@@ -2595,7 +2891,7 @@ export function WorkstationChatPane() {
       }
       stopStreamingResponse();
       setSendFailureNotice({
-        message: 'Sage stopped waiting on a stalled response. Your draft is restored so you can try again.',
+        message: 'The response stalled. Your draft is restored so you can try again.',
         retryable: true,
         retryDraft: pendingUserMessageRef.current?.content ?? draft,
       });
@@ -2625,29 +2921,23 @@ export function WorkstationChatPane() {
         case 'open_usage':
           router.push(`${settingsHref}?section=usage`);
           break;
-        case 'open_tools':
-          router.push(`${integrationsHref}?section=connections`);
-          break;
-        case 'open_runtime':
-          router.push(`${integrationsHref}?section=ai-runtime`);
-          break;
-        case 'run_doctor':
-          void refreshBrowserGatewayReadiness();
-          setStatusMessage('Sage setup check refreshed. Open Agent Computer status for readiness checks.');
-          router.push(gatewayHref);
-          break;
         case 'open_status':
         default:
-          setStatusMessage(`${runtimeStatus.label}. Open Agent Computer status for readiness checks.`);
-          router.push(gatewayHref);
+          setStatusMessage(`${runtimeStatus.label}. Open Hardware for Agent Computer status.`);
+          router.push(hardwareHref);
       }
       return;
     }
     const displayMessage = outboundMessage;
-    submitInFlightRef.current = true;
     const resolvedProviderId = readString(selectedProviderContext.providerId) || null;
     const resolvedModelId = readString(selectedProviderContext.modelId)
       || (effectiveSelectedModel === 'default' ? null : effectiveSelectedModel);
+    if (!resolvedProviderId && effectiveSelectedModel !== 'default') {
+      setStatusMessage(`The selected AI model "${selectedModelOption.label || effectiveSelectedModel}" is not available. Choose another model or reconnect its provider.`);
+      setIsSending(false);
+      return;
+    }
+    submitInFlightRef.current = true;
     if (isSmallOllamaSelection(
       resolvedProviderId,
       resolvedModelId || effectiveSelectedModel,
@@ -2667,7 +2957,9 @@ export function WorkstationChatPane() {
         setSmallModelWarningVisible(true);
       }
     }
+    const turnAttachments = [...composerAttachments];
     setDraft('');
+    setComposerAttachments([]);
     setHasEnteredConversationFlow(true);
     setSendFailureNotice(null);
     setStatusMessage(null);
@@ -2708,8 +3000,26 @@ export function WorkstationChatPane() {
         type: 'user',
         payload: { content: displayMessage },
       },
+      {
+        type: 'step',
+        payload: {
+          id: 'turn-thinking',
+          kind: 'thinking',
+          label: 'Thinking',
+          detail: 'Waiting for the selected model',
+          status: 'running',
+        },
+      },
     ]);
-    setLiveActivitySteps([]);
+    setLiveActivitySteps([{
+      id: 'turn-thinking',
+      kind: 'thinking',
+      label: 'Thinking',
+      detail: 'Waiting for the selected model',
+      status: 'active',
+      toolCallId: null,
+      createdAt: new Date().toISOString(),
+    }]);
     setLiveTrace({
       traceId: null,
       transport: 'external',
@@ -2789,7 +3099,7 @@ export function WorkstationChatPane() {
             events: nextEvents,
           };
         });
-        const eventType = readString(traceEvent.event_type);
+        const eventType = normalizeTraceEventType(traceEvent.event_type);
         const eventData = readObject(traceEvent.data);
         if (eventType === 'reasoning.summary.delta') {
           const delta = readString(eventData.delta);
@@ -2810,12 +3120,12 @@ export function WorkstationChatPane() {
           return;
         }
         if (eventType === 'tool.started') {
-          const toolName = readString(eventData.tool_name) || 'Using tool';
+          const descriptor = traceToolDescriptor(eventData);
           setLiveActivitySteps((current) => upsertLiveActivityStep(current, {
-            id: readString(traceEvent.tool_call_id) || `${toolName}:${current.length}`,
-            kind: 'tool',
-            label: toolName,
-            detail: 'Running',
+            id: readString(traceEvent.tool_call_id) || `${descriptor.activeLabel}:${current.length}`,
+            kind: descriptor.kind,
+            label: descriptor.activeLabel,
+            detail: descriptor.detail || 'Running',
             status: 'active',
             toolCallId: readString(traceEvent.tool_call_id) || null,
             createdAt: new Date().toISOString(),
@@ -2823,12 +3133,60 @@ export function WorkstationChatPane() {
           return;
         }
         if (eventType === 'tool.result') {
+          const resultStatus = readString(eventData.status).toLowerCase();
+          const failed = ['error', 'failed', 'fail', 'denied', 'blocked', 'offline'].includes(resultStatus);
+          setLiveActivitySteps((current) => {
+            const toolCallId = readString(traceEvent.tool_call_id);
+            const existing = toolCallId
+              ? current.find((item) => item.toolCallId === toolCallId || item.id === toolCallId)
+              : null;
+            const descriptor = traceToolDescriptor({
+              ...eventData,
+              tool_name: readString(eventData.tool_name) || existing?.label || '',
+              connector_id: readString(eventData.connector_id) || existing?.kind || '',
+            });
+            const label = failed ? descriptor.failedLabel : descriptor.doneLabel;
+            return upsertLiveActivityStep(current, {
+              id: toolCallId || `tool:${current.length}`,
+              kind: existing?.kind || descriptor.kind,
+              label,
+              detail: descriptor.detail || (failed ? 'Failed' : 'Completed'),
+              status: failed ? 'error' : 'done',
+              toolCallId: toolCallId || null,
+              createdAt: new Date().toISOString(),
+            });
+          });
+          return;
+        }
+        if (eventType.startsWith('gateway.action') || eventType.startsWith('hardware.action') || eventType.startsWith('channel.')) {
+          const rawStatus = readString(eventData.status).toLowerCase();
+          const failed = eventType.endsWith('.failed') || ['error', 'failed', 'fail', 'denied', 'blocked', 'offline'].includes(rawStatus);
+          const completed = eventType.endsWith('.completed') || ['done', 'ok', 'completed', 'success', 'succeeded'].includes(rawStatus);
+          const descriptor = traceToolDescriptor({
+            ...eventData,
+            tool_name: readString(eventData.tool_name)
+              || readString(eventData.capability)
+              || readString(eventData.capability_id)
+              || readString(eventData.action)
+              || eventType,
+            connector_id: eventType.startsWith('channel.')
+              ? readString(eventData.connector_id) || readString(eventData.channel_id) || 'channel'
+              : readString(eventData.connector_id),
+            summary: readString(eventData.summary)
+              || readString(eventData.capability)
+              || readString(eventData.capability_id)
+              || readString(eventData.action)
+              || '',
+          });
           setLiveActivitySteps((current) => upsertLiveActivityStep(current, {
-            id: readString(traceEvent.tool_call_id) || `tool:${current.length}`,
-            kind: 'tool',
-            label: '',
-            detail: eventData.status === 'error' ? 'Failed' : 'Completed',
-            status: eventData.status === 'error' ? 'error' : 'done',
+            id: readString(traceEvent.tool_call_id)
+              || readString(eventData.activity_event_id)
+              || readString(eventData.id)
+              || `${eventType}:${current.length}`,
+            kind: descriptor.kind,
+            label: failed ? descriptor.failedLabel : completed ? descriptor.doneLabel : descriptor.activeLabel,
+            detail: descriptor.detail || (failed ? 'Failed' : completed ? 'Completed' : 'Running'),
+            status: failed ? 'error' : completed ? 'done' : 'active',
             toolCallId: readString(traceEvent.tool_call_id) || null,
             createdAt: new Date().toISOString(),
           }));
@@ -2871,6 +3229,7 @@ export function WorkstationChatPane() {
         provider: resolvedProviderId,
         model: resolvedModelId,
         reasoningEffort,
+        attachments: turnAttachments,
         existingSession: session,
         clientRequestId,
         abortHandle: streamAbortHandle,
@@ -2906,8 +3265,7 @@ export function WorkstationChatPane() {
             if (event.event === 'response') {
               const delta = readString(event.payload.delta)
                 || readString(event.payload.text)
-                || readString(event.payload.content)
-                || readString(event.payload.message);
+                || readString(event.payload.content);
               if (delta) {
                 setStreamingAssistantText((current) => stripInternalToolMarkup(`${current}${delta}`));
               }
@@ -2947,8 +3305,7 @@ export function WorkstationChatPane() {
             }]);
             setTimelineSettled(true);
             const finalReply = readString(event.payload.reply)
-              || readString(event.payload.content)
-              || readString(event.payload.message);
+              || readString(event.payload.content);
             const visibleFinalReply = stripInternalToolMarkup(finalReply);
             if (visibleFinalReply && !isProviderRuntimeGateMessage(visibleFinalReply)) {
               observedFinalReply = visibleFinalReply;
@@ -3085,15 +3442,40 @@ export function WorkstationChatPane() {
         && responseInterventions.every(isConnectorSetupIntervention);
       const needsUserIntervention = responseInterventions.length > 0
         && !hasVisibleAssistantReply;
+      if (providerGateDetected) {
+        setLiveActivitySteps((current) => settleLiveActivitySteps(current, 'error'));
+      } else if (hasPendingApprovals) {
+        setLiveActivitySteps((current) => upsertLiveActivityStep(settleLiveActivitySteps(current, 'done'), {
+          id: 'turn-waiting-approval',
+          kind: 'approval',
+          label: 'Waiting for approval',
+          detail: responseExecutionTarget === 'local_companion'
+            ? 'Agent Computer action needs approval'
+            : 'Approval required',
+          status: 'active',
+          toolCallId: null,
+          createdAt: new Date().toISOString(),
+        }));
+      } else if (needsUserIntervention) {
+        setLiveActivitySteps((current) => upsertLiveActivityStep(settleLiveActivitySteps(current, 'done'), {
+          id: 'turn-waiting-input',
+          kind: 'thinking',
+          label: 'Waiting for input',
+          detail: 'Input is required before the turn can continue',
+          status: 'active',
+          toolCallId: null,
+          createdAt: new Date().toISOString(),
+        }));
+      }
       setStatusMessage(
         providerGateDetected
           ? null
           : hasPendingApprovals
             ? responseExecutionTarget === 'local_companion'
-              ? 'Sage is waiting for approval before using Agent Computer.'
+              ? 'Approval is required before Agent Computer can be used.'
               : 'Approval is waiting.'
             : needsUserIntervention && !hasProviderFailure && !connectorSetupInterventionOnly
-              ? 'Sage needs your input before it can continue.'
+              ? 'Input is required before the turn can continue.'
               : null,
       );
       setSendFailureNotice(
@@ -3121,8 +3503,34 @@ export function WorkstationChatPane() {
         setShowProjectedAssistant(false);
         setTimelineSettled(true);
         finalizePartialAssistantResponse(activeThreadIdRef.current);
-        setLiveTimelineEvents([]);
-        setLiveActivitySteps([]);
+        if (aborted) {
+          setLiveTimelineEvents((current) => (
+            current.some((item) => readString(readObject(item.payload).id) === 'turn-stopped')
+              ? current
+              : [...current, {
+                  type: 'step',
+                  payload: {
+                    id: 'turn-stopped',
+                    label: 'Stopped',
+                    detail: 'Turn stopped by user',
+                    status: 'done',
+                    kind: 'thinking',
+                  },
+                }]
+          ));
+          setLiveActivitySteps((current) => upsertLiveActivityStep(settleLiveActivitySteps(current, 'done'), {
+            id: 'turn-stopped',
+            kind: 'thinking',
+            label: 'Stopped',
+            detail: 'Turn stopped by user',
+            status: 'done',
+            toolCallId: null,
+            createdAt: new Date().toISOString(),
+          }));
+        } else {
+          setLiveTimelineEvents([]);
+          setLiveActivitySteps([]);
+        }
         setLiveTrace(null);
         setSendFailureNotice(incompleteWithPartial
           ? {
@@ -3132,6 +3540,9 @@ export function WorkstationChatPane() {
             }
           : null);
       } else {
+        if (turnAttachments.length > 0) {
+          setComposerAttachments((current) => [...turnAttachments, ...current]);
+        }
         setStreamingAssistantText('');
         setShowProjectedAssistant(false);
         setTimelineSettled(true);
@@ -3162,20 +3573,20 @@ export function WorkstationChatPane() {
         const noticeMessage = isLocalCompanionGateMessage(rawMessage)
           ? 'Agent Computer is needed for this request. Connect Agent Computer and try again.'
           : providerNeedsAttention
-            ? 'The selected AI path is not ready. Use the workspace AI route, connect your own AI account, connect Agent Computer, or choose another model in Connections.'
+            ? 'The selected AI path is not ready. Check model connections or choose another model.'
             : approvalNeedsAttention
-              ? 'Sage needs approval before using that capability. Review the pending request instead of retrying blindly.'
+              ? 'This capability needs approval first. Review the pending request before retrying.'
               : authNeedsAttention
-                ? 'Your session needs attention before Sage can continue. Refresh the page or sign in again.'
+                ? 'Your session needs attention. Refresh the page or sign in again.'
                 : rateLimitFailure
-                  ? 'Sage is temporarily at capacity. Try again in a moment or switch AI model.'
+                  ? 'The selected AI provider is temporarily at capacity. Try again in a moment or switch AI model.'
                   : timeoutFailure
-                    ? 'Sage took too long to respond. Try again or switch AI model.'
+                    ? 'The selected AI provider took too long to respond. Try again or switch AI model.'
                     : transportFailure
                       ? 'The request could not reach the server. Check your connection and try again.'
                       : serverFailure
-                        ? 'Sage hit a temporary server issue before it could reply. Try again in a moment.'
-                        : "Sage couldn't complete that turn. Try again or choose another AI model in Connections.";
+                      ? 'The selected AI path hit a temporary server issue. Try again in a moment.'
+                        : 'The selected AI path could not complete that turn. Try again or choose another AI model.';
         const providerNotice = providerNeedsAttention
           ? providerFailureNoticeForProvider(selectedProviderRecord, noticeMessage)
           : null;
@@ -3220,7 +3631,6 @@ export function WorkstationChatPane() {
         aria-expanded={modelCanvasPickerOpen}
         disabled={isSending || isPersistingModelSelection}
         onClick={() => {
-          setHardwareCanvasPickerOpen(false);
           setModelPickerSubpanel(null);
           setModelCanvasPickerOpen((current) => !current);
         }}
@@ -3426,68 +3836,7 @@ export function WorkstationChatPane() {
     </div>
   );
 
-  const sageCanvasControls = (
-    <div className="sage-canvas-controls" aria-label="Sage chat controls">
-      <div className="sage-canvas-hardware" ref={hardwareCanvasPickerRef}>
-        <button
-          type="button"
-          className="sage-canvas-hardware__trigger"
-          aria-label={`Choose Agent Computer mode. Current: ${selectedHardwareLabel}`}
-          aria-expanded={hardwareCanvasPickerOpen}
-          disabled={isSending || isPersistingModelSelection}
-          onClick={() => {
-            setModelCanvasPickerOpen(false);
-            setModelPickerSubpanel(null);
-            setHardwareCanvasPickerOpen((current) => !current);
-          }}
-        >
-          {selectedHardwareTarget === 'local' ? selectedHardwareLabel : `Agent Computer: ${selectedHardwareLabel}`}
-        </button>
-        {hardwareCanvasPickerOpen ? (
-          <div className="sage-canvas-hardware__menu" role="dialog" aria-label="Agent Computer">
-            <div className="sage-canvas-hardware__options" role="listbox" aria-label="Agent Computer">
-              {hardwareOptions.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`sage-canvas-hardware__option${option.value === selectedHardwareTarget ? ' sage-canvas-hardware__option--selected' : ''}`}
-                  disabled={isSending || isPersistingModelSelection || option.disabled}
-                  onClick={() => {
-                    handleHardwareTargetChange(option.value);
-                  }}
-                  role="option"
-                  aria-selected={option.value === selectedHardwareTarget}
-                >
-                  <span className="sage-canvas-hardware__option-copy">
-                    <HardwareOptionIcon value={option.value} />
-                    <span>{option.label}</span>
-                  </span>
-                  {option.value === selectedHardwareTarget ? (
-                    <Check size={16} strokeWidth={2} aria-hidden="true" />
-                  ) : null}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              className="sage-canvas-hardware__option sage-canvas-hardware__option--manage"
-              disabled={isSending || isPersistingModelSelection}
-              onClick={() => {
-                setHardwareCanvasPickerOpen(false);
-                router.push(`${integrationsHref}?section=connections`);
-              }}
-            >
-              <span className="sage-canvas-hardware__option-copy">
-                <Settings className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
-                <span>Agent Computer settings</span>
-              </span>
-              <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
-            </button>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
+  const sageCanvasControls = null;
 
   return (
     <>
@@ -3643,7 +3992,7 @@ export function WorkstationChatPane() {
                   modelLabel={selectedModelOption.label}
                   providerGateVisible={!activeProviderSummary.connected}
                   integrationsHref={integrationsHref}
-                  onSelectPrompt={setDraft}
+                  onSelectPrompt={handleEmptyStatePromptSelect}
                 />
               ) : null}
 
@@ -3755,13 +4104,12 @@ export function WorkstationChatPane() {
         slashCommands={sageSlashCommands}
         onSlashCommandSelect={handleSlashCommandSelect}
         capabilityItems={sageCapabilityItems}
-        onFilesSelected={handleComposerFilesSelected}
+        onFilesSelected={sageFileAttachmentsEnabled ? handleComposerFilesSelected : undefined}
         modelControl={sageModelControl}
         modelControlOpen={modelCanvasPickerOpen}
         onComposerMenuOpen={() => {
           setModelCanvasPickerOpen(false);
           setModelPickerSubpanel(null);
-          setHardwareCanvasPickerOpen(false);
         }}
         reasoningEffort={reasoningEffort}
         reasoningOptions={reasoningOptions}

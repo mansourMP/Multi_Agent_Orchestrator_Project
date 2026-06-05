@@ -31,7 +31,10 @@ pub fn stop_gateway(manager: State<'_, Arc<ProcessManager>>) -> Result<TrayStatu
 }
 
 #[tauri::command]
-pub fn set_launch_at_login(manager: State<'_, Arc<ProcessManager>>, enabled: bool) -> Result<TrayStatus, String> {
+pub fn set_launch_at_login(
+    manager: State<'_, Arc<ProcessManager>>,
+    enabled: bool,
+) -> Result<TrayStatus, String> {
     manager.set_launch_at_login(enabled)
 }
 

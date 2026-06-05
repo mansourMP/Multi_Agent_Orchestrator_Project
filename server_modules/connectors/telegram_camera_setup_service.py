@@ -136,7 +136,7 @@ class TelegramCameraSetupService:
             stage = str(active_state.get("stage") or "").strip()
             if active_intent == "EMAIL_SUMMARY" and stage == "awaiting_summary_target":
                 if not normalized_text:
-                    return {"handled": True, "reply": "Which inbox should I summarize? (e.g. Work inbox, Support inbox)"}
+                    return {"handled": True, "reply": "Choose the inbox to summarize. (e.g. Work inbox, Support inbox)"}
                 try:
                     workflow_id = create_email_summary_visibility_record(
                         normalized_text,
@@ -161,11 +161,11 @@ class TelegramCameraSetupService:
                     self.clear_state(workspace_id, chat_id)
                     return {
                         "handled": True,
-                        "reply": f"I couldn't finish the setup.\n\n{str(exc).strip() or 'Failed to create the summary automation.'}",
+                        "reply": f"Setup failed.\n\n{str(exc).strip() or 'Failed to create the summary automation.'}",
                     }
             if active_intent == "LEAD_FOLLOWUP" and stage == "awaiting_followup_target":
                 if not normalized_text:
-                    return {"handled": True, "reply": "What should I call this lead flow? (e.g. Website leads, Telegram inquiries)"}
+                    return {"handled": True, "reply": "Choose a name for this lead flow. (e.g. Website leads, Telegram inquiries)"}
                 try:
                     workflow_id = create_lead_followup_visibility_record(
                         normalized_text,
@@ -191,7 +191,7 @@ class TelegramCameraSetupService:
                     self.clear_state(workspace_id, chat_id)
                     return {
                         "handled": True,
-                        "reply": f"I couldn't finish the setup.\n\n{str(exc).strip() or 'Failed to create the follow-up automation.'}",
+                        "reply": f"Setup failed.\n\n{str(exc).strip() or 'Failed to create the follow-up automation.'}",
                     }
 
         detected_intent = classify_intent(normalized_text)
@@ -205,7 +205,7 @@ class TelegramCameraSetupService:
             )
             return {
                 "handled": True,
-                "reply": "I'll set up a daily email summary for you.\n\nWhich inbox should I summarize?\n\n(e.g. Work inbox, Support inbox)",
+                "reply": "Daily email summary setup needs a target inbox.\n\nWhich inbox should be summarized?\n\n(e.g. Work inbox, Support inbox)",
             }
         if detected_intent == "LEAD_FOLLOWUP":
             self.set_state(
@@ -217,7 +217,7 @@ class TelegramCameraSetupService:
             )
             return {
                 "handled": True,
-                "reply": "I'll set up lead follow-up for you.\n\nWhat should I call this lead flow?\n\n(e.g. Website leads, Telegram inquiries)",
+                "reply": "Lead follow-up setup needs a flow name.\n\nWhat should this lead flow be called?\n\n(e.g. Website leads, Telegram inquiries)",
             }
 
         return {"handled": False, "reply": ""}

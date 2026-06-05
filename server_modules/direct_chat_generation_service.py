@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import html
+import json
 import re
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional
@@ -68,20 +70,29 @@ _ASSISTANT_INLINE_SHELL_PLAN_RE = re.compile(
     re.I,
 )
 _ASSISTANT_SHELL_LINE_RE = re.compile(
-    r"^(?:#|\$|(?:sudo\s+)?(?:bash|sh|zsh|pwd|whoami|uname|sw_vers|sysctl|df|du|ls|brew|cat|echo|find|mdfind|system_profiler|ioreg|ps|pgrep|osascript|open)\b)",
+    r"^(?:#|\$|(?:sudo\s+)?(?:bash|sh|zsh|pwd|whoami|uname|sw_vers|sysctl|df|du|ls|brew|cat|echo|find|mdfind|system_profiler|ioreg|ps|pgrep|osascript|open|systeminfo|wmic|powershell)\b)",
     re.I,
 )
 _ASSISTANT_SHELL_LINE_HINT_RE = re.compile(
-    r"(?:&&|\|\||\||2>/dev/null|/Applications|/etc/os-release|hw\.memsize|brew\s+list|sw_vers)",
+    r"(?:&&|\|\||\||2>/dev/null|/Applications|/etc/os-release|hw\.memsize|brew\s+list|sw_vers|systeminfo)",
+    re.I,
+)
+_ASSISTANT_LABELED_SHELL_COMMAND_RE = re.compile(
+    r"^\s*(?:run[_\s-]?command|shell[_\s-]?command)\s*:\s*(?P<command>.+?)\s*$",
     re.I,
 )
 _ASSISTANT_SHELL_PLAN_MARKERS = (
     "running the command",
     "running the commands",
+    "running a command",
     "run the command",
     "run the commands",
     "run these commands",
     "run the following commands",
+    "run_command:",
+    "run command:",
+    "shell_command:",
+    "shell command:",
     "let me check",
     "let me get",
     "let me run",
@@ -98,10 +109,458 @@ _ASSISTANT_SHELL_PLAN_MARKERS = (
     "i will grab",
 )
 
+_EXTERNAL_ACTION_OBJECT_RE = re.compile(
+    r"\b(?:screenshot|screen\s+capture|screen|shell|command|file|mouse|keyboard|click|type|window|app|computer)\b",
+    re.I,
+)
+_EXTERNAL_ACTION_SUCCESS_RE = re.compile(
+    r"\b(?:captured|completed|done|success(?:ful|fully)?|finished|executed|ran|created|opened|clicked|typed|wrote|read|controlled|took)\b",
+    re.I,
+)
+_EXTERNAL_ACTION_ACTIVE_RE = re.compile(
+    r"\b(?:i(?:'|’)?m|i\s+am|i(?:'|’)?ll|i\s+will|i\s+have|i(?:'|’)?ve|let\s+me|the)\b.{0,120}"
+    r"\b(?:taking|captur(?:ing|ed)|running|executing|check(?:ing)?|inspect(?:ing)?|retriev(?:ing|e)|clicking|typing|writing|reading|opening|controlling|use|using|calling|fetching|getting|send(?:ing)?|submitting|requesting)\b",
+    re.I | re.S,
+)
+_DIRECT_TOOL_FAILURE_CLAIM_RE = re.compile(
+    r"\b(?:failed|failure|didn(?:'|’)?t|couldn(?:'|’)?t|cannot|can't|can(?:not|'t)|not\s+connected|"
+    r"isn(?:'|’)?t\s+connected|not\s+responding|unavailable|offline|no\s+luck|timed\s+out)\b",
+    re.I,
+)
+
+
+def _contains_unverified_external_action_claim(value: Any) -> bool:
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return False
+    if not _EXTERNAL_ACTION_OBJECT_RE.search(text):
+        return False
+    return bool(_EXTERNAL_ACTION_SUCCESS_RE.search(text) or _EXTERNAL_ACTION_ACTIVE_RE.search(text))
+
+
+def _direct_tool_result_status(result_text: Any) -> str:
+    try:
+        payload = json.loads(str(result_text or "").strip())
+    except Exception:
+        payload = {}
+    if isinstance(payload, dict):
+        result_payload = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        if (
+            isinstance(result_payload.get("images"), list)
+            and result_payload.get("images")
+        ) or int(result_payload.get("image_count") or 0) > 0:
+            return "completed"
+        status = str(payload.get("status") or "").strip().lower()
+        if not status and result_payload:
+            status = str(result_payload.get("status") or "").strip().lower()
+        if not status and payload.get("success") is True:
+            status = "completed"
+        if status:
+            return status
+    return "completed" if str(result_text or "").strip() else "unknown"
+
+
+def _direct_tool_authoritative_result_message(
+    *,
+    tool_name: str,
+    result_text: Any,
+    trace_metadata: Dict[str, Any],
+) -> str:
+    status = _direct_tool_result_status(result_text)
+    summary = _compact_trace_text(
+        str((trace_metadata or {}).get("result_summary") or result_text or "").strip()
+    )
+    artifact_ids: List[str] = []
+    screenshot_payload = (trace_metadata or {}).get("browser_screenshot")
+    if isinstance(screenshot_payload, dict):
+        artifact_id = str(screenshot_payload.get("artifact_id") or "").strip()
+        if artifact_id:
+            artifact_ids.append(artifact_id)
+    lines = [
+        "Authoritative action outcome for answering the user.",
+        f"Action name: {str(tool_name or 'direct_tool').strip() or 'direct_tool'}",
+        f"Outcome: {status}",
+    ]
+    if summary:
+        lines.append(f"Result summary: {summary}")
+    if artifact_ids:
+        lines.append(f"Attached artifact IDs: {', '.join(artifact_ids)}")
+        if status == "completed":
+            lines.append("If the user asked for a screenshot or visual proof, the attached artifact is the captured result.")
+    lines.append("Answer naturally in your own words. Do not expose tool JSON, command syntax, or internal trace text.")
+    lines.append("Do not report this action as failed unless the outcome above is failed, error, denied, or offline.")
+    return "\n".join(lines)
+
+
+def _direct_tool_result_record(
+    *,
+    tool_name: str,
+    result_text: Any,
+    trace_metadata: Dict[str, Any],
+) -> Dict[str, str]:
+    status = _direct_tool_result_status(result_text)
+    screenshot_payload = (trace_metadata or {}).get("browser_screenshot")
+    if isinstance(screenshot_payload, dict) and str(screenshot_payload.get("artifact_id") or "").strip():
+        status = "completed"
+    summary = _compact_trace_text(str((trace_metadata or {}).get("result_summary") or result_text or "").strip())
+    try:
+        payload = json.loads(str(result_text or "").strip())
+    except Exception:
+        payload = {}
+    result_payload = payload.get("result") if isinstance(payload, dict) and isinstance(payload.get("result"), dict) else {}
+    if (
+        isinstance(result_payload.get("images"), list)
+        and result_payload.get("images")
+    ) or int(result_payload.get("image_count") or 0) > 0:
+        summary = str(result_payload.get("summary") or "").strip() or "Captured screenshot from Agent Computer."
+    return {
+        "tool": str(tool_name or "direct_tool").strip() or "direct_tool",
+        "status": status,
+        "summary": summary,
+    }
+
+
+def _direct_tool_user_facing_label(tool_name: str, connector_id: str, action_id: str) -> str:
+    normalized_tool = " ".join(str(tool_name or "").replace("_", " ").replace("-", " ").split()).lower()
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    if (
+        normalized_connector == "computer"
+        and normalized_action == "system_info"
+    ) or (
+        "computer" in normalized_tool and "system" in normalized_tool and "info" in normalized_tool
+    ):
+        return "computer info"
+    if normalized_connector == "screenshot" or "screenshot" in normalized_tool:
+        return "screenshot"
+    if normalized_connector == "file" or normalized_tool.startswith("file "):
+        return "file"
+    return str(tool_name or "tool").strip() or "tool"
+
+
+_DSML_PIPE_RE = r"[\|｜]"
+_DSML_PREFIX_RE = r"<\s*" + _DSML_PIPE_RE + r"\s*" + _DSML_PIPE_RE + r"\s*DSML\s*" + _DSML_PIPE_RE + r"\s*" + _DSML_PIPE_RE + r"\s*"
+_DSML_TOOL_BLOCK_RE = re.compile(
+    _DSML_PREFIX_RE + r"tool_calls\s*>.*",
+    re.IGNORECASE | re.DOTALL,
+)
+_DSML_INVOKE_RE = re.compile(
+    _DSML_PREFIX_RE
+    + r"invoke\s+name=[\"']([^\"']+)[\"']\s*>(.*?)"
+    + r"<\s*/\s*" + _DSML_PIPE_RE + r"\s*" + _DSML_PIPE_RE + r"\s*DSML\s*" + _DSML_PIPE_RE + r"\s*" + _DSML_PIPE_RE + r"\s*invoke\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DSML_PARAMETER_RE = re.compile(
+    _DSML_PREFIX_RE
+    + r"parameter\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)"
+    + r"<\s*/\s*" + _DSML_PIPE_RE + r"\s*" + _DSML_PIPE_RE + r"\s*DSML\s*" + _DSML_PIPE_RE + r"\s*" + _DSML_PIPE_RE + r"\s*parameter\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_INLINE_FUNCTION_TOOL_RE = re.compile(
+    r"<\s*function\s*>\s*([a-zA-Z0-9_.:-]+)\s*<\s*/\s*function\s*>",
+    re.IGNORECASE,
+)
+_ASSISTANT_JSON_FENCE_RE = re.compile(
+    r"```(?:json)?\s*\n?(.*?)```",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_ASSISTANT_ACTION_TOOL_ALIASES = {
+    "bash": "shell__exec",
+    "capture_screenshot": "screenshot__capture",
+    "command": "shell__exec",
+    "screen": "screenshot__capture",
+    "screen.capture": "screenshot__capture",
+    "screen_capture": "screenshot__capture",
+    "screenshot": "screenshot__capture",
+    "screenshot.capture": "screenshot__capture",
+    "shell": "shell__exec",
+    "sh": "shell__exec",
+    "take_screenshot": "screenshot__capture",
+    "terminal": "shell__exec",
+    "run_command": "shell__exec",
+    "zsh": "shell__exec",
+}
+
+
+def _looks_like_dsml_tool_markup(value: Any) -> bool:
+    text = str(value or "")
+    return bool(
+        re.search(_DSML_PREFIX_RE, text, flags=re.IGNORECASE)
+        or _INLINE_FUNCTION_TOOL_RE.search(text)
+    )
+
+
+def _looks_like_assistant_json_action_markup(value: Any) -> bool:
+    text = str(value or "")
+    if not text:
+        return False
+    lowered = text.lower()
+    if "```json" in lowered:
+        return True
+    stripped = text.strip()
+    if stripped.startswith(("{", "[")) and any(token in lowered for token in ('"action"', '"tool"', '"tool_name"', '"capability"')):
+        return True
+    return False
+
+
+def _looks_like_assistant_shell_plan_markup(value: Any) -> bool:
+    text = str(value or "")
+    if not text:
+        return False
+    if _ASSISTANT_LABELED_SHELL_COMMAND_RE.search(text):
+        return True
+    for raw_line in text.splitlines():
+        if _looks_like_assistant_shell_line(_normalize_assistant_shell_line(raw_line)):
+            return True
+    return any(marker in " ".join(text.lower().split()) for marker in _ASSISTANT_SHELL_PLAN_MARKERS)
+
+
+def _strip_assistant_pseudo_tool_lines(value: Any) -> str:
+    raw_text = str(value or "")
+    had_pseudo_tool_line = bool(_ASSISTANT_LABELED_SHELL_COMMAND_RE.search(raw_text))
+    lines: List[str] = []
+    for raw_line in raw_text.splitlines():
+        if _ASSISTANT_LABELED_SHELL_COMMAND_RE.match(raw_line):
+            continue
+        lines.append(raw_line)
+    cleaned = "\n".join(lines).strip()
+    if had_pseudo_tool_line and _looks_like_assistant_action_plan_preamble(cleaned):
+        return ""
+    return cleaned
+
+
+def _looks_like_assistant_action_plan_preamble(value: Any) -> bool:
+    text = " ".join(str(value or "").strip().lower().replace("’", "'").replace("`", "'").split())
+    if not text:
+        return True
+    if len(text) > 320:
+        return False
+    plan_markers = (
+        "i'll check",
+        "i will check",
+        "i'll run",
+        "i will run",
+        "i'll retrieve",
+        "i will retrieve",
+        "running a command",
+        "running the command",
+        "run a command",
+        "retrieve the details",
+        "retrieve details",
+        "hardware information",
+        "checking your system",
+        "checking the system",
+        "need to run",
+        "approve?",
+    )
+    result_markers = (
+        "the result is",
+        "here is",
+        "here are",
+        "i found",
+        "completed",
+        "captured",
+        "output",
+    )
+    return any(marker in text for marker in plan_markers) and not any(marker in text for marker in result_markers)
+
+
+def _normalize_dsml_tool_name(name: str) -> str:
+    normalized = str(name or "").strip().lower().replace("-", "_")
+    aliases = {
+        "bash": "shell__exec",
+        "sh": "shell__exec",
+        "shell": "shell__exec",
+        "terminal": "shell__exec",
+        "zsh": "shell__exec",
+        "screenshot": "screenshot__capture",
+        "screen_capture": "screenshot__capture",
+        "capture_screenshot": "screenshot__capture",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _extract_dsml_tool_calls_from_text(value: Any) -> tuple[str, List[Dict[str, Any]]]:
+    raw = str(value or "")
+    if not raw or not (_DSML_TOOL_BLOCK_RE.search(raw) or _INLINE_FUNCTION_TOOL_RE.search(raw)):
+        return raw, []
+
+    tool_calls: List[Dict[str, Any]] = []
+    for invoke_match in _DSML_INVOKE_RE.finditer(raw):
+        tool_name = _normalize_dsml_tool_name(invoke_match.group(1))
+        if not tool_name:
+            continue
+        body = invoke_match.group(2) or ""
+        parameters: Dict[str, str] = {}
+        for parameter_match in _DSML_PARAMETER_RE.finditer(body):
+            parameter_name = str(parameter_match.group(1) or "").strip()
+            if not parameter_name:
+                continue
+            parameters[parameter_name] = html.unescape(str(parameter_match.group(2) or "")).strip()
+        arguments: Dict[str, Any] = {}
+        if tool_name == "shell__exec":
+            command = parameters.get("command") or parameters.get("cmd") or parameters.get("input") or ""
+            if not command:
+                continue
+            arguments["command"] = command
+            description = parameters.get("description")
+            if description:
+                arguments["description"] = description
+        else:
+            arguments = dict(parameters)
+        tool_calls.append({"name": tool_name, "arguments": arguments})
+
+    cleaned = _DSML_TOOL_BLOCK_RE.sub("", raw).strip()
+    for function_match in _INLINE_FUNCTION_TOOL_RE.finditer(raw):
+        tool_name = _normalize_dsml_tool_name(function_match.group(1))
+        if tool_name:
+            tool_calls.append({"name": tool_name, "arguments": {}})
+    cleaned = _INLINE_FUNCTION_TOOL_RE.sub("", cleaned).strip()
+    return cleaned, tool_calls
+
+
+def _assistant_plan_tool_names(tools: List[Dict[str, Any]]) -> set[str]:
+    return {
+        str(item.get("name") or "").strip()
+        for item in tools
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
+
+
+def _normalize_assistant_json_tool_name(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if not normalized:
+        return ""
+    return _ASSISTANT_ACTION_TOOL_ALIASES.get(normalized, normalized)
+
+
+def _assistant_json_action_arguments(payload: Dict[str, Any], tool_name: str) -> Dict[str, Any]:
+    raw_arguments = payload.get("arguments")
+    if raw_arguments is None:
+        raw_arguments = payload.get("args")
+    if isinstance(raw_arguments, dict):
+        arguments: Dict[str, Any] = dict(raw_arguments)
+    elif raw_arguments is not None:
+        arguments = {"input": raw_arguments}
+    else:
+        arguments = {}
+
+    if tool_name == "shell__exec":
+        command = (
+            arguments.get("command")
+            or payload.get("command")
+            or payload.get("cmd")
+            or payload.get("input")
+        )
+        if command:
+            arguments["command"] = str(command)
+    for key in ("description", "reason", "target"):
+        value = payload.get(key)
+        if value is not None and key not in arguments:
+            arguments[key] = value
+    return arguments
+
+
+def _assistant_json_action_tool_calls(payload: Any, available_tool_names: set[str]) -> List[Dict[str, Any]]:
+    if isinstance(payload, list):
+        tool_calls: List[Dict[str, Any]] = []
+        for item in payload:
+            tool_calls.extend(_assistant_json_action_tool_calls(item, available_tool_names))
+        return tool_calls
+    if not isinstance(payload, dict):
+        return []
+
+    nested_actions = payload.get("actions")
+    if nested_actions is None:
+        nested_actions = payload.get("tool_calls")
+    if isinstance(nested_actions, list):
+        return _assistant_json_action_tool_calls(nested_actions, available_tool_names)
+
+    raw_tool_name = (
+        payload.get("tool")
+        or payload.get("tool_name")
+        or payload.get("name")
+        or payload.get("action")
+        or payload.get("capability")
+    )
+    tool_name = _normalize_assistant_json_tool_name(raw_tool_name)
+    if not tool_name or tool_name not in available_tool_names:
+        return []
+    arguments = _assistant_json_action_arguments(payload, tool_name)
+    if (
+        tool_name == "shell__exec"
+        and "computer__system_info" in available_tool_names
+        and _looks_like_system_info_shell_command(arguments.get("command"))
+    ):
+        return [{"name": "computer__system_info", "arguments": {}}]
+    if tool_name == "shell__exec" and not arguments.get("command"):
+        return []
+    return [{"name": tool_name, "arguments": arguments}]
+
+
+def _try_parse_assistant_json_action_block(value: str, available_tool_names: set[str]) -> List[Dict[str, Any]]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return []
+    return _assistant_json_action_tool_calls(payload, available_tool_names)
+
+
+def _extract_assistant_json_action_tool_calls_from_text(
+    value: Any,
+    tools: List[Dict[str, Any]],
+) -> tuple[str, List[Dict[str, Any]]]:
+    raw = str(value or "")
+    if not raw:
+        return raw, []
+    available_tool_names = _assistant_plan_tool_names(tools)
+    if not available_tool_names:
+        return raw, []
+
+    tool_calls: List[Dict[str, Any]] = []
+    removals: List[tuple[int, int]] = []
+    for match in _ASSISTANT_JSON_FENCE_RE.finditer(raw):
+        calls = _try_parse_assistant_json_action_block(match.group(1), available_tool_names)
+        if not calls:
+            continue
+        tool_calls.extend(calls)
+        removals.append((match.start(), match.end()))
+
+    cleaned = raw
+    if removals:
+        parts: List[str] = []
+        cursor = 0
+        for start, end in removals:
+            parts.append(raw[cursor:start])
+            cursor = end
+        parts.append(raw[cursor:])
+        cleaned = "".join(parts).strip()
+
+    stripped = cleaned.strip()
+    if not tool_calls and stripped.startswith(("{", "[")) and stripped.endswith(("}", "]")):
+        calls = _try_parse_assistant_json_action_block(stripped, available_tool_names)
+        if calls:
+            return "", calls
+
+    return cleaned, tool_calls
+
 
 def _has_shell_exec_tool(tools: List[Dict[str, Any]]) -> bool:
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
     return "shell__exec" in tool_names
+
+
+def _has_tool(tools: List[Dict[str, Any]], tool_name: str) -> bool:
+    expected = str(tool_name or "").strip()
+    return bool(expected) and expected in {
+        str(item.get("name") or "").strip()
+        for item in tools
+        if isinstance(item, dict)
+    }
 
 
 def _normalize_assistant_shell_line(raw_line: Any) -> str:
@@ -150,6 +609,12 @@ def _extract_assistant_shell_command_blocks(text: str) -> List[str]:
     current_block: List[str] = []
     for raw_line in text.splitlines():
         line = _normalize_assistant_shell_line(raw_line)
+        labeled_command_match = _ASSISTANT_LABELED_SHELL_COMMAND_RE.match(line)
+        if labeled_command_match:
+            labeled_command = _normalize_assistant_shell_line(labeled_command_match.group("command"))
+            if labeled_command:
+                current_block.append(labeled_command)
+            continue
         if _looks_like_assistant_shell_line(line):
             current_block.append(line)
             continue
@@ -161,6 +626,22 @@ def _extract_assistant_shell_command_blocks(text: str) -> List[str]:
     return command_blocks
 
 
+def _looks_like_system_info_shell_command(command: Any) -> bool:
+    normalized = " ".join(str(command or "").strip().lower().split())
+    if not normalized:
+        return False
+    system_info_prefixes = (
+        "systeminfo",
+        "system_profiler",
+        "sw_vers",
+        "uname",
+        "sysctl",
+        "wmic",
+        "cat /etc/os-release",
+    )
+    return any(normalized == prefix or normalized.startswith(f"{prefix} ") for prefix in system_info_prefixes)
+
+
 def _extract_assistant_shell_plan_tool_call(
     reply: Any,
     tools: List[Dict[str, Any]],
@@ -168,7 +649,9 @@ def _extract_assistant_shell_plan_tool_call(
     text = str(reply or "").strip()
     if not text:
         return "", []
-    if not _has_shell_exec_tool(tools):
+    has_shell_exec_tool = _has_shell_exec_tool(tools)
+    has_computer_system_info_tool = _has_tool(tools, "computer__system_info")
+    if not has_shell_exec_tool and not has_computer_system_info_tool:
         return text, []
     normalized = " ".join(text.lower().split())
     if not any(marker in normalized for marker in _ASSISTANT_SHELL_PLAN_MARKERS):
@@ -176,6 +659,10 @@ def _extract_assistant_shell_plan_tool_call(
     command_blocks = _extract_assistant_shell_command_blocks(text)
     command = "\n\n".join(command_blocks).strip()
     if not command or len(command) > 5000:
+        return text, []
+    if has_computer_system_info_tool and _looks_like_system_info_shell_command(command):
+        return "", [{"name": "computer__system_info", "arguments": {}}]
+    if not has_shell_exec_tool:
         return text, []
     return "", [
         {
@@ -194,6 +681,31 @@ def _trace_raw_event(envelope: Optional[Dict[str, Any]]) -> Optional[Dict[str, A
     return {
         "type": "trace",
         "payload": envelope,
+    }
+
+
+def _fallback_trace_raw_event(
+    *,
+    event_type: str,
+    data: Optional[Dict[str, Any]],
+    tool_call_id: Optional[str] = None,
+    item_id: Optional[str] = None,
+    artifact_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {}
+    if artifact_id:
+        metadata["artifact_id"] = artifact_id
+    return {
+        "type": "trace",
+        "payload": {
+            "event_type": event_type,
+            "persisted": False,
+            "tool_call_id": tool_call_id,
+            "item_id": item_id,
+            "artifact_id": artifact_id,
+            "metadata": metadata,
+            "data": dict(data or {}),
+        },
     }
 
 
@@ -280,7 +792,7 @@ def _public_generation_error_reply(services: DirectChatGenerationServices, llm_e
         and "remote end closed" not in lower_reply
     ):
         return reply
-    return "Sage hit a temporary error while generating the response. Please try again in a moment."
+    return "The selected AI provider hit a temporary generation error. Try again in a moment."
 
 
 def _turn_metadata_from_session(session_ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -296,6 +808,29 @@ def _turn_metadata_from_session(session_ctx: Optional[Dict[str, Any]]) -> Dict[s
     if isinstance(raw_metadata, dict):
         metadata.update(raw_metadata)
     return metadata
+
+
+def _provider_alias(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == "openai-codex":
+        return "codex_cli"
+    return normalized
+
+
+def _provider_mismatch(requested_provider: Any, actual_provider: Any) -> bool:
+    requested = _provider_alias(requested_provider)
+    actual = _provider_alias(actual_provider)
+    return bool(requested and actual and requested != actual)
+
+
+def _model_alias(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _model_mismatch(expected_model: Any, actual_model: Any) -> bool:
+    expected = _model_alias(expected_model)
+    actual = _model_alias(actual_model)
+    return bool(expected and actual and expected != actual)
 
 
 def _platform_paid_ai_identity(
@@ -470,8 +1005,63 @@ def stream_provider_backed_direct_chat(
             system_prompt = f"{system_prompt}\n\n[System Instruction: {system_instruction}]" if system_prompt else f"[System Instruction: {system_instruction}]"
             normalized_reasoning_effort = None
 
+    if availability_payload.get("selected_model_unavailable") is True:
+        unavailable_tier = str(availability_payload.get("selected_model_unavailable_tier") or "").strip()
+        unavailable_model = str(availability_payload.get("selected_model_unavailable_model") or normalized_requested_model or "").strip()
+        unavailable_reason = str(availability_payload.get("selected_model_unavailable_reason") or "").strip()
+        if unavailable_reason == "unknown_provider_for_selected_model" and unavailable_model:
+            error_detail = (
+                f"The selected model '{unavailable_model}' is not mapped to a provider. "
+                "Choose a mapped model/provider in AI setup."
+            )
+        else:
+            error_detail = "Selected model is unavailable. Choose another model or add the required key."
+        yield {
+            "type": "final",
+            "payload": {
+                "reply": "",
+                "actions": [],
+                "interventions": [
+                    build_intervention(
+                        "selected_model_unavailable",
+                        "Selected model unavailable",
+                        detail=error_detail,
+                        severity="warning",
+                        status="failed",
+                        code="selected_model_unavailable",
+                    )
+                ],
+                "suggestions": proactive_suggestions,
+                "mode": "answer",
+                "usage_masked": {},
+                "provider": actual_provider,
+                "model": actual_model,
+                "attempted_providers": "",
+                "error": "selected_model_unavailable",
+                "context_used": services.build_context_used(
+                    workspace_id=normalized_workspace_id,
+                    requested_provider=normalized_requested_provider,
+                    effective_provider=None,
+                    requested_model=normalized_requested_model,
+                    effective_model=None,
+                    reasoning_effort=normalized_reasoning_effort,
+                    connected_systems=connected_systems,
+                    tool_capabilities=tool_capabilities,
+                    prior_messages_used=prior_messages_used,
+                    history_mode=history_mode,
+                    run_created=False,
+                    fallback_used=False,
+                    fallback_reason=unavailable_tier or fallback_reason,
+                ),
+            },
+        }
+        return
+
     executed_any_tools = False
     conversation_messages: List[Dict[str, Any]] = []
+    direct_tool_authoritative_messages: List[str] = []
+    direct_tool_authoritative_results: List[Dict[str, str]] = []
+    direct_tool_artifact_ids: List[str] = []
     conversation_messages.extend(compacted_prior_messages)
     current_prompt = normalized_message
     max_iterations = resolved_chat_max_iterations
@@ -491,10 +1081,21 @@ def stream_provider_backed_direct_chat(
         ),
     )
     if hook_ctx.aborted:
+        abort_detail = str(hook_ctx.abort_reason or "").strip() or "Agent start was stopped before the model turn began."
         yield {
-            "reply": hook_ctx.abort_reason or "Agent start aborted by hook.",
-            "interventions": [],
+            "reply": "",
+            "interventions": [
+                build_intervention(
+                    "system_error",
+                    "Agent start blocked",
+                    detail=abort_detail,
+                    severity="error",
+                    status="failed",
+                    code="agent_start_aborted",
+                )
+            ],
             "aborted": True,
+            "error": "agent_start_aborted",
         }
         return
 
@@ -503,7 +1104,7 @@ def stream_provider_backed_direct_chat(
     assistant_message_id = uuid.uuid4().hex
     health_safety_context = healthguide_safety_service.resolve_health_safety_context(session_ctx=session_ctx)
     effective_assistant_plan_tools = assistant_plan_tools if assistant_plan_tools is not None else tools
-    buffer_assistant_tool_plans = _has_shell_exec_tool(effective_assistant_plan_tools)
+    buffer_assistant_tool_plans = False
     trace_started_raw = _emit_trace_event(
         trace_context,
         event_type="trace.started",
@@ -565,77 +1166,6 @@ def stream_provider_backed_direct_chat(
     if reasoning_started is not None:
         yield reasoning_started
 
-    if direct_chat_tool_catalog_service.message_requests_tool_inventory(normalized_message):
-        inventory_reply = direct_chat_tool_catalog_service.direct_chat_tool_inventory_reply(tools, availability_payload)
-        plan_done = _emit_trace_event(
-            trace_context,
-            event_type="plan.item.updated",
-            data={
-                "item_id": planning_item_id,
-                "status": "done",
-                "summary": "Answered from the active tool catalog.",
-            },
-            persisted=True,
-            item_id=planning_item_id,
-        )
-        if plan_done is not None:
-            yield plan_done
-        yield {"type": "chunk", "delta": inventory_reply}
-        trace_delta = _emit_trace_event(
-            trace_context,
-            event_type="assistant.message.delta",
-            data={
-                "message_id": assistant_message_id,
-                "delta": inventory_reply,
-            },
-            persisted=False,
-        )
-        if trace_delta is not None:
-            yield trace_delta
-        trace_completed = _emit_trace_event(
-            trace_context,
-            event_type="trace.completed",
-            data={
-                "duration_ms": int((time.monotonic() - trace_started_at) * 1000),
-                "final_message_id": assistant_message_id,
-            },
-            persisted=True,
-        )
-        if trace_completed is not None:
-            yield trace_completed
-        _finish_trace(trace_context, outcome="success", final_message_id=assistant_message_id)
-        yield {
-            "type": "final",
-            "payload": {
-                "reply": inventory_reply,
-                "actions": [],
-                "interventions": [],
-                "suggestions": [],
-                "mode": "answer",
-                "usage_masked": {},
-                "provider": actual_provider,
-                "model": actual_model,
-                "attempted_providers": "",
-                "error": "",
-                "context_used": services.build_context_used(
-                    workspace_id=normalized_workspace_id,
-                    requested_provider=normalized_requested_provider,
-                    effective_provider=str(actual_provider or context.get("provider") or "").strip() or None,
-                    requested_model=normalized_requested_model,
-                    effective_model=str(actual_model or "").strip() or None,
-                    reasoning_effort=normalized_reasoning_effort,
-                    connected_systems=connected_systems,
-                    tool_capabilities=tool_capabilities,
-                    prior_messages_used=prior_messages_used,
-                    history_mode=history_mode,
-                    run_created=False,
-                    fallback_used=False,
-                    fallback_reason=fallback_reason,
-                ),
-            },
-        }
-        return
-
     for iteration in range(max_iterations):
         thinking_iteration = iteration + 1
         yield services.thinking_step_payload(thinking_iteration, "active")
@@ -643,6 +1173,9 @@ def stream_provider_backed_direct_chat(
         iteration_reply = ""
         iteration_tool_calls: List[Dict[str, Any]] = []
         iteration_failed = False
+        suppress_unverified_action_chunks = False
+        pending_stream_text = ""
+        stream_released = False
 
         messages = conversation_messages or []
         for event in services.generate_chat_reply_stream_with_provider_fallback(
@@ -658,7 +1191,33 @@ def stream_provider_backed_direct_chat(
                 delta = response_leak_guard_service.guard_stream_delta(event.get("delta") or "")
                 if delta:
                     iteration_reply += delta
-                    if not buffer_assistant_tool_plans:
+                    contains_assistant_tool_markup = (
+                        _looks_like_dsml_tool_markup(delta)
+                        or _looks_like_dsml_tool_markup(iteration_reply)
+                        or _looks_like_assistant_json_action_markup(delta)
+                        or _looks_like_assistant_json_action_markup(iteration_reply)
+                        or _looks_like_assistant_shell_plan_markup(delta)
+                        or _looks_like_assistant_shell_plan_markup(iteration_reply)
+                    )
+                    if not executed_any_tools and _contains_unverified_external_action_claim(iteration_reply):
+                        suppress_unverified_action_chunks = True
+                    if not buffer_assistant_tool_plans and not contains_assistant_tool_markup and not suppress_unverified_action_chunks:
+                        if not stream_released:
+                            pending_stream_text += delta
+                            if _looks_like_assistant_action_plan_preamble(pending_stream_text):
+                                pending_stream_text = ""
+                                suppress_unverified_action_chunks = True
+                                continue
+                            should_release_stream = (
+                                len(pending_stream_text) >= 96
+                                or bool(re.search(r"[.!?]\s*$", pending_stream_text))
+                                or "\n" in pending_stream_text
+                            )
+                            if not should_release_stream:
+                                continue
+                            delta = pending_stream_text
+                            pending_stream_text = ""
+                            stream_released = True
                         yield {"type": "chunk", "delta": delta}
                         trace_delta = _emit_trace_event(
                             trace_context,
@@ -678,8 +1237,143 @@ def stream_provider_backed_direct_chat(
                 attempted_providers = str(event.get("attempted_providers") or "").strip()
                 llm_error = str(event.get("error") or "").strip()
                 actual_provider = str(event.get("provider") or actual_provider or "").strip() or actual_provider
+                expected_model_lock = str(actual_model or metadata.get("model") or normalized_requested_model or "").strip()
                 actual_model = str(event.get("model") or actual_model or "").strip() or actual_model
+                requested_provider_lock = str(normalized_requested_provider or metadata.get("requested_provider") or "").strip()
+                if _provider_mismatch(requested_provider_lock, actual_provider):
+                    mismatch_detail = "The selected AI provider did not match the provider that returned the response, so the turn was stopped."
+                    yield services.thinking_step_payload(
+                        thinking_iteration,
+                        "error",
+                        "Selected provider mismatch",
+                    )
+                    trace_failed = _emit_trace_event(
+                        trace_context,
+                        event_type="trace.failed",
+                        data={
+                            "code": "provider_mismatch",
+                            "message": mismatch_detail,
+                            "retryable": False,
+                            "failed_item_id": planning_item_id,
+                        },
+                        persisted=True,
+                        item_id=planning_item_id,
+                    )
+                    if trace_failed is not None:
+                        yield trace_failed
+                    _finish_trace(trace_context, outcome="partial", final_message_id=None)
+                    yield {
+                        "type": "final",
+                        "payload": {
+                            "reply": "",
+                            "actions": [],
+                            "interventions": [
+                                build_intervention(
+                                    "provider_mismatch",
+                                    "Selected model provider mismatch",
+                                    detail=mismatch_detail,
+                                    severity="error",
+                                    status="failed",
+                                    code="provider_mismatch",
+                                )
+                            ],
+                            "suggestions": proactive_suggestions,
+                            "mode": "answer",
+                            "usage_masked": usage_masked,
+                            "provider": actual_provider,
+                            "model": actual_model,
+                            "attempted_providers": attempted_providers,
+                            "error": "provider_mismatch",
+                            "context_used": services.build_context_used(
+                                workspace_id=normalized_workspace_id,
+                                requested_provider=normalized_requested_provider,
+                                effective_provider=str(actual_provider or "").strip() or None,
+                                requested_model=normalized_requested_model,
+                                effective_model=str(actual_model or "").strip() or None,
+                                reasoning_effort=normalized_reasoning_effort,
+                                connected_systems=connected_systems,
+                                tool_capabilities=tool_capabilities,
+                                prior_messages_used=prior_messages_used,
+                                history_mode=history_mode,
+                                run_created=False,
+                                fallback_used=False,
+                                fallback_reason="provider_mismatch",
+                            ),
+                        },
+                    }
+                    return
+                if _model_mismatch(expected_model_lock, actual_model):
+                    mismatch_detail = "The selected AI model did not match the model that returned the response, so the turn was stopped."
+                    yield services.thinking_step_payload(
+                        thinking_iteration,
+                        "error",
+                        "Selected model mismatch",
+                    )
+                    trace_failed = _emit_trace_event(
+                        trace_context,
+                        event_type="trace.failed",
+                        data={
+                            "code": "model_mismatch",
+                            "message": mismatch_detail,
+                            "retryable": False,
+                            "failed_item_id": planning_item_id,
+                        },
+                        persisted=True,
+                        item_id=planning_item_id,
+                    )
+                    if trace_failed is not None:
+                        yield trace_failed
+                    _finish_trace(trace_context, outcome="partial", final_message_id=None)
+                    yield {
+                        "type": "final",
+                        "payload": {
+                            "reply": "",
+                            "actions": [],
+                            "interventions": [
+                                build_intervention(
+                                    "model_mismatch",
+                                    "Selected model mismatch",
+                                    detail=mismatch_detail,
+                                    severity="error",
+                                    status="failed",
+                                    code="model_mismatch",
+                                )
+                            ],
+                            "suggestions": proactive_suggestions,
+                            "mode": "answer",
+                            "usage_masked": usage_masked,
+                            "provider": actual_provider,
+                            "model": actual_model,
+                            "attempted_providers": attempted_providers,
+                            "error": "model_mismatch",
+                            "context_used": services.build_context_used(
+                                workspace_id=normalized_workspace_id,
+                                requested_provider=normalized_requested_provider,
+                                effective_provider=str(actual_provider or "").strip() or None,
+                                requested_model=normalized_requested_model,
+                                effective_model=str(actual_model or "").strip() or None,
+                                reasoning_effort=normalized_reasoning_effort,
+                                connected_systems=connected_systems,
+                                tool_capabilities=tool_capabilities,
+                                prior_messages_used=prior_messages_used,
+                                history_mode=history_mode,
+                                run_created=False,
+                                fallback_used=False,
+                                fallback_reason="model_mismatch",
+                            ),
+                        },
+                    }
+                    return
                 iteration_tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
+                final_reply, dsml_tool_calls = _extract_dsml_tool_calls_from_text(final_reply)
+                if dsml_tool_calls:
+                    iteration_tool_calls = [*iteration_tool_calls, *dsml_tool_calls]
+                final_reply, json_action_tool_calls = _extract_assistant_json_action_tool_calls_from_text(
+                    final_reply,
+                    effective_assistant_plan_tools,
+                )
+                if json_action_tool_calls:
+                    iteration_tool_calls = [*iteration_tool_calls, *json_action_tool_calls]
                 if not iteration_tool_calls:
                     final_reply, assistant_shell_plan_tool_calls = _extract_assistant_shell_plan_tool_call(
                         final_reply,
@@ -687,6 +1381,10 @@ def stream_provider_backed_direct_chat(
                     )
                     if assistant_shell_plan_tool_calls:
                         iteration_tool_calls = assistant_shell_plan_tool_calls
+                if not iteration_tool_calls:
+                    final_reply = _strip_assistant_pseudo_tool_lines(final_reply)
+                    if not executed_any_tools and _looks_like_assistant_action_plan_preamble(final_reply):
+                        final_reply = ""
                 yield services.thinking_step_payload(
                     thinking_iteration,
                     "done",
@@ -784,7 +1482,7 @@ def stream_provider_backed_direct_chat(
                     approval_payload = services.build_direct_tool_approval_response(
                         tool_calls=iteration_tool_calls,
                         tool_capabilities=tool_capabilities,
-                        session_ctx=session_ctx,
+                        session_ctx={**(session_ctx or {}), "user_message": normalized_message},
                     )
                     if approval_payload is not None:
                         approval_blocked = _emit_trace_event(
@@ -859,6 +1557,7 @@ def stream_provider_backed_direct_chat(
                             if isinstance(tool_call, dict) and not str(tool_call.get("id") or "").strip():
                                 tool_call["id"] = tool_call_id
                             tool_name = str(tool_call.get("name") or f"{connector_id}__{action_id}").strip()
+                            tool_display_label = _direct_tool_user_facing_label(tool_name, connector_id, action_id)
                             tool_trace_metadata = direct_tool_execution_service.build_direct_tool_trace_metadata(
                                 connector_id,
                                 action_id,
@@ -871,7 +1570,7 @@ def stream_provider_backed_direct_chat(
                                     "plan_id": trace_plan_id,
                                     "item_id": tool_item_id,
                                     "index": tool_index + 1,
-                                    "title": f"Run {tool_name}",
+                                    "title": f"Use {tool_display_label}",
                                     "kind": "tool",
                                     "owner": "sage",
                                     "depends_on": [planning_item_id],
@@ -888,7 +1587,7 @@ def stream_provider_backed_direct_chat(
                                 data={
                                     "item_id": tool_item_id,
                                     "status": "running",
-                                    "summary": f"Running {tool_name}.",
+                                    "summary": f"Using {tool_display_label}.",
                                 },
                                 persisted=True,
                                 item_id=tool_item_id,
@@ -914,7 +1613,7 @@ def stream_provider_backed_direct_chat(
                                 trace_context,
                                 event_type="tool.progress",
                                 data={
-                                    "message": f"Running {tool_name}",
+                                    "message": f"Using {tool_display_label}",
                                     "percent": 0,
                                 },
                                 persisted=False,
@@ -976,6 +1675,11 @@ def stream_provider_backed_direct_chat(
                                 argument_payload,
                                 result_text=tool_result,
                             )
+                            completed_screenshot_payload = completed_trace_metadata.get("browser_screenshot")
+                            if isinstance(completed_screenshot_payload, dict):
+                                completed_artifact_id = str(completed_screenshot_payload.get("artifact_id") or "").strip()
+                                if completed_artifact_id and completed_artifact_id not in direct_tool_artifact_ids:
+                                    direct_tool_artifact_ids.append(completed_artifact_id)
                             if isinstance(completed_trace_metadata.get("search_results"), list) and completed_trace_metadata.get("search_results"):
                                 trace_search_results = _emit_trace_event(
                                     trace_context,
@@ -988,25 +1692,38 @@ def stream_provider_backed_direct_chat(
                                     yield trace_search_results
                             if isinstance(completed_trace_metadata.get("browser_screenshot"), dict):
                                 browser_screenshot_payload = dict(completed_trace_metadata.get("browser_screenshot") or {})
+                                browser_screenshot_data = {
+                                    "caption": str(browser_screenshot_payload.get("caption") or "").strip(),
+                                    "width": int(browser_screenshot_payload.get("width") or 0),
+                                    "height": int(browser_screenshot_payload.get("height") or 0),
+                                }
+                                browser_screenshot_artifact_id = str(browser_screenshot_payload.get("artifact_id") or "").strip() or None
                                 trace_browser_screenshot = _emit_trace_event(
                                     trace_context,
                                     event_type="browser.screenshot",
-                                    data={
-                                        "caption": str(browser_screenshot_payload.get("caption") or "").strip(),
-                                        "width": int(browser_screenshot_payload.get("width") or 0),
-                                        "height": int(browser_screenshot_payload.get("height") or 0),
-                                    },
+                                    data=browser_screenshot_data,
                                     persisted=True,
                                     tool_call_id=tool_call_id,
-                                    artifact_id=str(browser_screenshot_payload.get("artifact_id") or "").strip() or None,
+                                    artifact_id=browser_screenshot_artifact_id,
                                 )
                                 if trace_browser_screenshot is not None:
                                     yield trace_browser_screenshot
+                                else:
+                                    yield _fallback_trace_raw_event(
+                                        event_type="browser.screenshot",
+                                        data=browser_screenshot_data,
+                                        tool_call_id=tool_call_id,
+                                        artifact_id=browser_screenshot_artifact_id,
+                                    )
                             tool_result_event = _emit_trace_event(
                                 trace_context,
                                 event_type="tool.result",
                                 data={
                                     "status": "ok",
+                                    "tool_name": tool_name,
+                                    "capability_id": completed_trace_metadata.get("capability_id") or tool_trace_metadata.get("capability_id"),
+                                    "connector_id": connector_id or None,
+                                    "action_id": action_id or None,
                                     "summary": str(completed_trace_metadata.get("result_summary") or tool_result or "").strip(),
                                     "artifact_ids": (
                                         [str((completed_trace_metadata.get("browser_screenshot") or {}).get("artifact_id") or "").strip()]
@@ -1026,7 +1743,7 @@ def stream_provider_backed_direct_chat(
                                 data={
                                     "item_id": tool_item_id,
                                     "status": "done",
-                                    "summary": f"Completed {tool_name}.",
+                                    "summary": f"Completed {tool_display_label}.",
                                 },
                                 persisted=True,
                                 item_id=tool_item_id,
@@ -1039,6 +1756,19 @@ def stream_provider_backed_direct_chat(
                                 argument_payload,
                                 step_id=step_id,
                                 status="done",
+                            )
+                            authoritative_result_message = _direct_tool_authoritative_result_message(
+                                tool_name=str(tool_call.get("name") or f"{connector_id}__{action_id}"),
+                                result_text=tool_result,
+                                trace_metadata=completed_trace_metadata,
+                            )
+                            direct_tool_authoritative_messages.append(authoritative_result_message)
+                            direct_tool_authoritative_results.append(
+                                _direct_tool_result_record(
+                                    tool_name=str(tool_call.get("name") or f"{connector_id}__{action_id}"),
+                                    result_text=tool_result,
+                                    trace_metadata=completed_trace_metadata,
+                                )
                             )
                             if effective_iteration_provider == "codex_cli":
                                 conversation_messages.append(
@@ -1059,6 +1789,12 @@ def stream_provider_backed_direct_chat(
                                         "content": tool_result,
                                     }
                                 )
+                                conversation_messages.append(
+                                    {
+                                        "role": "system",
+                                        "content": authoritative_result_message,
+                                    }
+                                )
                         if effective_iteration_provider == "codex_cli":
                             conversation_messages.append({"role": "system", "content": direct_tool_result_summary_system_message})
                             current_prompt = (
@@ -1066,16 +1802,33 @@ def stream_provider_backed_direct_chat(
                                 "Otherwise provide the final answer to the user."
                             )
                         else:
-                            current_prompt = ""
+                            current_prompt = (
+                                "\n\n".join(direct_tool_authoritative_messages[-8:])
+                                + "\n\nUse the authoritative action outcomes above to answer the user. "
+                                "If the user's request is now complete, answer the user. If another tool is needed, call it now."
+                            )
                         break
                     except Exception as exc:
                         llm_error = str(exc).strip() or "connector_action_failed"
                         services.capture_exception(exc)
+                        tool_call_for_error = locals().get("tool_call")
+                        if isinstance(tool_call_for_error, dict):
+                            tool_name_for_error = str(
+                                tool_call_for_error.get("name")
+                                or f"{connector_id}__{action_id}"
+                            ).strip()
+                        else:
+                            tool_name_for_error = str(f"{connector_id}__{action_id}").strip()
+                        tool_name_for_error = tool_name_for_error if tool_name_for_error != "__" else "direct_tool"
+                        tool_item_id_for_error = str(locals().get("tool_item_id") or planning_item_id).strip()
                         tool_failure = _emit_trace_event(
                             trace_context,
                             event_type="tool.result",
                             data={
                                 "status": "error",
+                                "tool_name": tool_name_for_error,
+                                "connector_id": connector_id or None,
+                                "action_id": action_id or None,
                                 "summary": llm_error,
                                 "artifact_ids": [],
                             },
@@ -1084,17 +1837,16 @@ def stream_provider_backed_direct_chat(
                         )
                         if tool_failure is not None:
                             yield tool_failure
-                        tool_name_for_error = str(tool_call.get("name") or f"{connector_id}__{action_id}").strip()
                         tool_plan_failed = _emit_trace_event(
                             trace_context,
                             event_type="plan.item.updated",
                             data={
-                                "item_id": tool_item_id,
+                                "item_id": tool_item_id_for_error,
                                 "status": "failed",
                                 "summary": f"{tool_name_for_error} failed.",
                             },
                             persisted=True,
-                            item_id=tool_item_id,
+                            item_id=tool_item_id_for_error,
                         )
                         if tool_plan_failed is not None:
                             yield tool_plan_failed
@@ -1198,6 +1950,69 @@ def stream_provider_backed_direct_chat(
                         }
                 leak_guard = response_leak_guard_service.guard_model_response(final_reply)
                 final_reply = leak_guard.text
+                if not final_reply.strip():
+                    public_error_code = "assistant_response_suppressed"
+                    public_error_detail = (
+                        "The selected model returned internal action text instead of a user-facing answer, "
+                        "so the response was not shown as Sage speech."
+                    )
+                    trace_failed = _emit_trace_event(
+                        trace_context,
+                        event_type="trace.failed",
+                        data={
+                            "code": public_error_code,
+                            "message": public_error_detail,
+                            "retryable": True,
+                            "failed_item_id": planning_item_id,
+                        },
+                        persisted=True,
+                        item_id=planning_item_id,
+                    )
+                    if trace_failed is not None:
+                        yield trace_failed
+                    _finish_trace(trace_context, outcome="partial", final_message_id=None)
+                    yield {
+                        "type": "final",
+                        "payload": {
+                            "reply": "",
+                            "actions": [],
+                            "interventions": [
+                                build_intervention(
+                                    "system_error",
+                                    "Assistant response suppressed",
+                                    detail=public_error_detail,
+                                    severity="warning",
+                                    status="failed",
+                                    code=public_error_code,
+                                )
+                            ],
+                            "suggestions": proactive_suggestions,
+                            "mode": "answer",
+                            "usage_masked": usage_masked,
+                            "provider": actual_provider,
+                            "model": actual_model,
+                            "attempted_providers": attempted_providers,
+                            "error": public_error_code,
+                            "response_leak_guard": leak_guard.metadata(),
+                            "context_used": services.build_context_used(
+                                workspace_id=normalized_workspace_id,
+                                requested_provider=normalized_requested_provider,
+                                effective_provider=str(actual_provider or context.get("provider") or "").strip() or None,
+                                requested_model=normalized_requested_model,
+                                effective_model=str(actual_model or "").strip() or None,
+                                reasoning_effort=normalized_reasoning_effort,
+                                connected_systems=connected_systems,
+                                tool_capabilities=tool_capabilities,
+                                prior_messages_used=prior_messages_used,
+                                history_mode=history_mode,
+                                run_created=False,
+                                fallback_used=False,
+                                fallback_reason=public_error_code,
+                            ),
+                        },
+                    }
+                    services.clear_direct_tool_loop_state(tool_loop_session_key)
+                    return
                 if (
                     conversation_messages
                     and isinstance(conversation_messages[-1], dict)
@@ -1227,7 +2042,7 @@ def stream_provider_backed_direct_chat(
                         "message_id": assistant_message_id,
                         "text": final_reply,
                         "citation_refs": citation_refs,
-                        "artifact_ids": [],
+                        "artifact_ids": list(direct_tool_artifact_ids),
                     },
                     persisted=True,
                 )
@@ -1266,6 +2081,17 @@ def stream_provider_backed_direct_chat(
                     "model": actual_model,
                     "attempted_providers": attempted_providers,
                     "error": llm_error,
+                    "metadata": {
+                        "artifact_ids": list(direct_tool_artifact_ids),
+                        "artifacts": [
+                            {
+                                "artifact_id": artifact_id,
+                                "label": "Agent Computer screenshot",
+                                "kind": "screenshot",
+                            }
+                            for artifact_id in direct_tool_artifact_ids
+                        ],
+                    } if direct_tool_artifact_ids else {},
                     "response_leak_guard": leak_guard.metadata(),
                     "context_used": services.build_context_used(
                         workspace_id=normalized_workspace_id,
@@ -1398,9 +2224,18 @@ def stream_provider_backed_direct_chat(
         effective_model=effective_model,
     )
     final_error_payload = {
-        "reply": public_error_reply,
+        "reply": "",
         "actions": actions,
-        "interventions": [],
+        "interventions": [
+            build_intervention(
+                "model_response_failed",
+                "Sage response unavailable",
+                detail=public_error_reply,
+                severity="error",
+                status="failed",
+                code=public_error_code,
+            )
+        ],
         "suggestions": proactive_suggestions,
         "mode": "answer_with_action" if actions else "answer",
         "usage_masked": usage_masked,

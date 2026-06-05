@@ -48,8 +48,8 @@ class DirectChatContextServiceTests(unittest.TestCase):
                     "provider": {"label": "DeepSeek", "ai_ready": False},
                     "credits": {"hosted_enabled": False, "reason": "policy_disabled"},
                     "my_computer": {"state": "offline"},
-                    "connected_apps": [{"label": "Google Workspace", "connected": True}],
-                    "channels": [{"label": "Telegram", "connected": False}],
+                    "connected_apps": [{"label": "Google Workspace", "connected": True, "runtime_usable": True}],
+                    "channels": [{"label": "Telegram", "connected": False, "runtime_usable": False}],
                     "byok_providers": [{"label": "DeepSeek"}, {"label": "Gemini"}],
                     "required_setup_actions": [{"label": "Connect My Computer"}],
                 },
@@ -59,9 +59,9 @@ class DirectChatContextServiceTests(unittest.TestCase):
 
         self.assertIn("Selected AI model: DeepSeek (setup required)", lines)
         self.assertIn("Workspace AI: blocked (policy disabled)", lines)
-        self.assertIn("My Computer: offline", lines)
+        self.assertIn("Agent Computer: offline", lines)
         self.assertIn("Connected apps: Google Workspace", lines)
-        self.assertIn("Messaging channels: Telegram", lines)
+        self.assertIn("Messaging channels: none", lines)
         self.assertIn("Available AI connections: DeepSeek, Gemini", lines)
         self.assertIn("Required setup actions: Connect My Computer", lines)
 

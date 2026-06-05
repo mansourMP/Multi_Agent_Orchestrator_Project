@@ -58,6 +58,13 @@ export type WorkstationTurnStreamAbortHandle = {
   signal: AbortSignal;
 };
 
+export type WorkstationTurnAttachment = {
+  kind: string;
+  uri: string;
+  name?: string;
+  metadata?: Record<string, unknown>;
+};
+
 export type WorkspaceAiRouteKind =
   | 'empyralis_managed'
   | 'user_api_key'
@@ -817,6 +824,7 @@ export type WorkstationClientPaths = {
   approvalDetail: (approvalId: string) => string;
   approvalResolve: (approvalId: string, runId?: string | null) => string;
   artifacts: (limit?: number) => string;
+  artifactUpload: (fileName: string) => string;
   artifactDetail: (artifactId: string) => string;
   artifactFile: (artifactId: string) => string;
   artifactContent: (artifactId: string) => string;
@@ -1003,6 +1011,7 @@ export type WorkstationClient = {
   listApprovals: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
   getApprovalDetail: (options: { approvalId: string; allowMissing?: boolean }) => Promise<Record<string, unknown> | null>;
   listArtifacts: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  uploadArtifact: (options: { file: File }) => Promise<Record<string, unknown>>;
   getArtifactDetail: (options: { artifactId: string; allowMissing?: boolean }) => Promise<Record<string, unknown> | null>;
   artifactFileUrl: (artifactId: string) => string;
   artifactDownloadUrl: (artifactId: string) => string;
@@ -1425,6 +1434,7 @@ export type WorkstationClient = {
     provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
+    attachments?: WorkstationTurnAttachment[];
     policyContext?: Record<string, unknown>;
     clientRequestId?: string | null;
   }) => Promise<WorkstationTurnResponse>;
@@ -1440,6 +1450,7 @@ export type WorkstationClient = {
     provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
+    attachments?: WorkstationTurnAttachment[];
     policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
     clientRequestId?: string | null;
@@ -1456,6 +1467,7 @@ export type WorkstationClient = {
     provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
+    attachments?: WorkstationTurnAttachment[];
     policyContext?: Record<string, unknown>;
     existingSession?: WorkstationSessionRecord | null;
     clientRequestId?: string | null;
@@ -1475,6 +1487,7 @@ export type WorkstationClient = {
     provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
+    attachments?: WorkstationTurnAttachment[];
     policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
     existingSession?: WorkstationSessionRecord | null;
@@ -1554,6 +1567,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     ),
     artifacts: (limit = 80) =>
       `/api/artifacts${buildQueryString({ workspace_id: workspaceId, limit })}`,
+    artifactUpload: (fileName) =>
+      `/api/artifacts/uploads${buildQueryString({ workspace_id: workspaceId, file_name: fileName })}`,
     artifactDetail: (artifactId) =>
       `/api/artifacts/${encodeURIComponent(artifactId)}`,
     artifactFile: (artifactId) =>
@@ -1872,7 +1887,7 @@ function fallbackErrorMessage(status: number): string {
     return 'Your session expired. Sign in again and retry.';
   }
   if (status === 403) {
-    return 'Sage cannot run that request in this workspace right now.';
+    return 'This workspace cannot run that request right now.';
   }
   if (status === 429) {
     return 'Capacity is busy right now. Retry in a moment.';
@@ -2048,7 +2063,7 @@ function normalizeTransportFailure(error: unknown): WorkstationClientError {
   let retryable = true;
 
   if (isTimeout) {
-    message = 'Sage took too long to respond. Please try again.';
+    message = 'The selected AI provider took too long to respond. Please try again.';
     code = 'request_timeout';
   } else if (isAbort) {
     message = 'The request was cancelled.';
@@ -2261,6 +2276,7 @@ export function createWorkstationClient(
     provider = null,
     model = null,
     reasoningEffort = null,
+    attachments = [],
     policyContext = {},
     clientRequestId = null,
   }: {
@@ -2275,6 +2291,7 @@ export function createWorkstationClient(
     provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
+    attachments?: WorkstationTurnAttachment[];
     policyContext?: Record<string, unknown>;
     clientRequestId?: string | null;
   }): Promise<WorkstationTurnResponse> {
@@ -2297,7 +2314,7 @@ export function createWorkstationClient(
           model: model ?? undefined,
           reasoning_effort: reasoningEffort ?? undefined,
           machine_target: machineTarget ?? undefined,
-          attachments: [],
+          attachments,
           context_hints: {
             source,
             thread_id: threadId,
@@ -2420,6 +2437,7 @@ export function createWorkstationClient(
     provider = null,
     model = null,
     reasoningEffort = null,
+    attachments = [],
     policyContext = {},
     onEvent,
     clientRequestId = null,
@@ -2436,6 +2454,7 @@ export function createWorkstationClient(
     provider?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
+    attachments?: WorkstationTurnAttachment[];
     policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
     clientRequestId?: string | null;
@@ -2463,7 +2482,7 @@ export function createWorkstationClient(
             model: model ?? undefined,
             reasoning_effort: reasoningEffort ?? undefined,
             machine_target: machineTarget ?? undefined,
-            attachments: [],
+            attachments,
             context_hints: {
               source,
               thread_id: threadId,
@@ -2486,7 +2505,7 @@ export function createWorkstationClient(
     } catch (error) {
       if (abortHandle?.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
         throw new WorkstationClientError(
-          'Sage stopped before finishing the response.',
+          'The response stopped before it finished.',
           0,
           null,
           'stream_aborted',
@@ -2550,7 +2569,7 @@ export function createWorkstationClient(
       } catch (error) {
         if (abortHandle?.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
           throw new WorkstationClientError(
-            'Sage stopped before finishing the response.',
+            'The response stopped before it finished.',
             0,
             null,
             'stream_aborted',
@@ -2673,6 +2692,19 @@ export function createWorkstationClient(
       requestJson<Record<string, unknown>>({
         path: paths.artifacts(limit),
         policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    uploadArtifact: ({ file }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.artifactUpload(file.name || 'upload.bin'),
+        init: {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': file.type || 'application/octet-stream',
+          },
+          body: file,
+        },
+        policy: WRITE_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     getArtifactDetail: ({ artifactId, allowMissing = false }) =>
       requestJson<Record<string, unknown>>({
@@ -3966,6 +3998,7 @@ export function createWorkstationClient(
       provider = null,
       model = null,
       reasoningEffort = null,
+      attachments = [],
       policyContext = {},
       existingSession = null,
       clientRequestId = null,
@@ -3992,6 +4025,7 @@ export function createWorkstationClient(
           provider,
           model,
           reasoningEffort,
+          attachments,
           policyContext,
           clientRequestId,
         });
@@ -4021,6 +4055,7 @@ export function createWorkstationClient(
           provider,
           model,
           reasoningEffort,
+          attachments,
           policyContext,
           clientRequestId,
         });
@@ -4039,6 +4074,7 @@ export function createWorkstationClient(
       provider = null,
       model = null,
       reasoningEffort = null,
+      attachments = [],
       policyContext = {},
     onEvent,
     existingSession = null,
@@ -4069,6 +4105,7 @@ export function createWorkstationClient(
             provider,
             model,
             reasoningEffort,
+            attachments,
             policyContext,
             onEvent,
             clientRequestId,
@@ -4098,6 +4135,7 @@ export function createWorkstationClient(
                 provider,
                 model,
                 reasoningEffort,
+                attachments,
                 policyContext,
                 onEvent,
                 clientRequestId,

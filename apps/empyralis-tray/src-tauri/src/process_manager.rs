@@ -1,6 +1,8 @@
+use hmac::{Hmac, Mac};
 use rand::RngCore;
 use serde::Serialize;
 use serde_json::Value;
+use sha2::Sha256;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -14,6 +16,7 @@ const SUPERVISOR_HEALTH_ADDR: &str = "127.0.0.1:7788";
 const STATUS_URL: &str = "http://127.0.0.1:7790/status";
 const SESSION_VERIFY_TIMEOUT: Duration = Duration::from_secs(30);
 const SESSION_VERIFY_INTERVAL: Duration = Duration::from_secs(3);
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone, Default)]
 pub struct ConnectOptions {
@@ -34,6 +37,7 @@ pub struct TrayStatus {
     pub session_verified: bool,
     pub heartbeat_fresh: bool,
     pub session_status: String,
+    pub workspace_id: Option<String>,
     pub launch_at_login: bool,
     pub status_url: String,
     pub error: Option<String>,
@@ -85,7 +89,10 @@ impl ProcessManager {
         self.connect_device_with_options(ConnectOptions::default())
     }
 
-    pub fn connect_device_with_options(&self, options: ConnectOptions) -> Result<TrayStatus, String> {
+    pub fn connect_device_with_options(
+        &self,
+        options: ConnectOptions,
+    ) -> Result<TrayStatus, String> {
         self.apply_connect_options(options)?;
         self.set_desired_connected(true)?;
         match self.start_gateway() {
@@ -113,33 +120,65 @@ impl ProcessManager {
         fs::create_dir_all(&gateway_state)
             .map_err(|error| format!("Failed to create gateway state directory: {error}"))?;
         self.clear_dead_gateway_lock()?;
+        let launch = self.gateway_launch_options()?;
+        let requested_pairing_token = launch.pairing_token.clone().unwrap_or_default();
+        let reconnect_requested = !requested_pairing_token.trim().is_empty();
+        let launch_workspace_id = launch.workspace_id.clone();
+        let launch_gateway_api_url = launch.gateway_api_url.clone();
 
         if let Some(pid) = self.live_gateway_lock_pid()? {
-            let mut guard = self.lock_state()?;
-            guard.gateway = None;
-            guard.adopted_gateway_pid = Some(pid);
-            guard.last_error = None;
-            drop(guard);
-            self.verify_session();
-            let guard = self.lock_state()?;
-            return Ok(self.status_from_guard(&guard));
+            if reconnect_requested {
+                let _ = terminate_pid(pid);
+                std::thread::sleep(Duration::from_millis(300));
+            } else {
+                let mut guard = self.lock_state()?;
+                guard.gateway = None;
+                guard.adopted_gateway_pid = Some(pid);
+                guard.last_error = None;
+                drop(guard);
+                self.verify_session();
+                let guard = self.lock_state()?;
+                return Ok(self.status_from_guard(&guard));
+            }
+        }
+        if reconnect_requested {
+            for name in [
+                "gateway.lock",
+                "checkpoints.json",
+                "hello.json",
+                "identity.json",
+                "journal.ndjson",
+                "outbox.json",
+                "presence.json",
+                "registration.json",
+                "telegram-session.json",
+                "tokens.json",
+                "whatsapp-session.json",
+            ] {
+                let _ = fs::remove_file(gateway_state.join(name));
+            }
+            for name in ["telegram", "whatsapp"] {
+                let _ = fs::remove_dir_all(gateway_state.join(name));
+            }
         }
 
         let node = node_binary();
         let gateway_entry = self.repo_root().join("empyralis-gateway/dist/index.js");
         let secret = self.supervisor_secret()?;
-        let launch = self.gateway_launch_options()?;
         let child = Command::new(node)
             .arg(gateway_entry)
             .current_dir(self.repo_root())
             .env("EMPYRALIS_SUPERVISOR_SECRET", secret)
             .env("EMPYRALIS_SUPERVISOR_URL", SUPERVISOR_URL)
-            .env("EMPYRALIS_GATEWAY_API_URL", launch.gateway_api_url)
+            .env("EMPYRALIS_GATEWAY_API_URL", launch_gateway_api_url)
             .env("EMPYRALIS_GATEWAY_STATE_DIR", &gateway_state)
             .env("EMPYRALIS_GATEWAY_DISPLAY_NAME", self.device_name())
-            .env("EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID", launch.workspace_id)
+            .env(
+                "EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID",
+                launch_workspace_id,
+            )
             .env("EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT", self.repo_root())
-            .env("EMPYRALIS_GATEWAY_PAIRING_TOKEN", launch.pairing_token.unwrap_or_default())
+            .env("EMPYRALIS_GATEWAY_PAIRING_TOKEN", requested_pairing_token)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -199,6 +238,7 @@ impl ProcessManager {
                 session_verified: false,
                 heartbeat_fresh: false,
                 session_status: "none".to_string(),
+                workspace_id: None,
                 launch_at_login: false,
                 status_url: STATUS_URL.to_string(),
                 error: Some(error),
@@ -232,16 +272,34 @@ impl ProcessManager {
     }
 
     fn start_supervisor(&self) -> Result<(), String> {
+        let secret = self.supervisor_secret()?;
         if supervisor_healthy() {
-            let mut guard = self.lock_state()?;
-            guard.supervisor = None;
-            guard.adopted_supervisor_pid = listening_pid_for_port(7788);
-            guard.last_error = None;
-            return Ok(());
+            if !supervisor_accepts_secret(&secret) {
+                if let Some(pid) = listening_pid_for_port(7788) {
+                    let _ = terminate_pid(pid);
+                }
+                for _ in 0..20 {
+                    if !supervisor_healthy() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+                if supervisor_healthy() {
+                    return Err(
+                        "Supervisor is already running with a different secret. Stop it and reconnect."
+                            .to_string(),
+                    );
+                }
+            } else {
+                let mut guard = self.lock_state()?;
+                guard.supervisor = None;
+                guard.adopted_supervisor_pid = listening_pid_for_port(7788);
+                guard.last_error = None;
+                return Ok(());
+            }
         }
 
         self.ensure_supervisor_binary()?;
-        let secret = self.supervisor_secret()?;
         let audit_db = self.app_support_dir().join("supervisor-audit.sqlite3");
         let supervisor_bin = self.supervisor_binary();
         let mut child = Command::new(supervisor_bin)
@@ -277,11 +335,25 @@ impl ProcessManager {
     }
 
     fn status_from_guard(&self, guard: &ManagedProcesses) -> TrayStatus {
-        let supervisor_running = guard.supervisor.as_ref().map(process_still_running).unwrap_or(false)
-            || guard.adopted_supervisor_pid.map(process_alive).unwrap_or(false)
+        let supervisor_running = guard
+            .supervisor
+            .as_ref()
+            .map(process_still_running)
+            .unwrap_or(false)
+            || guard
+                .adopted_supervisor_pid
+                .map(process_alive)
+                .unwrap_or(false)
             || supervisor_healthy();
-        let gateway_running = guard.gateway.as_ref().map(process_still_running).unwrap_or(false)
-            || guard.adopted_gateway_pid.map(process_alive).unwrap_or(false)
+        let gateway_running = guard
+            .gateway
+            .as_ref()
+            .map(process_still_running)
+            .unwrap_or(false)
+            || guard
+                .adopted_gateway_pid
+                .map(process_alive)
+                .unwrap_or(false)
             || self.live_gateway_lock_pid().ok().flatten().is_some();
         let state = if let Some(error) = guard.last_error.as_ref() {
             if !error.is_empty() {
@@ -316,6 +388,7 @@ impl ProcessManager {
             } else {
                 guard.session_status.clone()
             },
+            workspace_id: Some(self.active_workspace_id_from_guard(guard)),
             launch_at_login: self.launch_agent_path().exists(),
             status_url: STATUS_URL.to_string(),
             error: guard.last_error.clone(),
@@ -398,18 +471,36 @@ impl ProcessManager {
         }
     }
 
+    fn active_workspace_id(&self) -> String {
+        match self.lock_state() {
+            Ok(guard) => self.active_workspace_id_from_guard(&guard),
+            Err(_) => self.workspace_id.clone(),
+        }
+    }
+
+    fn active_workspace_id_from_guard(&self, guard: &ManagedProcesses) -> String {
+        guard
+            .workspace_id
+            .clone()
+            .unwrap_or_else(|| self.workspace_id.clone())
+    }
+
     fn poll_session_once(&self) -> SessionVerification {
-        let local_verification = self.poll_local_gateway_session_once();
+        let active_workspace_id = self.active_workspace_id();
+        let local_verification = self.poll_local_gateway_session_once(&active_workspace_id);
         if local_verification.session_verified {
             return local_verification;
         }
-        if self.backend_url.trim().is_empty() || self.workspace_id.trim().is_empty() || self.api_key.trim().is_empty() {
+        if self.backend_url.trim().is_empty()
+            || active_workspace_id.trim().is_empty()
+            || self.api_key.trim().is_empty()
+        {
             return local_verification;
         }
         let url = format!(
             "{}/api/gateway/registrations?workspace_id={}",
             self.backend_url.trim_end_matches('/'),
-            percent_encode_query(self.workspace_id.trim()),
+            percent_encode_query(active_workspace_id.trim()),
         );
         let output = Command::new("curl")
             .arg("--silent")
@@ -439,7 +530,7 @@ impl ProcessManager {
         }
     }
 
-    fn poll_local_gateway_session_once(&self) -> SessionVerification {
+    fn poll_local_gateway_session_once(&self, workspace_id: &str) -> SessionVerification {
         let checkpoint_path = self.gateway_state_dir().join("checkpoints.json");
         let journal_path = self.gateway_state_dir().join("journal.ndjson");
         let checkpoint_payload = fs::read_to_string(&checkpoint_path).ok();
@@ -471,7 +562,8 @@ impl ProcessManager {
             .and_then(|modified| modified.elapsed().ok())
             .map(|age| age <= Duration::from_secs(45))
             .unwrap_or(false);
-        let heartbeat_acknowledged = journal_fresh && recent_journal_has_heartbeat_ack(&journal_path);
+        let heartbeat_acknowledged = journal_fresh
+            && recent_journal_has_heartbeat_ack_for_workspace(&journal_path, workspace_id);
         if health_state == "online" && heartbeat_acknowledged {
             return SessionVerification {
                 session_verified: true,
@@ -482,7 +574,11 @@ impl ProcessManager {
         SessionVerification {
             session_verified: false,
             heartbeat_fresh: heartbeat_acknowledged,
-            session_status: if health_state == "online" { "stale".to_string() } else { "none".to_string() },
+            session_status: if health_state == "online" {
+                "stale".to_string()
+            } else {
+                "none".to_string()
+            },
         }
     }
 
@@ -504,11 +600,15 @@ impl ProcessManager {
             }
         }
 
-        fs::create_dir_all(self.app_support_dir())
-            .map_err(|error| format!("Failed to create tray application support directory: {error}"))?;
+        fs::create_dir_all(self.app_support_dir()).map_err(|error| {
+            format!("Failed to create tray application support directory: {error}")
+        })?;
         let mut bytes = [0_u8; 32];
         rand::thread_rng().fill_bytes(&mut bytes);
-        let secret = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        let secret = bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         fs::write(&path, &secret)
             .map_err(|error| format!("Failed to persist supervisor secret: {error}"))?;
         Ok(secret)
@@ -534,7 +634,11 @@ impl ProcessManager {
     }
 
     fn ensure_gateway_dist(&self) -> Result<(), String> {
-        if self.repo_root().join("empyralis-gateway/dist/index.js").exists() {
+        if self
+            .repo_root()
+            .join("empyralis-gateway/dist/index.js")
+            .exists()
+        {
             return Ok(());
         }
         let status = Command::new(npm_binary())
@@ -706,10 +810,19 @@ fn session_verification_from_payload(value: &Value) -> SessionVerification {
     let mut saw_stale = false;
     let mut saw_fresh = false;
     for item in items {
-        let status = item.get("status").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
-        let backend_heartbeat_fresh = item.get("heartbeat_fresh").and_then(Value::as_bool).unwrap_or(false);
+        let status = item
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        let backend_heartbeat_fresh = item
+            .get("heartbeat_fresh")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let heartbeat_age_seconds = item.get("heartbeat_age_seconds").and_then(Value::as_i64);
-        let heartbeat_fresh = backend_heartbeat_fresh && heartbeat_age_seconds.map(|age| age <= 30).unwrap_or(false);
+        let heartbeat_fresh =
+            backend_heartbeat_fresh && heartbeat_age_seconds.map(|age| age <= 30).unwrap_or(false);
         let latest_session_status = item
             .get("latest_session_status")
             .and_then(Value::as_str)
@@ -719,7 +832,10 @@ fn session_verification_from_payload(value: &Value) -> SessionVerification {
         if heartbeat_fresh {
             saw_fresh = true;
         }
-        if status == "active" && heartbeat_fresh && matches!(latest_session_status.as_str(), "active" | "connected") {
+        if status == "active"
+            && heartbeat_fresh
+            && matches!(latest_session_status.as_str(), "active" | "connected")
+        {
             return SessionVerification {
                 session_verified: true,
                 heartbeat_fresh: true,
@@ -737,7 +853,11 @@ fn session_verification_from_payload(value: &Value) -> SessionVerification {
     }
 }
 
-fn recent_journal_has_heartbeat_ack(path: &Path) -> bool {
+fn recent_journal_has_heartbeat_ack_for_workspace(path: &Path, workspace_id: &str) -> bool {
+    let expected_workspace_id = workspace_id.trim();
+    if expected_workspace_id.is_empty() {
+        return false;
+    }
     let Ok(file) = fs::File::open(path) else {
         return false;
     };
@@ -769,7 +889,14 @@ fn recent_journal_has_heartbeat_ack(path: &Path) -> bool {
             continue;
         }
         if direction == "outbound" && message_type == "gateway.heartbeat" && saw_response_after {
-            return true;
+            let heartbeat_workspace_id = value
+                .get("payload")
+                .and_then(|payload| payload.get("scope"))
+                .and_then(|scope| scope.get("workspace_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            return heartbeat_workspace_id == expected_workspace_id;
         }
     }
     false
@@ -820,6 +947,79 @@ fn supervisor_healthy() -> bool {
     }
     let mut response = String::new();
     stream.read_to_string(&mut response).is_ok() && response.contains("200")
+}
+
+fn supervisor_accepts_secret(secret: &str) -> bool {
+    let Ok(mut addrs) = SUPERVISOR_HEALTH_ADDR.to_socket_addrs() else {
+        return false;
+    };
+    let Some(addr) = addrs.next() else {
+        return false;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(350)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(700)));
+
+    let request_id = "tray-secret-probe";
+    let capability_id = "empyralis.secret_probe";
+    let run_id = "tray-secret-probe";
+    let workspace_id = "tray-secret-probe";
+    let nonce = "tray-secret-probe";
+    let expires_at = "9999-12-31T23:59:59Z";
+    let sign_str = format!(
+        "execute:{request_id}:{capability_id}:{run_id}:{workspace_id}:{nonce}:{expires_at}"
+    );
+    let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac.update(sign_str.as_bytes());
+    let signature = hex_encode(mac.finalize().into_bytes().as_slice());
+    let body = serde_json::json!({
+        "request_id": request_id,
+        "capability_id": capability_id,
+        "run_id": run_id,
+        "trace_id": "tray-secret-probe",
+        "workspace_id": workspace_id,
+        "arguments": {},
+        "runtime_access_mode": null,
+        "empyralis_approved": true,
+        "nonce": nonce,
+        "expires_at": expires_at,
+        "signature": signature,
+    })
+    .to_string();
+    let request = format!(
+        "POST /execute HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    let lowered = response.to_ascii_lowercase();
+    if lowered.contains("signature mismatch")
+        || lowered.contains("invalid signature")
+        || lowered.contains("401 unauthorized")
+    {
+        return false;
+    }
+    lowered.contains("unsupported capability")
+        || lowered.contains("unknown capability")
+        || lowered.contains("empyralis.secret_probe")
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 fn process_still_running(child: &Child) -> bool {

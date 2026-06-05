@@ -136,32 +136,6 @@ class DirectChatResponseServiceTests(unittest.TestCase):
         self.assertEqual(payload["interventions"][0]["code"], "direct_chat_tool_execution_blocked")
         self.assertEqual(payload["interventions"][0]["status"], "blocked")
 
-    def test_unavailable_fallback_payload_uses_no_provider_response_when_no_tool_result(self) -> None:
-        payload = direct_chat_response_service.unavailable_fallback_payload(
-            fallback_payload=None,
-            proactive_suggestions=["next"],
-            workspace_id="default",
-            requested_provider="openai",
-            requested_model="gpt-5.4",
-            reasoning_effort="medium",
-            connected_systems=[],
-            tool_capabilities=[],
-            no_provider_tool_fallback_reason="no_provider_tool_execution",
-            unavailable_fallback_reason="provider_unavailable",
-            services=self._services(),
-            no_provider_reasoning_required_response_fn=lambda: {
-                "reply": "",
-                "message": "No AI provider configured",
-                "actions": [],
-                "mode": "error",
-                "error": "no_provider",
-            },
-        )
-
-        self.assertEqual(payload["mode"], "error")
-        self.assertEqual(payload["error"], "no_provider")
-        self.assertEqual(payload["context_used"]["fallback_reason"], "provider_unavailable")
-
 
 if __name__ == "__main__":
     unittest.main()

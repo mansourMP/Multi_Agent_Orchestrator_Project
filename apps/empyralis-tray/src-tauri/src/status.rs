@@ -8,6 +8,7 @@ use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
 const LOCAL_ORIGIN: &str = "http://localhost:3000";
+const LOCAL_ORIGIN_ALT: &str = "http://127.0.0.1:3000";
 
 pub fn start_status_server(manager: Arc<ProcessManager>, app_handle: AppHandle) {
     thread::spawn(move || {
@@ -36,7 +37,22 @@ fn handle_stream(mut stream: TcpStream, manager: Arc<ProcessManager>, app_handle
     let path = parts.next().unwrap_or("/").split('?').next().unwrap_or("/");
 
     if method == "OPTIONS" {
-        write_response(&mut stream, "204 No Content", "");
+        write_response(
+            &mut stream,
+            "204 No Content",
+            "",
+            &response_origin(&request),
+        );
+        return;
+    }
+
+    if method == "POST" && !request_origin_allowed(&request) {
+        write_response(
+            &mut stream,
+            "403 Forbidden",
+            &json!({ "ok": false, "error": "Origin not allowed" }).to_string(),
+            &response_origin(&request),
+        );
         return;
     }
 
@@ -54,7 +70,58 @@ fn handle_stream(mut stream: TcpStream, manager: Arc<ProcessManager>, app_handle
         ),
     };
 
-    write_response(&mut stream, status, &body);
+    write_response(&mut stream, status, &body, &response_origin(&request));
+}
+
+fn request_header(request: &str, name: &str) -> Option<String> {
+    let needle = name.to_ascii_lowercase();
+    request.lines().skip(1).find_map(|line| {
+        let (header_name, value) = line.split_once(':')?;
+        if header_name.trim().to_ascii_lowercase() != needle {
+            return None;
+        }
+        Some(value.trim().to_string())
+    })
+}
+
+fn origin_from_referer(value: &str) -> String {
+    let trimmed = value.trim();
+    for prefix in ["http://", "https://"] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let host = rest.split('/').next().unwrap_or_default();
+            return format!("{prefix}{host}");
+        }
+    }
+    String::new()
+}
+
+fn request_origin_allowed(request: &str) -> bool {
+    let origin = request_header(request, "Origin")
+        .or_else(|| request_header(request, "Referer").map(|value| origin_from_referer(&value)))
+        .unwrap_or_default();
+    let normalized = origin.trim();
+    if normalized.is_empty() {
+        return true;
+    }
+    matches!(
+        normalized,
+        LOCAL_ORIGIN
+            | LOCAL_ORIGIN_ALT
+            | "tauri://localhost"
+            | "http://tauri.localhost"
+            | "https://tauri.localhost"
+    )
+}
+
+fn response_origin(request: &str) -> String {
+    let origin = request_header(request, "Origin")
+        .or_else(|| request_header(request, "Referer").map(|value| origin_from_referer(&value)))
+        .unwrap_or_default();
+    let normalized = origin.trim();
+    if matches!(normalized, LOCAL_ORIGIN | LOCAL_ORIGIN_ALT) {
+        return normalized.to_string();
+    }
+    LOCAL_ORIGIN.to_string()
 }
 
 fn request_json_body(request: &str) -> Value {
@@ -64,7 +131,10 @@ fn request_json_body(request: &str) -> Value {
 
 fn launch_at_login_body(manager: &ProcessManager, request: &str) -> String {
     let body = request_json_body(request);
-    let enabled = body.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+    let enabled = body
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     action_body(manager.set_launch_at_login(enabled))
 }
 
@@ -90,11 +160,18 @@ fn connect_body(manager: &ProcessManager, request: &str) -> String {
     action_body(manager.connect_device_with_options(options))
 }
 
-
 fn notify_body(app_handle: &AppHandle, request: &str) -> String {
     let body = request_json_body(request);
-    let title = body.get("title").and_then(Value::as_str).unwrap_or("Empyralis").trim();
-    let message = body.get("body").and_then(Value::as_str).unwrap_or("").trim();
+    let title = body
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("Empyralis")
+        .trim();
+    let message = body
+        .get("body")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if title.is_empty() || message.is_empty() {
         return json!({ "ok": false, "error": "title and body are required" }).to_string();
     }
@@ -132,9 +209,9 @@ fn status_json(status: TrayStatus) -> Value {
     value
 }
 
-fn write_response(stream: &mut TcpStream, status: &str, body: &str) {
+fn write_response(stream: &mut TcpStream, status: &str, body: &str, origin: &str) {
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: {LOCAL_ORIGIN}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: {}\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: {}\r\n\r\n{body}",
         body.as_bytes().len(),
     );
     let _ = stream.write_all(response.as_bytes());

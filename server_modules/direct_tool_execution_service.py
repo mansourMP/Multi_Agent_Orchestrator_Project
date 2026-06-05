@@ -382,6 +382,8 @@ def _infer_trace_capability_id(connector_id: str, action_id: str) -> Optional[st
         return "shell.execute"
     if normalized_connector == "screenshot" and normalized_action == "capture":
         return "screenshot.capture"
+    if normalized_connector in _CHANNEL_CONNECTORS:
+        return f"channel.{normalized_connector}.{normalized_action or 'action'}"
     if normalized_connector == "computer" and normalized_action:
         return f"computer_control.{normalized_action}"
     if normalized_connector == "hardware":
@@ -580,34 +582,49 @@ def _parse_result_json_object(result_text: str) -> Dict[str, Any]:
 
 
 def _first_artifact_id_from_result_payload(payload: Dict[str, Any]) -> str:
-    containers: List[Dict[str, Any]] = []
-    if isinstance(payload, dict):
-        containers.append(payload)
-        execution = payload.get("execution")
-        if isinstance(execution, dict):
-            containers.append(execution)
-            execution_result = execution.get("result")
-            if isinstance(execution_result, dict):
-                containers.append(execution_result)
-        result = payload.get("result")
-        if isinstance(result, dict):
-            containers.append(result)
-
-    for container in containers:
-        for key in ("artifact_id", "screenshot_artifact_id", "id"):
-            candidate = str(container.get(key) or "").strip()
-            if candidate:
-                return candidate
-        artifacts = container.get("artifacts")
-        if isinstance(artifacts, list):
-            for item in artifacts:
-                if isinstance(item, dict):
-                    candidate = str(item.get("artifact_id") or item.get("id") or "").strip()
-                else:
-                    candidate = str(item or "").strip()
+    def _visit(value: Any, *, artifact_container: bool = False) -> str:
+        if isinstance(value, dict):
+            for key in ("artifact_id", "screenshot_artifact_id"):
+                candidate = str(value.get(key) or "").strip()
                 if candidate:
                     return candidate
-    return ""
+            if artifact_container:
+                candidate = str(value.get("id") or "").strip()
+                if candidate:
+                    return candidate
+            artifacts = value.get("artifacts")
+            if isinstance(artifacts, list):
+                for item in artifacts:
+                    candidate = _visit(item, artifact_container=True)
+                    if candidate:
+                        return candidate
+            for key in (
+                "artifact",
+                "live_screenshot",
+                "screenshot",
+                "streaming_ui",
+                "outputs",
+                "result_data",
+                "child_result",
+                "execution",
+                "result",
+            ):
+                candidate = _visit(value.get(key))
+                if candidate:
+                    return candidate
+            for item in value.values():
+                candidate = _visit(item)
+                if candidate:
+                    return candidate
+            return ""
+        if isinstance(value, list):
+            for item in value:
+                candidate = _visit(item, artifact_container=artifact_container)
+                if candidate:
+                    return candidate
+        elif artifact_container:
+            return str(value or "").strip()
+    return _visit(payload)
 
 
 def _hardware_result_summary(
@@ -626,12 +643,12 @@ def _hardware_result_summary(
     reason = str(result_payload.get("reason") or "").strip()
     if status == "completed":
         if capability_id == "screenshot.capture":
-            return "Captured screenshot from Agent Computer."
+            return "Screenshot captured through Agent Computer."
         return f"{capability_id or 'Hardware action'} completed."
     if status == "waiting_approval":
         return f"Waiting for approval to run {capability_id or 'hardware action'}."
     if status in {"offline", "degraded"}:
-        return "Agent Computer is not connected. Open Hardware to connect this Mac."
+        return "Agent Computer is not connected for this workspace."
     if status == "failed":
         return reason or "Hardware action failed."
     return fallback
@@ -686,6 +703,24 @@ def build_direct_tool_trace_metadata(
                 "height": 0,
             }
 
+    if normalized_connector == "screenshot" and normalized_action == "capture":
+        result_payload = _parse_result_json_object(result_text)
+        result_summary = _compact_trace_text(
+            _hardware_result_summary(
+                capability_id="screenshot.capture",
+                result_payload=result_payload,
+                fallback=result_summary,
+            )
+        )
+        artifact_ref = _first_artifact_id_from_result_payload(result_payload)
+        if artifact_ref:
+            browser_screenshot = {
+                "artifact_id": artifact_ref,
+                "caption": "Agent Computer screenshot",
+                "width": 0,
+                "height": 0,
+            }
+
     if normalized_connector == "hardware":
         result_payload = _parse_result_json_object(result_text)
         capability_id = str(payload.get("action") or payload.get("capability_id") or normalized_action or "action").strip()
@@ -732,7 +767,7 @@ def build_direct_tool_trace_metadata(
 def direct_tool_followup_message(tool_name: str, result_text: str) -> str:
     cleaned_result = str(result_text or "").strip() or "No result."
     return (
-        f"Tool result for {tool_name}:\n{cleaned_result}\n\n"
+        f"Action outcome for {tool_name}:\n{cleaned_result}\n\n"
         "Continue until the task is complete. If another tool is needed, call it now. "
         "Otherwise provide the final answer to the user."
     )

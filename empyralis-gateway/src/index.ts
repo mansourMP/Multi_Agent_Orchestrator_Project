@@ -24,6 +24,18 @@ import { GatewayBrowserRuntime } from "./browser/runtime";
 
 const GATEWAY_VERSION = "0.1.0";
 
+export function shouldRegisterFromPairingToken(
+  pairingToken: string | undefined,
+  storedGatewayToken: string | undefined,
+  explicitGatewayToken: string | undefined,
+): boolean {
+  return Boolean(
+    String(pairingToken || "").trim()
+      && !String(storedGatewayToken || "").trim()
+      && !String(explicitGatewayToken || "").trim(),
+  );
+}
+
 async function acquireGatewayProcessLock(stateDir: string): Promise<() => Promise<void>> {
   const lockPath = path.join(stateDir, "gateway.lock");
   await fs.mkdir(stateDir, { recursive: true });
@@ -152,10 +164,12 @@ async function main(): Promise<void> {
   installSignalHandler("SIGTERM");
 
   try {
-    if (config.pairingToken) {
-      await client.registerFromPairing(config.pairingToken, identity, runtimeMetadata);
-    } else if (config.gatewayToken) {
+    const storedTokens = await tokenStore.load();
+    if (config.gatewayToken) {
       await tokenStore.save({ gatewayToken: config.gatewayToken });
+    }
+    if (shouldRegisterFromPairingToken(config.pairingToken, storedTokens.gatewayToken, config.gatewayToken)) {
+      await client.registerFromPairing(config.pairingToken!, identity, runtimeMetadata);
     }
 
     await journal.append("system", "gateway.process.start", {

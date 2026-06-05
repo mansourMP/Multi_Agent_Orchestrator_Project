@@ -193,7 +193,7 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
             )
         )
 
-    def test_message_can_use_direct_connector_tools_detects_workspace_connector(self) -> None:
+    def test_message_can_use_direct_connector_tools_does_not_treat_studio_bot_as_personal_channel(self) -> None:
         callbacks = _callbacks()
         allowed = service.message_can_use_direct_connector_tools(
             "Send a telegram message",
@@ -202,7 +202,7 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
             callbacks=callbacks,
         )
 
-        self.assertTrue(allowed)
+        self.assertFalse(allowed)
 
     def test_tool_inventory_questions_are_detected(self) -> None:
         self.assertTrue(service.message_requests_tool_inventory("/tools"))
@@ -276,8 +276,10 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
         self.assertIn("Sage AI: setup required", reply)
         self.assertIn("Workspace AI: blocked (policy disabled)", reply)
         self.assertIn("Agent Computer: offline", reply)
-        self.assertIn("Connected apps: Google Workspace, GitHub (not connected)", reply)
-        self.assertIn("Messaging channels: Telegram, WhatsApp (not ready)", reply)
+        self.assertIn("Connected apps: Google Workspace", reply)
+        self.assertNotIn("GitHub (not connected)", reply)
+        self.assertIn("Messaging channels: Telegram", reply)
+        self.assertNotIn("WhatsApp (not ready)", reply)
         self.assertIn("Additional AI connections: 3 configured", reply)
         self.assertIn("Setup available now: Connect Agent Computer, Add API key.", reply)
 

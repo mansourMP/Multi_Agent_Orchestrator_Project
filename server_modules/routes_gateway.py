@@ -947,6 +947,76 @@ def _active_workspace_gateway_registration(workspace_id: str) -> Optional[Dict[s
     return (online or active)[0]
 
 
+def _gateway_hardware_session_payload(
+    workspace_id: str,
+    registration: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = str(workspace_id or "").strip() or "default"
+    if not registration:
+        return {
+            "available": False,
+            "connected": False,
+            "session_verified": False,
+            "status": "offline",
+            "workspace_id": resolved_workspace_id,
+            "gateway_id": None,
+            "device_id": None,
+            "device_name": None,
+            "platform": None,
+            "capabilities": [],
+            "last_seen_at": None,
+            "last_heartbeat_at": None,
+            "heartbeat_fresh": False,
+            "heartbeat_age_seconds": None,
+            "latest_session_status": None,
+            "connection_status": None,
+            "reason": "no_active_gateway_registration",
+        }
+
+    public_payload = gateway_registry_service.gateway_registration_public_payload(registration)
+    connection_status = str(public_payload.get("connection_status") or "").strip().lower()
+    registration_status = str(public_payload.get("status") or "").strip().lower()
+    trust_state = str(public_payload.get("device_trust_state") or "").strip().lower()
+    latest_session_status = str(public_payload.get("latest_session_status") or "").strip().lower()
+    heartbeat_fresh = bool(public_payload.get("heartbeat_fresh"))
+    session_verified = bool(
+        registration_status == "active"
+        and trust_state != "revoked"
+        and connection_status == "online"
+        and latest_session_status == "connected"
+        and heartbeat_fresh
+    )
+    reason = ""
+    if trust_state == "revoked" or registration_status == "revoked":
+        reason = "device_revoked"
+    elif not heartbeat_fresh:
+        reason = "gateway_heartbeat_stale"
+    elif latest_session_status != "connected":
+        reason = "gateway_session_not_connected"
+    elif connection_status != "online":
+        reason = f"gateway_{connection_status or 'offline'}"
+
+    return {
+        "available": True,
+        "connected": session_verified,
+        "session_verified": session_verified,
+        "status": "connected" if session_verified else "offline",
+        "workspace_id": resolved_workspace_id,
+        "gateway_id": public_payload.get("gateway_id"),
+        "device_id": public_payload.get("device_id"),
+        "device_name": public_payload.get("display_name") or public_payload.get("device_id"),
+        "platform": public_payload.get("platform"),
+        "capabilities": list(public_payload.get("capabilities") or []),
+        "last_seen_at": public_payload.get("last_seen_at"),
+        "last_heartbeat_at": public_payload.get("last_heartbeat_at"),
+        "heartbeat_fresh": heartbeat_fresh,
+        "heartbeat_age_seconds": public_payload.get("heartbeat_age_seconds"),
+        "latest_session_status": public_payload.get("latest_session_status"),
+        "connection_status": public_payload.get("connection_status"),
+        "reason": reason,
+    }
+
+
 class GatewayApprovalResolveRequest(BaseModel):
     decision: str = Field(min_length=1)
     note: Optional[str] = None
@@ -1521,6 +1591,20 @@ async def list_gateway_registrations(
         minimum_role="viewer",
     )
     return gateway_registry_service.list_workspace_gateways(workspace_id=resolved_workspace_id)
+
+
+@router.get("/gateway/hardware/session")
+async def get_gateway_hardware_session(
+    workspace_id: str = Query(..., min_length=1),
+    current_user=Depends(require_api_key),
+):
+    resolved_workspace_id = enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="member",
+    )
+    registration = _active_workspace_gateway_registration(resolved_workspace_id)
+    return _gateway_hardware_session_payload(resolved_workspace_id, registration)
 
 
 @router.get("/gateway/hardware/capabilities")

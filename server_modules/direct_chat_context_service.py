@@ -39,6 +39,20 @@ def _compact_labels(items: Any, *, limit: int = 4) -> str:
     return ", ".join(labels) if labels else "none"
 
 
+def _compact_runtime_usable_labels(items: Any, *, limit: int = 4) -> str:
+    labels: List[str] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or item.get("runtime_usable") is not True:
+            continue
+        label = str(item.get("label") or item.get("id") or "").strip()
+        if not label or label in labels:
+            continue
+        labels.append(label)
+        if len(labels) >= limit:
+            break
+    return ", ".join(labels) if labels else "none"
+
+
 def _credits_summary_line(credits_truth: Dict[str, Any]) -> str:
     hosted_enabled = bool(credits_truth.get("hosted_enabled"))
     reason = str(credits_truth.get("reason") or "").strip().lower()
@@ -142,14 +156,14 @@ def availability_lines(
 
     computer_state = str(my_computer.get("state") or "").strip().lower()
     if computer_state:
-        lines.append(f"My Computer: {computer_state.replace('_', ' ')}")
+        lines.append(f"Agent Computer: {computer_state.replace('_', ' ')}")
 
     connected_apps = capability_truth.get("connected_apps") if isinstance(capability_truth.get("connected_apps"), list) else []
     channels = capability_truth.get("channels") if isinstance(capability_truth.get("channels"), list) else []
     byok_providers = capability_truth.get("byok_providers") if isinstance(capability_truth.get("byok_providers"), list) else []
 
-    lines.append(f"Connected apps: {_compact_labels(connected_apps)}")
-    lines.append(f"Messaging channels: {_compact_labels(channels)}")
+    lines.append(f"Connected apps: {_compact_runtime_usable_labels(connected_apps)}")
+    lines.append(f"Messaging channels: {_compact_runtime_usable_labels(channels)}")
     if byok_providers:
         lines.append(f"Available AI connections: {_compact_labels(byok_providers)}")
 

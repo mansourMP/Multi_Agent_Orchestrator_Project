@@ -70,7 +70,7 @@ interface GatewayRunOptions {
   afterConnected?: () => Promise<void>;
 }
 
-function compactGatewayResponsePayload(payload?: Record<string, unknown>): Record<string, unknown> | undefined {
+export function compactGatewayResponsePayload(payload?: Record<string, unknown>): Record<string, unknown> | undefined {
   if (!payload || payload.capability_id !== "screenshot.capture") {
     return payload;
   }
@@ -83,10 +83,8 @@ function compactGatewayResponsePayload(payload?: Record<string, unknown>): Recor
     .map((item) => {
       const compact = { ...item };
       if (typeof compact.data_base64 === "string" && compact.data_base64.length > 0) {
-        compact.data_truncated = true;
         compact.byte_size_estimate = Math.floor((compact.data_base64.length * 3) / 4);
       }
-      delete compact.data_base64;
       delete compact.base64;
       delete compact.data;
       return compact;

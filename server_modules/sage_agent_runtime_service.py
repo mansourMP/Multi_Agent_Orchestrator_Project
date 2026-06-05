@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from server_modules import (
     activity_ledger_service,
+    empyralis_model_tier_contract,
     kill_switch_gate,
     sage_instruction_compiler_service,
     sage_heartbeat_service,
@@ -59,6 +60,14 @@ from scripts.orion_local_worker_llm import resolve_requested_model
 
 ALLOWED_MODES = {SAGE_MODE}
 CLOUD_PROVIDER_IDS = ("anthropic", "deepseek", "openai", "gemini")
+EMPYRALIS_PROVIDER_ALIASES = {
+    "empyralis",
+    "empyralis_managed",
+    "workspace_ai",
+    "workspace-ai",
+    "platform_ai",
+    "platform-ai",
+}
 
 SAFE_ACTION_CLASSES = {"read"}
 BLOCKED_ACTION_CLASSES = {"write", "execute"}
@@ -83,7 +92,31 @@ def _coerce_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _resolve_cloud_provider(workspace_id: str) -> tuple[str, dict]:
+def _resolve_cloud_provider(
+    workspace_id: str,
+    requested_provider: str = "",
+    requested_model: str = "",
+) -> tuple[str, dict]:
+    requested = _coerce_text(requested_provider).lower()
+    if requested in EMPYRALIS_PROVIDER_ALIASES:
+        tier = empyralis_model_tier_contract.normalize_model_tier(
+            requested_model,
+            fallback="light",
+        )
+        contract = empyralis_model_tier_contract.model_tier_contract(tier, fallback="light")
+        requested = _coerce_text(contract.internal_provider).lower()
+    if requested:
+        if requested not in CLOUD_PROVIDER_IDS:
+            raise RuntimeError(f"Selected AI provider is not available for Sage: {requested}.")
+        credentials = direct_chat_credentials(workspace_id, requested)
+        if requested == "openai":
+            credential_type = _coerce_text(credentials.get("credential_type")).lower()
+            auth_mode = credential_auth_mode("openai", credentials)
+            if credential_type == "codex_token" or auth_mode == "oauth_token":
+                raise RuntimeError("Selected OpenAI route needs a direct OpenAI API key for Sage.")
+        if not supports_direct_message_native_chat(requested, credentials):
+            raise RuntimeError(f"Selected AI provider is not configured for Sage: {requested}.")
+        return requested, credentials
     for provider in CLOUD_PROVIDER_IDS:
         credentials = direct_chat_credentials(workspace_id, provider)
         if provider == "openai":
@@ -380,6 +413,9 @@ async def handle_sage_chat(
     message: str,
     surface: str = "chat",
     mode: str = "owner_sage",
+    requested_provider: str = "",
+    requested_model: str = "",
+    reasoning_effort: str = "",
     current_user: dict | None = None,
 ) -> dict:
     normalized_workspace_id = _coerce_text(workspace_id)
@@ -428,23 +464,39 @@ async def handle_sage_chat(
         used_context.append("sage_skills")
 
     # --- Call provider ---
-    provider, credentials = _resolve_cloud_provider(normalized_workspace_id)
+    provider, credentials = _resolve_cloud_provider(
+        normalized_workspace_id,
+        requested_provider=requested_provider,
+        requested_model=requested_model,
+    )
+    normalized_requested_model = _coerce_text(requested_model)
+    normalized_reasoning_effort = _coerce_text(reasoning_effort)
 
     context: dict = {
         "workspace_id": normalized_workspace_id,
         "provider": provider,
+        "model": normalized_requested_model,
         "source": "sage_chat",
         "surface": normalized_surface,
         "disable_provider_fallback": True,
+        "disable_model_fallback": True,
+        "strict_model_routing": True,
     }
     metadata: dict = {
         "workspace_id": normalized_workspace_id,
         "provider": provider,
+        "model": normalized_requested_model,
         "source": "sage_chat",
         "surface": normalized_surface,
         "credentials": credentials,
         "trace_id": trace_id,
+        "disable_provider_fallback": True,
+        "disable_model_fallback": True,
+        "strict_model_routing": True,
     }
+    if normalized_reasoning_effort:
+        context["reasoning_effort"] = normalized_reasoning_effort
+        metadata["reasoning_effort"] = normalized_reasoning_effort
     requested_model = resolve_requested_model(context, metadata, provider)
 
     # --- Build prompt ---

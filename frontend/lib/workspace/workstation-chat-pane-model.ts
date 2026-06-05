@@ -197,10 +197,77 @@ export function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+export function normalizeTraceEventType(value: unknown): string {
+  return readString(value).toLowerCase().replace(/_/g, '.');
+}
+
 const INTERNAL_TOOL_MARKUP_PATTERN = /<\s*\|\s*\|\s*DSML(?:\s*\|\s*\|\s*tool_calls\s*>?)?[\s\S]*/i;
+const ASSISTANT_PSEUDO_TOOL_LINE_PATTERN = /^\s*(?:run[_\s-]?command|shell[_\s-]?command|tool\s*:\s*computer|tool\s*:\s*hardware)\s*:?\s*.+$/gim;
+const SYNTHETIC_ASSISTANT_GATE_PATTERN = /\b(?:i do not have a verified agent computer result|i cannot confirm that action completed because no tool result was returned|connect or approve the required system|hardware actions need the computer to be connected|computer is already connected)\b/i;
+const SYNTHETIC_ASSISTANT_GATE_PREFIX_PATTERN = /\b(?:i do not have a verified agent computer|i cannot confirm that action|connect or approve the required|hardware actions need the computer|computer is already connected)\b/i;
 
 export function stripInternalToolMarkup(value: unknown): string {
-  return readString(value).replace(INTERNAL_TOOL_MARKUP_PATTERN, '').trim();
+  const text = readString(value);
+  const hadPseudoToolLine = ASSISTANT_PSEUDO_TOOL_LINE_PATTERN.test(text);
+  ASSISTANT_PSEUDO_TOOL_LINE_PATTERN.lastIndex = 0;
+  const cleaned = text
+    .replace(INTERNAL_TOOL_MARKUP_PATTERN, '')
+    .replace(ASSISTANT_PSEUDO_TOOL_LINE_PATTERN, '')
+    .trim();
+  if (
+    SYNTHETIC_ASSISTANT_GATE_PATTERN.test(cleaned)
+    || SYNTHETIC_ASSISTANT_GATE_PREFIX_PATTERN.test(cleaned)
+    || isProviderRuntimeGateMessage(cleaned)
+  ) {
+    return '';
+  }
+  if ((hadPseudoToolLine || text !== cleaned) && looksLikeAssistantActionPlanPreamble(cleaned)) {
+    return '';
+  }
+  if (looksLikeAssistantActionPlanPreamble(cleaned)) {
+    return '';
+  }
+  return cleaned;
+}
+
+function looksLikeAssistantActionPlanPreamble(value: string): boolean {
+  const normalized = value.trim().toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, ' ');
+  if (!normalized) {
+    return true;
+  }
+  if (normalized.length > 320) {
+    return false;
+  }
+  const planMarkers = [
+    "i'll check",
+    'i will check',
+    "i'll run",
+    'i will run',
+    "i'll retrieve",
+    'i will retrieve',
+    'running a command',
+    'running a command now',
+    'running the command',
+    'run a command',
+    'retrieve the details',
+    'retrieve details',
+    'hardware information',
+    'checking your system',
+    'checking the system',
+    'need to run',
+    'approve?',
+  ];
+  const resultMarkers = [
+    'the result is',
+    'here is',
+    'here are',
+    'i found',
+    'completed',
+    'captured',
+    'output',
+  ];
+  return planMarkers.some((marker) => normalized.includes(marker))
+    && !resultMarkers.some((marker) => normalized.includes(marker));
 }
 
 export function readModelParameterCountBillions(...values: unknown[]): number | null {
@@ -263,7 +330,7 @@ export function traceEventKey(event: WorkstationAgentTraceEvent, index: number):
   }
   const traceId = readString(event.trace_id) || 'trace';
   const seq = readNumber(event.seq, index + 1);
-  const eventType = readString(event.event_type) || 'trace.event';
+  const eventType = normalizeTraceEventType(event.event_type) || 'trace.event';
   return `${traceId}:${seq}:${eventType}:${index}`;
 }
 
@@ -289,7 +356,8 @@ export function mergeTraceEvents(
 }
 
 export function isTerminalTraceEvent(eventType: string): boolean {
-  return eventType === 'trace.completed' || eventType === 'trace.failed';
+  const normalized = normalizeTraceEventType(eventType);
+  return normalized === 'trace.completed' || normalized === 'trace.failed';
 }
 
 export function formatElapsedClock(totalSeconds: number): string {
@@ -327,7 +395,7 @@ export function resolveTraceDurationSeconds(liveTrace: LiveTraceState | null, tr
   const orderedEvents = [...liveTrace.events].sort((left, right) => readNumber(left.seq, 0) - readNumber(right.seq, 0));
   for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
     const event = orderedEvents[index];
-    const eventType = readString(event.event_type);
+    const eventType = normalizeTraceEventType(event.event_type);
     if (!isTerminalTraceEvent(eventType)) {
       continue;
     }
@@ -367,7 +435,7 @@ export function summarizeLiveTraceStep(liveTrace: LiveTraceState | null): {
 
   for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
     const event = orderedEvents[index];
-    const eventType = readString(event.event_type);
+    const eventType = normalizeTraceEventType(event.event_type);
     const data = readObject(event.data);
 
     if (eventType === 'trace.failed') {
@@ -389,6 +457,39 @@ export function summarizeLiveTraceStep(liveTrace: LiveTraceState | null): {
         state: 'running',
       };
     }
+    if (eventType.startsWith('gateway.action') || eventType.startsWith('hardware.action')) {
+      const status = readString(data.status).toLowerCase();
+      const capability = shorten(readString(data.capability) || readString(data.capability_id) || readString(data.action));
+      if (eventType.endsWith('.failed') || status === 'failed' || status === 'error') {
+        return {
+          label: capability ? `Agent Computer failed: ${capability}` : 'Agent Computer action failed',
+          state: 'failed',
+        };
+      }
+      if (eventType.endsWith('.completed') || status === 'completed' || status === 'done') {
+        return {
+          label: capability ? `Agent Computer completed: ${capability}` : 'Agent Computer action complete',
+          state: 'complete',
+        };
+      }
+      return {
+        label: capability ? `Using Agent Computer: ${capability}` : 'Using Agent Computer',
+        state: 'running',
+      };
+    }
+    if (eventType.startsWith('channel.')) {
+      const channel = shorten(readString(data.channel_name) || readString(data.connector_id) || readString(data.delivery_transport));
+      if (eventType.includes('sent') || eventType.includes('delivery')) {
+        return {
+          label: channel ? `Sending channel message: ${channel}` : 'Sending channel message',
+          state: 'running',
+        };
+      }
+      return {
+        label: channel ? `Reading channel: ${channel}` : 'Reading channel',
+        state: 'running',
+      };
+    }
     if (eventType.startsWith('computer.') || eventType === 'browser.action' || eventType === 'browser.screenshot') {
       return {
         label: 'Using the computer',
@@ -397,6 +498,14 @@ export function summarizeLiveTraceStep(liveTrace: LiveTraceState | null): {
     }
     if (eventType === 'tool.progress') {
       const toolName = readString(data.tool_name);
+      const progressMessage = readString(data.message);
+      const progressHaystack = `${toolName} ${progressMessage}`.toLowerCase();
+      if (/computer.*system.*info|system[_\s.-]?info/.test(progressHaystack) && /computer|hardware|gateway/.test(progressHaystack)) {
+        return {
+          label: 'Reading computer info',
+          state: 'running',
+        };
+      }
       if (fileTool(toolName)) {
         return {
           label: 'Reading file',
@@ -410,12 +519,18 @@ export function summarizeLiveTraceStep(liveTrace: LiveTraceState | null): {
         };
       }
       return {
-        label: readString(data.message) || (toolName ? `Running ${toolName}` : 'Running a tool'),
+        label: progressMessage || (toolName ? `Running ${toolName}` : 'Running a tool'),
         state: 'running',
       };
     }
     if (eventType === 'tool.started') {
       const toolName = readString(data.tool_name);
+      if (/computer.*system.*info|system[_\s.-]?info/.test(toolName.toLowerCase()) && /computer|hardware|gateway/.test(toolName.toLowerCase())) {
+        return {
+          label: 'Reading computer info',
+          state: 'running',
+        };
+      }
       if (fileTool(toolName)) {
         return {
           label: 'Reading file',
@@ -472,7 +587,7 @@ export function summarizeLiveTraceStep(liveTrace: LiveTraceState | null): {
 }
 
 export function normalizeTraceStreamEvent(payload: Record<string, unknown>): WorkstationAgentTraceEvent | null {
-  const eventType = readString(payload.event_type);
+  const eventType = normalizeTraceEventType(payload.event_type);
   if (!eventType) {
     return null;
   }
@@ -646,12 +761,12 @@ export function connectorSetupNoticeFromInterventions(interventions: unknown[]):
   const title = readString(record.title);
   const detail = readString(record.detail);
   const combinedText = `${code} ${title} ${detail}`.toLowerCase();
-  let message = detail || title || 'Connect the required service before Sage can use that action.';
-  let actionLabel = 'Open Connections';
+  const message = detail || title || 'Connection required.';
+  let actionLabel = 'Open model connections';
   let actionTarget: NonNullable<SendFailureNotice['actions']>[number]['target'] = 'integrations';
 
   if (code.startsWith('google_workspace_') || combinedText.includes('google workspace')) {
-    message = 'Connect Google Workspace to let Sage use Gmail, Calendar, or Drive actions. You can keep chatting normally.';
+    actionLabel = 'Open connections';
   } else if (
     code === 'local_setup_required'
     || combinedText.includes('agent computer')
@@ -661,7 +776,6 @@ export function connectorSetupNoticeFromInterventions(interventions: unknown[]):
     || combinedText.includes('local computer')
     || combinedText.includes('screenshot')
   ) {
-    message = 'Connect Agent Computer in Hardware before Sage uses this computer. You can keep chatting normally.';
     actionLabel = 'Open Hardware';
     actionTarget = 'hardware';
   } else if (
@@ -670,15 +784,15 @@ export function connectorSetupNoticeFromInterventions(interventions: unknown[]):
     || combinedText.includes('smtp')
     || combinedText.includes('email connector')
   ) {
-    message = 'Connect an email account before Sage sends email. You can keep chatting normally.';
+    actionLabel = 'Open connections';
   } else if (code.startsWith('telegram_bot_') || combinedText.includes('telegram')) {
-    message = 'Connect Telegram before Sage uses Telegram actions. You can keep chatting normally.';
+    actionLabel = 'Open connections';
   } else if (code.startsWith('slack_') || combinedText.includes('slack')) {
-    message = 'Connect Slack before Sage uses Slack actions. You can keep chatting normally.';
+    actionLabel = 'Open connections';
   } else if (code.startsWith('dropbox_') || combinedText.includes('dropbox')) {
-    message = 'Connect Dropbox before Sage uses Dropbox actions. You can keep chatting normally.';
+    actionLabel = 'Open connections';
   } else if (code.startsWith('s3_') || combinedText.includes('s3')) {
-    message = 'Connect S3 before Sage uses S3 storage actions. You can keep chatting normally.';
+    actionLabel = 'Open connections';
   }
 
   return {
@@ -710,6 +824,11 @@ export function isProviderRuntimeGateMessage(message: string): boolean {
     normalized.includes('is selected for chat but is not available right now')
     || normalized.includes('is local-only and needs a connected computer')
     || normalized.includes('needs a connected computer')
+    || normalized.includes('verified agent computer result')
+    || normalized.includes('hardware actions need the computer')
+    || normalized.includes('computer is already connected')
+    || normalized.includes('i cannot confirm that action completed because no tool result was returned')
+    || normalized.includes('connect or approve the required system')
     || normalized.includes('the selected provider is not ready')
     || normalized.includes('the selected provider is not available right now')
     || normalized.includes('connect a computer, switch to empyralis credits')
@@ -1401,15 +1520,15 @@ export function providerFailureMessageForProvider(provider: ProviderCatalogRecor
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs a connected computer in Connections. Use Workspace AI, connect a computer, or connect your own AI account.`;
+    return `${providerLabel} needs Agent Computer in Hardware. Use Workspace AI, connect Agent Computer, or connect your own AI account.`;
   }
   if (credentialPlane === 'workspace_connection') {
-    return 'Your AI account needs attention. Check the connection, quota, or selected model in Connections.';
+    return 'Your AI account needs attention. Check the connection, quota, or selected model.';
   }
   if (credentialPlane === 'platform_runtime') {
     return 'Workspace AI is active, but the hosted AI model is temporarily unavailable. Try again or switch model.';
   }
-  return 'The selected AI model is not available right now. Switch model or open Connections.';
+  return 'The selected AI model is not available right now. Switch model or check model connections.';
 }
 
 export function providerFailureActionsForProvider(
@@ -1427,7 +1546,7 @@ export function providerFailureActionsForProvider(
     || normalized.includes('gateway offline');
   if (localOnly) {
     return [
-      { label: 'Open Connections', target: 'integrations' },
+      { label: 'Open Hardware', target: 'hardware' },
       { label: 'Choose AI Model', target: 'integrations' },
       { label: 'Use Workspace AI', target: 'integrations' },
     ];
@@ -2229,9 +2348,9 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
   if (!local || !local.available) {
     return {
       tone: 'neutral',
-      title: `${preferredLabel} is carrying Sage`,
-      meta: `${preferredStatus} · cloud-first`,
-      body: 'Sage stays in cloud mode until an Agent Computer is connected. Computer work will not start from this workspace yet.',
+      title: 'Agent Computer is not connected',
+      meta: `${preferredLabel} · ${preferredStatus}`,
+      body: 'Sage can answer normally. Computer actions stay unavailable until This Mac is connected in Hardware.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
       localPill: `${agentComputerLabel} · needs connection`,
     };
@@ -2241,8 +2360,8 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
     return {
       tone: 'warning',
       title: 'Agent Computer is offline',
-      meta: `${preferredLabel} remains active`,
-      body: local.statusReason || 'Sage will stay in cloud mode until Agent Computer reconnects.',
+      meta: `${preferredLabel} · ${preferredStatus}`,
+      body: local.statusReason || 'Computer actions stay unavailable until Agent Computer reconnects.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
       localPill: `${agentComputerLabel} · ${local.statusLabel ?? 'Offline'}`,
     };
@@ -2253,7 +2372,7 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
       tone: 'warning',
       title: 'Agent Computer needs attention',
       meta: `${preferredLabel} remains active`,
-      body: local.statusReason || 'Sage will avoid computer work until the connection is healthy again.',
+      body: local.statusReason || 'Computer work stays paused until the connection is healthy again.',
       preferredPill: `${preferredLabel} · ${preferredStatus}`,
       localPill: `${agentComputerLabel} · ${local.statusLabel ?? 'Needs attention'}`,
     };
@@ -2264,8 +2383,8 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
     title: 'Agent Computer is ready',
     meta: `${agentComputerLabel} · ${local.sampleAttachmentLabel ?? local.label} · Default Guarded`,
     body: local.supportsFullAccess
-      ? 'Sage still uses cloud execution for ordinary turns. Agent Computer work starts in Default Guarded mode, and dedicated hardware can be switched to Autonomous Full Access during setup.'
-      : 'Sage still uses cloud execution for ordinary turns. Agent Computer work starts in Default Guarded mode.',
+      ? 'Sage can use This Mac for approved computer actions. Default Guarded mode stays on unless dedicated hardware is switched to Autonomous Full Access during setup.'
+      : 'Sage can use This Mac for approved computer actions in Default Guarded mode.',
     preferredPill: `${preferredLabel} · ${preferredStatus}`,
     localPill: `${agentComputerLabel} · ${local.statusLabel ?? 'Ready'}`,
   };
@@ -2341,8 +2460,8 @@ export function classifyStatusNotice(message: string): {
       title: 'Sage readiness',
       body: message,
       requiresLocalAccess: false,
-      actionTarget: 'gateway',
-      actionLabel: 'Open Agent Computer',
+      actionTarget: 'hardware',
+      actionLabel: 'Open Hardware',
     };
   }
   if (/^turn submitted/i.test(message)) {
@@ -2360,11 +2479,11 @@ export function classifyStatusNotice(message: string): {
       tone: 'warning',
       title: 'AI model attention needed',
       body: /api key|credential/i.test(message)
-        ? 'Check your AI model key or quota in Connections.'
+        ? 'Check your AI model key or quota.'
         : 'Choose Workspace AI, add an AI model key, or connect a computer.',
       requiresLocalAccess: false,
       actionTarget: 'integrations',
-      actionLabel: 'Open Connections',
+      actionLabel: 'Open model connections',
     };
   }
   return {
@@ -2842,6 +2961,17 @@ export function resolveProviderModelContext({
   };
 
   if (selectedModelId !== 'default') {
+    if (!selectedOption && selectedModelId.includes('/')) {
+      const [providerId, ...modelParts] = selectedModelId.split('/');
+      const modelId = modelParts.join('/').trim();
+      const providerRecord = providers.find((provider) => readString(provider.id) === providerId.trim()) ?? null;
+      return {
+        providerId: providerId.trim() || null,
+        providerLabel: readString(providerRecord?.label) || providerId.trim() || null,
+        modelLabel: selectedModelLabel || modelId || selectedModelId,
+        modelId: modelId || null,
+      };
+    }
     if (selectedOption && selectedRouteProviderId && selectedRouteModelId) {
       const providerRecord = availableProviders.find((provider) => readString(provider.id) === selectedRouteProviderId) ?? null;
       const providerLabel = readString(providerRecord?.label) || readString(selectedOption.providerLabel) || selectedRouteProviderId;
@@ -2941,16 +3071,34 @@ export function resolvePersistedSelectedModelId({
 
   for (const profile of sortProviderProfiles(profiles)) {
     const providerId = readString(profile.provider);
-    if (!providerId || !eligibleProviderIds.has(providerId) || profile.enabled === false) {
-      continue;
-    }
     const metadata = profileMetadataRecord(profile);
     const selectionMode = readString(metadata.chat_model_selection).toLowerCase();
     const modelTier = readString(metadata.chat_model_tier).toLowerCase();
+    const modelId = readString(profile.model);
+    if (selectionMode === 'explicit' && providerId) {
+      if (modelTier && optionById.has(modelTier)) {
+        return modelTier;
+      }
+      const matchingOption = modelOptions.find((option) =>
+        readString(option.routeProviderId || option.providerId) === providerId
+        && readString(option.routeModelId || option.id) === modelId
+      );
+      if (matchingOption && optionById.has(readString(matchingOption.id))) {
+        return readString(matchingOption.id);
+      }
+      if (modelId) {
+        return `${providerId}/${modelId}`;
+      }
+      if (modelTier) {
+        return modelTier;
+      }
+    }
+    if (!providerId || !eligibleProviderIds.has(providerId) || profile.enabled === false) {
+      continue;
+    }
     if (selectionMode === 'explicit' && modelTier && availableModelIds.has(modelTier)) {
       return modelTier;
     }
-    const modelId = readString(profile.model);
     if (selectionMode === 'explicit' && modelId && availableModelIds.has(modelId)) {
       return modelId;
     }

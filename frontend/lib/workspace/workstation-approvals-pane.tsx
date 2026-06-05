@@ -195,7 +195,7 @@ export function WorkstationApprovalsPane() {
       setStatusMessage(
         resolution === 'approved'
           ? 'Request approved. Sage resumed the blocked work.'
-          : 'Request rejected. Sage stopped the blocked work.',
+          : 'Request rejected. The blocked work was stopped.',
       );
     } catch (resolveError) {
       setError(

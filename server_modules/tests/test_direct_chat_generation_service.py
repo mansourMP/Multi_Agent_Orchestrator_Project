@@ -6,6 +6,29 @@ from server_modules import direct_chat_generation_service
 
 
 class DirectChatGenerationServiceTests(unittest.TestCase):
+    def test_strip_assistant_pseudo_tool_lines_removes_fake_action_plan(self) -> None:
+        text = (
+            "I'll check your system's hardware information. Running a command now to retrieve the details.\n\n"
+            "run_command: systeminfo"
+        )
+
+        cleaned = direct_chat_generation_service._strip_assistant_pseudo_tool_lines(text)
+
+        self.assertEqual(cleaned, "")
+
+    def test_strip_assistant_pseudo_tool_lines_keeps_real_result_text(self) -> None:
+        text = (
+            "Here is the result I found from the system check.\n\n"
+            "run_command: systeminfo\n\n"
+            "Output: CPU and memory details are available."
+        )
+
+        cleaned = direct_chat_generation_service._strip_assistant_pseudo_tool_lines(text)
+
+        self.assertIn("Here is the result", cleaned)
+        self.assertIn("Output:", cleaned)
+        self.assertNotIn("run_command:", cleaned)
+
     def test_extract_assistant_shell_plan_tool_call_converts_command_blocks(self) -> None:
         reply = (
             "Running the commands now.\n\n"
@@ -72,6 +95,33 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         reply = "Running the commands now.\n\n```bash\nuname -a\n```"
 
         clean_reply, tool_calls = direct_chat_generation_service._extract_assistant_shell_plan_tool_call(reply, [])
+
+        self.assertEqual(clean_reply, reply)
+        self.assertEqual(tool_calls, [])
+
+    def test_extract_assistant_json_action_tool_call_converts_available_screenshot_tool(self) -> None:
+        reply = (
+            "I will use the available screen tool.\n\n"
+            "```json\n"
+            '{"action":"screenshot","description":"Capture the current screen"}\n'
+            "```"
+        )
+
+        clean_reply, tool_calls = direct_chat_generation_service._extract_assistant_json_action_tool_calls_from_text(
+            reply,
+            [{"name": "screenshot__capture", "parameters": {"type": "object"}}],
+        )
+
+        self.assertEqual(clean_reply, "I will use the available screen tool.")
+        self.assertEqual(tool_calls, [{"name": "screenshot__capture", "arguments": {"description": "Capture the current screen"}}])
+
+    def test_extract_assistant_json_action_tool_call_ignores_unavailable_tools(self) -> None:
+        reply = '```json\n{"action":"screenshot","description":"Capture the current screen"}\n```'
+
+        clean_reply, tool_calls = direct_chat_generation_service._extract_assistant_json_action_tool_calls_from_text(
+            reply,
+            [{"name": "shell__exec", "parameters": {"type": "object"}}],
+        )
 
         self.assertEqual(clean_reply, reply)
         self.assertEqual(tool_calls, [])
@@ -197,6 +247,84 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         self.assertTrue(executed)
         self.assertIn("uname -a && sw_vers", executed[0])
         self.assertEqual(events[-1]["payload"]["reply"], "The local command finished.")
+
+    def test_stream_provider_backed_direct_chat_converts_json_action_without_streaming_markup(self) -> None:
+        action_reply = '```json\n{"action":"screenshot","description":"Capture the current screen"}\n```'
+        stream_rounds = iter(
+            [
+                [
+                    {"type": "chunk", "delta": action_reply[:12]},
+                    {"type": "chunk", "delta": action_reply[12:]},
+                    {
+                        "type": "result",
+                        "reply": action_reply,
+                        "usage_masked": {"provider": "openai"},
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "openai",
+                        "error": "",
+                        "tool_calls": [],
+                    },
+                ],
+                [
+                    {
+                        "type": "result",
+                        "reply": "Screenshot captured.",
+                        "usage_masked": {"provider": "openai"},
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "openai",
+                        "error": "",
+                        "tool_calls": [],
+                    }
+                ],
+            ]
+        )
+        services = self._services(stream_events=[])
+        services.generate_chat_reply_stream_with_provider_fallback = lambda **kwargs: iter(next(stream_rounds))
+        executed: list[str] = []
+
+        def _execute_single_direct_tool_call(**kwargs):
+            executed.append(kwargs.get("tool_call", {}).get("name", ""))
+            return "Captured screenshot from Agent Computer."
+
+        services.execute_single_direct_tool_call = _execute_single_direct_tool_call
+
+        events = list(
+            direct_chat_generation_service.stream_provider_backed_direct_chat(
+                services=services,
+                context={"provider": "openai"},
+                metadata={"provider": "openai", "model": "gpt-5.4"},
+                system_prompt="System prompt",
+                normalized_workspace_id="default",
+                normalized_requested_provider="openai",
+                normalized_requested_model="gpt-5.4",
+                normalized_reasoning_effort="medium",
+                normalized_thread_id="thread-1",
+                normalized_message="Capture the screen.",
+                compacted_prior_messages=[],
+                prior_messages_used=False,
+                history_mode="none",
+                connected_systems=[],
+                tool_capabilities=[],
+                availability_payload={"ai_ready": True},
+                tools=[],
+                direct_chat_credentials={},
+                proactive_suggestions=[],
+                tool_loop_session_key="session-1-json",
+                fallback_reason=None,
+                session_ctx=None,
+                trace_context=None,
+                resolved_chat_max_iterations=3,
+                direct_tool_result_summary_system_message="Summarize tool results.",
+                assistant_plan_tools=[{"name": "screenshot__capture"}],
+            )
+        )
+
+        streamed_text = "".join(str(event.get("delta") or "") for event in events if event.get("type") == "chunk")
+        self.assertNotIn("```json", streamed_text)
+        self.assertEqual(executed, ["screenshot__capture"])
+        self.assertEqual(events[-1]["payload"]["reply"], "Screenshot captured.")
 
     def test_stream_provider_backed_direct_chat_returns_final_answer(self) -> None:
         events = list(

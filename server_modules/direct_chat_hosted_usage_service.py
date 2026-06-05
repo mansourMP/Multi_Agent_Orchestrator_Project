@@ -363,6 +363,8 @@ def persist_direct_chat_hosted_usage_best_effort(
         )
     except Exception as exc:
         raise RuntimeError("Hosted AI usage cost ledger persistence failed.") from exc
+    if ledger_entry is None:
+        return
     if not isinstance(ledger_entry, dict):
         raise RuntimeError("Hosted AI usage cost ledger persistence failed.")
     try:

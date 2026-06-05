@@ -112,7 +112,7 @@ def direct_chat_error_reply(
         or "rate limit" in normalized
         or "too many requests" in normalized
     ):
-        return "Sage is temporarily rate-limited by the current AI provider. Please try again in a moment."
+        return "The selected AI provider is temporarily rate-limited. Try again in a moment."
     if "direct_chat_transport_unavailable" in normalized:
-        return "Sage could not complete the reply on the current provider transport. Please try again while fallback providers recover."
-    return "Sage hit a temporary error while generating the response. Please try again in a moment."
+        return "The selected provider transport could not complete the reply. Try again after that provider recovers."
+    return "The selected AI provider hit a temporary generation error. Try again in a moment."

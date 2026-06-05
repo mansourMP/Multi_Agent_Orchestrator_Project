@@ -68,12 +68,13 @@ def check_personal_channel_control_command(
         "command": command["command"],
         "sender_role": normalized_role or None,
         "reason": "owner_authorization_required",
-        "reply": "That control command needs owner approval in Empyralis. I did not run it.",
+        "reply": "",
+        "platform_message": "Owner approval is required before this channel control command can run.",
     }
 
 
 def duplicate_ignored_reply() -> str:
-    return "This inbound event was already processed, so it was ignored."
+    return ""
 
 
 def duplicate_ignored_result() -> ChannelExecutionResult:
@@ -108,7 +109,8 @@ def incident_result_payload(incident: Dict[str, Any]) -> Dict[str, Any]:
     if mode == "pause":
         return {
             "status": "paused",
-            "reply": "This workspace is temporarily paused while the owner resolves an incident. Please try again shortly.",
+            "reply": "",
+            "platform_message": "This workspace is temporarily paused while the owner resolves an incident.",
             "incident_scope": matched_scope,
             "incident_mode": mode,
             "retry_after_seconds": retry_after_seconds,
@@ -116,7 +118,8 @@ def incident_result_payload(incident: Dict[str, Any]) -> Dict[str, Any]:
     if mode == "drain":
         return {
             "status": "draining",
-            "reply": "This channel is temporarily draining its backlog and is not accepting new messages right now.",
+            "reply": "",
+            "platform_message": "This channel is temporarily draining its backlog and is not accepting new messages right now.",
             "incident_scope": matched_scope,
             "incident_mode": mode,
             "retry_after_seconds": retry_after_seconds,
@@ -124,7 +127,8 @@ def incident_result_payload(incident: Dict[str, Any]) -> Dict[str, Any]:
     if mode == "reject":
         return {
             "status": "rejected",
-            "reply": "This channel is temporarily rejecting new work while the owner handles an incident.",
+            "reply": "",
+            "platform_message": "This channel is temporarily rejecting new work while the owner handles an incident.",
             "incident_scope": matched_scope,
             "incident_mode": mode,
             "retry_after_seconds": retry_after_seconds,
@@ -165,9 +169,10 @@ def check_deployment_pause(*, context: ChannelRoutingContext) -> Optional[Channe
     )
     return ChannelExecutionResult(
         status=status,
-        reply=reply,
+        reply="",
         limit_reason=limit_reason,
         metadata={
+            "platform_message": reply,
             "deployed_agent_id": context.deployed_agent_id,
             "deployment_state": state,
         },
@@ -191,9 +196,10 @@ def check_incident_state(*, context: ChannelRoutingContext) -> Optional[ChannelE
         return None
     incident = incident_result_payload(incident_state)
     reply = str(incident.get("reply") or "").strip()
+    platform_message = str(incident.get("platform_message") or "").strip()
     error = error_response_service.platform_error(
         code=f"incident_{incident.get('incident_mode')}",
-        message=reply or "This channel is temporarily unavailable.",
+        message=platform_message or "This channel is temporarily unavailable.",
         error_class=POLICY_BLOCK,
         retryable=True,
         status_code=409,
@@ -205,7 +211,7 @@ def check_incident_state(*, context: ChannelRoutingContext) -> Optional[ChannelE
     )
     return ChannelExecutionResult(
         status=str(incident.get("status") or "paused").strip().lower() or "paused",
-        reply=reply,
+        reply="",
         limit_reason=f"incident_{incident.get('incident_mode')}",
         retry_after_seconds=incident.get("retry_after_seconds"),
         incident_scope=incident.get("incident_scope"),
@@ -215,6 +221,7 @@ def check_incident_state(*, context: ChannelRoutingContext) -> Optional[ChannelE
             "incident_scope": incident.get("incident_scope"),
             "incident_mode": incident.get("incident_mode"),
             "retry_after_seconds": incident.get("retry_after_seconds"),
+            "platform_message": platform_message,
             "error": error_response_service.channel_error_payload(error),
         },
         error=error_response_service.channel_error_payload(error),

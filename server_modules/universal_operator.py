@@ -47,17 +47,7 @@ def _policy_text(manifest: AgentManifest) -> str:
 
 
 def _direct_reply(manifest: AgentManifest, goal: str) -> str:
-    normalized = str(goal or "").strip()
-    if not normalized:
-        return f"{manifest.identity.name} is ready."
-    if re.search(r"\b(refund|discount|legal|privacy)\b", normalized, re.IGNORECASE):
-        return "This request should stay in Owner Mode so the final decision follows the agent policy and approval boundary."
-    if re.search(r"\b(order|book|schedule|charge)\b", normalized, re.IGNORECASE):
-        return "Before I take that action, I need one clarifying detail so I stay within the owner policy."
-    return (
-        f"{manifest.identity.name} is operating from its owner-authored Bible. "
-        "I can answer directly when the request stays inside that context, or use a bound skill when live business facts are required."
-    )
+    return ""
 
 
 def _requires_inventory_live_fact(goal: str) -> bool:
@@ -70,72 +60,13 @@ def _tool_broker_denial_reply(
     needed_skill: skill_registry.SkillDefinition,
     error: tool_broker.ToolExecutionDeniedError,
 ) -> str:
-    if error.code == "skill_not_granted":
-        return (
-            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-            "but the owner has not bound that skill to this manifest yet."
-        )
-    if error.code == "approval_required":
-        return (
-            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-            "but the current policy requires owner approval before that capability can execute."
-        )
-    if error.code == "skill_disabled":
-        return (
-            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-            "but that skill is disabled for this workspace right now."
-        )
-    if error.code == "connector_scope_not_granted":
-        return (
-            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-            "but the required connector scope is not currently authorized for this run."
-        )
-    if error.code == "connector_disabled":
-        return (
-            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-            "but the required connector is disabled by a security control."
-        )
-    if error.code in {"workspace_paused", "workspace_draining", "workspace_rejected"}:
-        return "This workspace is temporarily under an operator incident control and cannot process this request right now."
-    if error.code == "connector_paused":
-        return (
-            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-            "but the required connector is temporarily paused by an operator incident control."
-        )
-    if error.code == "connector_draining":
-        return (
-            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-            "but the required connector is draining its backlog before it accepts new work."
-        )
-    if error.code == "connector_rejected":
-        return (
-            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-            "but the required connector is temporarily rejecting new work during an incident."
-        )
-    if error.code in {"workspace_disabled", "agent_disabled"}:
-        return "This agent is temporarily disabled by a security control and cannot execute right now."
-    if error.code in {"runtime_not_allowed", "runtime_mismatch"}:
-        return (
-            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-            "but the current runtime profile does not allow that capability."
-        )
-    if error.code == "token_expired":
-        return "The capability grant expired before the tool call executed. Please try again."
-    if error.code == "egress_denied":
-        return (
-            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-            "but outbound network policy denied the required destination for this run."
-        )
-    return (
-        f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
-        "but the tool broker denied the capability for this run."
-    )
+    return ""
 
 
 def _security_gate_result(*, manifest: AgentManifest, reason: str, violation: str) -> dict[str, Any]:
     return {
         "status": "security_blocked",
-        "reply": reason,
+        "reply": "",
         "artifact": None,
         "steps": [
             {"label": "Security control", "detail": reason, "status": "error", "kind": "thinking"},
@@ -144,7 +75,7 @@ def _security_gate_result(*, manifest: AgentManifest, reason: str, violation: st
         "needed_skill_id": None,
         "critic": {
             "mode": "escalate",
-            "reply": reason,
+            "reply": "",
             "violations": [violation],
         },
     }
@@ -164,13 +95,7 @@ def _incident_gate_result(
         "drain": "draining",
         "reject": "rejected",
     }.get(normalized_mode, "paused")
-    reply = (
-        "This workspace is temporarily paused while the owner resolves an incident. Please try again shortly."
-        if normalized_mode == "pause"
-        else "This workspace is temporarily draining existing work and is not accepting new requests right now."
-        if normalized_mode == "drain"
-        else "This workspace is temporarily rejecting new work while the owner handles an incident."
-    )
+    reply = ""
     return {
         "status": status,
         "reply": reply,
@@ -189,7 +114,7 @@ def _incident_gate_result(
         "incident_scope": normalized_scope,
         "critic": {
             "mode": "escalate",
-            "reply": reply,
+                "reply": "",
             "violations": [f"{normalized_scope}_incident_{normalized_mode}"],
         },
     }
@@ -215,7 +140,7 @@ def run_policy_critic(
         items = skill_result.get("items") if isinstance(skill_result, dict) else None
         if not isinstance(items, list) or len(items) == 0:
             violations.append("inventory_claim_without_live_evidence")
-            draft_reply = "I need to check the live inventory tool before I confirm stock or price. One moment."
+            draft_reply = ""
 
     if (
         re.search(r"\b(order|book|schedule|charge)\b", lower_goal)
@@ -223,13 +148,13 @@ def run_policy_critic(
         and "?" not in draft_reply
     ):
         violations.append("clarification_required")
-        draft_reply = "Before I take that action, I need one clarifying detail so I stay inside the owner policy."
+        draft_reply = ""
 
     if re.search(r"\b(refund|discount|legal|privacy)\b", lower_goal) and "escalat" in policy_text:
         violations.append("owner_escalation_required")
         return {
             "mode": "escalate",
-            "reply": "This request should move to Owner Mode before I answer, because the manifest marks it as an escalation case.",
+            "reply": "",
             "violations": violations,
         }
 
@@ -380,14 +305,14 @@ async def execute_customer_turn_in_process(
         })
         return {
             "status": "approval_required",
-            "reply": "This agent is configured for privileged device execution. Owner approval is required before it can run in Customer View.",
+            "reply": "",
             "artifact": None,
             "steps": steps,
             "system_prompt": system_prompt,
             "needed_skill_id": None,
             "critic": {
                 "mode": "escalate",
-                "reply": "This agent is configured for privileged device execution. Owner approval is required before it can run in Customer View.",
+                "reply": "",
                 "violations": ["privileged_runtime_approval_required"],
             },
         }

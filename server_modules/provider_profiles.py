@@ -293,19 +293,11 @@ def workspace_live_gateway_available(workspace_id: str) -> bool:
         return False
 
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
-    if _workspace_live_gateway_available_for_id(
+    return _workspace_live_gateway_available_for_id(
         normalized_workspace_id,
         gateway_protocol_service=gateway_protocol_service,
         gateway_state_repository=gateway_state_repository,
-    ):
-        return True
-    if normalized_workspace_id != "default" and _local_gateway_workspace_fallback_enabled():
-        return _workspace_live_gateway_available_for_id(
-            "default",
-            gateway_protocol_service=gateway_protocol_service,
-            gateway_state_repository=gateway_state_repository,
-        )
-    return False
+    )
 
 
 def _openai_credential_type(credentials: Optional[Dict[str, Any]]) -> str:

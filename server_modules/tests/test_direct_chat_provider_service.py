@@ -76,6 +76,16 @@ class DirectChatProviderServiceTests(unittest.TestCase):
     def test_provider_display_name_includes_ollama_cloud(self) -> None:
         self.assertEqual(direct_chat_provider_service.provider_display_name("ollama_cloud"), "Ollama Cloud")
 
+    def test_provider_for_model_maps_unambiguous_model_ids(self) -> None:
+        self.assertEqual(direct_chat_provider_service.provider_for_model("deepseek-chat"), "deepseek")
+        self.assertEqual(direct_chat_provider_service.provider_for_model("gemini-2.0-flash"), "gemini")
+        self.assertEqual(direct_chat_provider_service.provider_for_model("openai-codex/gpt-5.4"), "codex_cli")
+
+    def test_provider_for_model_maps_local_and_cloud_models_but_leaves_unknown_empty(self) -> None:
+        self.assertEqual(direct_chat_provider_service.provider_for_model("llama3.2"), "ollama")
+        self.assertEqual(direct_chat_provider_service.provider_for_model("unknown-model"), "")
+        self.assertEqual(direct_chat_provider_service.provider_for_model("gpt-oss:120b"), "ollama_cloud")
+
     def test_preferred_provider_does_not_use_platform_key_when_hosted_ai_is_filtered(self) -> None:
         def fake_credentials(_workspace_id: str, _provider: str) -> dict[str, str]:
             return {}
@@ -447,8 +457,32 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "connect")
         self.assertEqual(payload["reply"], "")
         self.assertEqual(payload["interventions"][0]["kind"], "connect_required")
-        self.assertEqual(payload["interventions"][0]["title"], "Workspace AI account is not ready")
-        self.assertEqual(payload["actions"], [{"label": "Connect", "href": "/connect-ai"}])
+        self.assertEqual(payload["interventions"][0]["title"], "Codex/OpenAI is not available")
+        self.assertEqual(payload["actions"], [{"label": "Open Hardware", "href": "/hardware"}])
+
+    def test_provider_unavailable_response_keeps_cloud_provider_specific(self) -> None:
+        payload = direct_chat_provider_service.provider_unavailable_response(
+            "deepseek",
+            connect_action=lambda label, href: {"label": label, "href": href},
+        )
+
+        self.assertEqual(payload["mode"], "connect")
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["interventions"][0]["title"], "DeepSeek is not available")
+        self.assertIn("Configure this provider", payload["interventions"][0]["detail"])
+        self.assertNotIn("switch to Workspace AI", payload["interventions"][0]["detail"])
+        self.assertEqual(payload["actions"], [{"label": "Configure model", "href": "/integrations"}])
+
+    def test_provider_unavailable_response_routes_local_provider_to_hardware(self) -> None:
+        payload = direct_chat_provider_service.provider_unavailable_response(
+            "ollama",
+            connect_action=lambda label, href: {"label": label, "href": href},
+        )
+
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["interventions"][0]["title"], "Ollama is not available")
+        self.assertIn("local runner", payload["interventions"][0]["detail"])
+        self.assertEqual(payload["actions"], [{"label": "Open Hardware", "href": "/hardware"}])
 
     def test_resolve_provider_for_direct_chat_message_forces_codex_for_connector_heavy_requests_without_explicit_selection(self) -> None:
         provider, credentials = direct_chat_provider_service.resolve_provider_for_direct_chat_message(

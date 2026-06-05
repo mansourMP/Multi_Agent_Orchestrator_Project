@@ -55,9 +55,14 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'artifact_ids',
   'artifactId',
   'caption',
+  'capability',
   'capability_id',
+  'channel_id',
+  'channel_name',
   'code',
   'command',
+  'conversation_id',
+  'conversation_name',
   'cwd',
   'decision',
   'delivery_transport',
@@ -70,6 +75,7 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'exit_code',
   'exitCode',
   'filename',
+  'gateway_id',
   'height',
   'id',
   'kind',
@@ -94,6 +100,7 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'state',
   'status',
   'summary',
+  'timestamp',
   'stdout',
   'stdout_preview',
   'stdout_tail',
@@ -112,8 +119,12 @@ const SAFE_TRACE_METADATA_KEYS = new Set([
   'action_id',
   'approval_id',
   'artifact_id',
+  'capability',
+  'capability_id',
+  'channel_id',
   'code',
   'cwd',
+  'gateway_id',
   'label',
   'machine_label',
   'runtime_access_mode',
@@ -132,6 +143,13 @@ const SAFE_TRACE_EVENT_EXACT = new Set([
   'browser.action',
   'browser.screenshot',
   'computer.browser.action',
+  'gateway.action.completed',
+  'gateway.action.failed',
+  'gateway.action.started',
+  'hardware.action',
+  'hardware.action.completed',
+  'hardware.action.failed',
+  'hardware.action.started',
   'delegation.finished',
   'delegation.started',
   'screenshot.captured',
@@ -147,6 +165,7 @@ const SAFE_TRACE_EVENT_PREFIXES = [
   'approval.',
   'artifact.',
   'browser.',
+  'channel.',
   'computer.',
   'delegation.',
   'file.',
@@ -183,6 +202,10 @@ function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeTraceEventType(value: unknown): string {
+  return readString(value).toLowerCase().replace(/_/g, '.');
+}
+
 function looksInternalText(value: string): boolean {
   const normalized = value.trim();
   if (!normalized) {
@@ -216,7 +239,8 @@ function looksInternalText(value: string): boolean {
     || lowered.includes('raw_');
 }
 
-function isSafeTraceEventType(eventType: string): boolean {
+function isSafeTraceEventType(value: string): boolean {
+  const eventType = normalizeTraceEventType(value);
   if (eventType === 'reasoning.summary.delta') {
     return true;
   }
@@ -311,7 +335,7 @@ function sanitizeSafeRecord(value: unknown, safeKeys: Set<string>, depth = 0): R
 }
 
 function safeTraceProjectionEvent(record: Record<string, unknown>, index: number): TimelineProjectionEvent | null {
-  const eventType = readString(record.event_type).toLowerCase();
+  const eventType = normalizeTraceEventType(record.event_type);
   if (!isSafeTraceEventType(eventType)) {
     return null;
   }
@@ -512,6 +536,13 @@ export function useWorkstationTimelineProjection(options: TimelineProjectionOpti
     for (const message of canonicalMessages) {
       const cell = workstationMessageToCodexCell(message);
       if (options.isProviderGateTranscriptCell(cell)) {
+        continue;
+      }
+      if (cell.kind === 'assistant' && !cell.content.trim()) {
+        const replayCells = !options.isSending ? replayProofCellsForMessage(message, options) : [];
+        if (replayCells.length > 0) {
+          nextCells.push(...replayCells);
+        }
         continue;
       }
       if (!options.isSending && cell.kind === 'assistant') {

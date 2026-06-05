@@ -248,7 +248,8 @@ async def execute_inventory_skill(
     except Exception:
         return {
             "status": "unavailable",
-            "reply": "My inventory system is currently updating, one moment.",
+            "reply": "",
+            "platform_message": "Inventory lookup is temporarily unavailable.",
             "artifact": None,
             "steps": [
                 {"label": "Resolving inventory query", "detail": goal, "status": "done", "kind": "thinking"},
@@ -259,7 +260,8 @@ async def execute_inventory_skill(
     if not items:
         return {
             "status": "no_match",
-            "reply": "I could not confirm that part in stock yet. Let me double-check the catalog and fitment before I promise availability.",
+            "reply": "",
+            "platform_message": "No live inventory matches were returned.",
             "artifact": {
                 "label": "Inventory lookup result",
                 "kind": "inventory-live-data",

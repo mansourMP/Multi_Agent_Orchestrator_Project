@@ -12,6 +12,13 @@ export const TRANSCRIPT_TRACE_EVENT_EXACT = [
   'browser.action',
   'browser.screenshot',
   'computer.browser.action',
+  'gateway.action.completed',
+  'gateway.action.failed',
+  'gateway.action.started',
+  'hardware.action',
+  'hardware.action.completed',
+  'hardware.action.failed',
+  'hardware.action.started',
   'delegation.finished',
   'delegation.started',
   'screenshot.captured',
@@ -31,7 +38,10 @@ export const TRANSCRIPT_TRACE_EVENT_PREFIXES = [
   'file.',
   'gateway.',
   'hardware.',
+  'channel.',
+  'plan.',
   'runtime.',
+  'reasoning.',
   'screenshot.',
   'search.',
   'shell.',
@@ -64,6 +74,10 @@ function readRecord(value: unknown): Record<string, unknown> {
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeTraceEventType(value: unknown): string {
+  return readString(value).toLowerCase().replace(/_/g, '.');
 }
 
 export function isTranscriptEventType(value: unknown): value is TranscriptEventType {
@@ -133,9 +147,15 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'artifact_ids',
   'artifactId',
   'caption',
+  'capability',
   'capability_id',
+  'channel_id',
+  'channel_name',
   'code',
+  'connector_id',
   'command',
+  'conversation_id',
+  'conversation_name',
   'cwd',
   'decision',
   'delivery_transport',
@@ -148,6 +168,7 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'exit_code',
   'exitCode',
   'filename',
+  'gateway_id',
   'height',
   'id',
   'kind',
@@ -173,6 +194,7 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'state',
   'status',
   'summary',
+  'timestamp',
   'stdout',
   'stdout_preview',
   'stdout_tail',
@@ -191,8 +213,14 @@ const SAFE_TRACE_METADATA_KEYS = new Set([
   'action_id',
   'approval_id',
   'artifact_id',
+  'artifact_ids',
+  'capability',
+  'capability_id',
+  'channel_id',
   'code',
+  'connector_id',
   'cwd',
+  'gateway_id',
   'label',
   'machine_label',
   'runtime_access_mode',
@@ -202,6 +230,7 @@ const SAFE_TRACE_METADATA_KEYS = new Set([
   'summary',
   'target_kind',
   'title',
+  'tool_name',
 ]);
 
 const SAFE_STEP_KEYS = new Set([
@@ -379,7 +408,7 @@ function sanitizeRecord(value: unknown, safeKeys: Set<string>): Record<string, u
 }
 
 function isTranscriptTracePayload(payload: Record<string, unknown>): boolean {
-  const eventType = readString(payload.event_type).toLowerCase();
+  const eventType = normalizeTraceEventType(payload.event_type);
   if (eventType === 'reasoning.summary.delta') {
     return true;
   }
@@ -411,7 +440,12 @@ function sanitizeTranscriptPayload(type: TranscriptEventType, payload: Record<st
     if (!isTranscriptTracePayload(payload)) {
       return {};
     }
-    return sanitizeRecord(payload, SAFE_TRACE_TOP_LEVEL_KEYS);
+    const sanitized = sanitizeRecord(payload, SAFE_TRACE_TOP_LEVEL_KEYS);
+    const eventType = normalizeTraceEventType(payload.event_type);
+    if (eventType) {
+      sanitized.event_type = eventType;
+    }
+    return sanitized;
   }
   if (!isTranscriptStepPayload(payload)) {
     return {};

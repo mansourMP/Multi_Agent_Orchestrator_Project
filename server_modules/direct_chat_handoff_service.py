@@ -239,12 +239,12 @@ def direct_chat_run_event_to_step(run_id: str, event: Dict[str, Any]) -> tuple[O
         return None, None
     if event_name == "local_queued":
         detail = str(data.get("preferred_runtime_label") or "").strip() or message
-        return {"type": "step", "id": f"run-handoff:queue:{run_id}", "label": "Queued on your laptop", "detail": detail or None, "status": "done", "kind": "thinking"}, None
+        return {"type": "step", "id": f"run-handoff:queue:{run_id}", "label": "Queued on Agent Computer", "detail": detail or None, "status": "done", "kind": "thinking"}, None
     if event_name == "local_claimed":
         detail = str(data.get("worker_id") or "").strip() or message
-        return {"type": "step", "id": f"run-handoff:claim:{run_id}", "label": "Local machine picked up the run", "detail": detail or None, "status": "done", "kind": "thinking"}, None
+        return {"type": "step", "id": f"run-handoff:claim:{run_id}", "label": "Agent Computer picked up the run", "detail": detail or None, "status": "done", "kind": "thinking"}, None
     if event_name in {"local_heartbeat", "local_still_working", "workflow_node_start", "workflow_data_step", "workflow_tool_http", "workflow_tool_connector_action", "pack_phase", "orion_plan", "dag_node_start"}:
-        return {"type": "step", "id": f"run-handoff:working:{run_id}", "label": "Working on your laptop", "detail": message or None, "status": "active", "kind": "thinking"}, None
+        return {"type": "step", "id": f"run-handoff:working:{run_id}", "label": "Using Agent Computer", "detail": message or None, "status": "active", "kind": "thinking"}, None
     if event_name == "run_start":
         return {"type": "step", "id": f"run-handoff:started:{run_id}", "label": "Run started", "detail": message or None, "status": "done", "kind": "thinking"}, None
     if event_name in {"approval_requested", "approval_waiting"}:
@@ -261,9 +261,9 @@ def direct_chat_run_event_to_step(run_id: str, event: Dict[str, Any]) -> tuple[O
         return {"type": "step", "id": f"run-handoff:error:{run_id}", "label": label, "detail": message or None, "status": "error", "kind": "thinking"}, None
     if event_name in {"local_result", "orion_result", "pack_summary"}:
         reply_text = str(data.get("reply") or data.get("summary") or message).strip() or None
-        return {"type": "step", "id": f"run-handoff:working:{run_id}", "label": "Working on your laptop", "detail": "Response ready", "status": "done", "kind": "thinking"}, reply_text
+        return {"type": "step", "id": f"run-handoff:working:{run_id}", "label": "Agent Computer completed", "detail": "Response ready", "status": "done", "kind": "thinking"}, reply_text
     if event_name == "run_complete":
-        return {"type": "step", "id": f"run-handoff:working:{run_id}", "label": "Completed on your laptop", "detail": message or None, "status": "done", "kind": "thinking"}, None
+        return {"type": "step", "id": f"run-handoff:working:{run_id}", "label": "Agent Computer completed", "detail": message or None, "status": "done", "kind": "thinking"}, None
     return None, None
 
 
@@ -296,14 +296,14 @@ def direct_chat_run_snapshot_to_step(run_id: str, snapshot: Dict[str, Any]) -> t
         return f"waiting_for_input:{run_id}", {"type": "step", "id": f"run-handoff:approval:{run_id}", "label": "Waiting for confirmation", "detail": _detail(prompt, preferred_runtime_label), "status": "done", "kind": "thinking"}
     if status in {"queued_local", "queued", "starting"}:
         if waiting_for_runtime:
-            return f"waiting_for_runtime:{run_id}", {"type": "step", "id": f"run-handoff:waiting-runtime:{run_id}", "label": "Waiting for your laptop", "detail": _detail(preferred_runtime_label, estimated_wait_band, "Local machine not ready yet"), "status": "active", "kind": "thinking"}
+            return f"waiting_for_runtime:{run_id}", {"type": "step", "id": f"run-handoff:waiting-runtime:{run_id}", "label": "Waiting for Agent Computer", "detail": _detail(preferred_runtime_label, estimated_wait_band, "Agent Computer is not ready yet"), "status": "active", "kind": "thinking"}
         if waiting_for_capacity:
-            return f"waiting_for_capacity:{run_id}", {"type": "step", "id": f"run-handoff:waiting-capacity:{run_id}", "label": "Waiting for laptop capacity", "detail": _detail(preferred_runtime_label, estimated_wait_band, "Another task is using the local machine"), "status": "active", "kind": "thinking"}
+            return f"waiting_for_capacity:{run_id}", {"type": "step", "id": f"run-handoff:waiting-capacity:{run_id}", "label": "Waiting for Agent Computer capacity", "detail": _detail(preferred_runtime_label, estimated_wait_band, "Another task is using Agent Computer"), "status": "active", "kind": "thinking"}
         if selected_target == "local_companion" or status == "queued_local":
-            return f"queued_local:{run_id}", {"type": "step", "id": f"run-handoff:queue:{run_id}", "label": "Queued on your laptop", "detail": _detail(preferred_runtime_label, estimated_wait_band), "status": "active", "kind": "thinking"}
+            return f"queued_local:{run_id}", {"type": "step", "id": f"run-handoff:queue:{run_id}", "label": "Queued on Agent Computer", "detail": _detail(preferred_runtime_label, estimated_wait_band), "status": "active", "kind": "thinking"}
         return f"queued:{run_id}", {"type": "step", "id": f"run-handoff:queue:{run_id}", "label": "Run queued", "detail": _detail(estimated_wait_band), "status": "active", "kind": "thinking"}
     if status in {"running", "running_local"}:
-        label = "Working on your laptop" if selected_target == "local_companion" or status == "running_local" else "Working on the run"
+        label = "Using Agent Computer" if selected_target == "local_companion" or status == "running_local" else "Working"
         return f"running:{run_id}", {"type": "step", "id": f"run-handoff:working:{run_id}", "label": label, "detail": _detail(preferred_runtime_label), "status": "active", "kind": "thinking"}
     return None, None
 
@@ -379,16 +379,16 @@ def direct_chat_run_final_payload(
     elif continuing:
         reply = ""
         if bool(snapshot.get("execution_target_waiting_for_runtime")):
-            detail = "The durable run is waiting for your laptop to become available."
+            detail = "The durable run is waiting for Agent Computer to become available."
             handoff_status = "waiting"
         elif bool(snapshot.get("execution_target_waiting_for_capacity")):
-            detail = "The durable run is waiting for local machine capacity."
+            detail = "The durable run is waiting for Agent Computer capacity."
             handoff_status = "waiting"
         elif selected_target == "local_companion" and status in {"queued_local", "queued", "starting"}:
-            detail = "The durable run is queued for your laptop."
+            detail = "The durable run is queued for Agent Computer."
             handoff_status = "waiting"
         elif selected_target == "local_companion":
-            detail = "The durable run is still working on your laptop."
+            detail = "The durable run is still using Agent Computer."
             handoff_status = "active"
         else:
             detail = "The durable run is still working."

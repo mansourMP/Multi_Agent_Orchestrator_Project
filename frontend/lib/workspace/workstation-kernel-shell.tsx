@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { ArrowLeft, BookOpen, Bot, Brain, ChevronRight, Compass, Cpu, FolderOpen, LayoutGrid, Link2, ListTodo, Menu, MessageSquare, Monitor, Package, Plus, Wrench } from 'lucide-react';
+import { ArrowLeft, BookOpen, Bot, Brain, Cable, ChevronRight, Compass, FolderOpen, LayoutGrid, ListTodo, Menu, MessageSquare, Monitor, Package, Plus, SlidersHorizontal, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { logout } from '@/lib/auth/auth-client';
@@ -111,7 +111,6 @@ const SAGE_MOBILE_DRAWER_ROUTE_IDS: readonly {
   icon: LucideIcon;
 }[] = [
   { routeId: 'chat', label: 'Chat', icon: MessageSquare },
-  { routeId: 'integrations', label: 'Connections', icon: Link2 },
   { routeId: 'memory', label: 'Memory', icon: Brain },
   { routeId: 'tasks', label: 'Tasks', icon: ListTodo },
   { routeId: 'artifacts', label: 'Library', icon: BookOpen },
@@ -121,21 +120,14 @@ const SAGE_SIDEBAR_NAV_ITEMS: readonly {
   routeId: WorkspaceRouteId;
   label: string;
   icon: LucideIcon;
+  section?: string;
 }[] = [
   { routeId: 'memory', label: 'Memory', icon: Brain },
   { routeId: 'tasks', label: 'Tasks', icon: ListTodo },
   { routeId: 'artifacts', label: 'Library', icon: BookOpen },
-];
-
-const SAGE_SETUP_NAV_ITEMS: readonly {
-  id: string;
-  label: string;
-  section: string;
-  icon: LucideIcon;
-}[] = [
-  { id: 'ai-runtime', label: 'AI setup', section: 'ai-runtime', icon: Cpu },
-  { id: 'connections', label: 'Connections', section: 'connections', icon: Link2 },
-  { id: 'plugins', label: 'Actions', section: 'plugins', icon: Wrench },
+  { routeId: 'integrations', label: 'AI setup', icon: SlidersHorizontal, section: 'ai_runtime' },
+  { routeId: 'integrations', label: 'Connections', icon: Cable, section: 'connections' },
+  { routeId: 'integrations', label: 'Actions', icon: Wrench, section: 'plugins' },
 ];
 
 const MARKETPLACE_TITLEBAR_FILTERS = [
@@ -723,7 +715,6 @@ function AssistantPanelContent({
   activeRouteId,
   navigationItems,
   contextLinks,
-  setupItems,
   workspaceId,
 }: {
   chatHref: string;
@@ -733,7 +724,6 @@ function AssistantPanelContent({
   activeRouteId: WorkspaceRouteId | null;
   navigationItems: readonly SageContextLink[];
   contextLinks: readonly SageContextGroupLink[];
-  setupItems: readonly SageContextLink[];
   workspaceId: string;
 }) {
   const router = useRouter();
@@ -783,7 +773,7 @@ function AssistantPanelContent({
     setActiveThreadId(null);
     router.push(chatHref);
   };
-  const sidebarItems = useMemo(() => [...navigationItems, ...setupItems], [navigationItems, setupItems]);
+  const sidebarItems = useMemo(() => [...navigationItems], [navigationItems]);
   const currentHref = `${pathname ?? ''}${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
   void contextLinks;
 
@@ -1506,19 +1496,13 @@ export function WorkstationKernelShell({
       return [];
     }
     return [{
-      id: item.routeId,
+      id: item.section ? `${item.routeId}:${item.section}` : item.routeId,
       label: item.label,
       routeId: item.routeId,
       icon: item.icon,
+      href: item.section ? `${route.href}${route.href.includes('?') ? '&' : '?'}section=${encodeURIComponent(item.section)}` : undefined,
     }];
   }), [routeManifest.routeIndex]);
-  const sageSetupLinks = useMemo<SageContextLink[]>(() => SAGE_SETUP_NAV_ITEMS.map((item) => ({
-    id: item.id,
-    label: item.label,
-    routeId: 'integrations',
-    icon: item.icon,
-    href: `${buildWorkspaceRouteHref(workspaceId, 'integrations')}?section=${encodeURIComponent(item.section)}`,
-  })), [workspaceId]);
   const sageContextLinks = useMemo<SageContextGroupLink[]>(() => {
     const links: SageContextGroupLink[] = [];
     const chatRoute = routeManifest.routeIndex.chat;
@@ -1838,7 +1822,6 @@ export function WorkstationKernelShell({
                 activeRouteId={activeRouteId}
                 navigationItems={sageSidebarLinks}
                 contextLinks={sageContextLinks}
-                setupItems={sageSetupLinks}
                 workspaceId={workspaceId}
               />
             ) : visiblePanelLevel === 'studio' ? (

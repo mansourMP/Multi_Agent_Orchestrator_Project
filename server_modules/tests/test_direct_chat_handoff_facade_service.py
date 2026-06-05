@@ -92,7 +92,7 @@ class DirectChatHandoffFacadeServiceTests(unittest.TestCase):
                     {
                         "type": "step",
                         "id": "step-1",
-                        "label": "Waiting for your laptop",
+                        "label": "Waiting for Agent Computer",
                         "status": "active",
                         "kind": "thinking",
                     },

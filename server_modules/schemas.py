@@ -129,6 +129,9 @@ class SageChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=32_000)
     surface: str = Field(default="chat", max_length=80)
     mode: Literal["owner_sage"] = "owner_sage"
+    provider: Optional[str] = Field(default=None, max_length=120)
+    model: Optional[str] = Field(default=None, max_length=240)
+    reasoning_effort: Optional[str] = Field(default=None, max_length=80)
 
 
 class SageVoiceTaskRequest(BaseModel):

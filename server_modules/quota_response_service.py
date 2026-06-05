@@ -17,21 +17,21 @@ from server_modules.quota_policy_service import QuotaDecision
 _HTTP_DETAIL_BY_REASON = {
     "auth_login_rate_limited": "Too many attempts right now. Please wait a moment and try again.",
     "auth_public_rate_limited": "Too many requests right now. Please wait a moment and try again.",
-    "authenticated_api_rate_limited": "Sage is receiving too many requests right now. Please try again shortly.",
-    "service_api_rate_limited": "Sage is receiving too many requests right now. Please try again shortly.",
+    "authenticated_api_rate_limited": "The service is receiving too many requests right now. Please try again shortly.",
+    "service_api_rate_limited": "The service is receiving too many requests right now. Please try again shortly.",
     "control_plane_rate_limited": "Setup services are busy right now. Please try again in a moment.",
     "auth_csrf_rate_limited": "Too many invalid security token attempts. Please wait a moment and try again.",
-    "model_invocation_rate_limited": "Sage is receiving too many generation requests right now. Please try again shortly.",
+    "model_invocation_rate_limited": "The selected AI path is receiving too many generation requests right now. Please try again shortly.",
     "mini_app_bridge_rate_limited": "Mini-app bridge traffic is currently limited. Please retry in a moment.",
     "mini_app_invoke_rate_limited": "Mini-app invoke traffic is currently limited. Please retry in a moment.",
 }
 
 _CHANNEL_REPLY_BY_REASON = {
-    "thread_busy": "I’m still finishing the previous message in this conversation. One moment.",
+    "thread_busy": "The previous message in this conversation is still running.",
     "agent_limit_exceeded": "This Business Agent is helping other customers right now. Please try again in a moment.",
     "workspace_limit_exceeded": "The workspace is helping other customers right now. Please try again in a moment.",
-    "workspace_rate_limited": "I’m receiving too many requests right now. Please try again in a moment.",
-    "runtime_cap_exceeded": "I’m taking longer than the current service window allows. Please try again in a moment.",
+    "workspace_rate_limited": "The workspace is receiving too many requests right now. Please try again in a moment.",
+    "runtime_cap_exceeded": "The current service window ended before the run completed. Please try again in a moment.",
 }
 
 _CHANNEL_STATUS_BY_REASON = {
@@ -54,7 +54,7 @@ def _channel_failure_class_for_reason(reason: Optional[str]) -> str:
 def http_detail_for_reason(reason: Optional[str]) -> str:
     return _HTTP_DETAIL_BY_REASON.get(
         str(reason or "").strip(),
-        "Sage is temporarily at capacity. Please try again in a moment.",
+        "The service is temporarily at capacity. Please try again in a moment.",
     )
 
 
@@ -184,14 +184,14 @@ def channel_result_from_quota_decision(
 ) -> ChannelExecutionResult:
     details = dict(decision.metadata or {})
     status = _CHANNEL_STATUS_BY_REASON.get(str(decision.reason or "").strip(), "rate_limited")
-    reply = channel_reply_for_reason(
+    platform_message = channel_reply_for_reason(
         decision.reason,
         deployed_agent=deployed_agent,
         metadata=details,
     )
     error = error_response_service.platform_error(
         code=str(decision.reason or "").strip() or "rate_limit_exceeded",
-        message=reply,
+        message=platform_message or "The channel request is temporarily rate-limited.",
         error_class=_channel_failure_class_for_reason(decision.reason),
         retryable=True,
         status_code=int(decision.http_status or 429),
@@ -205,6 +205,7 @@ def channel_result_from_quota_decision(
         "status": status,
         "limit_reason": decision.reason,
         "response_class": decision.response_class,
+        "platform_message": platform_message,
         "error": error_response_service.channel_error_payload(error),
     }
     if str(decision.reason or "").strip() == "deployed_agent_daily_limit_exceeded":
@@ -228,6 +229,7 @@ def channel_result_from_quota_decision(
         event_metadata["rate_limit_scope"] = decision.scope
     metadata: Dict[str, Any] = {
         "response_class": decision.response_class,
+        "platform_message": platform_message,
         **{key: value for key, value in details.items() if value is not None},
     }
     if deployed_agent_id:
@@ -236,7 +238,7 @@ def channel_result_from_quota_decision(
         metadata["deployment_state"] = deployed_agent_state
     return ChannelExecutionResult(
         status=status,
-        reply=reply,
+        reply="",
         limit_reason=decision.reason,
         retry_after_seconds=decision.retry_after_seconds,
         quota_snapshot=dict(decision.quota_snapshot or {}) or None,

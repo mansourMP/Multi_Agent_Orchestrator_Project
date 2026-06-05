@@ -220,13 +220,13 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
 
         self.assertEqual(model, "claude-3-7-sonnet-20250219")
 
-    def test_generate_chat_remaps_retired_anthropic_model(self):
+    def test_generate_chat_keeps_selected_anthropic_model_when_strict(self):
         with patch.object(worker_llm, "anthropic_default_model", return_value="claude-3-5-haiku-20241022"):
             with patch.object(worker_llm, "provider_order_for_run", return_value=["anthropic"]):
                 with patch.object(
                     worker_llm,
                     "anthropic_chat_text",
-                    return_value=("Anthropic reply", {"input_tokens": 5, "output_tokens": 7}, "claude-3-5-haiku-20241022", ""),
+                    return_value=("Anthropic reply", {"input_tokens": 5, "output_tokens": 7}, "claude-3-5-sonnet-20241022", ""),
                 ) as anthropic_mock:
                     text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
                         context={"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"},
@@ -242,21 +242,21 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         anthropic_mock.assert_called_once_with(
             "You are concise.",
             "hello",
-            model_override="claude-3-5-haiku-20241022",
+            model_override="claude-3-5-sonnet-20241022",
             prior_messages=None,
             credential_override=None,
         )
 
-    def test_generate_chat_coerces_unsupported_openai_model_for_codex_cli(self):
+    def test_generate_chat_keeps_unsupported_selected_model_when_strict(self):
         with patch.object(worker_llm, "provider_order_for_run", return_value=["codex_cli"]):
             with patch.object(
                 worker_llm,
                 "openai_codex_backend_text",
-                return_value=("Direct answer", None, "gpt-5.4", ""),
+                return_value=("Direct answer", None, "gpt-4o-mini", ""),
             ) as codex_backend_mock:
                 text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
-                    context={"provider": "openai", "model": "gpt-4o-mini"},
-                    metadata={},
+                    context={"provider": "codex_cli", "model": "gpt-4o-mini"},
+                    metadata={"provider": "codex_cli", "disable_provider_fallback": True},
                     user_goal="hello",
                     system_prompt="You are concise.",
                 )
@@ -268,7 +268,7 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         codex_backend_mock.assert_called_once_with(
             "You are concise.",
             "hello",
-            model_override="gpt-5.4",
+            model_override="gpt-4o-mini",
             reasoning_effort_override=None,
             prior_messages=None,
             credential_override=None,

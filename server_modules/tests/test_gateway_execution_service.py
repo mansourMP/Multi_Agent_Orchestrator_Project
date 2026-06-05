@@ -85,6 +85,37 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertTrue(gateway_decision_calls)
 
+    async def test_execution_readiness_allows_degraded_gateway_when_capability_ready(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["screenshot.capture"],
+            "metadata": {"capability_readiness": {"ready": ["screenshot.capture"]}},
+        }
+        with (
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live", return_value=True),
+            patch(
+                "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "online",
+                    "heartbeat_fresh": True,
+                    "reported_health_state": "degraded",
+                    "capability_readiness": {"ready": ["screenshot.capture"]},
+                },
+            ),
+        ):
+            ready, reason = gateway_execution_service.gateway_registration_execution_readiness(
+                registration,
+                workspace_id="ws-1",
+                capability_id="screenshot.capture",
+            )
+
+        self.assertTrue(ready)
+        self.assertEqual(reason, "")
+
     async def test_execute_tool_via_gateway_rust_denial_blocks_dispatch(self) -> None:
         registration = {
             "gateway_id": "gw-1",

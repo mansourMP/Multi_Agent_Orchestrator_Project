@@ -121,6 +121,10 @@ function providerLabel(cell: CodexTranscriptCell): string {
   return parts.join(' · ');
 }
 
+function normalizeAssistantContentForDisplay(text: string): string {
+  return text;
+}
+
 function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
@@ -543,7 +547,7 @@ function traceSummaryParts(activities: TraceActivityCellRecord[]): string[] {
 function TraceStatusPill({ status }: { status: 'running' | 'done' | 'error' }) {
   return (
     <span className={`app-agent-trace-status app-agent-trace-status--${status}`}>
-      {status === 'running' ? 'loading' : status}
+      {status === 'running' ? 'Working' : status === 'done' ? 'Completed' : 'Failed'}
     </span>
   );
 }
@@ -647,8 +651,13 @@ export function ExecutionTraceCell({ cell }: { cell: ExecutionTraceCellRecord })
   ) ?? null;
   const toolActivities = cell.activities.filter((activity) => activity.kind !== 'reasoning_summary');
   const summary = useMemo(
-    () => (toolActivities.length > 0 ? traceSummaryParts(toolActivities).join(' · ') : 'Thought through response'),
-    [toolActivities],
+    () => {
+      if (cell.isStreaming) {
+        return toolActivities.length > 0 ? traceSummaryParts(toolActivities).join(' · ') : 'Thinking';
+      }
+      return toolActivities.length > 0 ? traceSummaryParts(toolActivities).join(' · ') : 'Thought process';
+    },
+    [cell.isStreaming, toolActivities],
   );
   const hasTrace = Boolean(thinkingCell) || toolActivities.length > 0;
   const showTrace = hasTrace && expanded;
@@ -770,7 +779,7 @@ export function UserCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 
 export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'assistant' }> }) {
   const timestamp = formatTimestamp(cell.createdAt);
   const effectiveLabel = providerLabel(cell);
-  const text = cell.content.trim();
+  const text = normalizeAssistantContentForDisplay(cell.content).trim();
   return (
     <article data-chat-role="assistant" className="app-chat-message">
       <div className="app-chat-message__content">
@@ -829,7 +838,7 @@ export function ReasoningSummaryCell({
           className={`app-chat-thinking-row__chevron${expanded ? ' app-chat-thinking-row__chevron--expanded' : ''}`}
           aria-hidden="true"
         />
-        <span className="app-chat-thinking-row__label">Thought through response</span>
+        <span className="app-chat-thinking-row__label">{cell.isStreaming ? 'Thinking' : 'Thought process'}</span>
       </button>
       {expanded ? (
         <div className="app-chat-thinking-row__detail">

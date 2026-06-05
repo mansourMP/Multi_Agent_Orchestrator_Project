@@ -121,7 +121,7 @@ def build_safe_approval_notification_payload(
     a trusted approval surface.
     """
     action_token = _coerce_text(action) or "approval_required"
-    summary = secret_redaction_service.redact_text(_coerce_text(description) or "Sage needs your approval.")
+    summary = secret_redaction_service.redact_text(_coerce_text(description) or "Approval is required.")
     payload = {
         "title": "Approval needed",
         "body": summary,

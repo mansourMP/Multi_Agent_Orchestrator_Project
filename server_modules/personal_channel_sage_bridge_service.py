@@ -136,18 +136,7 @@ def _build_personal_reply(
             }
     except Exception:
         pass
-    fallback_name = str(push_name or "").strip()
-    prefix = f"{fallback_name}, " if fallback_name else ""
-    return {
-        "text": f"{prefix}Sage received your {fallback_label} message: {normalized_text}",
-        "source": "personal_channel_fallback",
-        "raw": {
-            "external_content_guard": {
-                "wrapper_id": guarded.wrapper_id,
-                "suspicious_patterns": list(guarded.suspicious_patterns),
-            }
-        },
-    }
+    return None
 
 
 async def _build_unified_sage_personal_reply_async(

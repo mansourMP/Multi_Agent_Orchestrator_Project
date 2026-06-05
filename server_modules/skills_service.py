@@ -483,6 +483,16 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             parameters={"type": "object", "properties": {"command": {"type": "string", "description": "Shell command to run"}}, "required": ["command"]},
         ),
         ToolDescriptor(
+            tool_name="computer__system_info",
+            label="Computer system info",
+            connector_id="computer",
+            action_id="system_info",
+            description="Read OS, CPU, memory, cores, and disk summary from the verified Agent Computer without exposing a raw shell command.",
+            capability_id="shell.execute",
+            requires_runtime=True,
+            parameters={"type": "object", "properties": {}},
+        ),
+        ToolDescriptor(
             tool_name="screenshot__capture",
             label="Local screenshot",
             connector_id="screenshot",
@@ -616,9 +626,9 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="hardware",
             action_id="action",
             description=(
-                "Request a browser, file, shell, screenshot, or app action through an Empyralis runtime target. "
-                "Use runtime_target cloud_default for cloud-only chat, user_device_gateway for a paired user computer, "
-                "empyralis_cloud_computer for hosted desktop/sandbox work, or self_hosted_node for an enrolled node."
+                "Run a real Agent Computer action through the verified Gateway/Supervisor. "
+                "Use action='screenshot.capture' for screenshots; use shell.execute only for explicit safe shell requests. "
+                "Do not write pseudo-command text in the assistant reply."
             ),
             requires_runtime=True,
             parameters={
@@ -632,15 +642,15 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
                             "empyralis_cloud_computer",
                             "self_hosted_node",
                         ],
-                        "description": "Target runtime. Omit to use the selected hardware runtime when available.",
+                        "description": "Target runtime. Omit to use the selected verified runtime when available.",
                     },
                     "action": {
                         "type": "string",
-                        "description": "Capability/action such as file.read, shell.execute, screenshot.capture, browser.open, computer_control.click, or computer_control.launch_app.",
+                        "description": "Capability/action to execute. Prefer exact capability IDs such as screenshot.capture, filesystem.read, shell.execute, computer_control.ocr, computer_control.click, computer_control.type, computer_control.clipboard_read, or computer_control.launch_app.",
                     },
                     "arguments": {
                         "type": "object",
-                        "description": "Action-specific arguments, for example path, command, url, selector, text, x/y coordinates, or app name.",
+                        "description": "Action-specific arguments. Examples: {\"path\":\"~/Desktop\"}, {\"command\":\"uname -a\"}, {\"text\":\"hello\"}, {\"x\":100,\"y\":200}, or {\"name_or_path\":\"Safari\"}.",
                     },
                 },
                 "required": ["action"],
@@ -1156,6 +1166,16 @@ def build_local_direct_chat_tools(
 def build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     tools: List[Dict[str, Any]] = []
     seen: set[str] = set()
+    agent_computer_read_tool_names = {
+        "filesystem.read": "file__read",
+        "shell.execute": "shell__exec",
+        "screenshot.capture": "screenshot__capture",
+        "computer_control.system_info": "computer__system_info",
+        "computer_control.ocr": "computer__ocr",
+        "computer_control.clipboard_read": "computer__clipboard_read",
+        "computer_control.list_apps": "computer__list_apps",
+        "computer_control.list_windows": "computer__list_windows",
+    }
     for cap in tool_capabilities:
         if not isinstance(cap, dict):
             continue
@@ -1165,6 +1185,88 @@ def build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Dic
         label = str(cap.get("label") or connector_id).strip() or connector_id
         if not connector_id:
             continue
+        if connector_id == "agent_computer":
+            read_actions = _normalize_action_list(cap.get("read_actions"))
+            if read_actions and "hardware__action" not in seen:
+                hardware_descriptor = next(
+                    (
+                        item
+                        for item in _builtin_tool_descriptors()
+                        if item.tool_name == "hardware__action"
+                    ),
+                    None,
+                )
+                if hardware_descriptor is not None:
+                    tool_payload = _tool_payload_from_descriptor(hardware_descriptor)
+                    parameters = dict(tool_payload.get("parameters") or {})
+                    properties = dict(parameters.get("properties") or {})
+                    action_schema = dict(properties.get("action") or {})
+                    action_schema["enum"] = read_actions
+                    action_schema["description"] = (
+                        "Agent Computer capability to run on the verified paired computer."
+                    )
+                    runtime_target_schema = dict(properties.get("runtime_target") or {})
+                    runtime_target_schema["enum"] = ["user_device_gateway"]
+                    runtime_target_schema["description"] = (
+                        "Use user_device_gateway for this workspace's verified Agent Computer."
+                    )
+                    properties["action"] = action_schema
+                    properties["runtime_target"] = runtime_target_schema
+                    parameters["properties"] = properties
+                    tool_payload.update({
+                        "description": (
+                            "Use the verified Agent Computer for available read actions such as screenshots, "
+                            "screen reading, clipboard read, and local app/window inspection."
+                        ),
+                        "label": "Agent Computer action",
+                        "parameters": parameters,
+                        "metadata": {
+                            **dict(tool_payload.get("metadata") or {}),
+                            "source": "agent_computer_capability",
+                            "available_actions": read_actions,
+                            "device_id": str((cap.get("metadata") or {}).get("device_id") or "").strip() or None
+                                if isinstance(cap.get("metadata"), dict)
+                                else None,
+                            "gateway_id": str((cap.get("metadata") or {}).get("gateway_id") or "").strip() or None
+                                if isinstance(cap.get("metadata"), dict)
+                                else None,
+                        },
+                    })
+                    tools.append(tool_payload)
+                    seen.add("hardware__action")
+                local_descriptors_by_name = {
+                    item.tool_name: item for item in _local_tool_descriptors()
+                }
+                expanded_read_actions = list(read_actions)
+                if "shell.execute" in expanded_read_actions and "computer_control.system_info" not in expanded_read_actions:
+                    expanded_read_actions.insert(0, "computer_control.system_info")
+                for read_action in expanded_read_actions:
+                    concrete_tool_name = agent_computer_read_tool_names.get(read_action)
+                    if not concrete_tool_name or concrete_tool_name in seen:
+                        continue
+                    concrete_descriptor = local_descriptors_by_name.get(concrete_tool_name)
+                    if concrete_descriptor is None:
+                        continue
+                    concrete_payload = _tool_payload_from_descriptor(concrete_descriptor)
+                    concrete_payload.update({
+                        "description": (
+                            f"Use the verified Agent Computer for {read_action}. "
+                            "This executes through Gateway/Supervisor and returns trace evidence."
+                        ),
+                        "metadata": {
+                            **dict(concrete_payload.get("metadata") or {}),
+                            "source": "agent_computer_capability",
+                            "agent_computer_action": read_action,
+                            "device_id": str((cap.get("metadata") or {}).get("device_id") or "").strip() or None
+                                if isinstance(cap.get("metadata"), dict)
+                                else None,
+                            "gateway_id": str((cap.get("metadata") or {}).get("gateway_id") or "").strip() or None
+                                if isinstance(cap.get("metadata"), dict)
+                                else None,
+                        },
+                    })
+                    tools.append(concrete_payload)
+                    seen.add(concrete_tool_name)
         for action in capability_payload_write_actions(cap):
             tool_name = tool_name_for_action(connector_id, action)
             if not tool_name or tool_name in seen:
@@ -1600,6 +1702,13 @@ def build_direct_local_tool_config(
             "summary": "Capture screenshot of the current screen.",
         }
     if connector_id == "computer":
+        if action_id == "system_info":
+            from server_modules import no_provider_service
+
+            return "shell", {
+                "command": no_provider_service.local_system_info_shell_command(),
+                "summary": "Read this computer's system information.",
+            }
         if action_id == "ocr":
             return "computer", {
                 "action": "ocr",
@@ -1792,6 +1901,8 @@ def _gateway_capability_for_direct_local_tool(connector_id: str, action_id: str)
         return "filesystem.read_write"
     if normalized_connector == "shell":
         return "shell.execute"
+    if normalized_connector == "computer" and normalized_action == "system_info":
+        return "shell.execute"
     if normalized_connector == "screenshot":
         return "screenshot.capture"
     if normalized_connector == "computer" and normalized_action:
@@ -1907,6 +2018,11 @@ def _gateway_arguments_for_direct_local_tool(
             command = command.replace("/root/Downloads", str(Path.home() / "Downloads"))
             payload["command"] = command
         return payload
+    if normalized_connector == "computer" and normalized_action == "system_info":
+        from server_modules import no_provider_service
+
+        payload["command"] = no_provider_service.local_system_info_shell_command()
+        return payload
     if normalized_connector == "computer":
         normalized_path = _normalize_direct_local_path_argument(
             payload.get("path") or payload.get("file_path")
@@ -2007,20 +2123,70 @@ def _format_gateway_direct_local_tool_result(
     callbacks: Any,
 ) -> str:
     inner_result = gateway_response.get("result")
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    if normalized_connector == "screenshot" and normalized_action == "capture":
+        result_payload = inner_result if isinstance(inner_result, dict) else {}
+        status = str(result_payload.get("status") or gateway_response.get("status") or "").strip().lower()
+        artifacts = result_payload.get("artifacts") or gateway_response.get("artifacts")
+        artifact_items = list(artifacts) if isinstance(artifacts, list) else []
+        images = result_payload.get("images")
+        image_items = list(images) if isinstance(images, list) else []
+        compact_images: List[Dict[str, Any]] = []
+        for image in image_items:
+            if not isinstance(image, dict):
+                continue
+            compact_image: Dict[str, Any] = {}
+            for key in ("artifact_id", "uri", "mime_type", "width", "height"):
+                value = image.get(key)
+                if value not in (None, "", []):
+                    compact_image[key] = value
+            if compact_image:
+                compact_images.append(compact_image)
+        if status in {"failed", "offline", "degraded", "waiting_approval"}:
+            summary = str(result_payload.get("summary") or result_payload.get("reason") or status or "Screenshot capture did not complete.").strip()
+        else:
+            status = "completed"
+            summary = str(result_payload.get("summary") or "Captured screenshot from Agent Computer.").strip()
+        compact_result: Dict[str, Any] = {
+            "status": status,
+            "capability_id": str(capability_id or "screenshot.capture").strip() or "screenshot.capture",
+            "summary": summary,
+            "result": {
+                "summary": summary,
+                "artifacts": artifact_items,
+                "images": compact_images,
+                "image_count": len(image_items),
+            },
+        }
+        if str(gateway_response.get("gateway_id") or "").strip():
+            compact_result["gateway_id"] = str(gateway_response.get("gateway_id") or "").strip()
+        if str(gateway_response.get("run_id") or "").strip():
+            compact_result["run_id"] = str(gateway_response.get("run_id") or "").strip()
+        try:
+            return json.dumps(compact_result, ensure_ascii=False)
+        except Exception:
+            return summary
     if isinstance(inner_result, dict) and (
         "summary" in inner_result or "result_data" in inner_result
     ):
         return callbacks.format_direct_local_tool_result(inner_result)
-    normalized_connector = str(connector_id or "").strip().lower()
-    normalized_action = str(action_id or "").strip().lower()
-    if normalized_connector == "shell" and isinstance(inner_result, dict):
+    if (
+        normalized_connector == "shell"
+        or (normalized_connector == "computer" and normalized_action == "system_info")
+    ) and isinstance(inner_result, dict):
         command = str(inner_result.get("command") or "").strip()
         stdout = str(inner_result.get("stdout") or "").strip()
         stderr = str(inner_result.get("stderr") or "").strip()
         exit_code = inner_result.get("exit_code")
         output_preview = "\n".join(part for part in [stdout, f"stderr:\n{stderr}" if stderr else ""] if part).strip()
+        summary = (
+            "Read this computer's system information."
+            if normalized_connector == "computer" and normalized_action == "system_info"
+            else "Checked this device."
+        )
         result = {
-            "summary": "Checked this device.",
+            "summary": summary,
             "result_data": {
                 "tool_variant": "run_command",
                 "child_result": {
@@ -2115,7 +2281,22 @@ def _execute_direct_tool_via_gateway(
     )
     payload = dict(response) if isinstance(response, dict) else {"result": response}
     if isinstance(payload.get("execution"), dict):
-        return dict(payload["execution"])
+        execution = dict(payload["execution"])
+        normalized_payload = dict(payload)
+        execution_result = execution.get("result")
+        if isinstance(execution_result, dict):
+            result_payload = dict(execution_result)
+            artifact_ids = payload.get("artifacts")
+            if isinstance(artifact_ids, list) and artifact_ids and not isinstance(result_payload.get("artifacts"), list):
+                result_payload["artifacts"] = list(artifact_ids)
+            normalized_payload["result"] = result_payload
+        elif "result" not in normalized_payload:
+            normalized_payload["result"] = execution_result
+        for key in ("gateway_id", "device_id", "workspace_id", "request_id", "capability_id", "run_id"):
+            value = execution.get(key)
+            if value not in (None, "", []) and normalized_payload.get(key) in (None, "", []):
+                normalized_payload[key] = value
+        return normalized_payload
     status = str(payload.get("status") or "").strip()
     reason = str(payload.get("reason") or "").strip()
     if status in {"waiting_approval", "offline", "degraded", "failed"}:
@@ -2133,6 +2314,44 @@ def _execute_direct_tool_via_gateway(
 
 def _format_hardware_action_result(payload: Dict[str, Any]) -> str:
     runtime_session = payload.get("runtime_session") if isinstance(payload.get("runtime_session"), dict) else {}
+    execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
+    execution_result = execution.get("result") if isinstance(execution.get("result"), dict) else {}
+    image_items = list(execution_result.get("images") or []) if isinstance(execution_result.get("images"), list) else []
+    if image_items:
+        compact_images: List[Dict[str, Any]] = []
+        for image in image_items:
+            if not isinstance(image, dict):
+                continue
+            compact_image: Dict[str, Any] = {}
+            for key in ("artifact_id", "uri", "mime_type", "width", "height"):
+                value = image.get(key)
+                if value not in (None, "", []):
+                    compact_image[key] = value
+            if compact_image:
+                compact_images.append(compact_image)
+        status = "completed"
+        summary_text = str(
+            execution_result.get("summary")
+            or execution.get("summary")
+            or "Captured screenshot from Agent Computer."
+        ).strip()
+        summary = {
+            "status": status,
+            "success": status.lower() == "completed",
+            "summary": summary_text,
+            "runtime_target": str(runtime_session.get("canonical_runtime_target") or runtime_session.get("runtime_target") or "").strip() or None,
+            "runtime_access_mode": str(runtime_session.get("runtime_access_mode") or "").strip() or None,
+            "runtime_state": str(runtime_session.get("state") or "").strip() or None,
+            "gateway_id": str(runtime_session.get("gateway_id") or "").strip() or None,
+            "device_id": str(runtime_session.get("device_id") or "").strip() or None,
+            "artifacts": list(payload.get("artifacts") or []),
+            "result": {
+                "summary": summary_text,
+                "image_count": len(image_items),
+                "images": compact_images,
+            },
+        }
+        return json.dumps({key: value for key, value in summary.items() if value not in (None, "", [])}, ensure_ascii=False)
     summary = {
         "status": str(payload.get("status") or "").strip(),
         "reason": str(payload.get("reason") or "").strip() or None,
@@ -2144,7 +2363,6 @@ def _format_hardware_action_result(payload: Dict[str, Any]) -> str:
         "approval_id": str((payload.get("approval") if isinstance(payload.get("approval"), dict) else {}).get("approval_id") or "").strip() or None,
         "artifacts": list(payload.get("artifacts") or []),
     }
-    execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
     if isinstance(execution.get("result"), dict):
         summary["result"] = execution["result"]
     return json.dumps({key: value for key, value in summary.items() if value not in (None, "", [])}, ensure_ascii=False)
@@ -2208,11 +2426,7 @@ def _execute_hardware_action_tool_call(
     run_id = str(payload.get("run_id") or "").strip() or (
         f"direct_chat:{str(thread_id or 'thread').strip() or 'thread'}:hardware:{index}:{uuid.uuid4().hex}"
     )
-    request_id = (
-        _request_id_from_direct_tool_context(session_ctx)
-        or str(payload.get("request_id") or payload.get("client_request_id") or "").strip()
-        or run_id
-    )
+    request_id = str(payload.get("request_id") or payload.get("client_request_id") or "").strip() or run_id
     runtime_target = _runtime_target_from_direct_tool_context(
         explicit_target=payload.get("runtime_target"),
         gateway_id=gateway_id,
@@ -2449,7 +2663,10 @@ def _execute_safe_direct_local_tool_call(
         gateway_run_id = (
             f"direct_chat:{str(thread_id or 'thread').strip() or 'thread'}:{index}:{uuid.uuid4().hex}"
         )
-        gateway_request_id = _request_id_from_direct_tool_context(session_ctx) or gateway_run_id
+        # Gateway request IDs must be unique per protocol invoke. The parent
+        # Sage request ID is shared by every tool in the turn and is kept for
+        # audit correlation outside the Gateway protocol envelope.
+        gateway_request_id = gateway_run_id
         gateway_trace_id = (
             str(getattr(trace_context, "trace_id", "") or "").strip()
             or str(metadata.get("trace_id") or "").strip()

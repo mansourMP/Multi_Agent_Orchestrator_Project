@@ -527,18 +527,15 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
                     "connected_apps": [
                         {"label": "Google Workspace", "connected": True, "runtime_usable": True},
                     ],
-                    "channels": [
-                        {"label": "Telegram", "connected": True, "runtime_usable": True},
-                    ],
+                    "channels": [],
                     "byok_providers": [{"label": "DeepSeek"}, {"label": "Gemini"}, {"label": "OpenAI"}],
                     "required_setup_actions": [{"label": "Connect My Computer", "href": "/integrations"}],
                 },
             },
-            connected_systems=["Google Workspace", "Telegram"],
+            connected_systems=["Google Workspace"],
             tool_capabilities=[],
             tools=[
                 {"name": "web__search", "description": "Search the web"},
-                {"name": "telegram_bot__send_message", "description": "Send a Telegram message"},
             ],
             approved_action_payload=None,
             base_context_used={"workspace_id": "default"},
@@ -873,7 +870,7 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["payload"]["provider"], "ollama")
         self.assertEqual(events[-1]["payload"]["context_used"]["effective_provider"], "ollama")
 
-    def test_build_direct_operator_reply_forces_working_directory_request_even_when_provider_ready(self) -> None:
+    def test_build_direct_operator_reply_sends_working_directory_request_to_selected_model(self) -> None:
         prepared = SimpleNamespace(
             normalized_message="what folder are you in ?",
             normalized_workspace_id="ws-1",
@@ -906,16 +903,25 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         services.no_provider_execution_services.tool_arguments_payload = (
             lambda arguments: arguments if isinstance(arguments, dict) else {}
         )
-        executed: dict[str, object] = {}
-
-        def _execute_single_tool_call(**kwargs):
-            executed.update(kwargs)
-            return "/Users/mansur/Multi_Agent_Orchestrator_Project"
-
-        services.no_provider_execution_services.execute_single_tool_call = _execute_single_tool_call
-        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = (
-            lambda **kwargs: (_ for _ in ()).throw(AssertionError("provider generation should not run"))
+        services.no_provider_execution_services.execute_single_tool_call = (
+            lambda **kwargs: (_ for _ in ()).throw(AssertionError("backend should not pre-run the shell tool"))
         )
+        captured: dict[str, object] = {}
+
+        def _stream_provider_backed_direct_chat(**kwargs):
+            captured["provider"] = kwargs.get("provider")
+            captured["model"] = kwargs.get("model")
+            captured["tools"] = kwargs.get("tools")
+            return iter(
+                [
+                    {
+                        "type": "final",
+                        "payload": {"reply": "I can check that with the available shell tool.", "context_used": {}},
+                    }
+                ]
+            )
+
+        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = _stream_provider_backed_direct_chat
 
         events = list(
             direct_chat_runtime_service.build_direct_operator_reply(
@@ -927,10 +933,11 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(executed["tool_call"]["name"], "shell__exec")
-        self.assertEqual(executed["tool_call"]["arguments"]["command"], "pwd")
+        self.assertEqual(captured["provider"], "deepseek")
+        self.assertEqual(captured["model"], "deepseek-chat")
+        self.assertEqual(captured["tools"], [{"name": "shell__exec"}])
         self.assertEqual(events[-1]["type"], "final")
-        self.assertIn("/Users/mansur/Multi_Agent_Orchestrator_Project", events[-1]["payload"]["reply"])
+        self.assertIn("available shell tool", events[-1]["payload"]["reply"])
 
     def test_build_direct_operator_reply_orders_system_identity_and_workspace_context(self) -> None:
         prepared = SimpleNamespace(

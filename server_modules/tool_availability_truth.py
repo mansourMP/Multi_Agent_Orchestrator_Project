@@ -277,6 +277,78 @@ def _merge_bool(values: List[Optional[bool]]) -> Optional[bool]:
     return None
 
 
+def _active_agent_computer_capability_payload(workspace_id: str) -> Optional[Dict[str, Any]]:
+    requested_workspace = str(workspace_id or "").strip() or "default"
+    try:
+        from server_modules import gateway_protocol_service, gateway_state_repository
+
+        registrations = gateway_state_repository.list_workspace_gateway_registrations(
+            requested_workspace,
+            include_revoked=False,
+        )
+    except Exception:
+        return None
+
+    for registration in registrations if isinstance(registrations, list) else []:
+        if not isinstance(registration, dict):
+            continue
+        gateway_id = str(registration.get("gateway_id") or "").strip()
+        if not gateway_id:
+            continue
+        if str(registration.get("status") or "").strip().lower() != "active":
+            continue
+        try:
+            if not gateway_protocol_service.gateway_connection_is_live(gateway_id):
+                continue
+        except Exception:
+            continue
+
+        metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
+        readiness = metadata.get("capability_readiness") if isinstance(metadata.get("capability_readiness"), dict) else {}
+        ready_capabilities = {
+            str(item or "").strip().lower()
+            for item in (
+                list(registration.get("capabilities") or [])
+                + list(readiness.get("ready") or [])
+            )
+            if str(item or "").strip()
+        }
+        read_actions: List[str] = []
+        if "shell.execute" in ready_capabilities:
+            read_actions.append("shell.execute")
+        if "filesystem.read" in ready_capabilities or "filesystem.read_write" in ready_capabilities:
+            read_actions.append("filesystem.read")
+        if "screenshot.capture" in ready_capabilities:
+            read_actions.append("screenshot.capture")
+        if "computer_control.ocr" in ready_capabilities:
+            read_actions.append("computer_control.ocr")
+        if "computer_control.clipboard_read" in ready_capabilities:
+            read_actions.append("computer_control.clipboard_read")
+        if "computer_control.list_apps" in ready_capabilities:
+            read_actions.append("computer_control.list_apps")
+        if "computer_control.list_windows" in ready_capabilities:
+            read_actions.append("computer_control.list_windows")
+
+        return {
+            "id": "agent_computer",
+            "label": "Agent Computer",
+            "connected": True,
+            "authenticated": True,
+            "runtime_usable": True,
+            "read_actions": _normalize_action_list(read_actions),
+            "write_actions": [],
+            "approval_required_actions": [],
+            "metadata": {
+                "source": "gateway_registration",
+                "gateway_id": gateway_id,
+                "device_id": str(registration.get("device_id") or "").strip() or None,
+                "display_name": str(registration.get("display_name") or "").strip() or None,
+                "ready_capabilities": sorted(ready_capabilities),
+            },
+        }
+    return None
+
+
 def resolve_workspace_tool_capabilities(
     workspace_id: str,
     *,
@@ -350,5 +422,9 @@ def resolve_workspace_tool_capabilities(
                 "approval_required_actions": _normalize_action_list(group.get("approval_required_actions")),
             }
         )
+    if not normalized_filter or "agent_computer" in normalized_filter or "local_companion" in normalized_filter:
+        agent_computer_payload = _active_agent_computer_capability_payload(requested_workspace)
+        if agent_computer_payload is not None:
+            out.append(agent_computer_payload)
     out.sort(key=lambda item: (str(item.get("label") or ""), str(item.get("id") or "")))
     return out

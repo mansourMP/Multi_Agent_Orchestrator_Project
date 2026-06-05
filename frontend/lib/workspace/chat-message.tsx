@@ -109,6 +109,69 @@ const SYNTHETIC_THINKING_TEXT = new Set([
   'answer ready',
 ]);
 
+const ASSISTANT_PSEUDO_TOOL_LINE_PATTERN = /^\s*(?:run[_\s-]?command|shell[_\s-]?command|tool\s*:\s*computer|tool\s*:\s*hardware)\s*:?\s*.+$/gim;
+const SYNTHETIC_ASSISTANT_GATE_PATTERN = /\b(?:i do not have a verified agent computer result|i cannot confirm that action completed because no tool result was returned|connect or approve the required system|hardware actions need the computer to be connected|computer is already connected)\b/i;
+const SYNTHETIC_ASSISTANT_GATE_PREFIX_PATTERN = /\b(?:i do not have a verified agent computer|i cannot confirm that action|connect or approve the required|hardware actions need the computer|computer is already connected)\b/i;
+
+function stripAssistantPseudoToolText(value: string): string {
+  const hadPseudoToolLine = ASSISTANT_PSEUDO_TOOL_LINE_PATTERN.test(value);
+  ASSISTANT_PSEUDO_TOOL_LINE_PATTERN.lastIndex = 0;
+  const cleaned = value
+    .replace(ASSISTANT_PSEUDO_TOOL_LINE_PATTERN, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (SYNTHETIC_ASSISTANT_GATE_PATTERN.test(cleaned) || SYNTHETIC_ASSISTANT_GATE_PREFIX_PATTERN.test(cleaned)) {
+    return '';
+  }
+  if ((hadPseudoToolLine || value !== cleaned) && looksLikeAssistantActionPlanPreamble(cleaned)) {
+    return '';
+  }
+  if (looksLikeAssistantActionPlanPreamble(cleaned)) {
+    return '';
+  }
+  return cleaned;
+}
+
+function looksLikeAssistantActionPlanPreamble(value: string): boolean {
+  const normalized = value.trim().toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, ' ');
+  if (!normalized) {
+    return true;
+  }
+  if (normalized.length > 320) {
+    return false;
+  }
+  const planMarkers = [
+    "i'll check",
+    'i will check',
+    "i'll run",
+    'i will run',
+    "i'll retrieve",
+    'i will retrieve',
+    'running a command',
+    'running a command now',
+    'running the command',
+    'run a command',
+    'retrieve the details',
+    'retrieve details',
+    'hardware information',
+    'checking your system',
+    'checking the system',
+    'need to run',
+    'approve?',
+  ];
+  const resultMarkers = [
+    'the result is',
+    'here is',
+    'here are',
+    'i found',
+    'completed',
+    'captured',
+    'output',
+  ];
+  return planMarkers.some((marker) => normalized.includes(marker))
+    && !resultMarkers.some((marker) => normalized.includes(marker));
+}
+
 function normalizedThinkingContent(rawText: string): string {
   const trimmed = rawText.trim();
   if (!trimmed) {
@@ -167,7 +230,7 @@ const ThinkingRow = memo(({
           className={`app-chat-thinking-row__chevron${expanded ? ' app-chat-thinking-row__chevron--expanded' : ''}`}
           aria-hidden="true"
         />
-        <span className="app-chat-thinking-row__label">Thought through response</span>
+        <span className="app-chat-thinking-row__label">{isStreaming ? 'Thinking' : 'Thought process'}</span>
       </button>
       {expanded ? (
         <div className="app-chat-thinking-row__detail">
@@ -208,7 +271,7 @@ export const ChatMessage = memo(({
   onResolveApproval?: (approvalId: string, resolution: 'approved' | 'rejected') => void;
 }) => {
   const isUser = message.role === 'user';
-  const text = message.content.trim();
+  const text = isUser ? message.content.trim() : stripAssistantPseudoToolText(message.content);
   const timestamp = formatTimestamp(message.createdAt);
   const displayKind = typeof message.metadata.display_kind === 'string' ? message.metadata.display_kind : '';
   const actionHref = typeof message.metadata.action_href === 'string' ? message.metadata.action_href : '';
@@ -277,7 +340,7 @@ export const ChatMessage = memo(({
         <span className="app-chat-activity-row__icon" aria-hidden="true">
           <Icon size={14} strokeWidth={1.9} />
         </span>
-        <span className="app-chat-activity-row__label">{message.content.trim()}</span>
+        <span className="app-chat-activity-row__label">{stripAssistantPseudoToolText(message.content) || (stepStatus === 'done' ? 'Completed' : stepStatus === 'error' ? 'Failed' : 'Working')}</span>
       </article>
     );
   }
@@ -309,6 +372,10 @@ export const ChatMessage = memo(({
         ) : null}
       </article>
     );
+  }
+
+  if (!isUser && !text) {
+    return null;
   }
 
   return (

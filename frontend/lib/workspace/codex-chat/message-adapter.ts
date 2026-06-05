@@ -1,6 +1,7 @@
 'use client';
 
 import type { WorkstationChatMessageRecord } from '@/lib/workspace/chat-message';
+import { stripInternalToolMarkup } from '@/lib/workspace/workstation-chat-pane-model';
 
 import type { CodexTranscriptCell } from './cells';
 
@@ -153,7 +154,7 @@ export function workstationMessageToCodexCell(message: WorkstationChatMessageRec
   return {
     id: message.id,
     kind: 'assistant',
-    content: message.content,
+    content: stripInternalToolMarkup(message.content),
     isStreaming: message.status === 'streaming',
     isIncomplete: metadata.incomplete === true || message.status === 'incomplete',
     effectiveProvider: providerFromMetadata(metadata),

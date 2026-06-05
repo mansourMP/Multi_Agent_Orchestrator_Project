@@ -26,6 +26,75 @@ function readNumber(value: unknown): number | null {
   return null;
 }
 
+function readStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(readString).filter(Boolean);
+  }
+  const single = readString(value);
+  return single ? [single] : [];
+}
+
+function artifactIdsFromPayload(
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): string[] {
+  const ids: string[] = [];
+  for (const candidate of [
+    ...readStringList(data.artifact_ids),
+    ...readStringList(data.artifacts),
+    readString(data.artifact_id),
+    readString(data.artifactId),
+    ...readStringList(metadata.artifact_ids),
+    readString(metadata.artifact_id),
+    readString(metadata.artifactId),
+    ...readStringList(payload.artifact_ids),
+    readString(payload.artifact_id),
+    readString(payload.artifactId),
+  ]) {
+    if (candidate && !ids.includes(candidate)) {
+      ids.push(candidate);
+    }
+  }
+  return ids;
+}
+
+function interventionStatusEvents(
+  payload: Record<string, unknown>,
+  fallbackIndex: number,
+): CodexChatEvent[] {
+  const interventions = Array.isArray(payload.interventions) ? payload.interventions : [];
+  return interventions
+    .map((item, index): CodexChatEvent | null => {
+      const record = readObject(item);
+      const kind = readString(record.kind);
+      const title = readString(record.title) || toolDisplayName(kind) || 'Action needed';
+      const detail = readString(record.detail) || readString(record.message) || null;
+      const severity = readString(record.severity).toLowerCase();
+      const status = readString(record.status).toLowerCase();
+      const code = readString(record.code);
+      const state: 'idle' | 'running' | 'done' | 'error' = (
+        severity === 'error'
+        || status === 'failed'
+        || status === 'blocked'
+        || status === 'error'
+        || code.includes('error')
+        || code.includes('blocked')
+      ) ? 'error' : status === 'done' || status === 'completed' ? 'done' : 'idle';
+      if (!title && !detail) {
+        return null;
+      }
+      return {
+        type: 'status',
+        id: eventId('intervention', record.id || record.code || record.kind || title, fallbackIndex + index),
+        label: title,
+        detail,
+        status: state,
+      };
+    })
+    .filter((item): item is CodexChatEvent => Boolean(item));
+}
+
 function normalizeStepStatus(value: unknown): 'running' | 'done' | 'error' {
   const normalized = readString(value).toLowerCase();
   if (normalized === 'done' || normalized === 'complete' || normalized === 'completed' || normalized === 'success') {
@@ -102,10 +171,22 @@ function isShellLabel(value: string): boolean {
 }
 
 function isShellToolName(toolName: string, command: string): boolean {
+  if (isComputerSystemInfoTool(toolName)) {
+    return false;
+  }
   if (command.trim()) {
     return true;
   }
   return /shell|command|terminal|bash|zsh|exec/i.test(toolName);
+}
+
+function isComputerSystemInfoTool(toolName: string): boolean {
+  const normalized = readString(toolName)
+    .replace(/[_:.-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  return Boolean(normalized && normalized.includes('computer') && normalized.includes('system') && normalized.includes('info'));
 }
 
 function toolInputRecord(data: Record<string, unknown>): Record<string, unknown> {
@@ -145,7 +226,7 @@ function compactJsonPreview(value: unknown): string {
 function toolInputPreview(data: Record<string, unknown>): string | null {
   const command = shellCommandFromData(data);
   if (command) {
-    return command;
+    return null;
   }
   const input = toolInputRecord(data);
   const query = readString(data.query) || readString(input.query);
@@ -162,18 +243,66 @@ function toolInputPreview(data: Record<string, unknown>): string | null {
   }
   const directInput = compactJsonPreview(data.input ?? data.arguments ?? data.args ?? data.parameters);
   if (directInput) {
-    return directInput;
+    return null;
   }
   const summary = readString(data.summary) || readString(data.detail);
   return summary || null;
 }
 
+const INTERNAL_TOOL_RESULT_PATTERN = /\b(?:event_type|trace_id|tool_call_id|activity_event_id|metadata|payload|run[_\s-]?command|shell[_\s-]?command|tool_calls|DSML)\b/i;
+const ASSISTANT_ACTION_PLAN_RESULT_PATTERN = /\b(?:i(?:'|’)?ll check|i will check|i(?:'|’)?ll run|i will run|i(?:'|’)?ll retrieve|i will retrieve|running a command|running the command|run a command|retrieve the details|retrieve details|hardware information|checking your system|checking the system|need to run|approve\?)\b/i;
+const SYNTHETIC_ASSISTANT_GATE_PATTERN = /\b(?:i do not have a verified agent computer result|i cannot confirm that action completed because no tool result was returned|connect or approve the required system|hardware actions need the computer to be connected|computer is already connected)\b/i;
+const SYNTHETIC_ASSISTANT_GATE_PREFIX_PATTERN = /\b(?:i do not have a verified agent computer|i cannot confirm that action|connect or approve the required|hardware actions need the computer|computer is already connected)\b/i;
+
+function visibleToolResultText(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = readString(value);
+    if (!text) {
+      continue;
+    }
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    const jsonLike = (
+      (normalized.startsWith('{') && normalized.endsWith('}'))
+      || (normalized.startsWith('[') && normalized.endsWith(']'))
+    );
+    if (
+      jsonLike
+      || INTERNAL_TOOL_RESULT_PATTERN.test(normalized)
+      || ASSISTANT_ACTION_PLAN_RESULT_PATTERN.test(normalized)
+      || SYNTHETIC_ASSISTANT_GATE_PATTERN.test(normalized)
+      || SYNTHETIC_ASSISTANT_GATE_PREFIX_PATTERN.test(normalized)
+    ) {
+      continue;
+    }
+    return normalized;
+  }
+  return null;
+}
+
+function visibleAssistantReplyText(value: unknown): string | null {
+  const text = readString(value);
+  if (!text) {
+    return null;
+  }
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (
+    INTERNAL_TOOL_RESULT_PATTERN.test(normalized)
+    || ASSISTANT_ACTION_PLAN_RESULT_PATTERN.test(normalized)
+    || SYNTHETIC_ASSISTANT_GATE_PATTERN.test(normalized)
+    || SYNTHETIC_ASSISTANT_GATE_PREFIX_PATTERN.test(normalized)
+  ) {
+    return null;
+  }
+  return text;
+}
+
 function toolResultText(data: Record<string, unknown>): string | null {
-  return readString(data.summary)
-    || readString(data.result)
-    || readString(data.output)
-    || readString(data.text)
-    || null;
+  return visibleToolResultText(
+    data.summary,
+    data.result,
+    data.output,
+    data.text,
+  );
 }
 
 const EXEC_OUTPUT_MAX_LINES = 30;
@@ -203,14 +332,35 @@ function toolDisplayName(rawName: string): string {
   if (!lower) {
     return 'Using tool';
   }
+  if (lower.includes('channel')) {
+    return channelDisplayName(lower);
+  }
   if (lower.includes('telegram')) {
     return isSendish(lower) ? 'Sending Telegram' : 'Using Telegram';
   }
   if (lower.includes('whatsapp')) {
     return isSendish(lower) ? 'Sending WhatsApp' : 'Using WhatsApp';
   }
+  if (lower.includes('slack')) {
+    return isSendish(lower) ? 'Sending Slack message' : 'Reading Slack';
+  }
+  if (lower.includes('discord')) {
+    return isSendish(lower) ? 'Sending Discord message' : 'Reading Discord';
+  }
   if (lower.includes('gmail') || lower.includes('email') || lower.includes('mail')) {
     return isSendish(lower) ? 'Sending email' : 'Using email';
+  }
+  if (lower.includes('screenshot') || lower.includes('screen capture')) {
+    return 'Taking screenshot';
+  }
+  if ((lower.includes('computer') && lower.includes('system') && lower.includes('info')) || lower.includes('systeminfo')) {
+    return 'Reading computer info';
+  }
+  if (lower.includes('shell') || lower.includes('command') || lower.includes('terminal') || lower.includes('powershell') || lower.includes('systeminfo')) {
+    return 'Running command';
+  }
+  if (lower.includes('computer') || lower.includes('hardware') || lower.includes('keyboard') || lower.includes('mouse') || lower.includes('window') || lower.includes('app focus')) {
+    return 'Using Agent Computer';
   }
   if (lower.includes('image')) {
     return 'Generating image';
@@ -219,6 +369,32 @@ function toolDisplayName(rawName: string): string {
     return 'Browser action';
   }
   return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function channelDisplayName(rawName: string): string {
+  const lower = rawName.toLowerCase();
+  if (lower.includes('telegram')) {
+    return isSendish(lower) ? 'Sending Telegram' : 'Using Telegram';
+  }
+  if (lower.includes('whatsapp')) {
+    return isSendish(lower) ? 'Sending WhatsApp' : 'Using WhatsApp';
+  }
+  if (lower.includes('slack')) {
+    return isSendish(lower) ? 'Sending Slack message' : 'Reading Slack';
+  }
+  if (lower.includes('discord')) {
+    return isSendish(lower) ? 'Sending Discord message' : 'Reading Discord';
+  }
+  if (lower.includes('gmail') || lower.includes('email') || lower.includes('mail')) {
+    return isSendish(lower) ? 'Sending email' : 'Reading email';
+  }
+  if (isSendish(lower)) {
+    return 'Sending channel message';
+  }
+  if (lower.includes('read') || lower.includes('fetch') || lower.includes('list') || lower.includes('inbox') || lower.includes('recent') || lower.includes('roster')) {
+    return 'Reading channel';
+  }
+  return 'Using channel';
 }
 
 function specialistDisplayName(data: Record<string, unknown>): string {
@@ -258,8 +434,12 @@ function shellCommandFromData(data: Record<string, unknown>): string {
   const input = toolInputRecord(data);
   return readString(data.command)
     || readString(data.cmd)
+    || readString(data.run_command)
+    || readString(data.shell_command)
     || readString(input.command)
-    || readString(input.cmd);
+    || readString(input.cmd)
+    || readString(input.run_command)
+    || readString(input.shell_command);
 }
 
 function execMetaFromData(
@@ -436,7 +616,9 @@ function projectStepEvent(payload: Record<string, unknown>, fallbackIndex: numbe
 
 function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: number): CodexChatEvent[] {
   const eventType = readString(payload.event_type).toLowerCase();
-  const data = readObject(payload.data);
+  const eventKey = eventType.replace(/_/g, '.');
+  const nestedData = readObject(payload.data);
+  const data = { ...payload, ...nestedData };
   const metadata = readObject(payload.metadata);
 
   if (eventType === 'trace.started') {
@@ -511,7 +693,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     const result = toolResultText(data);
     const id = eventId('tool', payload.tool_call_id || payload.item_id, fallbackIndex);
     const combined = `${toolName} ${command} ${query} ${path}`;
-    const artifactIds = Array.isArray(data.artifact_ids) ? data.artifact_ids : [];
+    const artifactIds = artifactIdsFromPayload(payload, data, metadata);
     const artifactId = readString(artifactIds[0]);
     if (combined.toLowerCase().includes('screenshot') && artifactId) {
       return [{
@@ -661,10 +843,13 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     }];
   }
 
-  if (eventType.startsWith('runtime.') || eventType.startsWith('gateway.') || eventType.startsWith('hardware.')) {
-    const status = statusFromEventType(eventType, data.status || data.state);
-    const action = readString(data.action) || readString(data.capability_id) || readString(data.tool_name);
-    if (action && !eventType.includes('status') && !eventType.includes('session')) {
+  if (eventKey.startsWith('runtime.') || eventKey.startsWith('gateway.') || eventKey.startsWith('hardware.')) {
+    const status = statusFromEventType(eventKey, data.status || data.state);
+    const action = readString(data.action)
+      || readString(data.capability)
+      || readString(data.capability_id)
+      || readString(data.tool_name);
+    if (action && !eventKey.includes('status') && !eventKey.includes('session')) {
       return [{
         type: 'tool_result',
         id: eventId('hardware', payload.item_id || payload.tool_call_id || data.action_id, fallbackIndex),
@@ -676,9 +861,26 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
     return [{
       type: 'status',
       id: eventId('runtime', payload.item_id || data.action_id || data.runtime_session_id, fallbackIndex),
-      label: runtimeStatusLabel(eventType, data),
+      label: runtimeStatusLabel(eventKey, data),
       detail: readString(data.summary) || readString(data.detail) || null,
       status: status === 'error' ? 'error' : status === 'running' ? 'running' : 'done',
+    }];
+  }
+
+  if (eventKey.startsWith('channel.')) {
+    const rawStatus = readString(data.status).toLowerCase();
+    const status = rawStatus === 'error' || rawStatus === 'failed'
+      ? 'error'
+      : rawStatus === 'running' || rawStatus === 'started'
+        ? 'running'
+        : 'done';
+    const channelSummary = `${eventKey} ${readString(data.action)} ${readString(data.delivery_transport)} ${readString(data.summary)} ${readString(data.message)}`;
+    return [{
+      type: 'tool_result',
+      id: eventId('channel', payload.item_id || payload.tool_call_id || data.action_id, fallbackIndex),
+      name: channelDisplayName(channelSummary),
+      status,
+      result: readString(data.summary) || readString(data.message) || null,
     }];
   }
 
@@ -725,9 +927,7 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
   }
 
   if (eventType === 'browser.screenshot' || eventType === 'screenshot.captured') {
-    const artifactId = readString(data.artifact_id)
-      || readString(data.artifactId)
-      || readString(metadata.artifact_id)
+    const artifactId = artifactIdsFromPayload(payload, data, metadata)[0]
       || null;
     const caption = readString(data.caption)
       || readString(data.description)
@@ -776,6 +976,17 @@ function projectTraceEvent(payload: Record<string, unknown>, fallbackIndex: numb
       mimeType: mimeType || null,
       status: readString(data.status).toLowerCase() === 'error' ? 'error' : 'done',
     }];
+  }
+
+  if (eventType === 'assistant.message.completed') {
+    return artifactIdsFromPayload(payload, data, metadata).map((artifactId, artifactIndex) => ({
+      type: 'artifact_created' as const,
+      id: eventId('artifact', artifactId, fallbackIndex + artifactIndex),
+      title: 'Artifact created',
+      artifactId,
+      mimeType: null,
+      status: 'done' as const,
+    }));
   }
 
   if (eventType === 'plan.item.created') {
@@ -938,8 +1149,9 @@ function projectTypedStreamEvent(payload: Record<string, unknown>, fallbackIndex
       || readString(merged.text)
       || readString(merged.content)
       || readString(merged.message);
-    return text
-      ? [{ type: 'assistant_delta', id: 'assistant', delta: text, provider: null, model: null }]
+    const visibleText = visibleAssistantReplyText(text);
+    return visibleText
+      ? [{ type: 'assistant_delta', id: 'assistant', delta: visibleText, provider: null, model: null }]
       : [];
   }
   return [];
@@ -970,7 +1182,7 @@ export function projectRawEventToCodexEvents(
   }
 
   if (event.type === 'chunk') {
-    const delta = readString(event.payload.delta);
+    const delta = visibleAssistantReplyText(event.payload.delta);
     return delta
       ? [{ type: 'assistant_delta', id: 'assistant', delta, provider: null, model: null }]
       : [];
@@ -978,8 +1190,11 @@ export function projectRawEventToCodexEvents(
 
   const payload = readObject(event.payload);
   const metadata = readObject(payload.metadata);
-  const reply = readString(payload.reply) || readString(payload.content) || readString(payload.message);
+  const reply = visibleAssistantReplyText(payload.reply) || visibleAssistantReplyText(payload.content) || '';
   const status = readString(payload.status).toLowerCase();
+  if (!reply) {
+    return interventionStatusEvents(payload, fallbackIndex);
+  }
   return [{
     type: 'assistant_final',
     id: 'assistant',

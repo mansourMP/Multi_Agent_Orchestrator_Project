@@ -193,10 +193,11 @@ async def execute_prepared_channel_turn(
                 "request_id": str(context.shared_metadata.get("request_id") or "").strip() or None,
             },
         )
-        reply = "I hit an internal problem while handling this message. Please try again in a moment."
+        reply = ""
+        platform_message = "Channel execution failed before a model response was completed."
         error = error_response_service.platform_error(
             code="channel_execution_failed",
-            message=reply,
+            message=platform_message,
             error_class=INTERNAL_ERROR,
             retryable=True,
             status_code=500,
@@ -212,6 +213,7 @@ async def execute_prepared_channel_turn(
             limit_reason="internal_error",
             metadata={
                 "response_class": "internal_error",
+                "platform_message": platform_message,
                 "deployed_agent_id": context.deployed_agent_id,
                 "deployment_state": context.deployed_agent_state,
             },

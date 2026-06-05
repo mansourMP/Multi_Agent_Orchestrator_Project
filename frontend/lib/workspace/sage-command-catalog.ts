@@ -2,10 +2,6 @@ import {
   Activity,
   CircleAlert,
   Coins,
-  Cpu,
-  LayoutGrid,
-  LifeBuoy,
-  Puzzle,
   SquareActivity,
   Table,
 } from 'lucide-react';
@@ -15,10 +11,7 @@ import type { WorkspaceRouteId } from '../../../shared/nav-manifest';
 
 export type SageCommandActionKind =
   | 'open_status'
-  | 'open_usage'
-  | 'open_tools'
-  | 'open_runtime'
-  | 'run_doctor';
+  | 'open_usage';
 
 export type SageCommandMetadata = {
   id: string;
@@ -58,44 +51,9 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
     icon: Coins,
     keywords: ['quota', 'cost', 'billing', 'stats'],
   },
-  {
-    id: 'tools',
-    slash: '/tools',
-    title: 'Sage connections',
-    description: 'Open Sage app connections, personal channels, and Agent Computer setup.',
-    actionKind: 'open_tools',
-    icon: Puzzle,
-    keywords: ['connections', 'agent computer', 'apps', 'channels'],
-  },
-  {
-    id: 'runtime',
-    slash: '/runtime',
-    title: 'AI setup',
-    description: 'Check which AI path Sage will use and where to manage it.',
-    actionKind: 'open_runtime',
-    icon: Cpu,
-    keywords: ['target', 'provider', 'agent computer', 'cloud', 'routing'],
-  },
-  {
-    id: 'doctor',
-    slash: '/doctor',
-    title: 'Check setup',
-    description: 'Run a Sage readiness and connectivity check.',
-    actionKind: 'run_doctor',
-    icon: LifeBuoy,
-    keywords: ['health check', 'diagnostic', 'connectivity', 'connectors', 'gateway'],
-  },
 ];
 
 export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetadata[] = [
-  {
-    id: 'skills',
-    title: 'Installed skills',
-    description: 'Open connected skills and reusable AI procedures.',
-    routeId: 'integrations',
-    icon: Puzzle,
-    keywords: ['extensions', 'skills', 'install', 'tool server', 'playbook'],
-  },
   {
     id: 'tasks',
     title: 'Sage tasks',
@@ -119,14 +77,6 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
     routeId: 'approvals',
     icon: CircleAlert,
     keywords: ['review', 'approve', 'pending', 'guarded action', 'ok'],
-  },
-  {
-    id: 'integrations',
-    title: 'Connections',
-    description: 'Open Sage apps, AI accounts, Agent Computer, and reviewed extensions.',
-    routeId: 'integrations',
-    icon: LayoutGrid,
-    keywords: ['connect', 'apps', 'providers', 'channels', 'services'],
   },
 ];
 

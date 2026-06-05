@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from server_modules import direct_chat_hosted_usage_service
 from server_modules import direct_chat_memory_facade_service
 from server_modules import direct_chat_metadata_service
 from server_modules import direct_chat_prompt_service
+
+logger = logging.getLogger(__name__)
 
 
 def persist_direct_chat_memory_best_effort(
@@ -61,7 +64,10 @@ def persist_direct_chat_transcript_best_effort(
 
 
 def persist_direct_chat_hosted_usage_best_effort(**kwargs: Any) -> None:
-    direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(**kwargs)
+    try:
+        direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(**kwargs)
+    except Exception:
+        logger.exception("Direct chat hosted usage persistence failed; continuing response stream.")
 
 
 def build_context_used(**kwargs: Any) -> Dict[str, Any]:

@@ -48,6 +48,16 @@ def preview_run_response(
     callbacks: DirectChatRoutingPolicyCallbacks,
 ) -> Optional[Dict[str, Any]]:
     compact = callbacks.compact_text(message)
+    if status_readiness_request(compact):
+        return None
+    local_request = (
+        callbacks.message_requests_local_file_tool(message)
+        or callbacks.message_requests_local_shell_tool(message)
+        or callbacks.message_requests_local_screenshot_tool(message)
+        or callbacks.message_requests_local_computer_tool(message)
+    )
+    if local_request and not local_tools_available(availability):
+        return None
     if callbacks.is_explicit_workflow_request(message):
         return {
             "reply": "",
@@ -79,6 +89,50 @@ def preview_run_response(
             ],
         }
     return None
+
+
+def status_readiness_request(compact_message: str) -> bool:
+    compact = str(compact_message or "").strip().lower()
+    if not compact:
+        return False
+    subject = any(
+        token in compact
+        for token in (
+            "agent computer",
+            "hardware",
+            "gateway",
+            "computer connection",
+            "connection status",
+            "connections",
+        )
+    )
+    status_word = any(
+        token in compact
+        for token in (
+            "status",
+            "ready",
+            "readiness",
+            "health",
+            "doctor",
+            "connected",
+            "disconnected",
+            "offline",
+            "online",
+        )
+    )
+    return subject and status_word
+
+
+def local_tools_available(availability: Dict[str, Any]) -> bool:
+    if not isinstance(availability, dict):
+        return False
+    capability_truth = availability.get("capability_truth")
+    if isinstance(capability_truth, dict):
+        my_computer = capability_truth.get("my_computer")
+        if isinstance(my_computer, dict) and "local_tools_available" in my_computer:
+            return bool(my_computer.get("local_tools_available"))
+    connection_mode = str(availability.get("connection_mode") or "").strip().lower()
+    return connection_mode == "local_companion" and bool(availability.get("local_gateway_online"))
 
 
 def action_marker_count(compact_message: str, execution_markers: tuple[str, ...] | list[str]) -> int:
@@ -113,6 +167,8 @@ def prefer_durable_run_handoff(
         return False
     if not isinstance(availability, dict) or not bool(availability.get("ai_ready")):
         return False
+    if status_readiness_request(compact):
+        return False
     connection_mode = str(availability.get("connection_mode") or "").strip().lower()
 
     local_file = callbacks.message_requests_local_file_tool(message)
@@ -120,6 +176,8 @@ def prefer_durable_run_handoff(
     local_screenshot = callbacks.message_requests_local_screenshot_tool(message)
     local_computer = callbacks.message_requests_local_computer_tool(message)
     local_request_count = sum(1 for flag in (local_file, local_shell, local_screenshot, local_computer) if flag)
+    if local_request_count > 0 and not local_tools_available(availability):
+        return False
     sequence_requested = any(marker in compact for marker in callbacks.complex_task_sequence_markers)
     outcome_requested = any(marker in compact for marker in callbacks.complex_task_outcome_markers)
     path_reference_total = path_like_reference_count(message)

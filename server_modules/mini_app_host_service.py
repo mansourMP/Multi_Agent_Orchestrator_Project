@@ -106,11 +106,9 @@ def _launch_token_secret() -> bytes:
         or os.getenv("ORION_SECRET_KEY")
     )
     if not secret:
-        if _is_production_environment():
-            raise RuntimeError("CRITICAL: EMPYRALIS_MINI_APP_LAUNCH_SECRET must be configured in production.")
-        secret = "empyralis-mini-app-local-dev-secret"
-    if _is_production_environment() and _is_weak_launch_secret(secret):
-        raise RuntimeError("CRITICAL: EMPYRALIS_MINI_APP_LAUNCH_SECRET must be at least 32 high-entropy characters in production.")
+        raise RuntimeError("CRITICAL: EMPYRALIS_MINI_APP_LAUNCH_SECRET must be explicitly configured.")
+    if _is_weak_launch_secret(secret):
+        raise RuntimeError("CRITICAL: EMPYRALIS_MINI_APP_LAUNCH_SECRET must be at least 32 high-entropy characters.")
     return secret.encode("utf-8")
 
 

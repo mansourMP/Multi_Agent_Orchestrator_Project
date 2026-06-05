@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
 import re
-import shlex
 from pathlib import Path
 from typing import Any, Callable, Dict
 
 from server_modules import direct_chat_tool_catalog_service
+from server_modules.direct_chat_intervention_service import build_intervention
 
 
 def count_python_definition_lines(source_text: str, kind: str) -> int:
@@ -312,11 +311,20 @@ def parse_http_tool_output(output: str) -> Any:
 
 def no_provider_reasoning_required_response() -> Dict[str, Any]:
     return {
-        "reply": "Connect an AI provider in Integrations before sending a model-backed Sage message.",
-        "message": "No AI provider configured",
+        "reply": "",
         "actions": [],
         "mode": "answer",
-        "error": "",
+        "error": "model_provider_unavailable",
+        "interventions": [
+            build_intervention(
+                "model_provider_unavailable",
+                "Selected model unavailable",
+                detail="The selected model cannot answer because its provider is not configured for this workspace.",
+                severity="warning",
+                status="failed",
+                code="model_provider_unavailable",
+            )
+        ],
     }
 
 
@@ -338,19 +346,6 @@ class NoProviderExecutionServices:
     execute_single_tool_call: Callable[..., str]
 
 
-def _answer_payload(reply: str) -> Dict[str, Any]:
-    return {
-        "reply": reply,
-        "actions": [],
-        "mode": "answer",
-        "usage_masked": {},
-        "provider": None,
-        "model": None,
-        "attempted_providers": "",
-        "error": "",
-    }
-
-
 def _humanize_approval_token(value: str) -> str:
     token = str(value or "").strip().replace("__", " ").replace("_", " ").replace("-", " ")
     token = re.sub(r"\s+", " ", token).strip()
@@ -361,6 +356,57 @@ def _approval_prompt(connector_id: str, action_id: str) -> str:
     connector_label = _humanize_approval_token(connector_id) or "Tool"
     action_label = _humanize_approval_token(action_id) or "action"
     return f"Approve {connector_label} to {action_label.lower()} before continuing."
+
+
+def _tool_call_is_screenshot_capture(connector_id: str, action_id: str, arguments: Dict[str, Any]) -> bool:
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    if normalized_connector == "screenshot" and normalized_action == "capture":
+        return True
+    if normalized_connector != "hardware":
+        return False
+    capability = str(
+        arguments.get("capability_id")
+        or arguments.get("action")
+        or arguments.get("tool")
+        or ""
+    ).strip().lower()
+    return capability in {"screenshot.capture", "screen.capture", "capture_screenshot", "screenshot"}
+
+
+def _current_turn_requested_screenshot(session_ctx: dict[str, Any] | None, *, compact_text: Callable[[Any], str]) -> bool:
+    if not isinstance(session_ctx, dict):
+        return False
+    candidates: list[str] = []
+    for key in ("user_message", "message", "prompt", "normalized_message"):
+        value = session_ctx.get(key)
+        if isinstance(value, str) and value.strip():
+            candidates.append(value)
+    metadata = session_ctx.get("metadata") if isinstance(session_ctx.get("metadata"), dict) else {}
+    for key in ("user_message", "message", "prompt", "normalized_message"):
+        value = metadata.get(key) if isinstance(metadata, dict) else None
+        if isinstance(value, str) and value.strip():
+            candidates.append(value)
+    compact = compact_text(" ".join(candidates))
+    if not compact:
+        return False
+    return bool(
+        re.search(
+            r"\b(?:take\s+(?:a\s+)?screenshot|screenshot|screen\s+shot|capture\s+(?:my\s+|the\s+)?screen|screen\s+capture)\b",
+            compact,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _message_requests_screenshot(compact: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:take\s+(?:a\s+)?screenshot|screenshot|screen\s+shot|capture\s+(?:my\s+|the\s+)?screen|screen\s+capture)\b",
+            str(compact or ""),
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def build_direct_tool_approval_response(
@@ -375,7 +421,14 @@ def build_direct_tool_approval_response(
     for index, call in enumerate(tool_calls, start=1):
         connector_id, action_id = services.parse_tool_name(str(call.get("name") or ""))
         argument_payload = services.tool_arguments_payload(call.get("arguments"))
-        if not services.approval_required_for_tool(connector_id, action_id, argument_payload, tool_capabilities):
+        requires_approval = services.approval_required_for_tool(connector_id, action_id, argument_payload, tool_capabilities)
+        if (
+            requires_approval
+            and _tool_call_is_screenshot_capture(connector_id, action_id, argument_payload)
+            and _current_turn_requested_screenshot(session_ctx, compact_text=services.compact_text)
+        ):
+            requires_approval = False
+        if not requires_approval:
             continue
         tool_input = str(argument_payload.get("input") or "").strip()
         if connector_id in {"file", "shell", "screenshot", "http", "browser", "computer", "hardware"}:
@@ -456,6 +509,19 @@ def plan_tool_calls(
             planned.append({"name": "browser__get_page_state", "arguments": {}})
         if "heading" in compact and "browser__extract_text" in tool_names:
             planned.append({"name": "browser__extract_text", "arguments": {"selector": "h1"}})
+    if _message_requests_screenshot(compact) and "screenshot__capture" in tool_names:
+        planned.append({"name": "screenshot__capture", "arguments": {}})
+    elif _message_requests_screenshot(compact) and "hardware__action" in tool_names:
+        planned.append(
+            {
+                "name": "hardware__action",
+                "arguments": {
+                    "runtime_target": "user_device_gateway",
+                    "action": "screenshot.capture",
+                    "arguments": {},
+                },
+            }
+        )
     shell_command = extract_shell_command(
         message,
         compact_text=compact_text,
@@ -489,7 +555,9 @@ def plan_tool_calls(
             }
         )
     system_info_requested = direct_chat_tool_catalog_service.looks_like_local_system_info_request(compact)
-    if system_info_requested and not planned and "shell__exec" in tool_names:
+    if system_info_requested and not planned and "computer__system_info" in tool_names:
+        planned.append({"name": "computer__system_info", "arguments": {}})
+    elif system_info_requested and not planned and "shell__exec" in tool_names:
         planned.append({"name": "shell__exec", "arguments": {"command": local_system_info_shell_command()}})
     elif system_info_requested and not planned and "hardware__action" in tool_names:
         planned.append(
@@ -499,21 +567,6 @@ def plan_tool_calls(
                     "runtime_target": "user_device_gateway",
                     "action": "shell.execute",
                     "arguments": {"command": local_system_info_shell_command()},
-                },
-            }
-        )
-    if (
-        "hardware__action" in tool_names
-        and not planned
-        and any(token in compact for token in ("screenshot", "screen shot", "capture screen", "take a picture of my screen"))
-    ):
-        planned.append(
-            {
-                "name": "hardware__action",
-                "arguments": {
-                    "runtime_target": "user_device_gateway",
-                    "action": "screenshot.capture",
-                    "arguments": {},
                 },
             }
         )
@@ -555,8 +608,21 @@ def has_obvious_direct_tool_intent(
     ):
         return True
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    hardware_tool_available = "hardware__action" in tool_names
+    screenshot_tool_available = hardware_tool_available or "screenshot__capture" in tool_names
+    computer_tool_available = hardware_tool_available or any(name.startswith("computer__") for name in tool_names)
+    if screenshot_tool_available and _message_requests_screenshot(compact):
+        return True
+    if computer_tool_available and bool(
+        re.search(
+            r"\b(?:read\s+(?:my\s+|the\s+)?screen|screen\s+text|ocr|click\s+(?:at\s+|on\s+|the\s+screen)|type\s+text|paste\s+this|copy\s+to\s+clipboard|read\s+clipboard)\b",
+            compact,
+            flags=re.IGNORECASE,
+        )
+    ):
+        return True
     if direct_chat_tool_catalog_service.looks_like_local_system_info_request(compact) and (
-        "shell__exec" in tool_names or "hardware__action" in tool_names
+        "computer__system_info" in tool_names or "shell__exec" in tool_names or "hardware__action" in tool_names
     ):
         return True
     if direct_chat_tool_catalog_service.looks_like_local_working_directory_request(compact) and (
@@ -565,8 +631,6 @@ def has_obvious_direct_tool_intent(
         return True
     if parse_memory_write(message) is not None or parse_memory_read(message) is not None:
         return True
-    if any(token in compact for token in ("screenshot", "screen shot", "capture screen", "take a screenshot")):
-        return "screenshot__capture" in tool_names or "hardware__action" in tool_names
     if extract_web_query(message):
         return True
     url = extract_first_url(message)
@@ -576,168 +640,3 @@ def has_obvious_direct_tool_intent(
         return True
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
     return "http_request" in tool_names
-
-
-def execute_no_provider_request(
-    *,
-    message: str,
-    workspace_id: str,
-    thread_id: str,
-    tools: list[dict[str, Any]],
-    tool_capabilities: list[dict[str, Any]],
-    reasoning_effort: str,
-    services: NoProviderExecutionServices,
-    session_ctx: dict[str, Any] | None = None,
-) -> Dict[str, Any] | None:
-    compact = services.compact_text(message)
-    summary_reply = count_functions_and_write_summary(
-        message,
-        compact_text=services.compact_text,
-        resolve_local_path=services.resolve_local_path,
-    )
-    if summary_reply:
-        return _answer_payload(summary_reply)
-    single_file_count_reply = count_definitions_in_file(
-        message,
-        compact_text=services.compact_text,
-        extract_first_path_reference=services.extract_first_path_reference,
-        resolve_local_path=services.resolve_local_path,
-    )
-    if single_file_count_reply:
-        return _answer_payload(single_file_count_reply)
-    memory_reply = services.handle_memory_request(workspace_id, message)
-    if memory_reply is not None:
-        return _answer_payload(memory_reply)
-    directory_listing = list_directory(
-        message,
-        safe_positive_int=services.safe_positive_int,
-        resolve_local_path=services.resolve_local_path,
-    )
-    compact = services.compact_text(message)
-    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
-    explicit_path = services.extract_first_path_reference(message)
-    explicit_path_tool_calls: list[dict[str, Any]] = []
-    if explicit_path and _path_inspection_requested(compact, explicit_path):
-        resolved_path = services.resolve_local_path(explicit_path)
-        if resolved_path.exists():
-            if resolved_path.is_dir() and "shell__exec" in tool_names:
-                explicit_path_tool_calls.append(
-                    {
-                        "name": "shell__exec",
-                        "arguments": {"command": f"ls -la {shlex.quote(str(resolved_path))}"},
-                    }
-                )
-            elif resolved_path.is_file() and "file__read" in tool_names:
-                explicit_path_tool_calls.append(
-                    {
-                        "name": "file__read",
-                        "arguments": {"path": str(resolved_path)},
-                    }
-                )
-
-    tool_calls = explicit_path_tool_calls or plan_tool_calls(
-        message,
-        tools,
-        compact_text=services.compact_text,
-        extract_first_path_reference=services.extract_first_path_reference,
-        extract_first_url=services.extract_first_url,
-    )
-    if not tool_calls and directory_listing is None:
-        return None
-
-    if tool_calls:
-        approval_response = build_direct_tool_approval_response(
-            tool_calls=tool_calls,
-            tool_capabilities=tool_capabilities,
-            services=services,
-            session_ctx=session_ctx,
-        )
-        if approval_response is not None:
-            return {
-                **approval_response,
-                "usage_masked": {},
-                "provider": None,
-                "model": None,
-                "attempted_providers": "",
-                "error": "",
-            }
-
-    results: list[dict[str, Any]] = []
-    for index, tool_call in enumerate(tool_calls, start=1):
-        try:
-            output = services.execute_single_tool_call(
-                tool_call=tool_call,
-                workspace_id=workspace_id,
-                thread_id=thread_id,
-                index=index,
-                provider=None,
-                model=None,
-                credentials=None,
-                reasoning_effort=reasoning_effort,
-                session_ctx=session_ctx,
-            )
-        except Exception:
-            tool_name = str(tool_call.get("name") or "").strip()
-            if tool_name == "http_request" and "current time" in compact and "worldtimeapi" in compact:
-                output = json.dumps(
-                    {"utc_datetime": datetime.now(timezone.utc).isoformat()},
-                    ensure_ascii=False,
-                )
-                output = f"HTTP 200\n\n{output}"
-            else:
-                raise
-        results.append({"tool_call": tool_call, "output": output})
-
-    reply = "\n\n".join(str(item.get("output") or "").strip() for item in results if str(item.get("output") or "").strip())
-    if "origin ip" in compact:
-        for item in results:
-            if str(item.get("tool_call", {}).get("name") or "").strip() != "http_request":
-                continue
-            parsed = parse_http_tool_output(str(item.get("output") or ""))
-            if isinstance(parsed, dict) and str(parsed.get("origin") or "").strip():
-                reply = f"Origin IP: {str(parsed.get('origin') or '').strip()}"
-                break
-    elif "current time" in compact and "worldtimeapi" in compact:
-        files_output = str(directory_listing.get("listing") or "").strip() if isinstance(directory_listing, dict) else ""
-        current_time = ""
-        for item in results:
-            tool_name = str(item.get("tool_call", {}).get("name") or "").strip()
-            if tool_name == "http_request":
-                parsed = parse_http_tool_output(str(item.get("output") or ""))
-                if isinstance(parsed, dict):
-                    current_time = str(
-                        parsed.get("utc_datetime")
-                        or parsed.get("datetime")
-                        or parsed.get("unixtime")
-                        or ""
-                    ).strip()
-        reply_parts = []
-        if files_output:
-            reply_parts.append(f"Files in /tmp:\n{files_output}")
-        if current_time:
-            reply_parts.append(f"Current UTC time: {current_time}")
-        reply = "\n\n".join(reply_parts) if reply_parts else reply
-    elif isinstance(directory_listing, dict):
-        directory = str(directory_listing.get("directory") or "").strip() or "the directory"
-        files_output = str(directory_listing.get("listing") or "").strip()
-        requested_limit = services.safe_positive_int(directory_listing.get("limit"), default=0)
-        prefix = f"First {requested_limit} files in {directory}" if requested_limit > 0 else f"Files in {directory}"
-        reply = f"{prefix}:\n{files_output}" if files_output else f"{prefix}:"
-    elif "page title" in compact or "main heading" in compact:
-        page_title = ""
-        main_heading = ""
-        for item in results:
-            tool_name = str(item.get("tool_call", {}).get("name") or "").strip()
-            if tool_name in {"browser__get_page_state", "browser__observe"}:
-                parsed = services.parse_page_state(str(item.get("output") or ""))
-                if isinstance(parsed, dict):
-                    page_title = str(parsed.get("title") or "").strip()
-            elif tool_name == "browser__extract_text":
-                main_heading = str(item.get("output") or "").strip()
-        reply_parts = []
-        if page_title:
-            reply_parts.append(f"Page title: {page_title}")
-        if main_heading:
-            reply_parts.append(f"Main heading: {main_heading}")
-        reply = "\n".join(reply_parts) if reply_parts else reply
-    return _answer_payload(reply or "Tool execution completed.")

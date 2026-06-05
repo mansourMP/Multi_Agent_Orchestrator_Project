@@ -29,8 +29,6 @@ def local_worker_available(availability: Dict[str, Any]) -> bool:
     if not isinstance(availability, dict):
         return False
     local_worker_online = availability.get("local_worker_online")
-    if isinstance(local_worker_online, bool):
-        return local_worker_online
     capability_truth = availability.get("capability_truth") if isinstance(availability.get("capability_truth"), dict) else {}
     my_computer = capability_truth.get("my_computer") if isinstance(capability_truth.get("my_computer"), dict) else {}
     local_tools_available = my_computer.get("local_tools_available")
@@ -44,8 +42,10 @@ def local_worker_available(availability: Dict[str, Any]) -> bool:
         return local_gateway_online
     runtime_ok = availability.get("runtime_ok")
     if isinstance(runtime_ok, bool):
-        return runtime_ok
-    return True
+        return runtime_ok and local_worker_online is True and availability.get("local_gateway_online") is True
+    if local_worker_online is False:
+        return False
+    return False
 
 
 def active_run_count(workspace_id: str) -> int:

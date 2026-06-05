@@ -409,7 +409,7 @@ function memoryPaneErrorMessage(error: unknown): string {
   if (!message) {
     return 'Memory is unavailable right now.';
   }
-  if (message === 'Sage cannot run that request in this workspace right now.') {
+  if (message.toLowerCase().includes('cannot run that request in this workspace right now')) {
     return 'Memory is unavailable in this workspace.';
   }
   if (message === 'The requested item could not be found.') {

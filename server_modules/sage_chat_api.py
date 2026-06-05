@@ -180,6 +180,9 @@ def register_sage_chat_routes(app) -> None:
                 message=str(body.message).strip(),
                 surface=normalized_surface,
                 mode=normalized_mode,
+                requested_provider=_coerce_text(body.provider),
+                requested_model=_coerce_text(body.model),
+                reasoning_effort=_coerce_text(body.reasoning_effort),
                 current_user=current_user,
             )
         except ValueError as exc:

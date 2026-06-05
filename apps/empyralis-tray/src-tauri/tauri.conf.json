@@ -5,8 +5,8 @@
   "build": {
     "devUrl": "http://127.0.0.1:5177",
     "frontendDist": "../dist",
-    "beforeDevCommand": "",
-    "beforeBuildCommand": ""
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "macOSPrivateApi": true,

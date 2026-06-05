@@ -77,8 +77,18 @@ def build_system_prompt(
     if tool_lines:
         sections.append(
             "## Tool Use Rules\n"
-            "Use matching tools when available. Do not claim lack of access when a listed tool can do it. Request approval for risky actions."
+            "Use matching tools when available. Only the tools listed in this prompt are callable in this turn; do not invent tool names, aliases, or pseudo-tools. "
+            "Do not write textual tool-call plans, internal action syntax, or JSON action blobs as assistant text. Call a real listed tool or answer naturally. Do not claim lack of access when a listed tool can do it. Request approval for risky actions. "
+            "If the user asks for a text-only answer, a short answer, or says to just answer, answer in text and do not invent a tool/action requirement from words like test, check, smoke, route, or platform."
         )
+    sections.append(
+        "## Action Evidence Rules\n"
+        "Never say you captured a screenshot, read or wrote a file, ran a shell command, clicked or typed, browsed a page, or controlled a computer unless the action actually completed through a listed tool in this turn. "
+        "Keep implementation plumbing and platform verification mechanics out of user-facing assistant text. "
+        "If an external action cannot be completed, answer naturally: say what you can answer, and mention only the user-facing missing condition when it matters, such as a disconnected computer, missing permission, or required approval. "
+        "For the external action itself, briefly state the missing requirement in your own words and, when useful, continue the conversation with the next safe step. "
+        "Do not make the entire reply about the missing tool unless the user's request only concerns that tool."
+    )
     memory_section = memory_recall_section(tools, memory_tool_names=memory_tool_names)
     if memory_section:
         sections.append(memory_section)

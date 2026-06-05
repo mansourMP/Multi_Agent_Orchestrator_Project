@@ -53,6 +53,13 @@ class DirectChatOperatorSupportServiceTests(unittest.TestCase):
             )
         )
 
+    def test_local_worker_available_uses_verified_gateway_when_worker_registry_is_empty(self) -> None:
+        self.assertTrue(
+            service.local_worker_available(
+                {"runtime_ok": True, "local_gateway_online": True, "local_worker_online": False}
+            )
+        )
+
     def test_local_worker_available_keeps_gateway_false_when_runtime_not_healthy(self) -> None:
         self.assertFalse(
             service.local_worker_available(

@@ -241,8 +241,8 @@ const SAGE_CONNECTOR_MENU_SHORTCUTS: readonly SageConnectorMenuShortcut[] = [
   },
   {
     id: 'telegram_bot',
-    title: 'Telegram',
-    connectorIds: ['telegram_bot', 'telegram'],
+    title: 'Telegram Bot',
+    connectorIds: ['telegram_bot'],
     iconSrc: '/brand-assets/channels/telegram.svg?v=3',
   },
   {
@@ -909,6 +909,23 @@ export function WorkstationChatPane() {
   }, [services.client, services.queryClient]);
 
   const persistSelectedModelPreference = useCallback(async (nextModelId: string) => {
+    const targetOption = nextModelId === 'default'
+      ? null
+      : modelOptions.find((option) => option.id === nextModelId) ?? null;
+    const hostedTier = targetOption
+      && targetOption.uiSection === 'empyralis'
+      && EMPYRALIS_TIER_SET.has(readString(targetOption.id).toLowerCase())
+      ? readString(targetOption.id).toLowerCase()
+      : null;
+    if (hostedTier) {
+      await services.client.updateWorkspaceAiRouteDefault({
+        routeId: `empyralis_managed:${hostedTier}`,
+        kind: 'empyralis_managed',
+        modelPreset: hostedTier,
+      });
+      return true;
+    }
+
     const sortedProfiles = sortProviderProfiles(providerProfiles).filter((profile) => {
       const providerId = readString(profile.provider);
       return providerId && providerCatalog.some((provider) =>
@@ -919,9 +936,6 @@ export function WorkstationChatPane() {
       return false;
     }
 
-    const targetOption = nextModelId === 'default'
-      ? null
-      : modelOptions.find((option) => option.id === nextModelId) ?? null;
     const targetProviderId = readString(targetOption?.providerId || targetOption?.routeProviderId);
     const targetProfile = targetProviderId
       ? sortedProfiles.find((profile) => readString(profile.provider) === targetProviderId && profile.enabled !== false) ?? null
@@ -1880,9 +1894,9 @@ export function WorkstationChatPane() {
     }),
     [routeManifest.routeIndex],
   );
-  const gatewayHref = useMemo(
-    () => routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/gateway`,
-    [bootstrap.workspace.id, routeManifest.routeIndex.gateway],
+  const hardwareHref = useMemo(
+    () => routeManifest.routeIndex.hardware?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/hardware`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.hardware],
   );
   const composerModelOptions = useMemo(
     () => {
@@ -1962,14 +1976,14 @@ export function WorkstationChatPane() {
       case 'run_doctor':
         void refreshBrowserGatewayReadiness();
         setStatusMessage('Sage setup check refreshed. Open Agent Computer status for readiness checks.');
-        router.push(gatewayHref);
+        router.push(hardwareHref);
         return;
       case 'open_status':
       default:
         setStatusMessage(`${runtimeStatus.label}. Open Agent Computer status for readiness checks.`);
-        router.push(gatewayHref);
+        router.push(hardwareHref);
     }
-  }, [gatewayHref, integrationsHref, refreshBrowserGatewayReadiness, router, runtimeStatus.label, setDraft, setStatusMessage, settingsHref]);
+  }, [hardwareHref, integrationsHref, refreshBrowserGatewayReadiness, router, runtimeStatus.label, setDraft, setStatusMessage, settingsHref]);
   const handleWorkspaceCommandSelect = useCallback((command: SageWorkspaceCommandMetadata) => {
     setWorkspaceCommandPaletteOpen(false);
     if (command.routeId === 'approvals') {
@@ -2630,12 +2644,12 @@ export function WorkstationChatPane() {
         case 'run_doctor':
           void refreshBrowserGatewayReadiness();
           setStatusMessage('Sage setup check refreshed. Open Agent Computer status for readiness checks.');
-          router.push(gatewayHref);
+          router.push(hardwareHref);
           break;
         case 'open_status':
         default:
           setStatusMessage(`${runtimeStatus.label}. Open Agent Computer status for readiness checks.`);
-          router.push(gatewayHref);
+          router.push(hardwareHref);
       }
       return;
     }
@@ -2703,6 +2717,16 @@ export function WorkstationChatPane() {
       {
         type: 'user',
         payload: { content: displayMessage },
+      },
+      {
+        type: 'step',
+        payload: {
+          id: `thinking:${clientRequestId}`,
+          kind: 'thinking',
+          label: 'Thinking',
+          detail: '',
+          status: 'running',
+        },
       },
     ]);
     setLiveActivitySteps([]);
@@ -3181,7 +3205,7 @@ export function WorkstationChatPane() {
             ? error.retryable
             : true,
           actions: localComputerNeedsAttention
-            ? [{ label: 'Open Connections', target: 'integrations' }]
+            ? [{ label: 'Open Hardware', target: 'gateway' }]
             : approvalNeedsAttention
               ? [{ label: 'Review approvals', target: 'approvals' }]
               : authNeedsAttention
@@ -3545,7 +3569,7 @@ export function WorkstationChatPane() {
                   className={`app-chat-readiness-pill app-chat-readiness-pill--${pill.tone}`}
                   onClick={() => {
                     if (pill.target === 'gateway') {
-                      router.push(gatewayHref);
+                      router.push(hardwareHref);
                       return;
                     }
                     router.push(integrationsHref);
@@ -3663,7 +3687,7 @@ export function WorkstationChatPane() {
         {sendFailureNotice ? (
           <PlatformNotification
             tone="warning"
-            title="Action needed"
+            title="System status"
             detail={sendFailureNotice.message}
             action={(sendFailureNotice.actions ?? [])[0]
               ? {
@@ -3677,7 +3701,7 @@ export function WorkstationChatPane() {
                     }
                     router.push(
                       action?.target === 'gateway'
-                        ? gatewayHref
+                        ? hardwareHref
                         : action?.target === 'approvals'
                           ? approvalsHref
                           : integrationsHref,
@@ -3711,7 +3735,7 @@ export function WorkstationChatPane() {
               onClick: () => {
                 if (statusNotice?.actionTarget === 'gateway') {
                   setStatusMessage(null);
-                  router.push(gatewayHref);
+                  router.push(hardwareHref);
                   return;
                 }
                 if (statusNotice?.actionTarget === 'integrations') {

@@ -167,7 +167,7 @@ export class WhatsAppPersonalRuntime {
       media: { text: true, images: false, files: false, reactions: false, voice: false },
       safety: {
         ownerPairingRequired: true,
-        allowlistRequired: true,
+        allowlistRequired: false,
         studioBusinessAllowed: false,
         customerPublicSendAllowed: false,
       },
@@ -479,11 +479,7 @@ export class WhatsAppPersonalRuntime {
   }
 
   private async publishInbound(payload: GatewayChannelInboundPayload): Promise<void> {
-    try {
-      await this.publisher?.publishEvent("channel.inbound", payload);
-    } catch {
-      // Durable replay belongs in Phase 5. Phase 4 only persists local session/auth/outbound state.
-    }
+    await this.publisher?.publishEvent("channel.inbound", payload);
   }
 
   private scheduleReconnect(): void {

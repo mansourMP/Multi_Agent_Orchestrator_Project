@@ -436,6 +436,8 @@ LOCAL_CLI_AUTH_MODES = {
     "claude_code_cli",
 }
 
+PLATFORM_RUNTIME_AUTH_PROVIDERS = {"deepseek"}
+
 WORKSPACE_USER_FACING_AI_PROVIDERS = {
     "openai",
     "openai-codex",
@@ -1866,13 +1868,18 @@ def provider_supports_auth_mode(provider: Any, auth_mode: Any) -> bool:
     entry = provider_catalog_entry(provider)
     supported = {str(mode).strip().lower() for mode in entry.get("auth", []) if str(mode).strip()}
     normalized = normalize_auth_mode(provider, auth_mode)
+    if normalized == "platform_runtime":
+        return normalize_provider_id(provider) in PLATFORM_RUNTIME_AUTH_PROVIDERS
     if normalized == "local_cli":
         return bool({"local_cli", "local_subscription"} & supported) or str(provider).strip().lower() == "claude_code_cli"
     return normalized in supported if normalized else not supported
 
 
 def provider_requires_credential(provider: Any, auth_mode: Any) -> bool:
-    return normalize_auth_mode(provider, auth_mode) not in {"local_cli", "none"}
+    normalized = normalize_auth_mode(provider, auth_mode)
+    if normalized == "platform_runtime":
+        return normalize_provider_id(provider) not in PLATFORM_RUNTIME_AUTH_PROVIDERS
+    return normalized not in {"local_cli", "none"}
 
 
 def secretless_provider_credentials(provider: Any, auth_mode: Any) -> Dict[str, Any]:

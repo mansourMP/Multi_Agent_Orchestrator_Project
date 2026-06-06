@@ -474,49 +474,6 @@ def plan_tool_calls(
                 },
             }
         )
-    working_directory_requested = direct_chat_tool_catalog_service.looks_like_local_working_directory_request(compact)
-    if working_directory_requested and not planned and "shell__exec" in tool_names:
-        planned.append({"name": "shell__exec", "arguments": {"command": local_working_directory_shell_command()}})
-    elif working_directory_requested and not planned and "hardware__action" in tool_names:
-        planned.append(
-            {
-                "name": "hardware__action",
-                "arguments": {
-                    "runtime_target": "user_device_gateway",
-                    "action": "shell.execute",
-                    "arguments": {"command": local_working_directory_shell_command()},
-                },
-            }
-        )
-    system_info_requested = direct_chat_tool_catalog_service.looks_like_local_system_info_request(compact)
-    if system_info_requested and not planned and "shell__exec" in tool_names:
-        planned.append({"name": "shell__exec", "arguments": {"command": local_system_info_shell_command()}})
-    elif system_info_requested and not planned and "hardware__action" in tool_names:
-        planned.append(
-            {
-                "name": "hardware__action",
-                "arguments": {
-                    "runtime_target": "user_device_gateway",
-                    "action": "shell.execute",
-                    "arguments": {"command": local_system_info_shell_command()},
-                },
-            }
-        )
-    if (
-        "hardware__action" in tool_names
-        and not planned
-        and any(token in compact for token in ("screenshot", "screen shot", "capture screen", "take a picture of my screen"))
-    ):
-        planned.append(
-            {
-                "name": "hardware__action",
-                "arguments": {
-                    "runtime_target": "user_device_gateway",
-                    "action": "screenshot.capture",
-                    "arguments": {},
-                },
-            }
-        )
     web_query = extract_web_query(message)
     if web_query and "web__search" in tool_names and not url:
         planned.append({"name": "web__search", "arguments": {"query": web_query}})

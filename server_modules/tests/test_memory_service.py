@@ -838,15 +838,15 @@ class MemoryServiceTests(unittest.TestCase):
         read_reply = memory_service.handle_no_provider_memory_request("default", "What is timezone")
         missing_reply = memory_service.handle_no_provider_memory_request("default", "What is favorite color")
 
-        self.assertEqual(write_reply, "Stored memory: timezone = Asia/Shanghai")
+        self.assertIsNone(write_reply)
         self.assertEqual(read_reply, "timezone = Asia/Shanghai")
-        self.assertEqual(missing_reply, "I don't have favorite color saved in memory yet.")
+        self.assertIsNone(missing_reply)
 
     def test_handle_no_provider_memory_request_reads_common_question_with_punctuation(self) -> None:
         write_reply = memory_service.handle_no_provider_memory_request("default", "Remember that my timezone is Asia/Shanghai.")
         read_reply = memory_service.handle_no_provider_memory_request("default", "What is my timezone?")
 
-        self.assertEqual(write_reply, "Stored memory: my timezone = Asia/Shanghai")
+        self.assertIsNone(write_reply)
         self.assertEqual(read_reply, "my_timezone = Asia/Shanghai")
 
 

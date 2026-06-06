@@ -4,9 +4,10 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
 
-EMPYRALIS_MODEL_TIER_VERSION = "2026-05-08.v1"
+EMPYRALIS_MODEL_TIER_VERSION = "2026-06-05.v2"
 
-EMPYRALIS_HOSTED_TIERS = ("light", "pro", "max")
+EMPYRALIS_HOSTED_TIERS = ("light", "pro")
+LEGACY_EMPYRALIS_HOSTED_TIERS = ("max",)
 USER_OWNED_TIERS = ("local_ai", "my_api_key", "my_ai_account")
 EMPYRALIS_MODEL_TIERS = (*EMPYRALIS_HOSTED_TIERS, *USER_OWNED_TIERS)
 
@@ -49,7 +50,7 @@ MODEL_TIER_CONTRACTS: Dict[str, EmpyralisModelTierContract] = {
         public_tier="light",
         public_label="Light",
         internal_provider="deepseek",
-        internal_model="deepseek-v4-flash",
+        internal_model="deepseek-chat",
         reasoning_effort=None,
         max_output_tier="standard",
         agent_budget_tier="standard",
@@ -70,7 +71,7 @@ MODEL_TIER_CONTRACTS: Dict[str, EmpyralisModelTierContract] = {
         agent_budget_tier="expanded",
         billing_source="empyralis_credits",
         credit_multiplier=1.0,
-        fallback_tier="light",
+        fallback_tier=None,
         user_owned=False,
         expose_provider_model_to_ordinary_ui=False,
         ordinary_ui_subtitle="Empyralis credits",
@@ -140,8 +141,12 @@ MODEL_TIER_CONTRACTS: Dict[str, EmpyralisModelTierContract] = {
 
 def normalize_model_tier(value: Any, *, fallback: str = "pro") -> str:
     tier = str(value or "").strip().lower().replace("-", "_")
+    if tier == "max":
+        return "pro"
     if tier in MODEL_TIER_CONTRACTS:
         return tier
+    if fallback == "":
+        return ""
     if fallback in MODEL_TIER_CONTRACTS:
         return fallback
     return "pro"

@@ -209,7 +209,7 @@ export function WorkspaceChannelPairingSurface({
   const selectedIntent = intentByProvider[selectedProvider] ?? null;
   const selectedProviderLinks = activeLinks.filter((link) => link.provider === selectedProvider);
   const providerEnabled = hasCapability(selectedDefinition.capabilityKey);
-  const visibleProviders: ChannelProvider[] = featureId === 'integrations' ? ['telegram'] : ['telegram', 'whatsapp'];
+  const visibleProviders: ChannelProvider[] = ['telegram', 'whatsapp'];
 
   async function refreshLinks(options: { silent?: boolean } = {}): Promise<ChannelLinksResponse> {
     if (!options.silent) {
@@ -427,7 +427,7 @@ export function WorkspaceChannelPairingSurface({
                   {activeLinks.length === 0 ? (
                     <EmptyPanel
                       title="No active links"
-                      body="Generate a pairing code, paste it into Telegram, and your first linked account will appear here."
+                      body={`Generate a pairing code, paste it into ${selectedDefinition.label}, and your first linked account will appear here.`}
                     />
                   ) : (
                     <DataTable>
@@ -456,10 +456,13 @@ export function WorkspaceChannelPairingSurface({
                                   type="button"
                                   tone="secondary"
                                   onClick={() => {
-                                    setSelectedProvider('telegram');
+                                    if (link.provider === 'telegram' || link.provider === 'whatsapp') {
+                                      setSelectedProvider(link.provider);
+                                    }
                                   }}
+                                  disabled={link.provider !== 'telegram' && link.provider !== 'whatsapp'}
                                 >
-                                  {link.provider === 'telegram' ? 'Inspect' : 'Telegram only'}
+                                  Inspect
                                 </AppButton>
                                 <AppButton
                                   type="button"

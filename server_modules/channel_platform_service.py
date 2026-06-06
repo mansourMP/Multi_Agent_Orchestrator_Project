@@ -9,6 +9,7 @@ from server_modules import (
     channel_lane_contract_service,
     control_plane_repository,
     connectors_actions,
+    connection_catalog_service,
     gateway_state_repository,
     personal_channels_repository,
     runtime_common,
@@ -79,7 +80,7 @@ def _assert_scope(tenant_id: str, workspace_id: str) -> tuple[str, str]:
 
 
 def _catalog_items() -> list[Dict[str, Any]]:
-    return channel_lane_contract_service.platform_channel_catalog()
+    return connection_catalog_service.studio_channel_catalog_items()
 
 
 def _catalog_by_key() -> Dict[str, Dict[str, Any]]:
@@ -226,7 +227,7 @@ def _list_personal_channel_accounts(
 
 def list_channel_catalog(*, surface: Optional[str] = None) -> Dict[str, Any]:
     normalized_surface = _token(surface)
-    items = channel_lane_contract_service.platform_channel_catalog(normalized_surface or None)
+    items = connection_catalog_service.studio_channel_catalog_items(normalized_surface or None)
     groups: Dict[str, int] = {}
     for item in items:
         group = _text(item.get("navigation_group")) or "other"

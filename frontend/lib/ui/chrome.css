@@ -4806,6 +4806,7 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
 }
 
 .app-agent-trace-summary {
+  position: relative;
   max-width: 100%;
   min-height: 28px;
   display: inline-flex;
@@ -4825,6 +4826,28 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
     background-color var(--transition),
     border-color var(--transition),
     color var(--transition);
+}
+
+.app-agent-trace-turn--streaming .app-agent-trace-summary {
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+.app-agent-trace-turn--streaming .app-agent-trace-summary span {
+  background:
+    linear-gradient(
+      110deg,
+      var(--text-secondary),
+      var(--text-secondary) 34%,
+      var(--text-primary) 50%,
+      var(--text-secondary) 66%,
+      var(--text-secondary)
+    );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: app-agent-trace-summary-shine 1.85s linear infinite;
 }
 
 .app-agent-trace-summary:hover,
@@ -5108,6 +5131,16 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
 @keyframes app-agent-trace-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes app-agent-trace-summary-shine {
+  0% {
+    background-position: 180% 0;
+  }
+
+  100% {
+    background-position: -180% 0;
   }
 }
 
@@ -21565,6 +21598,108 @@ body.theme-light .sage-integrations-nav__bucket--active {
   font-weight: var(--app-weight-medium);
 }
 
+.sage-integrations-topnav {
+  margin: 0 0 22px;
+  width: fit-content;
+  padding: 4px;
+  border-radius: var(--app-radius-lg);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 70%, transparent 30%);
+}
+
+.sage-integrations-topnav .sage-integrations-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+}
+
+.sage-integrations-topnav .sage-integrations-nav__bucket {
+  width: auto;
+  min-height: 38px;
+  justify-content: center;
+  padding: 8px 16px;
+  border-bottom: 0;
+  border-radius: var(--app-radius-md);
+  color: var(--app-text-secondary);
+  white-space: nowrap;
+}
+
+.sage-integrations-topnav .sage-integrations-nav__bucket--active {
+  color: var(--app-text-primary);
+  background: var(--app-bg-panel);
+}
+
+:root[data-emp-theme='light'] .sage-integrations-topnav .sage-integrations-nav__bucket--active,
+body[data-emp-theme='light'] .sage-integrations-topnav .sage-integrations-nav__bucket--active,
+body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--active {
+  background: color-mix(in srgb, var(--app-surface-hover) 84%, var(--app-bg-panel) 16%);
+  box-shadow: none;
+}
+
+.sage-integrations-topnav .sage-integrations-nav__bucket-copy {
+  display: block;
+}
+
+.sage-integrations-topnav .sage-integrations-nav__label {
+  color: inherit;
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.sage-integrations-topnav .sage-integrations-nav__icon,
+.sage-integrations-topnav .sage-integrations-nav__detail,
+.sage-integrations-topnav .sage-integrations-nav__status {
+  display: none;
+}
+
+.sage-skills-surface {
+  display: grid;
+  gap: 28px;
+}
+
+.sage-skill-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.sage-skill-card {
+  min-height: 116px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 56%, transparent 44%);
+  border-radius: var(--app-radius-lg);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 72%, var(--app-bg-panel) 28%);
+}
+
+.sage-skill-card strong {
+  display: block;
+  color: var(--app-text-primary);
+  font-size: 17px;
+}
+
+.sage-skill-card span {
+  display: block;
+  margin-top: 8px;
+  color: var(--app-text-tertiary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sage-skill-card em {
+  width: fit-content;
+  padding: 5px 9px;
+  border-radius: var(--app-radius-sm);
+  background: color-mix(in srgb, var(--app-text-primary) 7%, transparent);
+  color: var(--app-text-secondary);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: var(--app-weight-semibold);
+}
+
 @container sage-integrations-sidebar (max-width: 180px) {
   .sage-integrations-nav {
     align-content: start;
@@ -22447,6 +22582,29 @@ body.theme-light .sage-integrations-nav__bucket--active {
   border-radius: var(--app-radius-xl);
   background: color-mix(in srgb, var(--app-bg-panel) 88%, var(--app-bg-panel-elevated) 12%);
   box-shadow: 0 20px 38px -30px color-mix(in srgb, black 42%, transparent);
+}
+
+.sage-unified-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: color-mix(in srgb, var(--app-bg-page) 58%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.sage-unified-modal__panel {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 64px));
+}
+
+.sage-unified-modal__panel .sage-unified-expand {
+  max-height: inherit;
+  overflow: auto;
+  box-shadow: 0 28px 80px -34px color-mix(in srgb, black 58%, transparent);
 }
 
 .sage-unified-expand--embed {

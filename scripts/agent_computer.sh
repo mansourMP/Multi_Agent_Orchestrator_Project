@@ -177,7 +177,49 @@ EOF
   if [[ -n "${EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID:-}" ]]; then
     echo "export EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID=$(shell_quote "${EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID}")" >> "${ENV_FILE}"
   fi
+  local telegram_env_name
+  for telegram_env_name in EMPYRALIS_TELEGRAM_API_ID EMPYRALIS_TELEGRAM_API_HASH TELEGRAM_API_ID TELEGRAM_API_HASH; do
+    local telegram_env_value="${!telegram_env_name-}"
+    if [[ -z "${telegram_env_value}" ]]; then
+      telegram_env_value="$(dotenv_value "${telegram_env_name}" || true)"
+    fi
+    if [[ -n "${telegram_env_value}" ]]; then
+      echo "export ${telegram_env_name}=$(shell_quote "${telegram_env_value}")" >> "${ENV_FILE}"
+    fi
+  done
   chmod 600 "${ENV_FILE}" 2>/dev/null || true
+}
+
+dotenv_value() {
+  local target="$1"
+  local file line key value
+  for file in "${ROOT_DIR}/.env.local" "${ROOT_DIR}/.env"; do
+    [[ -f "${file}" ]] || continue
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+      [[ -z "${line}" || "${line}" == \#* ]] && continue
+      if [[ "${line}" == export[[:space:]]* ]]; then
+        line="${line#export }"
+        line="${line#"${line%%[![:space:]]*}"}"
+      fi
+      [[ "${line}" == *=* ]] || continue
+      key="${line%%=*}"
+      value="${line#*=}"
+      key="${key%"${key##*[![:space:]]}"}"
+      [[ "${key}" == "${target}" ]] || continue
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+      if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
+        value="${value:1:${#value}-2}"
+      elif [[ "${value}" == \'*\' && "${value}" == *\' ]]; then
+        value="${value:1:${#value}-2}"
+      fi
+      printf "%s" "${value}"
+      return 0
+    done < "${file}"
+  done
+  return 1
 }
 
 load_runtime_env() {
@@ -459,10 +501,20 @@ stop_runtime() {
 status_line() {
   local label="$1"
   local file="$2"
+  local pattern="${3:-}"
+  local command_pattern="${4:-.*}"
   local pid
   pid="$(pid_from_file "${file}")"
   if is_pid_alive "${pid}"; then
     echo "${label}: running pid=${pid}"
+  elif [[ -n "${pattern}" ]]; then
+    local matches
+    matches="$(unmanaged_process_pids "${pattern}" "${file}" "${command_pattern}" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+    if [[ -n "${matches}" ]]; then
+      echo "${label}: running unmanaged pid=${matches}"
+    else
+      echo "${label}: stopped"
+    fi
   else
     echo "${label}: stopped"
   fi
@@ -573,10 +625,8 @@ PY
 status_runtime() {
   load_env_if_present
   echo "== Agent Computer status =="
-  status_line "local_runner" "${SUPERVISOR_PID_FILE}"
-  status_line "cloud_connection" "${EDGE_PID_FILE}"
-  unmanaged_process_status_line "local_runner" "${SUPERVISOR_BIN#${ROOT_DIR}/}" "${SUPERVISOR_PID_FILE}" "${SUPERVISOR_BIN#${ROOT_DIR}/}$"
-  unmanaged_process_status_line "cloud_connection" "${EDGE_ENTRY#${ROOT_DIR}/}" "${EDGE_PID_FILE}" "${EDGE_ENTRY#${ROOT_DIR}/}$"
+  status_line "local_runner" "${SUPERVISOR_PID_FILE}" "${SUPERVISOR_BIN#${ROOT_DIR}/}" "${SUPERVISOR_BIN#${ROOT_DIR}/}$"
+  status_line "cloud_connection" "${EDGE_PID_FILE}" "${EDGE_ENTRY#${ROOT_DIR}/}" "${EDGE_ENTRY#${ROOT_DIR}/}$"
   gateway_scope_status
   if curl -fsS "${SUPERVISOR_URL}/health" >/dev/null 2>&1; then
     echo "health: local runner ok (${SUPERVISOR_URL})"

@@ -11,7 +11,7 @@ LEGACY_MAX_MODEL_MARKERS = ("reasoner", "reasoning", "max", "o1", "o3", "opus", 
 
 
 def is_hosted_empyralis_tier(value: Any) -> bool:
-    tier = str(value or "").strip().lower().replace("-", "_")
+    tier = empyralis_model_tier_contract.normalize_model_tier(value, fallback="")
     return tier in empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS
 
 
@@ -111,11 +111,13 @@ def resolve_requested_empyralis_tier(
     provider_token = str(requested_provider or "").strip().lower()
     model_token = str(requested_model or "").strip().lower().replace("-", "_")
     tier_token = str(metadata_tier or "").strip().lower().replace("-", "_")
-    if tier_token in empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS:
+    hosted_tiers = set(empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS)
+    legacy_hosted_tiers = set(getattr(empyralis_model_tier_contract, "LEGACY_EMPYRALIS_HOSTED_TIERS", ()))
+    if tier_token in hosted_tiers or tier_token in legacy_hosted_tiers:
         return resolve_backend_provider_model_for_tier(tier_token)
-    if provider_token == EMPYRALIS_PROVIDER_ALIAS and model_token in empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS:
+    if provider_token == EMPYRALIS_PROVIDER_ALIAS and (model_token in hosted_tiers or model_token in legacy_hosted_tiers):
         return resolve_backend_provider_model_for_tier(model_token)
-    if not provider_token and model_token in empyralis_model_tier_contract.EMPYRALIS_HOSTED_TIERS:
+    if not provider_token and (model_token in hosted_tiers or model_token in legacy_hosted_tiers):
         return resolve_backend_provider_model_for_tier(model_token)
     return None
 
@@ -184,14 +186,14 @@ def infer_migrated_public_tier_from_legacy_selection(
 
     if provider_token in {"", EMPYRALIS_PROVIDER_ALIAS, "deepseek"}:
         if model_token in {"light", "pro", "max"}:
-            return model_token
+            return empyralis_model_tier_contract.normalize_model_tier(model_token, fallback="pro")
         if not model_token or model_token == "deepseek_chat":
-            return "pro"
+            return "light" if model_token == "deepseek_chat" else "pro"
         if model_token == "deepseek_v4_flash" or _model_matches_any(model_token, LEGACY_LIGHT_MODEL_MARKERS):
             return "light"
         if model_token == "deepseek_reasoner" or _model_matches_any(model_token, LEGACY_MAX_MODEL_MARKERS):
-            return "max"
-        if model_token in {"deepseek_v4_pro", "deepseek_chat"}:
+            return "pro"
+        if model_token in {"deepseek_v4_pro"}:
             return "pro"
         return "pro"
     return None

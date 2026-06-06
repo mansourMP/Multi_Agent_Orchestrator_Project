@@ -464,8 +464,8 @@ def _stream_explicit_provider_parity_tools(
 
     yield {
         "type": "step",
-        "label": "Using direct tools",
-        "detail": "Running explicit tool request",
+        "label": "Using local tool",
+        "detail": "Running selected local tool",
         "status": "active",
         "kind": "tool",
         "id": "direct-tools:explicit",
@@ -1287,7 +1287,7 @@ def build_direct_operator_reply(
     if not provider_ready:
         yield {
             "type": "step",
-            "label": "Using fallback tools",
+            "label": "Using available tools",
             "detail": normalized_message[:120] if normalized_message else "Preparing tool execution",
             "status": "active",
             "kind": "thinking",
@@ -1309,8 +1309,8 @@ def build_direct_operator_reply(
         )
         yield {
             "type": "step",
-            "label": "Using fallback tools",
-            "detail": "Completed" if fallback_payload.get("error") != "no_provider" else "No tool path available",
+            "label": "Using available tools",
+            "detail": "Completed" if fallback_payload.get("error") != "no_provider" else "No available tool",
             "status": "done",
             "kind": "thinking",
             "id": "direct-tools:fallback",

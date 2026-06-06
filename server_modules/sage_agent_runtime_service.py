@@ -381,6 +381,7 @@ async def handle_sage_chat(
     surface: str = "chat",
     mode: str = "owner_sage",
     current_user: dict | None = None,
+    channel_context: dict | None = None,
 ) -> dict:
     normalized_workspace_id = _coerce_text(workspace_id)
     normalized_message = _coerce_text(message)
@@ -400,6 +401,13 @@ async def handle_sage_chat(
 
     used_context: list[str] = []
     action_execution_mode = "text_only"
+    normalized_channel_context = {
+        str(key): _coerce_text(value)
+        for key, value in dict(channel_context or {}).items()
+        if _coerce_text(key) and _coerce_text(value)
+    }
+    if normalized_channel_context:
+        used_context.append("channel_context")
 
     # --- Load context ---
     profile_context = _load_profile_context(workspace_id=normalized_workspace_id)
@@ -437,6 +445,8 @@ async def handle_sage_chat(
         "surface": normalized_surface,
         "disable_provider_fallback": True,
     }
+    if normalized_channel_context:
+        context["channel_context"] = normalized_channel_context
     metadata: dict = {
         "workspace_id": normalized_workspace_id,
         "provider": provider,
@@ -445,6 +455,8 @@ async def handle_sage_chat(
         "credentials": credentials,
         "trace_id": trace_id,
     }
+    if normalized_channel_context:
+        metadata["channel_context"] = normalized_channel_context
     requested_model = resolve_requested_model(context, metadata, provider)
 
     # --- Build prompt ---
@@ -479,10 +491,20 @@ async def handle_sage_chat(
         "changing files, spending credits, controlling a computer, publishing "
         "apps, or making external changes when policy requires approval."
     )
+    channel_context_prompt = ""
+    if normalized_channel_context:
+        channel_context_prompt = (
+            "\n\n## Personal channel context\n"
+            f"Surface channel: {normalized_channel_context.get('surface_channel', 'personal_channel')}\n"
+            f"Sender: {normalized_channel_context.get('push_name') or normalized_channel_context.get('remote_jid') or 'unknown'}\n"
+            f"Gateway: {normalized_channel_context.get('gateway_id', 'unknown')}\n"
+            "This message came from a user-owned personal channel through Agent Computer. "
+            "Reply naturally as Sage, but do not claim a message was sent unless the approval and dispatch layer confirms it."
+        )
     envelope = _build_prompt_envelope(
         workspace_id=normalized_workspace_id,
         message=normalized_message,
-        system_prompt=f"{instruction_bundle.system_prompt.rstrip()}{sage_surface_guardrails}",
+        system_prompt=f"{instruction_bundle.system_prompt.rstrip()}{sage_surface_guardrails}{channel_context_prompt}",
     )
 
     try:
@@ -535,7 +557,7 @@ async def handle_sage_chat(
             policy_profile=DIRECT_CHAT_PROFILE,
             user_message=normalized_message,
             assistant_reply=reply or "",
-            metadata={"trace_id": trace_id, "source": "sage_chat"},
+            metadata={"trace_id": trace_id, "source": "sage_chat", "channel_context": normalized_channel_context or None},
         )
     except Exception:
         pass
@@ -562,6 +584,7 @@ async def handle_sage_chat(
                 "blocked_action_count": 0,
                 "action_execution_mode": action_execution_mode,
                 "prompt_diagnostics": prompt_diagnostics,
+                "channel_context": normalized_channel_context or None,
             },
         )
     except Exception:
@@ -587,6 +610,7 @@ async def handle_sage_chat(
                 "blocked_action_count": 0,
                 "action_execution_mode": action_execution_mode,
                 "prompt_diagnostics": prompt_diagnostics,
+                "channel_context": normalized_channel_context or None,
             },
             idempotency_key=f"sage_chat:{trace_id}",
         )

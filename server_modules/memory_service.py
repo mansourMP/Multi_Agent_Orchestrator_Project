@@ -1966,16 +1966,10 @@ def handle_no_provider_memory_request(workspace_id: str, message: str) -> str | 
     memory_write = parse_no_provider_memory_write(message)
     if memory_write is not None:
         save_memory(workspace_id, memory_write["key"], memory_write["value"])
-        return f"Stored memory: {memory_write['display_key']} = {memory_write['value']}"
-    memory_read = parse_no_provider_memory_read(message)
-    if memory_read is None:
         return None
-    entry = find_workspace_memory_entry(workspace_id, memory_read)
-    if isinstance(entry, dict):
-        key = str(entry.get("key") or memory_read).strip()
-        content = str(entry.get("content") or "").strip()
-        return f"{key} = {content}"
-    return f"I don't have {memory_read} saved in memory yet."
+    if parse_no_provider_memory_read(message) is not None:
+        return None
+    return None
 
 
 def runtime_memory_search(

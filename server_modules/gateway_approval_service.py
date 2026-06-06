@@ -181,6 +181,43 @@ def capability_requires_owner_approval(capability_id: str) -> bool:
     return True
 
 
+def _is_personal_channel_send_capability(capability_id: str) -> bool:
+    token = str(capability_id or "").strip().lower()
+    return token in {
+        "channel.whatsapp.personal.send",
+        "channel.telegram.personal.send",
+    } or (token.endswith("_personal.send") and token.startswith(("signal", "imessage", "wechat")))
+
+
+async def _execute_personal_channel_send_approval(
+    *,
+    gateway_id: str,
+    capability_id: str,
+    arguments: Dict[str, Any],
+    run_id: str,
+    trace_id: str,
+    workspace_id: str,
+    timeout_seconds: int,
+    request_id: Optional[str] = None,
+    runtime_access_mode: Optional[str] = None,
+    empyralis_approved: bool = False,
+) -> Dict[str, Any]:
+    from server_modules import personal_channels_service
+
+    return await personal_channels_service.dispatch_approved_personal_channel_outbound(
+        gateway_id=gateway_id,
+        capability_id=capability_id,
+        arguments=arguments,
+        run_id=run_id,
+        trace_id=trace_id,
+        workspace_id=workspace_id,
+        timeout_seconds=timeout_seconds,
+        request_id=request_id,
+        runtime_access_mode=runtime_access_mode,
+        empyralis_approved=empyralis_approved,
+    )
+
+
 def get_gateway_tool_approval(approval_id: str) -> Optional[Dict[str, Any]]:
     approval = gateway_state_repository.get_gateway_action_approval(approval_id)
     if not isinstance(approval, dict):
@@ -498,6 +535,8 @@ async def resolve_gateway_tool_approval(
     if execute_fn is gateway_execution_service.execute_tool_via_gateway:
         execute_kwargs["runtime_access_mode"] = str(request_payload.get("runtime_access_mode") or "").strip() or None
         execute_kwargs["empyralis_approved"] = True
+        if _is_personal_channel_send_capability(str(execute_kwargs.get("capability_id") or "")):
+            execute_fn = _execute_personal_channel_send_approval
     try:
         execution = await execute_fn(**execute_kwargs)
     except (asyncio.TimeoutError, TimeoutError, RuntimeError, ValueError) as exc:

@@ -201,6 +201,7 @@ from server_modules.routes_agent_traces import router as agent_traces_router
 from server_modules.routes_auth import router as auth_router
 from server_modules.routes_billing import router as billing_router
 from server_modules.routes_builder import router as builder_router
+from server_modules.routes_connections import router as connections_router
 from server_modules.routes_connectors import router as connectors_router
 from server_modules.routes_deployed_agents import router as deployed_agents_router
 from server_modules.routes_discovery import router as discovery_router
@@ -318,6 +319,7 @@ app.include_router(agents_router, prefix="/api")
 app.include_router(runs_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
+app.include_router(connections_router, prefix="/api")
 app.include_router(gateway_router, prefix="/api")
 app.include_router(personal_channels_router, prefix="/api")
 app.include_router(workspaces_router, prefix="/api")

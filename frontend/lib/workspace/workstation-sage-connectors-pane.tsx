@@ -9,13 +9,13 @@ import { FormField, FormInput, FormSelect } from '@/lib/ui/form-controls';
 import { MotionSlidePanel } from '@/lib/ui/motion';
 import { AppButton, AppNotice, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
-import { WorkstationSageToolsPane } from '@/lib/workspace/workstation-sage-tools-pane';
 import { WorkstationSplitWorkbench } from '@/lib/workspace/workstation-split-workbench';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { emitWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import type {
   ProviderCatalogModelRecord,
+  ConnectionStatusItem,
   ProviderCatalogRecord,
   ProviderProfileRecord,
   VaultCredentialRecord,
@@ -218,6 +218,59 @@ type PersonalChannelDraft = {
   text: string;
 };
 
+type TelegramSetupStep = 'phone' | 'code' | 'password' | 'connected';
+
+function asConnectorPayload(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function readTelegramStatePayload(value: unknown): Record<string, unknown> | null {
+  const payload = asConnectorPayload(value);
+  return asConnectorPayload(payload?.['state']);
+}
+
+function resolveTelegramSetupStep(value: unknown, fallback: TelegramSetupStep): TelegramSetupStep {
+  const state = readTelegramStatePayload(value) ?? asConnectorPayload(value);
+  const metadata = asConnectorPayload(state?.['metadata']);
+  const status = String(state?.['status'] ?? '').trim();
+  const loginHint = String(state?.['login_hint'] ?? state?.['loginHint'] ?? '').trim();
+  const codeRequestedAt = String(
+    state?.['code_requested_at']
+    ?? state?.['codeRequestedAt']
+    ?? metadata?.['code_requested_at']
+    ?? metadata?.['codeRequestedAt']
+    ?? '',
+  ).trim();
+  if (status === 'connected') {
+    return 'connected';
+  }
+  if (status === 'password_required' || loginHint === 'password_required') {
+    return 'password';
+  }
+  if (status === 'code_required' || loginHint === 'login_code_required') {
+    return codeRequestedAt ? 'code' : 'phone';
+  }
+  if (
+    status === 'authorization_required'
+    && (loginHint === 'api_credentials_required' || loginHint === 'phone_number_required')
+  ) {
+    return 'phone';
+  }
+  return fallback;
+}
+
+function readTelegramConnectedPhone(value: unknown, fallback: string): string {
+  const state = readTelegramStatePayload(value) ?? asConnectorPayload(value);
+  return String(
+    state?.['linked_phone']
+    ?? state?.['linkedPhone']
+    ?? state?.['phone_number']
+    ?? state?.['phoneNumber']
+    ?? fallback
+    ?? '',
+  ).trim();
+}
+
 type McpToolRecord = Record<string, unknown> & {
   name?: string | null;
   label?: string | null;
@@ -256,11 +309,13 @@ type ExternalIntegrationCardRecord = {
   nextStep: string | null;
   actionLabel?: string | null;
   secondaryActionLabel?: string | null;
-  actionTarget?: 'gateway' | 'computer' | 'ai' | 'close';
+  actionTarget?: 'gateway' | 'computer' | 'ai' | 'connection' | 'close';
+  connectionId?: string | null;
   channel?: PersonalCommunicationChannel | null;
+  locked?: boolean;
 };
 
-type IntegrationWorkbenchCategoryId = 'ai_runtime' | 'connections' | 'plugins';
+type IntegrationWorkbenchCategoryId = 'ai_runtime' | 'channels' | 'apps' | 'skills' | 'plugins';
 
 type IntegrationWorkbenchGroup = {
   id: IntegrationWorkbenchCategoryId;
@@ -285,6 +340,7 @@ type SageConnectorsPaneCache = {
   hostedSageAi: HostedSageAiSnapshot;
   workspaceAiRoute: WorkspaceAiRoutePayload | null;
   mcpServers: McpServerRecord[];
+  connectionStatusItems: ConnectionStatusItem[];
 };
 
 const sageConnectorsPaneCache = new Map<string, SageConnectorsPaneCache>();
@@ -531,26 +587,22 @@ function normalizeIntegrationCategoryId(value: unknown): IntegrationWorkbenchCat
     case 'ai_accounts':
     case 'ai_runtime':
       return 'ai_runtime';
+    case 'connectors':
     case 'connections':
     case 'connection':
-    case 'hardware':
-    case 'runtime':
-    case 'computers':
-    case 'computer':
-    case 'agent_computer':
-    case 'connected_computer':
-      return 'connections';
-    case 'apps':
-    case 'app_connections':
-    case 'connected_apps':
     case 'channels':
     case 'personal_messaging':
     case 'apps_messaging':
-    case 'plugins':
-      return 'plugins';
+      return 'channels';
+    case 'apps':
+    case 'app_connections':
+    case 'connected_apps':
+      return 'apps';
+    case 'skills':
     case 'knowledge':
     case 'sources':
-    case 'skills':
+      return 'skills';
+    case 'plugins':
     case 'extensions':
     case 'developer':
       return 'plugins';
@@ -1719,12 +1771,16 @@ export function WorkstationSageConnectorsPane({
   const [hostedSageAi, setHostedSageAi] = useState<HostedSageAiSnapshot>(() => cachedState?.hostedSageAi ?? DEFAULT_HOSTED_SAGE_AI);
   const [workspaceAiRoute, setWorkspaceAiRoute] = useState<WorkspaceAiRoutePayload | null>(() => cachedState?.workspaceAiRoute ?? null);
   const [mcpServers, setMcpServers] = useState<McpServerRecord[]>(() => cachedState?.mcpServers ?? []);
+  const [connectionStatusItems, setConnectionStatusItems] = useState<ConnectionStatusItem[]>(() => cachedState?.connectionStatusItems ?? []);
   const [isLoading, setIsLoading] = useState(() => cachedState === null);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
+  const [personalChannelError, setPersonalChannelError] = useState<string | null>(null);
+  const [, setStatus] = useState<string | null>(null);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
-  const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => showProviders ? 'ai_runtime' : 'plugins');
-  const [pluginsTab, setPluginsTab] = useState<'plugins' | 'skills'>('plugins');
+  const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => (
+    normalizeIntegrationCategoryId(searchParams.get('section') ?? searchParams.get('connection'))
+    ?? (showProviders ? 'ai_runtime' : 'channels')
+  ));
   const [providerDraftKeys, setProviderDraftKeys] = useState<Record<string, string>>({});
   const [providerDraftBaseUrls, setProviderDraftBaseUrls] = useState<Record<string, string>>({});
   const [providerPickerOpen, setProviderPickerOpen] = useState(false);
@@ -1736,19 +1792,21 @@ export function WorkstationSageConnectorsPane({
   const [busyCardId, setBusyCardId] = useState<string | null>(null);
   const [mcpServerDraft, setMcpServerDraft] = useState<McpServerDraft>(DEFAULT_MCP_SERVER_DRAFT);
   const [configChannelId, setConfigChannelId] = useState<PersonalCommunicationChannel | null>(null);
+  const [telegramSetupStep, setTelegramSetupStep] = useState<TelegramSetupStep>('phone');
   const [channelDrafts, setChannelDrafts] = useState<Record<PersonalCommunicationChannel, PersonalChannelDraft>>({
     telegram: defaultPersonalChannelDraft('telegram'),
     whatsapp: defaultPersonalChannelDraft('whatsapp'),
   });
 
   const loadState = useCallback(async () => {
-    const [catalogResult, routeResult, profileResult, credentialResult, connectorResult, mcpResult, gatewayResult] = await Promise.allSettled([
+    const [catalogResult, routeResult, profileResult, credentialResult, connectorResult, mcpResult, connectionStatusResult, gatewayResult] = await Promise.allSettled([
       services.client.listProviderCatalog(),
       services.client.getWorkspaceAiRoute(),
       services.client.listProviderProfiles(),
       services.client.listVaultCredentials(),
       services.client.listConnectorsVault(),
       services.client.listMcpServers(),
+      services.client.listConnectionStatus({ surface }),
       (async () => {
         const registrationsPayload = await services.client.requestJson<Record<string, unknown>>({
           path: `/api/gateway/registrations?workspace_id=${encodeURIComponent(workspaceId)}`,
@@ -1757,9 +1815,12 @@ export function WorkstationSageConnectorsPane({
         const registrationItems = Array.isArray(registrationsPayload?.items)
           ? registrationsPayload.items.filter((item): item is GatewayRegistrationRecord => Boolean(item) && typeof item === 'object')
           : [];
-        const selectedGateway = registrationItems.find((item) =>
-          readString(item.connection_status || item.status).toLowerCase() === 'online',
-        ) ?? registrationItems[0] ?? null;
+        const selectionPayload = await services.client.getSageAgentComputerSelection().catch(() => null);
+        const selection = asConnectorPayload(selectionPayload?.selection);
+        const currentGatewayId = readString(selection, 'selected_gateway_id') || readString(asConnectorPayload(selectionPayload), 'selected_gateway_id');
+        const selectedGateway = currentGatewayId
+          ? registrationItems.find((item) => readString(item.gateway_id, '') === currentGatewayId) ?? null
+          : null;
         const gatewayId = readString(selectedGateway?.gateway_id, '') || null;
         if (!gatewayId) {
           return {
@@ -1826,6 +1887,9 @@ export function WorkstationSageConnectorsPane({
       hostedSageAi: normalizeHostedSageAi(catalogPayload),
       workspaceAiRoute: routeResult.status === 'fulfilled' ? routeResult.value : null,
       mcpServers: mcpResult.status === 'fulfilled' ? normalizeMcpServers(mcpResult.value) : [],
+      connectionStatusItems: connectionStatusResult.status === 'fulfilled' && Array.isArray(connectionStatusResult.value?.items)
+        ? connectionStatusResult.value.items.filter((item): item is ConnectionStatusItem => Boolean(item) && typeof item === 'object')
+        : [],
     };
     sageConnectorsPaneCache.set(cacheKey, nextState);
     setProviders(nextState.providers);
@@ -1841,13 +1905,14 @@ export function WorkstationSageConnectorsPane({
     setHostedSageAi(nextState.hostedSageAi);
     setWorkspaceAiRoute(nextState.workspaceAiRoute);
     setMcpServers(nextState.mcpServers);
+    setConnectionStatusItems(nextState.connectionStatusItems);
 
     if (catalogResult.status === 'rejected') {
       throw catalogResult.reason instanceof Error
         ? catalogResult.reason
         : new Error('Provider catalog is unavailable right now.');
     }
-  }, [cacheKey, services.client, workspaceId]);
+  }, [cacheKey, services.client, surface, workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2073,6 +2138,7 @@ export function WorkstationSageConnectorsPane({
     () => gateways.find((gateway) => readString(gateway.gateway_id, '') === readString(selectedGatewayId, '')) ?? null,
     [gateways, selectedGatewayId],
   );
+  const selectedGatewayOnline = selectedGateway !== null && readString(selectedGateway.connection_status || selectedGateway.status).toLowerCase() === 'online';
   const showPersonalSurface = surface === 'sage';
   const personalChannelSurfaceByKey = useMemo(() => {
     const byKey = new Map<string, PersonalChannelSurfaceRecord>();
@@ -2172,46 +2238,140 @@ export function WorkstationSageConnectorsPane({
     });
   }, [connectorIds, connectorVault, surface]);
 
+  const connectionStatusById = useMemo(() => {
+    const out = new Map<string, ConnectionStatusItem>();
+    connectionStatusItems.forEach((item) => {
+      const id = readString(item.id).toLowerCase();
+      if (id) {
+        out.set(id, item);
+      }
+      if (Array.isArray(item.connector_ids)) {
+        item.connector_ids.forEach((alias) => {
+          const normalizedAlias = readString(alias).toLowerCase();
+          if (normalizedAlias && !out.has(normalizedAlias)) {
+            out.set(normalizedAlias, item);
+          }
+        });
+      }
+    });
+    return out;
+  }, [connectionStatusItems]);
+
+  function connectionStatusForConnector(record: ConnectorCardRecord): ConnectionStatusItem | null {
+    const candidates = [record.id, ...(record.definition.connectorIds ?? [])];
+    for (const candidate of candidates) {
+      const match = connectionStatusById.get(readString(candidate).toLowerCase());
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+
+  function connectionStatusForPersonal(record: PersonalCardRecord): ConnectionStatusItem | null {
+    return connectionStatusById.get(readString(record.id).toLowerCase()) ?? null;
+  }
+
+  function connectionLaunchLocked(item: ConnectionStatusItem | null): boolean {
+    if (!item) {
+      return false;
+    }
+    const launchStatus = readString(item.launch_status).toLowerCase();
+    const nextAction = readString(item.next_action).toLowerCase();
+    return nextAction === 'locked'
+      || item.runtime_usable === false
+      || item.setup_available === false
+      || launchStatus === 'planned'
+      || launchStatus === 'partial'
+      || launchStatus === 'locked';
+  }
+
+  function connectionLockedLabel(item: ConnectionStatusItem | null, fallback: string): string {
+    const launchStatus = readString(item?.launch_status).toLowerCase();
+    if (launchStatus === 'partial') {
+      return 'Not ready';
+    }
+    if (launchStatus === 'planned') {
+      return 'Planned';
+    }
+    return fallback;
+  }
+
   function connectorStatusTone(record: ConnectorCardRecord): PersonalCardStatusTone {
     return record.connected ? 'connected' : 'neutral';
   }
 
-  function connectorActionLabel(record: ConnectorCardRecord): string {
-    if (record.connected) {
-      return 'Done';
+  const lockedConnectorIds = new Set([
+    'whatsapp_twilio',
+    'discord_bot',
+    'notion',
+    'linear',
+    'webhook',
+  ]);
+
+  const lockedPersonalBridgeIds = new Set([
+    'signal_personal',
+    'imessage_personal',
+    'wechat_personal',
+  ]);
+
+  function connectorActionLabel(record: ConnectorCardRecord): string | null {
+    const statusItem = connectionStatusForConnector(record);
+    if (statusItem) {
+      const nextAction = readString(statusItem.next_action).toLowerCase();
+      if (nextAction === 'connect') {
+        return 'Connect';
+      }
+      return null;
     }
-    return 'Keep planned';
+    return null;
   }
 
   function connectorAsExternalCard(record: ConnectorCardRecord): ExternalIntegrationCardRecord {
+    const statusItem = connectionStatusForConnector(record);
+    const locked = connectionLaunchLocked(statusItem) || lockedConnectorIds.has(record.id);
+    const connected = statusItem ? statusItem.connected === true : record.connected;
+    const connectionId = readString(statusItem?.id) || null;
+    const nextAction = readString(statusItem?.next_action).toLowerCase();
     return {
       id: `connector_${record.id}`,
       label: record.label,
       image: record.image,
-      detail: describeConnectorCard(record),
-      statusLabel: record.connected ? 'Connected' : 'Not connected',
-      statusTone: connectorStatusTone(record),
+      detail: locked ? readString(statusItem?.description, 'Planned · Coming soon.') : describeConnectorCard(record),
+      statusLabel: locked ? connectionLockedLabel(statusItem, 'Planned') : connected ? 'Connected' : 'Not connected',
+      statusTone: locked ? 'neutral' : connectorStatusTone(record),
       summary: record.definition.summary,
-      nextStep: record.connected ? null : record.definition.setupHint,
-      actionLabel: connectorActionLabel(record),
-      actionTarget: 'close',
+      nextStep: locked ? null : connected ? null : record.definition.setupHint,
+      actionLabel: locked ? null : connectorActionLabel(record),
+      actionTarget: connectionId && nextAction === 'connect' ? 'connection' : 'close',
+      connectionId,
+      locked,
     };
   }
 
   function personalAsExternalCard(record: PersonalCardRecord): ExternalIntegrationCardRecord {
+    const statusItem = connectionStatusForPersonal(record);
+    const locked = connectionLaunchLocked(statusItem) || lockedPersonalBridgeIds.has(record.id);
+    const pairLabel = record.channel
+      ? record.statusTone === 'connected'
+        ? `Manage ${record.label.replace(/^Your\s+/, '')}`
+        : `Pair ${record.label.replace(/^Your\s+/, '')}`
+      : null;
     return {
       id: record.id,
       label: record.label,
       image: record.image,
-      detail: record.detail,
-      statusLabel: record.statusLabel,
-      statusTone: record.statusTone,
+      detail: locked ? readString(statusItem?.description, 'Requires Agent Computer bridge · Coming soon.') : record.detail,
+      statusLabel: locked ? connectionLockedLabel(statusItem, 'Coming soon') : record.statusLabel,
+      statusTone: locked ? 'neutral' : record.statusTone,
       summary: record.summary,
-      nextStep: record.nextStep,
-      actionLabel: record.channel ? 'Setup details' : record.statusTone === 'connected' ? 'Review connection' : 'Set up',
-      secondaryActionLabel: record.channel ? 'Agent Computer settings' : null,
-      actionTarget: 'gateway',
+      nextStep: locked ? null : record.nextStep,
+      actionLabel: locked ? null : pairLabel ?? (record.statusTone === 'connected' ? 'Review connection' : 'Set up'),
+      secondaryActionLabel: locked ? null : record.channel ? 'Agent Computer settings' : null,
+      actionTarget: locked ? 'close' : 'gateway',
+      connectionId: readString(statusItem?.id) || null,
       channel: record.channel ?? null,
+      locked,
     };
   }
 
@@ -2262,53 +2422,61 @@ export function WorkstationSageConnectorsPane({
     [communicationPersonalCards, connectorCards],
   );
 
-  const pluginCards = useMemo<ExternalIntegrationCardRecord[]>(
-    () => [
-      ...communicationPersonalCards.map(personalAsExternalCard),
-      ...connectorCards.map(connectorAsExternalCard),
-    ],
-    [communicationPersonalCards, connectorCards],
-  );
+  const includeAiRuntimeGroup = normalizeIntegrationCategoryId(searchParams.get('section') ?? searchParams.get('connection')) === 'ai_runtime';
 
   const integrationGroups = useMemo<IntegrationWorkbenchGroup[]>(() => {
     const groups: IntegrationWorkbenchGroup[] = [];
-    groups.push({
-      id: 'ai_runtime',
-      label: 'AI & Runtime',
-      description: 'Default AI route, provider accounts, and model source.',
-      detail: aiProviderSummary.activeLabel,
-      countLabel: activeProviderCard ? 'Active' : 'Setup',
-      statusTone: activeProviderCard ? 'connected' : 'warning',
-    });
-
-    if (showPersonalSurface && thisComputerCards.length > 0) {
-      const connectedComputer = thisComputerCards.some((card) => card.statusTone === 'connected');
+    if (includeAiRuntimeGroup) {
       groups.push({
-        id: 'connections',
-        label: 'Connections',
-        description: 'Connected hardware and runtime links for this workspace.',
-        detail: 'Agent Computer connection, local execution, and app connections.',
-        countLabel: connectedComputer ? 'Connected' : 'Setup',
-        statusTone: connectedComputer ? 'connected' : 'warning',
+        id: 'ai_runtime',
+        label: 'AI setup',
+        description: 'Default AI route, provider accounts, and model source.',
+        detail: aiProviderSummary.activeLabel,
+        countLabel: activeProviderCard ? 'Active' : 'Setup',
+        statusTone: activeProviderCard ? 'connected' : 'warning',
       });
     }
-
+    groups.push({
+      id: 'channels',
+      label: 'Channels',
+      description: 'Personal and messaging channels Sage can use.',
+      detail: 'Telegram, WhatsApp, Signal, iMessage, WeChat, email, Slack, and Discord.',
+      countLabel: `${channelCards.length}`,
+      statusTone: channelCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
+    });
+    groups.push({
+      id: 'apps',
+      label: 'Apps',
+      description: 'Apps Sage can connect to.',
+      detail: 'Gmail, Calendar, Microsoft 365, GitHub, Notion, Linear, and more.',
+      countLabel: `${appCards.length}`,
+      statusTone: appCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
+    });
+    groups.push({
+      id: 'skills',
+      label: 'Skills',
+      description: 'Reusable Sage capabilities and media tools.',
+      detail: 'Files, browser, screenshot, shell, memory, Whisper, TTS, image, and video.',
+      countLabel: showTools ? 'Ready' : 'Setup',
+      statusTone: showTools ? 'connected' : 'neutral',
+    });
     groups.push({
       id: 'plugins',
-      label: 'Plugins',
-      description: 'Apps, channels, skills, MCP servers, custom APIs, and webhooks.',
-      detail: 'Gmail, Calendar, GitHub, Notion, Drive, Slack, skills, MCP, and custom tools.',
-      countLabel: `${pluginCards.length + mcpServers.length}`,
-      statusTone: pluginCards.some((card) => card.statusTone === 'connected') || mcpServers.some((server) => server.enabled !== false) ? 'connected' : 'neutral',
+      label: 'MCP',
+      description: 'Technical tool servers and plugin packages.',
+      detail: 'MCP servers, plugin packages, custom APIs, and webhooks.',
+      countLabel: `${mcpServers.length}`,
+      statusTone: mcpServers.some((server) => server.enabled !== false) ? 'connected' : 'neutral',
     });
     return groups;
   }, [
     activeProviderCard,
     aiProviderSummary.activeLabel,
+    includeAiRuntimeGroup,
     mcpServers,
-    pluginCards,
+    channelCards,
+    appCards,
     showTools,
-    thisComputerCards,
   ]);
 
   const selectedIntegrationGroup = useMemo(
@@ -2328,10 +2496,12 @@ export function WorkstationSageConnectorsPane({
       setSelectedIntegrationId(requestedIntegrationId);
       return;
     }
-    if (!integrationGroups.some((group) => group.id === selectedIntegrationId)) {
-      setSelectedIntegrationId(integrationGroups[0].id);
-    }
-  }, [integrationGroups, requestedIntegrationId, selectedIntegrationId]);
+    setSelectedIntegrationId((current) => (
+      integrationGroups.some((group) => group.id === current)
+        ? current
+        : integrationGroups[0].id
+    ));
+  }, [integrationGroups, requestedIntegrationId]);
 
   useEffect(() => {
     setConnectorMemoryEnabled((current) => {
@@ -2370,6 +2540,58 @@ export function WorkstationSageConnectorsPane({
       await refreshAfterMutation('MCP server saved. Review and approve discovered tools before Sage can use them.');
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'MCP server could not be saved.');
+    } finally {
+      setBusyCardId(null);
+    }
+  }
+
+  async function handleConnectionSetupStart(record: ExternalIntegrationCardRecord) {
+    const connectionId = readString(record.connectionId);
+    if (!connectionId) {
+      setError('Connection setup is not available yet.');
+      return;
+    }
+    setBusyCardId(record.id);
+    try {
+      const response = await services.client.startConnectionSetup({
+        connectionId,
+        surface,
+        selectedGatewayId,
+        metadata: {
+          source: 'sage_connectors',
+          card_id: record.id,
+        },
+      });
+      const session = response && typeof response === 'object'
+        ? response.setup_session as Record<string, unknown> | undefined
+        : undefined;
+      const sessionId = readString(session?.id);
+      setStatus(sessionId ? 'Setup session started.' : 'Connection setup started.');
+      setError(null);
+      setExpandedCardId(null);
+      await loadState().catch(() => undefined);
+    } catch (connectionError) {
+      setError(connectionError instanceof Error ? connectionError.message : 'Connection setup is not available yet.');
+    } finally {
+      setBusyCardId(null);
+    }
+  }
+
+  async function chooseSageAgentComputer(gatewayId: string) {
+    const cleanGatewayId = gatewayId.trim();
+    if (!cleanGatewayId) {
+      return;
+    }
+    setBusyCardId(`gateway:${cleanGatewayId}`);
+    setPersonalChannelError(null);
+    try {
+      await services.client.setSageAgentComputerSelection({
+        selectedGatewayId: cleanGatewayId,
+        metadata: { source: 'sage_connectors' },
+      });
+      await loadState();
+    } catch (selectionError) {
+      setPersonalChannelError(selectionError instanceof Error ? selectionError.message : 'Could not choose Sage Agent Computer.');
     } finally {
       setBusyCardId(null);
     }
@@ -2518,7 +2740,7 @@ export function WorkstationSageConnectorsPane({
       });
     }
 
-    const hostedPreset = hosted && ['light', 'pro', 'max'].includes(activeModel.toLowerCase())
+    const hostedPreset = hosted && ['light', 'pro'].includes(activeModel.toLowerCase())
       ? activeModel.toLowerCase()
       : null;
     const routeKind: WorkspaceAiRouteKind = hosted
@@ -2695,20 +2917,34 @@ export function WorkstationSageConnectorsPane({
     }));
   }
 
-  async function handlePersonalChannelSetup(channel: PersonalCommunicationChannel): Promise<void> {
+  async function handlePersonalChannelSetup(
+    channel: PersonalCommunicationChannel,
+    setupStep?: TelegramSetupStep,
+  ): Promise<void> {
+    setError(null);
+    setSelectedIntegrationId('channels');
+    if (typeof window !== 'undefined') {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set('section', 'channels');
+      nextUrl.searchParams.delete('connection');
+      window.history.replaceState(window.history.state, '', nextUrl.toString());
+    }
     if (!selectedGatewayId) {
-      setError('Connect the selected Agent Computer before setting up a personal channel.');
+      setPersonalChannelError('Choose Sage Agent Computer before setting up a personal channel.');
+      return;
+    }
+    if (!selectedGatewayOnline) {
+      setPersonalChannelError('Selected Sage Agent Computer is offline. Reconnect it in Hardware first.');
       return;
     }
     const draft = channelDrafts[channel];
     const payload: Record<string, unknown> = {};
     if (channel === 'whatsapp') {
-      if (!draft.phoneNumber.trim()) {
-        setError('Enter the WhatsApp phone number before requesting pairing.');
-        return;
+      if (draft.phoneNumber.trim()) {
+        payload.phone_number = draft.phoneNumber.trim();
       }
-      payload.phone_number = draft.phoneNumber.trim();
     } else {
+      const step = setupStep ?? telegramSetupStep;
       const apiId = Number.parseInt(draft.apiId.trim(), 10);
       if (Number.isFinite(apiId)) {
         payload.api_id = apiId;
@@ -2716,25 +2952,33 @@ export function WorkstationSageConnectorsPane({
       if (draft.apiHash.trim()) {
         payload.api_hash = draft.apiHash.trim();
       }
-      if (draft.phoneNumber.trim()) {
+      if ((step === 'phone' || step === 'code' || step === 'password') && draft.phoneNumber.trim()) {
         payload.phone_number = draft.phoneNumber.trim();
       }
-      if (draft.loginCode.trim()) {
+      if ((step === 'code' || step === 'password') && draft.loginCode.trim()) {
         payload.login_code = draft.loginCode.trim();
       }
-      if (draft.password.trim()) {
+      if (step === 'password' && draft.password.trim()) {
         payload.password = draft.password.trim();
       }
-      if (Object.keys(payload).length === 0) {
-        setError('Enter Telegram API details, phone number, or login code before requesting setup.');
-        return;
-      }
+    }
+    if (Object.keys(payload).length === 0) {
+      setPersonalChannelError(
+        channel === 'telegram'
+          ? telegramSetupStep === 'code'
+            ? 'Enter the Telegram login code first.'
+            : telegramSetupStep === 'password'
+              ? 'Enter the Telegram two-step verification password first.'
+              : 'Enter a Telegram phone number first.'
+          : 'Enter a WhatsApp phone number first.',
+      );
+      return;
     }
     setBusyCardId(`${channel}_personal`);
-    setError(null);
+    setPersonalChannelError(null);
     setStatus(null);
     try {
-      await services.client.requestJson<Record<string, unknown>>({
+      const setupResult = await services.client.requestJson<Record<string, unknown>>({
         path: `/api/personal-channels/${channel}/gateways/${encodeURIComponent(selectedGatewayId)}/setup`,
         init: {
           method: 'POST',
@@ -2745,13 +2989,37 @@ export function WorkstationSageConnectorsPane({
           body: JSON.stringify(payload),
         },
       });
-      await refreshAfterMutation(
-        channel === 'telegram'
-          ? 'Telegram setup requested on Agent Computer.'
-          : 'WhatsApp pairing requested on Agent Computer.',
-      );
+      if (channel === 'telegram') {
+        const setupState = readTelegramStatePayload(setupResult) ?? asConnectorPayload(setupResult);
+        const setupStatus = String(setupState?.['status'] ?? '').trim();
+        const setupLoginHint = String(setupState?.['login_hint'] ?? setupState?.['loginHint'] ?? '').trim();
+        const nextStep = resolveTelegramSetupStep(setupResult, telegramSetupStep);
+        if (setupState) {
+          setTelegramPersonal((current) => ({
+            ...(current ?? {}),
+            state: setupState as PersonalChannelStateRecord,
+          }));
+        }
+        setTelegramSetupStep(nextStep);
+        if (setupStatus === 'authorization_required' && setupLoginHint === 'api_credentials_required') {
+          setTelegramSetupStep('phone');
+          setPersonalChannelError('Telegram cannot send a code yet. Platform Telegram credentials are not configured for Agent Computer.');
+          return;
+        }
+        if (setupStatus === 'authorization_required' && setupLoginHint === 'phone_number_required') {
+          setTelegramSetupStep('phone');
+          setPersonalChannelError('Enter your Telegram phone number first.');
+          return;
+        }
+        setPersonalChannelError(null);
+        if (nextStep === 'connected') {
+          await loadState().catch(() => undefined);
+        }
+      } else {
+        await loadState().catch(() => undefined);
+      }
     } catch (setupError) {
-      setError(setupError instanceof Error ? setupError.message : 'Personal Channels setup failed.');
+      setPersonalChannelError(setupError instanceof Error ? setupError.message : 'Personal Channels setup failed.');
     } finally {
       setBusyCardId(null);
     }
@@ -2759,16 +3027,16 @@ export function WorkstationSageConnectorsPane({
 
   async function handlePersonalChannelTest(channel: PersonalCommunicationChannel): Promise<void> {
     if (!selectedGatewayId) {
-      setError('Connect the selected Agent Computer before sending a personal channel test.');
+      setPersonalChannelError('Connect the selected Agent Computer before sending a personal channel test.');
       return;
     }
     const draft = channelDrafts[channel];
     if (!draft.recipient.trim() || !draft.text.trim()) {
-      setError(`Enter a ${channel === 'telegram' ? 'Telegram recipient' : 'WhatsApp recipient'} and test message first.`);
+      setPersonalChannelError(`Enter a ${channel === 'telegram' ? 'Telegram recipient' : 'WhatsApp recipient'} and test message first.`);
       return;
     }
     setBusyCardId(`${channel}_personal:test`);
-    setError(null);
+    setPersonalChannelError(null);
     setStatus(null);
     try {
       await services.client.requestJson<Record<string, unknown>>({
@@ -2786,13 +3054,14 @@ export function WorkstationSageConnectorsPane({
           }),
         },
       });
-      await refreshAfterMutation(
+      setStatus(
         channel === 'telegram'
-          ? 'Telegram test sent through Agent Computer.'
-          : 'WhatsApp test sent through Agent Computer.',
+          ? 'Telegram test requested through Agent Computer.'
+          : 'WhatsApp test requested through Agent Computer.',
       );
+      await loadState().catch(() => undefined);
     } catch (testError) {
-      setError(testError instanceof Error ? testError.message : 'Personal Channels test failed.');
+      setPersonalChannelError(testError instanceof Error ? testError.message : 'Personal Channels test failed.');
     } finally {
       setBusyCardId(null);
     }
@@ -2809,7 +3078,7 @@ export function WorkstationSageConnectorsPane({
   }
 
   function openGatewaySurface() {
-    router.push(routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(workspaceId)}/gateway`);
+    router.push(routeManifest.routeIndex.hardware?.href ?? `/w/${encodeURIComponent(workspaceId)}/hardware`);
   }
 
   function openComputerConnectSheet() {
@@ -2818,14 +3087,12 @@ export function WorkstationSageConnectorsPane({
   }
 
   function openWorkspaceRoute(routeId: 'gateway' | 'channels' | 'gatewayActivity' | 'gatewayApprovals') {
-    const fallbackPath = routeId === 'gateway'
-      ? 'gateway'
-      : routeId === 'channels'
-        ? 'channels'
-        : routeId === 'gatewayActivity'
-          ? 'gateway-activity'
-          : 'gateway-approvals';
-    router.push(routeManifest.routeIndex[routeId]?.href ?? `/w/${encodeURIComponent(workspaceId)}/${fallbackPath}`);
+    if (routeId === 'gateway' || routeId === 'gatewayActivity' || routeId === 'gatewayApprovals') {
+      router.push(routeManifest.routeIndex.hardware?.href ?? `/w/${encodeURIComponent(workspaceId)}/hardware`);
+      return;
+    }
+
+    router.push(routeManifest.routeIndex.channels?.href ?? `/w/${encodeURIComponent(workspaceId)}/channels`);
   }
 
   function openBillingSettings() {
@@ -3049,7 +3316,11 @@ export function WorkstationSageConnectorsPane({
         key={record.id}
         type="button"
         className={joinClassNames('sage-unified-card', isExpanded && 'sage-unified-card--selected')}
+        aria-disabled={record.locked ? true : undefined}
         onClick={() => {
+          if (record.locked) {
+            return;
+          }
           if (record.actionTarget === 'computer') {
             openComputerConnectSheet();
             return;
@@ -3226,100 +3497,215 @@ export function WorkstationSageConnectorsPane({
     channelDraft: PersonalChannelDraft,
     channelBusy: boolean,
   ) {
+    const isTelegram = channel === 'telegram';
+    const telegramStep = isTelegram
+      ? resolveTelegramSetupStep(telegramPersonal, telegramSetupStep)
+      : 'phone';
+    const connectedPhone = isTelegram ? readTelegramConnectedPhone(telegramPersonal, channelDraft.phoneNumber) : '';
+    if (!selectedGateway) {
+      return (
+        <div className="sage-unified-expand__config app-stack-3">
+          <div className="sage-unified-expand__text">
+            Choose the Agent Computer that owns this personal channel.
+          </div>
+          {gateways.length > 0 ? (
+            <div className="sage-unified-expand__actions">
+              {gateways.map((gateway) => {
+                const gatewayId = readString(gateway.gateway_id, '');
+                const label = readString(gateway.display_name || gateway.device_name || gateway.hostname, gatewayId || 'Agent Computer');
+                const status = readString(gateway.connection_status || gateway.status, 'unknown');
+                return (
+                  <AppButton
+                    key={gatewayId || label}
+                    type="button"
+                    tone="secondary"
+                    disabled={busyCardId === `gateway:${gatewayId}`}
+                    onClick={() => {
+                      void chooseSageAgentComputer(gatewayId);
+                    }}
+                  >
+                    {busyCardId === `gateway:${gatewayId}` ? 'Choosing...' : `${label} · ${status}`}
+                  </AppButton>
+                );
+              })}
+            </div>
+          ) : null}
+          <div className="sage-unified-expand__actions">
+            <AppButton type="button" onClick={openGatewaySurface}>
+              {gateways.length > 0 ? 'Manage computers' : 'Connect Agent Computer'}
+            </AppButton>
+          </div>
+        </div>
+      );
+    }
+    if (!selectedGatewayOnline) {
+      return (
+        <div className="sage-unified-expand__config app-stack-3">
+          <AppNotice tone="warning">Selected Sage Agent Computer is offline. Reconnect it in Hardware before pairing personal channels.</AppNotice>
+          <div className="sage-unified-expand__actions">
+            <AppButton type="button" onClick={openGatewaySurface}>
+              Open Hardware
+            </AppButton>
+          </div>
+        </div>
+      );
+    }
+    if (!isTelegram) {
+      return (
+        <div className="sage-unified-expand__config app-stack-3">
+          <div className="sage-unified-expand__text">
+            Connect your personal WhatsApp account through Agent Computer.
+          </div>
+          {personalChannelError ? <AppNotice tone="warning">{personalChannelError}</AppNotice> : null}
+          <FormField label="Phone number">
+            <FormInput
+              value={channelDraft.phoneNumber}
+              placeholder="+8618657105303"
+              autoComplete="tel"
+              onChange={(event) => updateChannelDraft('whatsapp', { phoneNumber: event.currentTarget.value })}
+            />
+          </FormField>
+          <div className="sage-unified-expand__actions">
+            <AppButton
+              type="button"
+              disabled={channelBusy}
+              onClick={() => {
+                void handlePersonalChannelSetup('whatsapp');
+              }}
+            >
+              {channelBusy && busyCardId === 'whatsapp_personal' ? 'Connecting...' : 'Connect WhatsApp'}
+            </AppButton>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="sage-unified-expand__config app-stack-3">
         <div className="sage-unified-expand__text">
-          Setup details are only for login, pairing, and controlled test messages.
+          Connect your personal Telegram account. Sage can read incoming chats and reply through your approved Agent Computer.
         </div>
-        {channel === 'whatsapp' ? (
+        {personalChannelError ? <AppNotice tone="warning">{personalChannelError}</AppNotice> : null}
+        {telegramStep === 'phone' ? (
           <>
-            <FormField label="WhatsApp phone number" hint="Used only by Agent Computer for pairing.">
-              <FormInput
-                value={channelDraft.phoneNumber}
-                placeholder="8618657105303"
-                onChange={(event) => updateChannelDraft('whatsapp', { phoneNumber: event.currentTarget.value })}
-              />
-            </FormField>
-            <FormField label="Recipient" hint="Phone number or chat identifier for the controlled test.">
-              <FormInput
-                value={channelDraft.recipient}
-                placeholder="8618657105303"
-                onChange={(event) => updateChannelDraft('whatsapp', { recipient: event.currentTarget.value })}
-              />
-            </FormField>
-          </>
-        ) : (
-          <>
-            <FormField label="Telegram app ID" hint="Used only for controlled Telegram setup on Agent Computer.">
-              <FormInput
-                value={channelDraft.apiId}
-                placeholder="123456"
-                onChange={(event) => updateChannelDraft('telegram', { apiId: event.currentTarget.value })}
-              />
-            </FormField>
-            <FormField label="Telegram app secret">
-              <FormInput
-                value={channelDraft.apiHash}
-                placeholder="Telegram app secret"
-                onChange={(event) => updateChannelDraft('telegram', { apiHash: event.currentTarget.value })}
-              />
-            </FormField>
-            <FormField label="Phone number" hint="Used by Telegram login on Agent Computer.">
+            <FormField label="Phone number">
               <FormInput
                 value={channelDraft.phoneNumber}
                 placeholder="+8618657105303"
+                autoComplete="tel"
                 onChange={(event) => updateChannelDraft('telegram', { phoneNumber: event.currentTarget.value })}
               />
             </FormField>
-            <FormField label="Login code" hint="Enter only when Telegram asks for a code.">
+            <div className="sage-unified-expand__actions">
+              <AppButton
+                type="button"
+                disabled={channelBusy}
+                onClick={() => {
+                  void handlePersonalChannelSetup('telegram', 'phone');
+                }}
+              >
+                {channelBusy && busyCardId === 'telegram_personal' ? 'Sending...' : 'Send Code'}
+              </AppButton>
+            </div>
+          </>
+        ) : null}
+        {telegramStep === 'code' ? (
+          <>
+            <div className="sage-unified-expand__text">
+              {`Code sent to ${channelDraft.phoneNumber.trim() || 'your Telegram account'}.`}
+            </div>
+            <FormField label="Verification code">
               <FormInput
+                inputMode="numeric"
                 value={channelDraft.loginCode}
+                placeholder="123456"
+                autoComplete="one-time-code"
                 onChange={(event) => updateChannelDraft('telegram', { loginCode: event.currentTarget.value })}
               />
             </FormField>
-            <FormField label="2FA password" hint="Optional. Required only for Telegram accounts with 2FA enabled.">
+            <div className="sage-unified-expand__actions">
+              <AppButton
+                type="button"
+                disabled={channelBusy}
+                onClick={() => {
+                  void handlePersonalChannelSetup('telegram', 'code');
+                }}
+              >
+                {channelBusy && busyCardId === 'telegram_personal' ? 'Verifying...' : 'Verify'}
+              </AppButton>
+            </div>
+          </>
+        ) : null}
+        {telegramStep === 'password' ? (
+          <>
+            <div className="sage-unified-expand__text">Two-step verification enabled.</div>
+            <FormField label="Password">
               <FormInput
                 type="password"
                 value={channelDraft.password}
+                autoComplete="current-password"
                 onChange={(event) => updateChannelDraft('telegram', { password: event.currentTarget.value })}
               />
             </FormField>
-            <FormField label="Recipient" hint="Telegram user, chat, or channel for the controlled test.">
-              <FormInput
-                value={channelDraft.recipient}
-                placeholder="123456789"
-                onChange={(event) => updateChannelDraft('telegram', { recipient: event.currentTarget.value })}
-              />
-            </FormField>
+            <div className="sage-unified-expand__actions">
+              <AppButton
+                type="button"
+                disabled={channelBusy}
+                onClick={() => {
+                  void handlePersonalChannelSetup('telegram', 'password');
+                }}
+              >
+                {channelBusy && busyCardId === 'telegram_personal' ? 'Connecting...' : 'Continue'}
+              </AppButton>
+            </div>
           </>
-        )}
-        <FormField label="Test message" hint="Sends from Agent Computer as a controlled test.">
-          <FormInput
-            value={channelDraft.text}
-            onChange={(event) => updateChannelDraft(channel, { text: event.currentTarget.value })}
-          />
-        </FormField>
-        <div className="sage-unified-expand__actions">
-          <AppButton
-            type="button"
-            disabled={channelBusy}
-            onClick={() => {
-              void handlePersonalChannelSetup(channel);
-            }}
-          >
-            {channelBusy && busyCardId === `${channel}_personal` ? 'Requesting…' : 'Request setup'}
-          </AppButton>
-          <AppButton
-            type="button"
-            tone="secondary"
-            disabled={channelBusy}
-            onClick={() => {
-              void handlePersonalChannelTest(channel);
-            }}
-          >
-            {channelBusy && busyCardId === `${channel}_personal:test` ? 'Sending…' : 'Send test'}
-          </AppButton>
-        </div>
+        ) : null}
+        {telegramStep === 'connected' ? (
+          <>
+            <div className="sage-unified-expand__text">
+              {`Connected${connectedPhone ? ` as ${connectedPhone}` : ''}.`}
+            </div>
+            <div className="sage-unified-expand__actions">
+              <AppButton
+                type="button"
+                tone="ghost"
+                onClick={() => {
+                  setExpandedCardId(null);
+                }}
+              >
+                Done
+              </AppButton>
+              <AppButton
+                type="button"
+                tone="secondary"
+                disabled
+              >
+                Disconnect
+              </AppButton>
+            </div>
+          </>
+        ) : null}
+        {telegramStep !== 'connected' ? (
+          <details className="sage-unified-expand__config-disclosure">
+            <summary className="sage-unified-expand__config-summary">Use custom credentials</summary>
+            <div className="sage-unified-expand__config app-stack-3">
+              <FormField label="Telegram app ID">
+                <FormInput
+                  value={channelDraft.apiId}
+                  placeholder="123456"
+                  onChange={(event) => updateChannelDraft('telegram', { apiId: event.currentTarget.value })}
+                />
+              </FormField>
+              <FormField label="Telegram app secret">
+                <FormInput
+                  value={channelDraft.apiHash}
+                  placeholder="Telegram app secret"
+                  onChange={(event) => updateChannelDraft('telegram', { apiHash: event.currentTarget.value })}
+                />
+              </FormField>
+            </div>
+          </details>
+        ) : null}
       </div>
     );
   }
@@ -3331,7 +3717,7 @@ export function WorkstationSageConnectorsPane({
       || record.id === 'wechat_personal';
     const channel = record.channel ?? null;
     const channelDraft = channel ? channelDrafts[channel] : null;
-    const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
+      const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
     const configOpen = channel ? configChannelId === channel : false;
     return (
       <MotionSlidePanel className="sage-unified-expand">
@@ -3371,9 +3757,11 @@ export function WorkstationSageConnectorsPane({
               disabled={channelBusy}
               onClick={() => {
                 setConfigChannelId(configOpen ? null : channel);
+                setPersonalChannelError(null);
+                setError(null);
               }}
             >
-              Setup details
+              {!selectedGateway ? 'Choose Agent Computer' : channel === 'telegram' ? 'Pair Telegram' : 'Pair WhatsApp'}
             </AppButton>
           ) : (
             <AppButton
@@ -3419,7 +3807,7 @@ export function WorkstationSageConnectorsPane({
     const channel = record.channel ?? null;
     const channelDraft = channel ? channelDrafts[channel] : null;
     const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
-    const configOpen = channel ? configChannelId === channel : false;
+    const configOpen = channel ? true : false;
     const showClose = options.showClose !== false;
     return (
       <MotionSlidePanel className="sage-unified-expand">
@@ -3439,14 +3827,10 @@ export function WorkstationSageConnectorsPane({
         <div className="sage-unified-expand__text">{record.summary}</div>
         {record.nextStep ? <div className="sage-unified-expand__text">{record.nextStep}</div> : null}
         <div className="sage-unified-expand__actions">
-          {record.actionLabel ? (
+          {record.actionLabel && !channel ? (
             <AppButton
               type="button"
               onClick={() => {
-                if (channel) {
-                  setConfigChannelId(configOpen ? null : channel);
-                  return;
-                }
                 if (record.actionTarget === 'computer') {
                   openComputerConnectSheet();
                   return;
@@ -3454,6 +3838,10 @@ export function WorkstationSageConnectorsPane({
                 if (record.actionTarget === 'ai' || record.id === 'local_models') {
                   setProviderPickerOpen(true);
                   setProviderPickerDraftId(null);
+                  return;
+                }
+                if (record.actionTarget === 'connection') {
+                  void handleConnectionSetupStart(record);
                   return;
                 }
                 if (record.actionTarget === 'close') {
@@ -3489,6 +3877,26 @@ export function WorkstationSageConnectorsPane({
         </div>
         {channel && channelDraft && configOpen ? renderPersonalChannelConfig(channel, channelDraft, channelBusy) : null}
       </MotionSlidePanel>
+    );
+  }
+
+  function renderExternalModal(record: ExternalIntegrationCardRecord) {
+    return (
+      <div
+        className="sage-unified-modal"
+        role="presentation"
+        onClick={() => setExpandedCardId(null)}
+      >
+        <div
+          className="sage-unified-modal__panel"
+          role="dialog"
+          aria-modal="true"
+          aria-label={record.label}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {renderExternalExpand(record)}
+        </div>
+      </div>
     );
   }
 
@@ -3929,7 +4337,7 @@ export function WorkstationSageConnectorsPane({
             <div className="sage-unified-grid sage-unified-grid--4">
               {cards.map(renderExternalCard)}
             </div>
-            {expandedCard ? renderExternalExpand(expandedCard) : null}
+            {expandedCard ? renderExternalModal(expandedCard) : null}
           </>
         ) : (
           <div className="sage-integrations-detail-card">
@@ -3991,7 +4399,6 @@ export function WorkstationSageConnectorsPane({
               tone="secondary"
               onClick={() => {
                 setSelectedIntegrationId('plugins');
-                setPluginsTab('plugins');
                 setExpandedCardId(null);
               }}
             >
@@ -4058,63 +4465,78 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
-  function renderPluginsOverview() {
+  function renderChannelsOverview() {
     return (
-      <div className="sage-plugins-surface">
-        <div className="sage-plugins-tabs" role="tablist" aria-label="Plugin setup">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={pluginsTab === 'plugins'}
-            className={joinClassNames('sage-plugins-tab', pluginsTab === 'plugins' && 'sage-plugins-tab--active')}
-            onClick={() => {
-              setPluginsTab('plugins');
-              setExpandedCardId(null);
-            }}
-          >
-            Plugins
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={pluginsTab === 'skills'}
-            className={joinClassNames('sage-plugins-tab', pluginsTab === 'skills' && 'sage-plugins-tab--active')}
-            onClick={() => {
-              setPluginsTab('skills');
-              setExpandedCardId(null);
-            }}
-          >
-            Skills
-          </button>
+      <>
+        {renderExternalCollection(
+          showPersonalSurface ? 'Channels' : 'Channels',
+          showPersonalSurface
+            ? 'Personal channels stay on Agent Computer. Business/customer channels stay separate.'
+            : 'Studio channels are customer-facing and separate from Sage personal channels.',
+          channelCards,
+          'No messaging connectors are available for this surface yet.',
+        )}
+      </>
+    );
+  }
+
+  function renderAppsOverview() {
+    return renderExternalCollection(
+      'Apps',
+      'Connect work apps here. These are external services Sage can read or act inside.',
+      appCards,
+      'No app connectors are available for this surface yet.',
+    );
+  }
+
+  function renderSkillsOverview() {
+    const readySkills = [
+      { name: 'Files', detail: 'Read and write workspace files with approval.', status: 'Ready' },
+      { name: 'Browser', detail: 'Open pages, inspect screens, and use web surfaces.', status: 'Ready' },
+      { name: 'Screenshot', detail: 'Capture the connected computer through Hardware.', status: 'Ready' },
+      { name: 'Memory', detail: 'Read and update Sage memory with policy checks.', status: 'Ready' },
+      { name: 'Shell / code', detail: 'Run approved commands through Agent Computer.', status: 'Approval' },
+    ];
+    const setupSkills = [
+      { name: 'Whisper', detail: 'Speech-to-text for voice notes and audio files.', status: 'Setup' },
+      { name: 'TTS', detail: 'Text-to-speech and voice replies.', status: 'Setup' },
+      { name: 'Image generation', detail: 'Generate images through a selected media model.', status: 'Setup' },
+      { name: 'Video generation', detail: 'Generate video through a selected media model.', status: 'Setup' },
+    ];
+    const renderSkillCard = (skill: { name: string; detail: string; status: string }) => (
+      <div key={skill.name} className="sage-skill-card">
+        <div>
+          <strong>{skill.name}</strong>
+          <span>{skill.detail}</span>
         </div>
-        {pluginsTab === 'plugins'
-          ? renderExternalCollection(
-            'Plugins',
-            'Connect apps, files, websites, channels, and automations Sage can use.',
-            pluginCards,
-            'No plugins are available yet.',
-          )
-          : renderDeveloperOverview()}
+        <em>{skill.status}</em>
       </div>
     );
+
+    return (
+      <div className="sage-skills-surface">
+        <section className="sage-unified-section">
+          <p className="sage-unified-section__label">Ready</p>
+          <div className="sage-skill-card-grid">{readySkills.map(renderSkillCard)}</div>
+        </section>
+        <section className="sage-unified-section">
+          <p className="sage-unified-section__label">Needs setup</p>
+          <div className="sage-skill-card-grid">{setupSkills.map(renderSkillCard)}</div>
+        </section>
+      </div>
+    );
+  }
+
+  function renderPluginsOverview() {
+    return renderDeveloperOverview();
   }
 
   function renderDeveloperOverview() {
     return (
       <>
-        {showTools ? (
-          <section className="sage-unified-section">
-            <p className="sage-unified-section__label">Skills</p>
-            <p className="sage-unified-section__description">
-              Installable Skill.md packages for reusable Sage procedures. Each package carries its own setup and safety
-              requirements.
-            </p>
-            <WorkstationSageToolsPane />
-          </section>
-        ) : null}
         <section className="sage-unified-section">
-          <p className="sage-unified-section__label">Extensions</p>
-          <p className="sage-unified-section__description">Custom APIs, tool servers, and webhooks stay collapsed until a technical user needs them.</p>
+          <p className="sage-unified-section__label">MCP</p>
+          <p className="sage-unified-section__description">Connect technical tool servers only. Apps and skills stay in their own tabs.</p>
           <div className="sage-integrations-detail-card">
             <strong>MCP servers, custom APIs, and webhooks</strong>
             <span>Use this lane for custom tools that should not be mixed with everyday app plugins. MCP tools stay unavailable until reviewed here.</span>
@@ -4291,6 +4713,12 @@ export function WorkstationSageConnectorsPane({
             onClick={() => {
               setSelectedIntegrationId(group.id);
               setExpandedCardId(null);
+              if (typeof window !== 'undefined') {
+                const nextUrl = new URL(window.location.href);
+                nextUrl.searchParams.set('section', group.id);
+                nextUrl.searchParams.delete('connection');
+                window.history.replaceState(window.history.state, '', nextUrl.toString());
+              }
             }}
           >
             <span className="sage-integrations-nav__icon" aria-hidden="true">
@@ -4310,36 +4738,48 @@ export function WorkstationSageConnectorsPane({
   }
 
   function renderSelectedIntegrationDetail() {
-    if (error) {
-      return <AppNotice tone="warning">Setup could not refresh. Try again when ready.</AppNotice>;
-    }
     if (!selectedIntegrationGroup) {
       return (
-        <div className="sage-settings-empty">
-          No setup options available.
-        </div>
+        <>
+          {error ? <AppNotice tone="warning">{error}</AppNotice> : null}
+          <div className="sage-settings-empty">
+            No setup options available.
+          </div>
+        </>
       );
     }
-    switch (selectedIntegrationGroup.id) {
-      case 'ai_runtime':
-        return renderAiRuntimeOverview();
-      case 'connections':
-        return renderConnectionsOverview();
-      case 'plugins':
-      default:
-        return renderPluginsOverview();
-    }
+    const detail = (() => {
+      switch (selectedIntegrationGroup.id) {
+        case 'ai_runtime':
+          return renderAiRuntimeOverview();
+        case 'channels':
+          return renderChannelsOverview();
+        case 'apps':
+          return renderAppsOverview();
+        case 'skills':
+          return renderSkillsOverview();
+        case 'plugins':
+        default:
+          return renderPluginsOverview();
+      }
+    })();
+    return (
+      <>
+        {error ? <AppNotice tone="warning">{error}</AppNotice> : null}
+        {detail}
+      </>
+    );
   }
 
 
   return (
     <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)} data-workstation-surface="integrations">
-      {status ? <AppNotice tone="success">{status}</AppNotice> : null}
       <WorkstationSplitWorkbench
         ariaLabel="Setup"
         className="sage-integrations-workbench sage-integrations-workbench--single"
         sidebar={null}
       >
+        <div className="sage-integrations-topnav">{renderIntegrationSidebar()}</div>
         {renderSelectedIntegrationDetail()}
       </WorkstationSplitWorkbench>
 

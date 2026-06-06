@@ -407,8 +407,14 @@ export class GatewayWsClient {
     type: "channel.inbound",
     payload: GatewayChannelInboundPayload | Record<string, unknown>,
   ): Promise<void> {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.activeScope) {
-      throw new Error("Gateway socket is not connected.");
+    if (!this.activeScope) {
+      await this.journal.append("outbound", type, {
+        type,
+        payload,
+        offline: true,
+        reason: "missing_active_scope",
+      });
+      throw new Error("Gateway scope is not active.");
     }
     const checkpoints = await this.checkpoints.load();
     const nextSeq = Math.max(Number(checkpoints.lastClientSeq ?? 0), 0) + 1;
@@ -424,9 +430,26 @@ export class GatewayWsClient {
     };
     await this.journal.append("outbound", type, frame as unknown as Record<string, unknown>);
     await this.checkpoints.save({ lastClientSeq: nextSeq });
+    const requestId = `event:${type}:${nextSeq}`;
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      await this.outbox.enqueue(requestId, type, payload as Record<string, unknown>, {
+        replayable: true,
+      });
+      await this.outbox.markForReplay(requestId, "Gateway socket is not connected.");
+      return;
+    }
     const encoded = encodeFrame(frame);
     if (typeof encoded === "string") {
-      this.socket.send(encoded);
+      try {
+        this.socket.send(encoded);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.outbox.enqueue(requestId, type, payload as Record<string, unknown>, {
+          replayable: true,
+        });
+        await this.outbox.markForReplay(requestId, message);
+        throw error;
+      }
     }
   }
 
@@ -700,6 +723,31 @@ export class GatewayWsClient {
 
   private async replayOutboxItem(item: GatewayOutboxItem, scope: GatewayScope): Promise<void> {
     await this.outbox.markAttemptStarted(item.requestId);
+    if (item.messageType === "channel.inbound") {
+      const checkpoints = await this.checkpoints.load();
+      const nextSeq = Math.max(Number(checkpoints.lastClientSeq ?? 0), 0) + 1;
+      const frame: GatewayEventEnvelope = {
+        kind: "event",
+        protocolVersion: PROTOCOL_VERSION,
+        type: "channel.inbound",
+        seq: nextSeq,
+        ack: checkpoints.lastServerSeq ?? checkpoints.lastAck ?? 0,
+        ts: new Date().toISOString(),
+        scope,
+        payload: dict(item.payload),
+      };
+      await this.journal.append("outbound", "channel.inbound", frame as unknown as Record<string, unknown>);
+      await this.checkpoints.save({ lastClientSeq: nextSeq });
+      const encoded = encodeFrame(frame);
+      if (typeof encoded !== "string") {
+        const message = encoded.ok === false ? encoded.error : "Frame encoding failed";
+        await this.outbox.markForReplay(item.requestId, message);
+        throw new Error(message);
+      }
+      this.socket?.send(encoded);
+      await this.outbox.acknowledge(item.requestId);
+      return;
+    }
     const frame: GatewayRequestEnvelope = {
       kind: "request",
       protocolVersion: PROTOCOL_VERSION,

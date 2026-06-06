@@ -480,7 +480,7 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "final")
         self.assertEqual(
             events[-1]["payload"]["reply"],
-            "Sage hit a temporary error while generating the response. Please try again in a moment.",
+            "",
         )
         self.assertEqual(events[-1]["payload"]["interventions"], [])
         self.assertEqual(events[-1]["payload"]["error"], "provider_generation_failed")

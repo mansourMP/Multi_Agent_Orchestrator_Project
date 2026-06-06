@@ -23,6 +23,7 @@ async def execute_sage_turn(
     surface: str = "chat",
     mode: str = SAGE_MODE,
     current_user: Optional[dict] = None,
+    channel_context: Optional[Dict[str, Any]] = None,
 ) -> SageTurnResult:
     """
     Unified Sage turn execution for both API and channel entry points.
@@ -48,6 +49,7 @@ async def execute_sage_turn(
         surface=normalized_surface,
         mode=normalized_mode,
         current_user=current_user,
+        channel_context=channel_context,
     )
 
     return SageTurnResult(
@@ -74,6 +76,7 @@ async def execute_sage_turn_for_channel(
     gateway_id: str = "",
     remote_jid: str = "",
     push_name: Optional[str] = None,
+    source_event_id: Optional[str] = None,
     current_user: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """
@@ -99,6 +102,13 @@ async def execute_sage_turn_for_channel(
         surface=surface,
         mode=SAGE_MODE,
         current_user=current_user,
+        channel_context={
+            "surface_channel": normalized_channel,
+            "gateway_id": _coerce_text(gateway_id),
+            "remote_jid": _coerce_text(remote_jid),
+            "push_name": _coerce_text(push_name),
+            "source_event_id": _coerce_text(source_event_id),
+        },
     )
 
     return sage_result.as_dict()

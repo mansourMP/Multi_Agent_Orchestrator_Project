@@ -50,6 +50,9 @@ export interface TelegramAdapterClient {
 }
 
 export interface TelegramRuntimeAdapter {
+  requestCode?: (
+    config: TelegramLoginConfig & { sessionString?: string },
+  ) => Promise<{ phoneCodeHash: string; isCodeViaApp?: boolean; sessionString?: string }>;
   connect: (
     config: TelegramLoginConfig & { sessionString?: string },
   ) => Promise<{ client: TelegramAdapterClient; account?: TelegramLinkedAccount }>;
@@ -141,7 +144,7 @@ export class TelegramPersonalRuntime {
       media: { text: true, images: false, files: false, reactions: false, voice: false },
       safety: {
         ownerPairingRequired: true,
-        allowlistRequired: true,
+        allowlistRequired: false,
         studioBusinessAllowed: false,
         customerPublicSendAllowed: false,
       },
@@ -324,27 +327,78 @@ export class TelegramPersonalRuntime {
     const loginConfig = loadTelegramLoginConfig();
     const persistedConfig = await this.configStore.loadTelegramConfig();
     const persistedSession = await this.sessionStore.loadSessionString();
+    const pendingLogin = await this.sessionStore.loadPendingLogin();
+    const pendingPhoneNumber = String(pendingLogin.phoneNumber || "").trim();
+    const resolvedPhoneNumber = String(persistedConfig.phoneNumber ?? loginConfig.phoneNumber ?? "").trim();
+    const pendingMatchesPhone = Boolean(
+      pendingPhoneNumber
+      && resolvedPhoneNumber
+      && pendingPhoneNumber === resolvedPhoneNumber,
+    );
     const resolvedConfig: TelegramLoginConfig & { sessionString?: string } = {
       ...loginConfig,
       apiId: persistedConfig.apiId ?? loginConfig.apiId,
       apiHash: persistedConfig.apiHash ?? loginConfig.apiHash,
-      phoneNumber: persistedConfig.phoneNumber ?? loginConfig.phoneNumber,
+      phoneNumber: resolvedPhoneNumber || undefined,
+      phoneCodeHash: pendingMatchesPhone ? pendingLogin.phoneCodeHash : undefined,
+      isCodeViaApp: pendingMatchesPhone ? pendingLogin.isCodeViaApp : undefined,
       loginCode: persistedConfig.loginCode ?? loginConfig.loginCode,
       password: persistedConfig.password ?? loginConfig.password,
-      sessionString: persistedSession || loginConfig.sessionString,
+      sessionString: persistedSession || (pendingMatchesPhone ? pendingLogin.sessionString : undefined) || loginConfig.sessionString,
     };
     const preflight = buildTelegramPreflightState(resolvedConfig);
     if (preflight) {
-      await this.sessionStore.save(preflight);
+      await this.sessionStore.save({
+        ...preflight,
+        codeRequestedAt: undefined,
+      });
+      await this.flushState();
+      return;
+    }
+
+    if (!resolvedConfig.sessionString && !resolvedConfig.phoneCodeHash && !resolvedConfig.loginCode) {
+      const adapter = await this.getAdapter();
+      if (typeof adapter.requestCode !== "function") {
+        throw new Error("telegram_code_request_not_supported");
+      }
+      const codeRequest = await adapter.requestCode(resolvedConfig);
+      const requestedAt = new Date().toISOString();
+      await this.sessionStore.savePendingLogin({
+        phoneNumber: String(resolvedConfig.phoneNumber || "").trim(),
+        phoneCodeHash: String(codeRequest.phoneCodeHash || "").trim(),
+        isCodeViaApp: Boolean(codeRequest.isCodeViaApp),
+        sessionString: String(codeRequest.sessionString || "").trim() || undefined,
+        codeRequestedAt: requestedAt,
+      });
+      await this.sessionStore.save({
+        status: "code_required",
+        loginHint: String(resolvedConfig.phoneNumber || "").trim() || "login_code_required",
+        codeRequestedAt: requestedAt,
+        retryable: false,
+        lastDisconnectReason: undefined,
+        lastDisconnectCode: undefined,
+      });
+      await this.flushState();
+      return;
+    }
+
+    if (resolvedConfig.phoneCodeHash && !resolvedConfig.loginCode) {
+      await this.sessionStore.save({
+        status: "code_required",
+        loginHint: String(resolvedConfig.phoneNumber || "").trim() || "login_code_required",
+        codeRequestedAt: String(pendingLogin.codeRequestedAt || "").trim() || new Date().toISOString(),
+        retryable: false,
+      });
       await this.flushState();
       return;
     }
 
     await this.sessionStore.save({
       status: "connecting",
-      loginHint: undefined,
-      retryable: true,
-    });
+        loginHint: undefined,
+        codeRequestedAt: undefined,
+        retryable: true,
+      });
     await this.flushState();
 
     try {
@@ -358,6 +412,7 @@ export class TelegramPersonalRuntime {
       if (exportedSession) {
         await this.sessionStore.saveSessionString(exportedSession);
       }
+      await this.sessionStore.clearPendingLogin();
       this.reconnectAttempts = 0;
       await this.configStore.clearTelegramSecrets();
       await this.sessionStore.save(buildTelegramConnectedState(account || {}));
@@ -370,6 +425,7 @@ export class TelegramPersonalRuntime {
       await this.sessionStore.save({
         status: reconnectState.status,
         loginHint: reconnectState.loginHint,
+        codeRequestedAt: reconnectState.status === "code_required" ? new Date().toISOString() : undefined,
         retryable: reconnectState.shouldReconnect,
         lastDisconnectReason: reconnectState.reason,
         lastDisconnectCode: reconnectState.statusCode,
@@ -390,11 +446,7 @@ export class TelegramPersonalRuntime {
   }
 
   private async publishInbound(payload: GatewayChannelInboundPayload): Promise<void> {
-    try {
-      await this.publisher?.publishEvent("channel.inbound", payload);
-    } catch {
-      // Durable replay is handled by the shared gateway journal/outbox path.
-    }
+    await this.publisher?.publishEvent("channel.inbound", payload);
   }
 
   private async flushState(): Promise<void> {
@@ -446,6 +498,39 @@ export class TelegramPersonalRuntime {
     }
 
     this.adapter = {
+      requestCode: async (config) => {
+        const sessionString = String(config.sessionString || "").trim();
+        const apiId = Number(config.apiId);
+        const apiHash = String(config.apiHash || "").trim();
+        const phoneNumber = String(config.phoneNumber || "").trim();
+        if (!apiId || !apiHash) {
+          throw new Error("api_credentials_required");
+        }
+        if (!phoneNumber) {
+          throw new Error("phone_number_required");
+        }
+        const client = new TelegramClient(
+          new StringSession(sessionString),
+          apiId,
+          apiHash,
+          { connectionRetries: 5, baseLogger: this.logger },
+        );
+        await client.connect();
+        try {
+          const code = await client.sendCode({ apiId, apiHash }, phoneNumber);
+          const phoneCodeHash = String(code.phoneCodeHash || "").trim();
+          if (!phoneCodeHash) {
+            throw new Error("telegram_phone_code_hash_missing");
+          }
+          return {
+            phoneCodeHash,
+            isCodeViaApp: Boolean(code.isCodeViaApp),
+            sessionString: String(client.session?.save?.() || "").trim() || undefined,
+          };
+        } finally {
+          await client.disconnect();
+        }
+      },
       connect: async (config) => {
         const sessionString = String(config.sessionString || "").trim();
         const apiId = Number(config.apiId);
@@ -459,29 +544,75 @@ export class TelegramPersonalRuntime {
         const phoneNumber = String(config.phoneNumber || "").trim();
         const loginCode = String(config.loginCode || "").trim();
         const password = String(config.password || "").trim();
-        await client.start({
-          phoneNumber: async () => {
-            if (!phoneNumber) {
-              throw new Error("phone_number_required");
+        if (config.phoneCodeHash) {
+          if (!phoneNumber) {
+            throw new Error("phone_number_required");
+          }
+          if (!loginCode) {
+            throw new Error("login_code_required");
+          }
+          await client.connect();
+          const Api = (telegram as { Api?: Record<string, any> }).Api;
+          const signInClass = Api?.auth?.SignIn;
+          if (!signInClass) {
+            throw new Error("telegram_sign_in_unavailable");
+          }
+          try {
+            const result = await client.invoke(
+              new signInClass({
+                phoneNumber,
+                phoneCodeHash: String(config.phoneCodeHash || "").trim(),
+                phoneCode: loginCode,
+              }),
+            );
+            const signUpRequiredClass = Api?.auth?.AuthorizationSignUpRequired;
+            if (signUpRequiredClass && result instanceof signUpRequiredClass) {
+              throw new Error("telegram_registration_required");
             }
-            return phoneNumber;
-          },
-          phoneCode: async () => {
-            if (!loginCode) {
-              throw new Error("login_code_required");
+          } catch (error: any) {
+            const token = String(error?.errorMessage || error?.message || error || "").trim().toUpperCase();
+            if (token.includes("SESSION_PASSWORD_NEEDED")) {
+              if (!password) {
+                throw new Error("password_required");
+              }
+              await client.signInWithPassword(
+                { apiId, apiHash },
+                {
+                  password: async () => password,
+                  onError: (passwordError: unknown) => {
+                    throw passwordError;
+                  },
+                },
+              );
+            } else {
+              throw error;
             }
-            return loginCode;
-          },
-          password: async () => {
-            if (!password) {
-              throw new Error("password_required");
-            }
-            return password;
-          },
-          onError: (error: unknown) => {
-            throw error;
-          },
-        });
+          }
+        } else {
+          await client.start({
+            phoneNumber: async () => {
+              if (!phoneNumber) {
+                throw new Error("phone_number_required");
+              }
+              return phoneNumber;
+            },
+            phoneCode: async () => {
+              if (!loginCode) {
+                throw new Error("login_code_required");
+              }
+              return loginCode;
+            },
+            password: async () => {
+              if (!password) {
+                throw new Error("password_required");
+              }
+              return password;
+            },
+            onError: (error: unknown) => {
+              throw error;
+            },
+          });
+        }
 
         let messageHandler: (message: TelegramInboundMessage) => void | Promise<void> = () => undefined;
         client.addEventHandler(
@@ -658,6 +789,7 @@ export class TelegramPersonalRuntime {
       state: {
         status: nextState.status,
         login_hint: nextState.loginHint,
+        code_requested_at: nextState.codeRequestedAt,
       },
     };
   }

@@ -409,13 +409,22 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
     def test_model_route_policy_keeps_deepseek_platform_paid_when_priced(self) -> None:
         policy = provider_catalog_service.assert_model_route_policy(
             provider="deepseek",
-            model="deepseek-v4-flash",
+            model="deepseek-chat",
             surface="sage",
             payer="platform_credits",
         )
 
         self.assertTrue(policy["platform_paid_allowed"])
         self.assertTrue(policy["pricing_known"])
+
+    def test_model_route_policy_rejects_non_deepseek_platform_credit_models(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Empyralis credits only support"):
+            provider_catalog_service.assert_model_route_policy(
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                surface="sage",
+                payer="platform_credits",
+            )
 
     def test_resolve_empyralis_model_tier_selection_hides_raw_route_by_default(self) -> None:
         route = provider_catalog_service.resolve_empyralis_model_tier_selection(public_tier="pro")

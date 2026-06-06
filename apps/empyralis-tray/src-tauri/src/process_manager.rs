@@ -129,19 +129,23 @@ impl ProcessManager {
         let gateway_entry = self.repo_root().join("empyralis-gateway/dist/index.js");
         let secret = self.supervisor_secret()?;
         let launch = self.gateway_launch_options()?;
-        let child = Command::new(node)
+        let repo_root = self.repo_root();
+        let mut command = Command::new(node);
+        command
             .arg(gateway_entry)
-            .current_dir(self.repo_root())
+            .current_dir(&repo_root)
             .env("EMPYRALIS_SUPERVISOR_SECRET", secret)
             .env("EMPYRALIS_SUPERVISOR_URL", SUPERVISOR_URL)
             .env("EMPYRALIS_GATEWAY_API_URL", launch.gateway_api_url)
             .env("EMPYRALIS_GATEWAY_STATE_DIR", &gateway_state)
             .env("EMPYRALIS_GATEWAY_DISPLAY_NAME", self.device_name())
             .env("EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID", launch.workspace_id)
-            .env("EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT", self.repo_root())
+            .env("EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT", &repo_root)
             .env("EMPYRALIS_GATEWAY_PAIRING_TOKEN", launch.pairing_token.unwrap_or_default())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        apply_gateway_telegram_env(&mut command, &repo_root);
+        let child = command
             .spawn()
             .map_err(|error| format!("Failed to start Empyralis Gateway: {error}"))?;
 
@@ -780,6 +784,61 @@ fn env_value(name: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn apply_gateway_telegram_env(command: &mut Command, repo_root: &Path) {
+    for name in [
+        "EMPYRALIS_TELEGRAM_API_ID",
+        "EMPYRALIS_TELEGRAM_API_HASH",
+        "TELEGRAM_API_ID",
+        "TELEGRAM_API_HASH",
+    ] {
+        if let Some(value) = env_value(name).or_else(|| dotenv_value(repo_root, name)) {
+            command.env(name, value);
+        }
+    }
+}
+
+fn dotenv_value(repo_root: &Path, name: &str) -> Option<String> {
+    for file_name in [".env.local", ".env"] {
+        let path = repo_root.join(file_name);
+        let Ok(contents) = fs::read_to_string(path) else {
+            continue;
+        };
+        if let Some(value) = dotenv_value_from_contents(&contents, name) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn dotenv_value_from_contents(contents: &str, name: &str) -> Option<String> {
+    for raw_line in contents.lines() {
+        let mut line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("export ") {
+            line = rest.trim();
+        }
+        let Some((raw_key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        if raw_key.trim() != name {
+            continue;
+        }
+        let mut value = raw_value.trim().to_string();
+        if (value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\''))
+        {
+            value = value[1..value.len().saturating_sub(1)].to_string();
+        }
+        let value = value.trim().to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn clean_option(value: Option<String>) -> Option<String> {

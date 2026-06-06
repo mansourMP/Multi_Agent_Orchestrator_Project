@@ -24,9 +24,19 @@ export interface TelegramSessionSnapshot {
   linkedPhone?: string;
   linkedName?: string;
   connectedAt?: string;
+  codeRequestedAt?: string;
   lastDisconnectReason?: string;
   lastDisconnectCode?: number;
   retryable?: boolean;
+  updatedAt?: string;
+}
+
+export interface TelegramPendingLoginSnapshot {
+  phoneNumber?: string;
+  phoneCodeHash?: string;
+  isCodeViaApp?: boolean;
+  sessionString?: string;
+  codeRequestedAt?: string;
   updatedAt?: string;
 }
 
@@ -83,6 +93,23 @@ export class TelegramSessionStore {
     await this.saveSessionString(undefined);
   }
 
+  async loadPendingLogin(): Promise<TelegramPendingLoginSnapshot> {
+    return this.db.readJson<TelegramPendingLoginSnapshot>("telegram-login.json", {});
+  }
+
+  async savePendingLogin(snapshot: TelegramPendingLoginSnapshot): Promise<TelegramPendingLoginSnapshot> {
+    return this.db.writeJson("telegram-login.json", {
+      ...snapshot,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  async clearPendingLogin(): Promise<void> {
+    await this.db.writeJson("telegram-login.json", {
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   toGatewayStatePayload(snapshot: TelegramSessionSnapshot): Record<string, unknown> {
     return {
       personal_channels: {
@@ -96,6 +123,7 @@ export class TelegramSessionStore {
           linked_phone: snapshot.linkedPhone,
           linked_name: snapshot.linkedName,
           connected_at: snapshot.connectedAt,
+          code_requested_at: snapshot.codeRequestedAt,
           retryable: snapshot.retryable,
           last_disconnect_reason: snapshot.lastDisconnectReason,
           last_disconnect_code: snapshot.lastDisconnectCode,

@@ -100,19 +100,10 @@ def direct_chat_error_reply(
     safe_positive_int_fn: Callable[[Any, int], int],
     chat_max_iterations_default: int,
 ) -> str:
-    detail = str(llm_error or "").strip() or "unknown_error"
-    if detail.startswith("max_tool_iterations_reached:"):
-        _, _, raw_limit = detail.partition(":")
-        return chat_iteration_limit_reply_fn(
-            safe_positive_int_fn(raw_limit, chat_max_iterations_default)
-        )
-    normalized = detail.lower()
-    if (
-        "http_429" in normalized
-        or "rate limit" in normalized
-        or "too many requests" in normalized
-    ):
-        return "Sage is temporarily rate-limited by the current AI provider. Please try again in a moment."
-    if "direct_chat_transport_unavailable" in normalized:
-        return "Sage could not complete the reply on the current provider transport. Please try again while fallback providers recover."
-    return "Sage hit a temporary error while generating the response. Please try again in a moment."
+    _ = (
+        llm_error,
+        chat_iteration_limit_reply_fn,
+        safe_positive_int_fn,
+        chat_max_iterations_default,
+    )
+    return ""

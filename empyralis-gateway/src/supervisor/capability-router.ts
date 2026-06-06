@@ -127,6 +127,10 @@ export class GatewayCapabilityRouter {
       arguments: argumentsPayload,
       runtimeAccessMode: String(payload.runtime_access_mode ?? "").trim() || undefined,
       empyralisApproved: Boolean(payload.empyralis_approved),
+      agentScope: String(payload.agent_scope ?? "").trim() || undefined,
+      policy: typeof payload.policy === "object" && payload.policy !== null
+        ? payload.policy as Record<string, unknown>
+        : null,
     });
     return {
       request_id: frame.id,

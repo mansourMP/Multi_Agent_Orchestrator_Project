@@ -390,6 +390,7 @@ async def _gateway_approval_required_response(
         run_id=run_id,
         trace_id=trace_id,
         request_id=str(request_id or "").strip() or None,
+        agent_scope="sage",
     )
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
@@ -1552,8 +1553,9 @@ async def get_gateway_hardware_capabilities(
             workspace_id=resolved_workspace_id,
             timeout_seconds=15,
             request_id=f"hardware-capability-probe-{gateway_id}",
-            runtime_access_mode="full_access",
+            runtime_access_mode="default_guarded",
             empyralis_approved=True,
+            agent_scope="system",
         )
         result = response.get("result") if isinstance(response.get("result"), dict) else {}
         stdout = str(result.get("stdout") or "").strip()
@@ -1882,6 +1884,7 @@ async def execute_gateway_tool(
             timeout_seconds=int(body.timeout_seconds or gateway_protocol_service.DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS),
             request_id=str(body.request_id or "").strip() or None,
             screenshot_retention=gateway_policy.screenshot_retention,
+            agent_scope="sage",
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

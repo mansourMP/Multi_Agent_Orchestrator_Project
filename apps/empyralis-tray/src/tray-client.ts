@@ -5,6 +5,7 @@ export type TrayStatusState = 'idle' | 'connecting' | 'connected' | 'active' | '
 export type TrayStatus = {
   state: TrayStatusState;
   device_name: string;
+  workspace_id?: string;
   supervisor_running: boolean;
   gateway_running: boolean;
   supervisor_adopted: boolean;

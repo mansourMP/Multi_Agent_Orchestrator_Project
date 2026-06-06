@@ -403,6 +403,8 @@ async def dispatch_tool_invoke(
     request_id: Optional[str] = None,
     runtime_access_mode: Optional[str] = None,
     empyralis_approved: bool = False,
+    agent_scope: Optional[str] = None,
+    policy: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     assert_not_killed(gateway_id=gateway_id, trace_id=trace_id)
     connection = _get_live_connection(gateway_id)
@@ -440,6 +442,10 @@ async def dispatch_tool_invoke(
         payload["runtime_access_mode"] = str(runtime_access_mode or "").strip()
     if empyralis_approved:
         payload["empyralis_approved"] = True
+    if str(agent_scope or "").strip():
+        payload["agent_scope"] = str(agent_scope or "").strip()
+    if isinstance(policy, dict):
+        payload["policy"] = dict(policy)
     _enforce_gateway_protocol_message_decision(
         gateway_id=str(gateway_id or "").strip(),
         session_id=str(connection.session_id or "").strip(),

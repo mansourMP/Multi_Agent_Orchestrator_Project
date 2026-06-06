@@ -34,6 +34,48 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+function envFlagEnabled(name: string): boolean {
+  const value = String(process.env[name] || "").trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "allow";
+}
+
+function isPrivateBridgeHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === "localhost" || host === "localhost.localdomain" || host.endsWith(".local")) {
+    return true;
+  }
+  if (host === "::1" || host.startsWith("127.")) {
+    return true;
+  }
+  if (host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.")) {
+    return true;
+  }
+  const match = /^172\.(\d{1,2})\./.exec(host);
+  if (match) {
+    const second = Number(match[1]);
+    return second >= 16 && second <= 31;
+  }
+  if (host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeLocalBridgeBaseUrl(value: string, envPrefix: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    throw new Error(`${envPrefix}_URL is required.`);
+  }
+  const parsed = new URL(raw);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`${envPrefix}_URL must use http or https.`);
+  }
+  if (!envFlagEnabled("EMPYRALIS_ALLOW_PUBLIC_LOCAL_BRIDGE_URLS") && !isPrivateBridgeHost(parsed.hostname)) {
+    throw new Error(`${envPrefix}_URL must point to a localhost, .local, or private-network Agent Computer bridge.`);
+  }
+  return trimTrailingSlash(parsed.toString());
+}
+
 function readPositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
@@ -169,7 +211,13 @@ export class LocalBridgePersonalChannelRuntime implements PersonalChannelRuntime
 
   async start(): Promise<void> {
     this.started = true;
-    const bridge = this.resolveBridgeConfig();
+    let bridge: LocalBridgeResolvedConfig | null = null;
+    try {
+      bridge = this.resolveBridgeConfig();
+    } catch (error) {
+      this.lastError = error instanceof Error ? error.message : String(error);
+      return;
+    }
     if (!bridge || bridge.pollIntervalMs <= 0 || this.pollTimer) {
       return;
     }
@@ -196,7 +244,22 @@ export class LocalBridgePersonalChannelRuntime implements PersonalChannelRuntime
   }
 
   async getHealthSnapshot(): Promise<PersonalChannelHealthSnapshot> {
-    const bridge = this.resolveBridgeConfig();
+    let bridge: LocalBridgeResolvedConfig | null = null;
+    try {
+      bridge = this.resolveBridgeConfig();
+    } catch (error) {
+      this.lastError = error instanceof Error ? error.message : String(error);
+      return {
+        channelKey: this.config.channelKey,
+        provider: this.config.provider,
+        status: "invalid_config",
+        running: this.started,
+        connected: false,
+        reconnectAttempts: 0,
+        lastError: this.lastError,
+        issues: [`${this.config.channelKey}_bridge_url_invalid`],
+      };
+    }
     if (!bridge) {
       return {
         channelKey: this.config.channelKey,
@@ -247,7 +310,7 @@ export class LocalBridgePersonalChannelRuntime implements PersonalChannelRuntime
       return null;
     }
     return {
-      baseUrl: trimTrailingSlash(baseUrl),
+      baseUrl: normalizeLocalBridgeBaseUrl(baseUrl, this.config.envPrefix),
       token: String(process.env[`${this.config.envPrefix}_TOKEN`] || "").trim() || undefined,
       pollIntervalMs: readPositiveInt(process.env[`${this.config.envPrefix}_POLL_MS`], 5000),
     };
@@ -257,7 +320,13 @@ export class LocalBridgePersonalChannelRuntime implements PersonalChannelRuntime
     if (!this.publisher) {
       return;
     }
-    const bridge = this.resolveBridgeConfig();
+    let bridge: LocalBridgeResolvedConfig | null = null;
+    try {
+      bridge = this.resolveBridgeConfig();
+    } catch (error) {
+      this.lastError = error instanceof Error ? error.message : String(error);
+      return;
+    }
     if (!bridge) {
       return;
     }

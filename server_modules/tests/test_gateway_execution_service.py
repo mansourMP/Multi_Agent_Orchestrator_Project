@@ -85,6 +85,101 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertTrue(gateway_decision_calls)
 
+    async def test_execute_tool_via_gateway_forwards_agent_scope_and_policy(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["filesystem.read"],
+            "metadata": {
+                "runtime_access_mode": "full_access",
+                "autonomous_agent_setup_warning_acknowledged": True,
+                "capability_readiness": {"ready": ["filesystem.read"]},
+            },
+        }
+        dispatch_mock = AsyncMock(
+            return_value={
+                "request_id": "req-1",
+                "capability_id": "filesystem.read_write",
+                "run_id": "run-1",
+                "result": {"content": "ok"},
+            }
+        )
+
+        def rust_side_effect(command, payload):
+            if payload.get("operation") == "quota_check":
+                return {"ok": True, "decision": "allow", "next_action": "allow_gateway_service_operation"}
+            return {"ok": True, "decision": "allow", "next_action": "dispatch_gateway_operation"}
+
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live", return_value=True),
+            patch(
+                "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "online",
+                    "heartbeat_fresh": True,
+                    "reported_health_state": "online",
+                    "capability_readiness": {"ready": ["filesystem.read"]},
+                },
+            ),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
+            patch("server_modules.gateway_execution_service.gateway_activity_service.append_gateway_activity", AsyncMock()),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                side_effect=rust_side_effect,
+            ),
+        ):
+            await gateway_execution_service.execute_tool_via_gateway(
+                gateway_id="gw-1",
+                capability_id="filesystem.read",
+                arguments={"path": "/Users/mansur/notes.txt"},
+                run_id="run-1",
+                trace_id="trace-1",
+                workspace_id="ws-1",
+                request_id="req-1",
+                agent_scope="sage",
+            )
+
+        dispatch_kwargs = dispatch_mock.await_args.kwargs
+        self.assertEqual(dispatch_kwargs["capability_id"], "filesystem.read_write")
+        self.assertEqual(dispatch_kwargs["arguments"]["mode"], "read")
+        self.assertEqual(dispatch_kwargs["runtime_access_mode"], "full_access")
+        self.assertEqual(dispatch_kwargs["agent_scope"], "sage")
+        self.assertEqual(dispatch_kwargs["policy"]["mode"], "full_access")
+        self.assertEqual(dispatch_kwargs["policy"]["agent_scope"], "sage")
+        self.assertTrue(dispatch_kwargs["policy"]["full_access_warning_acknowledged"])
+        self.assertEqual(dispatch_kwargs["policy"]["allowed_paths"], ["/"])
+
+    async def test_full_access_gateway_dispatch_requires_sage_scope(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["shell.execute"],
+            "metadata": {
+                "runtime_access_mode": "full_access",
+                "autonomous_agent_setup_warning_acknowledged": True,
+                "capability_readiness": {"ready": ["shell.execute"]},
+            },
+        }
+        with patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration):
+            with self.assertRaisesRegex(PermissionError, "only to Sage"):
+                await gateway_execution_service.execute_tool_via_gateway(
+                    gateway_id="gw-1",
+                    capability_id="shell.execute",
+                    arguments={"command": "pwd"},
+                    run_id="run-1",
+                    trace_id="trace-1",
+                    workspace_id="ws-1",
+                    request_id="req-1",
+                    agent_scope="studio_agent",
+                )
+
     async def test_execute_tool_via_gateway_rust_denial_blocks_dispatch(self) -> None:
         registration = {
             "gateway_id": "gw-1",

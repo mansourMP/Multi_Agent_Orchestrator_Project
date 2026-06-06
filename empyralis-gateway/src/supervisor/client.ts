@@ -35,6 +35,8 @@ export interface GatewaySupervisorExecuteInput {
   arguments: Record<string, unknown>;
   runtimeAccessMode?: string;
   empyralisApproved?: boolean;
+  agentScope?: string;
+  policy?: Record<string, unknown> | null;
 }
 
 export interface GatewaySupervisorInterruptInput {
@@ -105,13 +107,22 @@ export class GatewaySupervisorClient {
       arguments: input.arguments,
       runtime_access_mode: String(input.runtimeAccessMode ?? "").trim() || undefined,
       empyralis_approved: Boolean(input.empyralisApproved),
+      agent_scope: String(input.agentScope ?? "").trim() || undefined,
+      policy: input.policy ?? null,
+      signature_version: "v2",
       nonce,
       expires_at: expiresAt,
       signature: signSupervisorExecuteRequest(secret, {
         requestId: input.requestId,
         capabilityId: input.capabilityId,
         runId: input.runId,
+        traceId: input.traceId,
         workspaceId: input.workspaceId,
+        arguments: input.arguments,
+        runtimeAccessMode: input.runtimeAccessMode,
+        empyralisApproved: input.empyralisApproved,
+        agentScope: input.agentScope,
+        policy: input.policy ?? null,
         nonce,
         expiresAt,
       }),

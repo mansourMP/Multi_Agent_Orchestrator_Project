@@ -37,9 +37,10 @@ def direct_chat_stream_key(
     request_signature_fn=direct_chat_request_signature,
 ) -> tuple[str, str, str]:
     owner = request_user_token(current_user)
+    workspace_id = str(body.get("workspace_id") or "default").strip() or "default"
     thread_id = str(body.get("thread_id") or "").strip() or "direct-chat"
     client_request_id = str(body.get("client_request_id") or "").strip() or request_signature_fn(body)
-    return f"{owner}:{thread_id}:{client_request_id}", thread_id, client_request_id
+    return f"{owner}:{workspace_id}:{thread_id}:{client_request_id}", thread_id, client_request_id
 
 
 def direct_chat_actor_key_for_user(user_id: str, workspace_id: str, thread_id: str) -> str:

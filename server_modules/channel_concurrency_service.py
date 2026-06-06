@@ -374,7 +374,7 @@ async def acquire_channel_execution_lease(
                 )
                 or 0
             )
-            if recent_turn_count > quota_snapshot.max_workspace_turns_per_minute:
+            if recent_turn_count >= quota_snapshot.max_workspace_turns_per_minute:
                 raise _workspace_rate_limit_error(quota_snapshot)
             try:
                 await connection.execute(

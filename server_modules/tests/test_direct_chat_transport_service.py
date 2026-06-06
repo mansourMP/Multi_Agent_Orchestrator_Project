@@ -34,7 +34,19 @@ class DirectChatTransportServiceTests(unittest.TestCase):
 
         self.assertEqual(thread_id, "thread-1")
         self.assertEqual(client_request_id, service.direct_chat_request_signature(body))
-        self.assertEqual(session_key, f"user-1:thread-1:{client_request_id}")
+        self.assertEqual(session_key, f"user-1:default:thread-1:{client_request_id}")
+
+    def test_direct_chat_stream_key_is_scoped_by_workspace(self) -> None:
+        first, _, _ = service.direct_chat_stream_key(
+            {"user_id": "user-1"},
+            {"workspace_id": "workspace-a", "thread_id": "thread-1", "client_request_id": "req-1"},
+        )
+        second, _, _ = service.direct_chat_stream_key(
+            {"user_id": "user-1"},
+            {"workspace_id": "workspace-b", "thread_id": "thread-1", "client_request_id": "req-1"},
+        )
+
+        self.assertNotEqual(first, second)
 
     def test_direct_chat_actor_key_uses_normalized_user_token(self) -> None:
         actor_key = service.direct_chat_actor_key(

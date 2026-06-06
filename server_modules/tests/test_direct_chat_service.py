@@ -69,7 +69,7 @@ class DirectChatServiceTests(unittest.TestCase):
 
         self.assertEqual(thread_id, "thread-1")
         self.assertEqual(client_request_id, signature)
-        self.assertEqual(session_key, f"user-1:thread-1:{signature}")
+        self.assertEqual(session_key, f"user-1:default:thread-1:{signature}")
 
     def test_build_direct_chat_event_producer_uses_session_manager_when_enabled(self):
         manager = _DummyManager()

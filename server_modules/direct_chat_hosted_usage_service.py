@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from server_modules import (
@@ -12,12 +15,71 @@ from server_modules import (
 from server_modules.direct_tool_config_service import run_async_tool_call
 
 
+_STATE_HOME = Path(
+    os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
+).expanduser()
+_RESERVATION_DB_PATH = Path(
+    os.getenv(
+        "EMPYRALIS_HOSTED_AI_RESERVATION_DB",
+        str(_STATE_HOME / "quota" / "hosted-ai-reservations.sqlite3"),
+    )
+).expanduser()
+_RESERVATION_SCHEMA_READY = False
+_HOSTED_AI_PREFLIGHT_RESERVATION_USD = float(os.getenv("EMPYRALIS_HOSTED_AI_PREFLIGHT_RESERVATION_USD", "0.05"))
+_HOSTED_AI_MAX_ACTIVE_RESERVATION_USD = float(os.getenv("EMPYRALIS_HOSTED_AI_MAX_ACTIVE_RESERVATION_USD", "2.00"))
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _reservation_connection() -> sqlite3.Connection:
+    _RESERVATION_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(_RESERVATION_DB_PATH), timeout=10.0, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA busy_timeout=10000")
+    return connection
+
+
+def _ensure_reservation_schema(connection: sqlite3.Connection) -> None:
+    global _RESERVATION_SCHEMA_READY
+    if _RESERVATION_SCHEMA_READY:
+        return
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS hosted_ai_reservations (
+            reservation_key TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            request_id TEXT NOT NULL,
+            source_surface TEXT NOT NULL,
+            amount_usd REAL NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_hosted_ai_reservations_scope ON hosted_ai_reservations(workspace_id, status)"
+    )
+    _RESERVATION_SCHEMA_READY = True
+
+
+def _reservation_key(*, tenant_id: str, workspace_id: str, request_id: str, source_surface: str) -> str:
+    return ":".join(
+        [
+            _text(tenant_id) or "default",
+            _text(workspace_id) or "default",
+            _text(request_id) or "request",
+            _text(source_surface) or "sage_direct_chat",
+        ]
+    )
 
 
 def _session_request_id(session_ctx: Optional[Dict[str, Any]], thread_id: str) -> str:
@@ -47,6 +109,125 @@ def _session_tenant_id(session_ctx: Optional[Dict[str, Any]], workspace_id: str)
         workspace = {}
     resolved = _text(_coerce_dict(workspace).get("tenant_id"))
     return resolved or None
+
+
+def reserve_direct_chat_hosted_usage_best_effort(
+    *,
+    workspace_id: str,
+    thread_id: str,
+    session_ctx: Optional[Dict[str, Any]],
+    availability_payload: Optional[Dict[str, Any]],
+    requested_provider: Optional[str],
+    requested_model: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    availability = _coerce_dict(availability_payload)
+    if _text(availability.get("credential_plane")).lower() != "platform_runtime":
+        return None
+    if not bool(availability.get("platform_runtime_allowed")):
+        raise RuntimeError("Hosted AI platform runtime is not allowed for this request.")
+    workspace_token = _text(workspace_id)
+    request_id = _session_request_id(session_ctx, _text(thread_id))
+    tenant_id = _session_tenant_id(session_ctx, workspace_token) if workspace_token else None
+    if not workspace_token or not request_id or not tenant_id:
+        raise RuntimeError("Hosted AI reservation is missing tenant/workspace/request scope.")
+    amount_usd = max(float(_HOSTED_AI_PREFLIGHT_RESERVATION_USD or 0), 0.0)
+    max_active_usd = max(float(_HOSTED_AI_MAX_ACTIVE_RESERVATION_USD or 0), amount_usd)
+    source_surface = "sage_direct_chat"
+    key = _reservation_key(
+        tenant_id=tenant_id,
+        workspace_id=workspace_token,
+        request_id=request_id,
+        source_surface=source_surface,
+    )
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    with _reservation_connection() as connection:
+        _ensure_reservation_schema(connection)
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            existing = connection.execute(
+                "SELECT reservation_key, status, amount_usd FROM hosted_ai_reservations WHERE reservation_key = ?",
+                (key,),
+            ).fetchone()
+            if existing is not None:
+                status = _text(existing["status"]).lower()
+                connection.commit()
+                if status == "active":
+                    return {
+                        "reservation_key": key,
+                        "amount_usd": float(existing["amount_usd"] or 0.0),
+                        "status": status,
+                    }
+                if status in {"settled", "released"}:
+                    return None
+                raise RuntimeError("Hosted AI reservation has an uncertain previous outcome.")
+            active_total = float(
+                connection.execute(
+                    """
+                    SELECT COALESCE(SUM(amount_usd), 0) AS total
+                    FROM hosted_ai_reservations
+                    WHERE workspace_id = ? AND status = 'active'
+                    """,
+                    (workspace_token,),
+                ).fetchone()["total"]
+                or 0.0
+            )
+            if active_total + amount_usd > max_active_usd:
+                connection.commit()
+                raise RuntimeError("Hosted AI preflight reservation cap exceeded.")
+            connection.execute(
+                """
+                INSERT INTO hosted_ai_reservations (
+                    reservation_key, tenant_id, workspace_id, request_id, source_surface,
+                    amount_usd, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                """,
+                (key, tenant_id, workspace_token, request_id, source_surface, amount_usd, now, now),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+    return {
+        "reservation_key": key,
+        "amount_usd": amount_usd,
+        "status": "active",
+        "requested_provider": _text(requested_provider) or None,
+        "requested_model": _text(requested_model) or None,
+    }
+
+
+def release_direct_chat_hosted_usage_reservation_best_effort(
+    *,
+    workspace_id: str,
+    thread_id: str,
+    session_ctx: Optional[Dict[str, Any]],
+    status: str = "released",
+) -> None:
+    workspace_token = _text(workspace_id)
+    request_id = _session_request_id(session_ctx, _text(thread_id))
+    tenant_id = _session_tenant_id(session_ctx, workspace_token) if workspace_token else None
+    if not workspace_token or not request_id or not tenant_id:
+        return
+    key = _reservation_key(
+        tenant_id=tenant_id,
+        workspace_id=workspace_token,
+        request_id=request_id,
+        source_surface="sage_direct_chat",
+    )
+    normalized_status = _text(status).lower()
+    if normalized_status not in {"released", "settled", "uncertain"}:
+        normalized_status = "released"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    with _reservation_connection() as connection:
+        _ensure_reservation_schema(connection)
+        connection.execute(
+            """
+            UPDATE hosted_ai_reservations
+            SET status = ?, updated_at = ?
+            WHERE reservation_key = ? AND status = 'active'
+            """,
+            (normalized_status, now, key),
+        )
 
 
 def _session_turn_metadata(session_ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -389,3 +570,9 @@ def persist_direct_chat_hosted_usage_best_effort(
         )
     except Exception as exc:
         raise RuntimeError("Hosted AI credit debit failed.") from exc
+    release_direct_chat_hosted_usage_reservation_best_effort(
+        workspace_id=workspace_token,
+        thread_id=thread_token,
+        session_ctx=session_ctx,
+        status="settled",
+    )

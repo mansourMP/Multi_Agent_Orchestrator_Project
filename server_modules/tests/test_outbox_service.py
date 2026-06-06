@@ -11,6 +11,31 @@ from server_modules import runtime_events
 
 
 class OutboxServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        def fake_rust(command, payload, **_kwargs):
+            operation = str((payload or {}).get("operation") or "").strip()
+            if command == "run-record-decision":
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": operation,
+                    "next_action": "emit_run_transition_event",
+                }
+            return {
+                "ok": True,
+                "decision": "allow",
+                "operation": operation,
+                "next_action": outbox_service._OUTBOX_DELIVERY_EXPECTED_NEXT_ACTIONS.get(operation, operation),
+            }
+
+        self._rust_patch = patch.object(
+            outbox_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=fake_rust,
+        )
+        self._rust_patch.start()
+        self.addCleanup(self._rust_patch.stop)
+
     def test_emit_run_transition_event_calls_run_record_kernel_first(self) -> None:
         persisted = []
         calls = []
@@ -332,8 +357,8 @@ class OutboxServiceTests(unittest.TestCase):
                 "next_action": "persist_outbox_event",
             },
         ):
-            with self.assertRaisesRegex(RuntimeError, "unexpected next action"):
-                outbox_service.deliver_pending_outbox_events(
+            with self.assertRaisesRegex(RuntimeError, "unexpected next_action"):
+                outbox_service.deliver_due_outbox_events_once(
                     claim_due_outbox_events_fn=_claim_due,
                     mark_outbox_event_delivered_fn=lambda *args, **kwargs: True,
                     record_outbox_delivery_failure_fn=lambda *args, **kwargs: True,

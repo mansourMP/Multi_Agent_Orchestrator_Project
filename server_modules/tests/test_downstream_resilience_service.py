@@ -45,6 +45,24 @@ class DownstreamResilienceServiceTests(unittest.TestCase):
                 circuit_policy=policy,
             )
 
+    def test_http_retry_wrapper_retries_retryable_status(self) -> None:
+        calls = {"count": 0}
+
+        def operation():
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return {"status": 503, "json": {"error": "down"}, "headers": {}}
+            return {"status": 200, "json": {"ok": True}, "headers": {}}
+
+        result = resilience.call_http_json_with_retries(
+            name="http-test",
+            operation=operation,
+            retry_policy=resilience.RetryPolicy(attempts=2, initial_delay_seconds=0),
+        )
+
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(calls["count"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

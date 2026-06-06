@@ -19,7 +19,7 @@ from fastapi import Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from server_modules import runtime_config as config
-from server_modules import egress_policy
+from server_modules import client_identity_service, downstream_resilience_service, egress_policy
 from server_modules import error_response_service, quota_policy_service, quota_response_service
 from server_modules import rust_runtime_kernel_client
 from server_modules.error_contracts import AUTHORIZATION_ERROR, IDEMPOTENCY_CONFLICT
@@ -226,8 +226,7 @@ def _control_plane_rate_limit(request: Request) -> Optional[JSONResponse]:
         # Runtime claims/heartbeats and canonical turn streaming are chatty by design.
         # Keep control-plane limits focused on configuration-style mutation APIs.
         return None
-    now = time.time()
-    client_host = request.client.host if request.client else "unknown"
+    client_host = client_identity_service.resolve_client_ip(request)
     api_key = _extract_request_api_key(request)
     identity = f"{client_host}:{api_key or 'anon'}"
     limit = max(1, CONTROL_PLANE_RATE_LIMIT_PER_MINUTE + CONTROL_PLANE_RATE_LIMIT_BURST)
@@ -243,7 +242,6 @@ def _control_plane_rate_limit(request: Request) -> Optional[JSONResponse]:
         lock=RATE_LIMIT_LOCK,
         key=identity,
         limit=limit,
-        now=now,
     )
     if not decision.allowed:
         return quota_response_service.json_response_from_quota_decision(decision)
@@ -426,87 +424,93 @@ def http_json_request(
             request_headers.setdefault("Content-Type", "application/json")
     req = urlrequest.Request(url, data=body, headers=request_headers, method=verb)
     context = ssl.create_default_context(cafile=certifi.where())
-    try:
-        with urlrequest.urlopen(req, timeout=timeout, context=context) as resp:
-            raw = resp.read().decode("utf-8")
+    def _execute_once() -> Dict[str, Any]:
+        try:
+            with urlrequest.urlopen(req, timeout=timeout, context=context) as resp:
+                raw = resp.read().decode("utf-8")
+                parsed: Any = None
+                try:
+                    parsed = json.loads(raw) if raw else None
+                except Exception:
+                    parsed = None
+                return {
+                    "status": int(getattr(resp, "status", resp.getcode())),
+                    "text": raw,
+                    "json": parsed,
+                    "headers": dict(resp.headers.items()),
+                }
+        except urlerror.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
             parsed: Any = None
             try:
                 parsed = json.loads(raw) if raw else None
             except Exception:
                 parsed = None
             return {
-                "status": int(getattr(resp, "status", resp.getcode())),
+                "status": int(getattr(exc, "code", 500)),
                 "text": raw,
                 "json": parsed,
-                "headers": dict(resp.headers.items()),
+                "headers": dict(getattr(exc, "headers", {}).items()) if getattr(exc, "headers", None) else {},
             }
-    except urlerror.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
-        parsed: Any = None
-        try:
-            parsed = json.loads(raw) if raw else None
-        except Exception:
-            parsed = None
-        return {
-            "status": int(getattr(exc, "code", 500)),
-            "text": raw,
-            "json": parsed,
-            "headers": dict(getattr(exc, "headers", {}).items()) if getattr(exc, "headers", None) else {},
-        }
-    except Exception as exc:
-        # Some provider edges occasionally drop urllib TLS sessions in this
-        # environment even though the same request succeeds via curl. Preserve
-        # HTTPError handling above so bad credentials still return provider
-        # status codes; only retry low-level transport failures here.
-        is_telegram = "api.telegram.org" in str(url).lower()
-        if not (is_telegram or _is_retryable_http_transport_error(exc)) or not shutil.which("curl"):
-            raise
-        command = [
-            "curl",
-            "-sS",
-            "-L",
-            "-X",
-            verb,
-            "--max-time",
-            str(max(1, int(timeout))),
-            "-w",
-            "\n__CODEX_STATUS__:%{http_code}",
-        ]
-        for key, value in request_headers.items():
-            command.extend(["-H", f"{key}: {value}"])
-        if body is not None:
-            command.extend(["--data-binary", "@-"])
-        command.append(url)
-        completed = subprocess.run(
-            command,
-            input=body,
-            capture_output=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise exc
-        raw_output = completed.stdout.decode("utf-8", errors="replace")
-        marker = "\n__CODEX_STATUS__:"
-        body_text, _, status_text = raw_output.rpartition(marker)
-        if not status_text:
-            body_text = raw_output
-            status_code = 200
-        else:
+        except Exception as exc:
+            # Some provider edges occasionally drop urllib TLS sessions in this
+            # environment even though the same request succeeds via curl. Preserve
+            # HTTPError handling above so bad credentials still return provider
+            # status codes; only retry low-level transport failures here.
+            is_telegram = "api.telegram.org" in str(url).lower()
+            if not (is_telegram or _is_retryable_http_transport_error(exc)) or not shutil.which("curl"):
+                raise
+            command = [
+                "curl",
+                "-sS",
+                "-L",
+                "-X",
+                verb,
+                "--max-time",
+                str(max(1, int(timeout))),
+                "-w",
+                "\n__CODEX_STATUS__:%{http_code}",
+            ]
+            for key, value in request_headers.items():
+                command.extend(["-H", f"{key}: {value}"])
+            if body is not None:
+                command.extend(["--data-binary", "@-"])
+            command.append(url)
+            completed = subprocess.run(
+                command,
+                input=body,
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise exc
+            raw_output = completed.stdout.decode("utf-8", errors="replace")
+            marker = "\n__CODEX_STATUS__:"
+            body_text, _, status_text = raw_output.rpartition(marker)
+            if not status_text:
+                body_text = raw_output
+                status_code = 200
+            else:
+                try:
+                    status_code = int(status_text.strip() or "0")
+                except Exception:
+                    status_code = 0
+            parsed: Any = None
             try:
-                status_code = int(status_text.strip() or "0")
+                parsed = json.loads(body_text) if body_text else None
             except Exception:
-                status_code = 0
-        parsed: Any = None
-        try:
-            parsed = json.loads(body_text) if body_text else None
-        except Exception:
-            parsed = None
-        return {
-            "status": status_code,
-            "text": body_text,
-            "json": parsed,
-            "headers": {},
-        }
+                parsed = None
+            return {
+                "status": status_code,
+                "text": body_text,
+                "json": parsed,
+                "headers": {},
+            }
+
+    return downstream_resilience_service.call_http_json_with_retries(
+        name=f"http_json:{verb}:{url.split('?', 1)[0]}",
+        operation=_execute_once,
+    )
 
 
 def _workflow_api_headers() -> Dict[str, str]:

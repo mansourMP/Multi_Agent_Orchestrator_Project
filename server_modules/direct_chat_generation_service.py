@@ -50,6 +50,8 @@ class DirectChatGenerationServices:
     direct_chat_error_reply: Callable[[str], str]
     capture_exception: Callable[[BaseException], None]
     generate_chat_reply_stream_with_provider_fallback: Callable[..., Iterator[Dict[str, Any]]]
+    reserve_direct_chat_hosted_usage_best_effort: Callable[..., Optional[Dict[str, Any]]] = lambda **_kwargs: None
+    release_direct_chat_hosted_usage_reservation_best_effort: Callable[..., None] = lambda **_kwargs: None
 
 
 def _compact_trace_text(value: Any, limit: int = 280) -> str:
@@ -466,6 +468,14 @@ def stream_provider_backed_direct_chat(
     current_prompt = normalized_message
     max_iterations = resolved_chat_max_iterations
     trace_started_at = time.monotonic()
+    hosted_usage_reservation = services.reserve_direct_chat_hosted_usage_best_effort(
+        workspace_id=normalized_workspace_id,
+        thread_id=normalized_thread_id,
+        session_ctx=session_ctx,
+        availability_payload=availability_payload,
+        requested_provider=normalized_requested_provider,
+        requested_model=normalized_requested_model,
+    )
 
     registry = get_global_hook_registry()
     hook_ctx = registry.execute(
@@ -1331,6 +1341,13 @@ def stream_provider_backed_direct_chat(
                 llm_error = str(event.get("error") or "").strip()
                 public_error_reply = _public_generation_error_reply(services, llm_error)
                 public_error_code = _public_generation_error_code(llm_error)
+                if hosted_usage_reservation:
+                    services.release_direct_chat_hosted_usage_reservation_best_effort(
+                        workspace_id=normalized_workspace_id,
+                        thread_id=normalized_thread_id,
+                        session_ctx=session_ctx,
+                        status="released",
+                    )
                 trace_plan_failure = _emit_trace_event(
                     trace_context,
                     event_type="plan.item.updated",

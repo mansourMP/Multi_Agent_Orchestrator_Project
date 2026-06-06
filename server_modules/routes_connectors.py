@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from server_modules.auth import enforce_workspace_access
-from server_modules import provider_catalog_service, request_window_quota_adapter
+from server_modules import client_identity_service, provider_catalog_service, request_window_quota_adapter
 from server_modules import channel_lane_contract_service
 from server_modules.runtime_common import require_admin_api_key, require_api_key
 from server_modules.runtime_models import (
@@ -56,7 +56,7 @@ async def _dispatch_public_studio_webhook(
     delegate: Callable[[], Awaitable[Any]],
 ) -> Any:
     _assert_public_studio_webhook_lane(path)
-    client_ip = str((request.client.host if request.client else "") or "unknown").strip() or "unknown"
+    client_ip = client_identity_service.resolve_client_ip(request)
     decision = request_window_quota_adapter.evaluate_request_window(
         buckets=PUBLIC_WEBHOOK_RATE_LIMIT_BUCKETS,
         lock=PUBLIC_WEBHOOK_RATE_LIMIT_LOCK,

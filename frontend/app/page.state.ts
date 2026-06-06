@@ -209,7 +209,7 @@ Wed 3:00 PM`);
   const [localExecutionDraft, setLocalExecutionDraft] = useState<LocalExecutionDraft>(DEFAULT_LOCAL_EXECUTION_DRAFT);
   const [provider, setProvider] = useState<ProviderId>('openai');
   const [providerAuthMode, setProviderAuthMode] = useState(DEFAULT_PROVIDER_OPTIONS[0].defaultAuthMode || DEFAULT_PROVIDER_OPTIONS[0].auth[0] || 'api_key');
-  const [model, setModel] = useState('gpt-4o-mini');
+  const [model, setModel] = useState(DEFAULT_PROVIDER_OPTIONS[0].defaultModel || DEFAULT_PROVIDER_MODELS.openai[0]);
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
   const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>([]);
   const [modelOptions, setModelOptions] = useState<string[]>(DEFAULT_PROVIDER_MODELS.openai);

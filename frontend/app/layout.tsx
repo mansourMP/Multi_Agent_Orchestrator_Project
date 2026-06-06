@@ -140,9 +140,9 @@ a {
   width: 100%;
   max-width: none;
   margin: 0;
-  height: auto;
-  min-height: 0;
-  overflow: visible;
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
   padding: 12px 18px 18px;
 }
 .orion-shellbar {

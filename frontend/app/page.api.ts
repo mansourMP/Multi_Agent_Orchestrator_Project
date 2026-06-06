@@ -49,6 +49,94 @@ export const ORION_API_URL = API_BASE;
 export const ORION_FRONTEND_VERSION = '2026.2.26';
 const SCREENSHOT_PATH_PATTERN = /\.(png|jpg|jpeg|webp)$/i;
 const AGENT_CONFIG_STORAGE_KEY = 'empyralis.agents.profile-config.v1';
+const PROVIDER_POLL_MIN_INTERVAL_MS = 30_000;
+const MODEL_ALIAS_DEBOUNCE_MS = 120;
+const PROVIDER_CATALOG_DEBOUNCE_MS = 260;
+const PROVIDER_MODELS_DEBOUNCE_MS = 420;
+
+type TimedResourceCache<T> = {
+  value: T | null;
+  fetchedAt: number;
+  promise: Promise<T> | null;
+};
+
+const modelAliasCatalogCache: TimedResourceCache<ModelAliasOption[]> = {
+  value: null,
+  fetchedAt: 0,
+  promise: null,
+};
+
+const providerCatalogCache: TimedResourceCache<ProviderOption[]> = {
+  value: null,
+  fetchedAt: 0,
+  promise: null,
+};
+
+const providerModelsCache = new Map<string, TimedResourceCache<string[]>>();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function readFreshCache<T>(cache: TimedResourceCache<T>, staleMs: number): T | null {
+  if (cache.value === null) return null;
+  return Date.now() - cache.fetchedAt < staleMs ? cache.value : null;
+}
+
+function readAnyCache<T>(cache: TimedResourceCache<T>): T | null {
+  return cache.value;
+}
+
+function getProviderModelsCacheKey(providerId: ProviderId, credentialId?: string): string {
+  return `${providerId}::${String(credentialId || '').trim()}`;
+}
+
+function getProviderModelsCacheEntry(providerId: ProviderId, credentialId?: string): TimedResourceCache<string[]> {
+  const key = getProviderModelsCacheKey(providerId, credentialId);
+  let cache = providerModelsCache.get(key);
+  if (!cache) {
+    cache = { value: null, fetchedAt: 0, promise: null };
+    providerModelsCache.set(key, cache);
+  }
+  return cache;
+}
+
+async function getOrRefreshCachedResource<T>(
+  cache: TimedResourceCache<T>,
+  staleMs: number,
+  debounceMs: number,
+  loader: () => Promise<T>,
+  fallback: () => T,
+): Promise<T> {
+  const fresh = readFreshCache(cache, staleMs);
+  if (fresh !== null) return fresh;
+  if (cache.promise) return cache.promise;
+
+  cache.promise = (async () => {
+    if (debounceMs > 0) {
+      await sleep(debounceMs);
+      const refreshedDuringDebounce = readFreshCache(cache, staleMs);
+      if (refreshedDuringDebounce !== null) return refreshedDuringDebounce;
+    }
+    try {
+      const next = await loader();
+      cache.value = next;
+      cache.fetchedAt = Date.now();
+      return next;
+    } catch {
+      const existing = readAnyCache(cache);
+      if (existing !== null) return existing;
+      const next = fallback();
+      cache.value = next;
+      cache.fetchedAt = Date.now();
+      return next;
+    } finally {
+      cache.promise = null;
+    }
+  })();
+
+  return cache.promise;
+}
 
 function resolveAgentProfileSkills(agentRole: string | null | undefined): ReturnType<typeof resolveSkillsByIds> {
   const roleId = String(agentRole || '').trim();
@@ -444,105 +532,112 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
   }, [setWorkersLoading, setLocalWorkerStatus]);
 
   const refreshModelAliasCatalog = useCallback(async (): Promise<ModelAliasOption[]> => {
-    try {
-      const res = await controlPlaneFetch('/api/control-plane/providers/model-aliases');
-      if (!res.ok) {
-        throw new Error('Failed to load model aliases.');
-      }
-      const payload = await res.json();
-      const items = Array.isArray(payload?.models) ? payload.models : [];
-      const mapped = items
-        .map((item: unknown) => {
-          const value = item as {
-            alias?: unknown;
-            provider?: unknown;
-            model?: unknown;
-            resolved_model?: unknown;
-            is_global_default?: unknown;
-            is_provider_default?: unknown;
-          };
-          const rawProvider = typeof value.provider === 'string' ? value.provider.trim().toLowerCase() : '';
-          const providerId = normalizeProviderId(rawProvider);
-          const alias = typeof value.alias === 'string' ? value.alias.trim() : '';
-          const modelId = typeof value.model === 'string' ? value.model.trim() : '';
-          const resolvedModel = typeof value.resolved_model === 'string' ? value.resolved_model.trim() : '';
-          if (!rawProvider || !alias || !modelId || !resolvedModel || !isProviderId(providerId)) return null;
-          return {
-            alias,
-            provider: providerId,
-            model: modelId,
-            resolvedModel,
-            isGlobalDefault: Boolean(value.is_global_default),
-            isProviderDefault: Boolean(value.is_provider_default),
-          } satisfies ModelAliasOption;
-        })
-        .filter((item: ModelAliasOption | null): item is ModelAliasOption => item !== null);
-      if (mapped.length > 0) {
-        setModelAliases(mapped);
-        return mapped;
-      }
-    } catch {
-      // Keep fallback aliases when the catalog endpoint is unavailable.
-    }
-    return modelAliases.length > 0 ? modelAliases : DEFAULT_MODEL_ALIAS_OPTIONS;
-  }, [controlPlaneFetch, modelAliases, setModelAliases]);
+    const aliases = await getOrRefreshCachedResource(
+      modelAliasCatalogCache,
+      PROVIDER_POLL_MIN_INTERVAL_MS,
+      MODEL_ALIAS_DEBOUNCE_MS,
+      async () => {
+        const res = await controlPlaneFetch('/api/control-plane/providers/model-aliases');
+        if (!res.ok) {
+          throw new Error('Failed to load model aliases.');
+        }
+        const payload = await res.json();
+        const items = Array.isArray(payload?.models) ? payload.models : [];
+        const mapped = items
+          .map((item: unknown) => {
+            const value = item as {
+              alias?: unknown;
+              provider?: unknown;
+              model?: unknown;
+              resolved_model?: unknown;
+              is_global_default?: unknown;
+              is_provider_default?: unknown;
+            };
+            const rawProvider = typeof value.provider === 'string' ? value.provider.trim().toLowerCase() : '';
+            const providerId = normalizeProviderId(rawProvider);
+            const alias = typeof value.alias === 'string' ? value.alias.trim() : '';
+            const modelId = typeof value.model === 'string' ? value.model.trim() : '';
+            const resolvedModel = typeof value.resolved_model === 'string' ? value.resolved_model.trim() : '';
+            if (!rawProvider || !alias || !modelId || !resolvedModel || !isProviderId(providerId)) return null;
+            return {
+              alias,
+              provider: providerId,
+              model: modelId,
+              resolvedModel,
+              isGlobalDefault: Boolean(value.is_global_default),
+              isProviderDefault: Boolean(value.is_provider_default),
+            } satisfies ModelAliasOption;
+          })
+          .filter((item: ModelAliasOption | null): item is ModelAliasOption => item !== null);
+        return mapped.length > 0 ? mapped : DEFAULT_MODEL_ALIAS_OPTIONS;
+      },
+      () => readAnyCache(modelAliasCatalogCache) ?? DEFAULT_MODEL_ALIAS_OPTIONS,
+    );
+    setModelAliases(aliases);
+    return aliases;
+  }, [controlPlaneFetch, setModelAliases]);
 
   const refreshProviderCatalog = useCallback(async () => {
-    try {
-      const aliases = await refreshModelAliasCatalog();
-      const res = await controlPlaneFetch('/api/control-plane/providers');
-      if (!res.ok) return;
-      const payload = await res.json();
-      const items = Array.isArray(payload?.providers) ? payload.providers : [];
-      const mapped: ProviderOption[] = items
-        .map((item: unknown) => {
-          const i = item as { id?: unknown; label?: unknown; default_model?: unknown; auth?: unknown; auth_modes?: unknown; default_auth_mode?: unknown; note?: unknown };
-          const rawId = typeof i.id === 'string' ? i.id.trim().toLowerCase() : '';
-          const id = normalizeProviderId(rawId);
-          if (!isProviderId(id)) return null;
-          const fallback = DEFAULT_PROVIDER_OPTIONS.find((entry) => entry.id === id);
-          const authModes = Array.isArray(i.auth_modes)
-            ? i.auth_modes
-                .filter((value): value is { id?: unknown; label?: unknown; secret_required?: unknown } => Boolean(value && typeof value === 'object'))
-                .map((value) => ({
-                  id: typeof value.id === 'string' ? value.id : 'api_key',
-                  label: typeof value.label === 'string' && value.label.trim() ? value.label.trim() : String(value.id || 'API Key'),
-                  secretRequired: Boolean(value.secret_required),
-                }))
-            : fallback?.authModes ?? [];
-          return {
-            id,
-            label: typeof i.label === 'string' && i.label.trim() ? i.label.trim() : fallback?.label ?? id,
-            defaultModel: (() => {
-              const rawDefaultModel =
-                typeof i.default_model === 'string' && i.default_model.trim()
-                  ? i.default_model.trim()
-                  : fallback?.defaultModel ?? DEFAULT_PROVIDER_MODELS[id][0];
-              return resolveModelAlias(id, rawDefaultModel, aliases) ?? rawDefaultModel;
-            })(),
-            auth: Array.isArray(i.auth) ? i.auth.filter((v) => typeof v === 'string') as string[] : fallback?.auth ?? ['api_key'],
-            defaultAuthMode:
-              typeof i.default_auth_mode === 'string' && i.default_auth_mode.trim()
-                ? i.default_auth_mode.trim()
-                : fallback?.defaultAuthMode ?? fallback?.auth[0] ?? 'api_key',
-            authModes,
-            note: typeof i.note === 'string' && i.note.trim() ? i.note.trim() : fallback?.note,
-          } as ProviderOption;
-        })
-        .filter((item: ProviderOption | null): item is ProviderOption => item !== null);
-      if (mapped.length > 0) {
-        setProviderOptions(mapped);
-      }
-    } catch {
-      // Keep defaults when catalog cannot be fetched.
-    }
+    const catalog = await getOrRefreshCachedResource(
+      providerCatalogCache,
+      PROVIDER_POLL_MIN_INTERVAL_MS,
+      PROVIDER_CATALOG_DEBOUNCE_MS,
+      async () => {
+        const aliases = await refreshModelAliasCatalog();
+        const res = await controlPlaneFetch('/api/control-plane/providers');
+        if (!res.ok) {
+          throw new Error('Failed to load provider catalog.');
+        }
+        const payload = await res.json();
+        const items = Array.isArray(payload?.providers) ? payload.providers : [];
+        const mapped: ProviderOption[] = items
+          .map((item: unknown) => {
+            const i = item as { id?: unknown; label?: unknown; default_model?: unknown; auth?: unknown; auth_modes?: unknown; default_auth_mode?: unknown; note?: unknown };
+            const rawId = typeof i.id === 'string' ? i.id.trim().toLowerCase() : '';
+            const id = normalizeProviderId(rawId);
+            if (!isProviderId(id)) return null;
+            const fallback = DEFAULT_PROVIDER_OPTIONS.find((entry) => entry.id === id);
+            const authModes = Array.isArray(i.auth_modes)
+              ? i.auth_modes
+                  .filter((value): value is { id?: unknown; label?: unknown; secret_required?: unknown } => Boolean(value && typeof value === 'object'))
+                  .map((value) => ({
+                    id: typeof value.id === 'string' ? value.id : 'api_key',
+                    label: typeof value.label === 'string' && value.label.trim() ? value.label.trim() : String(value.id || 'API Key'),
+                    secretRequired: Boolean(value.secret_required),
+                  }))
+              : fallback?.authModes ?? [];
+            return {
+              id,
+              label: typeof i.label === 'string' && i.label.trim() ? i.label.trim() : fallback?.label ?? id,
+              defaultModel: (() => {
+                const rawDefaultModel =
+                  typeof i.default_model === 'string' && i.default_model.trim()
+                    ? i.default_model.trim()
+                    : fallback?.defaultModel ?? DEFAULT_PROVIDER_MODELS[id][0];
+                return resolveModelAlias(id, rawDefaultModel, aliases) ?? rawDefaultModel;
+              })(),
+              auth: Array.isArray(i.auth) ? i.auth.filter((v) => typeof v === 'string') as string[] : fallback?.auth ?? ['api_key'],
+              defaultAuthMode:
+                typeof i.default_auth_mode === 'string' && i.default_auth_mode.trim()
+                  ? i.default_auth_mode.trim()
+                  : fallback?.defaultAuthMode ?? fallback?.auth[0] ?? 'api_key',
+              authModes,
+              note: typeof i.note === 'string' && i.note.trim() ? i.note.trim() : fallback?.note,
+            } as ProviderOption;
+          })
+          .filter((item: ProviderOption | null): item is ProviderOption => item !== null);
+        return mapped.length > 0 ? mapped : DEFAULT_PROVIDER_OPTIONS;
+      },
+      () => readAnyCache(providerCatalogCache) ?? DEFAULT_PROVIDER_OPTIONS,
+    );
+    setProviderOptions(catalog);
   }, [controlPlaneFetch, refreshModelAliasCatalog, setProviderOptions]);
 
   const refreshProviderModels = useCallback(
     async (providerId: ProviderId, credentialForProvider?: string) => {
-      const aliases = modelAliases.length > 0 ? modelAliases : await refreshModelAliasCatalog();
+      const aliases = readAnyCache(modelAliasCatalogCache) ?? await refreshModelAliasCatalog();
       const fallbackOption =
-        providerOptions.find((item) => item.id === providerId) ||
+        (readAnyCache(providerCatalogCache) ?? DEFAULT_PROVIDER_OPTIONS).find((item) => item.id === providerId) ||
         DEFAULT_PROVIDER_OPTIONS.find((item) => item.id === providerId) ||
         DEFAULT_PROVIDER_OPTIONS[0];
       const fallbackModels = mapModelOptionsToAliases(
@@ -561,27 +656,40 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         return;
       }
 
+      const modelsCache = getProviderModelsCacheEntry(providerId, credentialForProvider);
+      const freshModels = readFreshCache(modelsCache, PROVIDER_POLL_MIN_INTERVAL_MS);
+      if (freshModels !== null) {
+        setModelOptions(freshModels);
+        setModel((prev) => resolveSelectedModel(prev, freshModels));
+        return;
+      }
+
       setModelsLoading(true);
       try {
-        const search = new URLSearchParams({ workspace_id: WORKSPACE_ID });
-        if (credentialForProvider) {
-          search.set('credential_id', credentialForProvider);
-        }
-        const res = await controlPlaneFetch(`/api/control-plane/providers/${encodeURIComponent(providerId)}/models?${search.toString()}`);
-        if (!res.ok) {
-          setModelOptions(fallbackModels);
-          setModel((prev) => resolveSelectedModel(prev, fallbackModels));
-          return;
-        }
-        const payload = await res.json();
-        const rawModels = Array.isArray(payload?.models) ? payload.models : [];
-        const models = rawModels
-          .filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
-          .slice(0, 120);
-        const nextModels =
-          models.length > 0
-            ? mapModelOptionsToAliases(providerId, models, aliases)
-            : fallbackModels;
+        const nextModels = await getOrRefreshCachedResource(
+          modelsCache,
+          PROVIDER_POLL_MIN_INTERVAL_MS,
+          PROVIDER_MODELS_DEBOUNCE_MS,
+          async () => {
+            const search = new URLSearchParams({ workspace_id: WORKSPACE_ID });
+            if (credentialForProvider) {
+              search.set('credential_id', credentialForProvider);
+            }
+            const res = await controlPlaneFetch(`/api/control-plane/providers/${encodeURIComponent(providerId)}/models?${search.toString()}`);
+            if (!res.ok) {
+              throw new Error('Failed to load provider models.');
+            }
+            const payload = await res.json();
+            const rawModels = Array.isArray(payload?.models) ? payload.models : [];
+            const models = rawModels
+              .filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+              .slice(0, 120);
+            return models.length > 0
+              ? mapModelOptionsToAliases(providerId, models, aliases)
+              : fallbackModels;
+          },
+          () => readAnyCache(modelsCache) ?? fallbackModels,
+        );
         setModelOptions(nextModels);
         setModel((prev) => resolveSelectedModel(prev, nextModels));
       } catch {
@@ -591,7 +699,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         setModelsLoading(false);
       }
     },
-    [connectionMode, controlPlaneFetch, modelAliases, providerOptions, refreshModelAliasCatalog, setModelsLoading, setModelOptions, setModel],
+    [connectionMode, controlPlaneFetch, refreshModelAliasCatalog, setModelsLoading, setModelOptions, setModel],
   );
 
   const hasRuntimeProviderAccount = useCallback(async (providerId: ProviderId) => {

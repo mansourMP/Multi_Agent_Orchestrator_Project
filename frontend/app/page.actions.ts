@@ -26,6 +26,10 @@ import {
 import { type PageState } from './page.state';
 import { type usePlatformApi } from './page.api';
 
+const PROVIDER_REFRESH_INTERVAL_MS = 30_000;
+const PROVIDER_CATALOG_BOOT_DELAY_MS = 120;
+const PROVIDER_MODELS_BOOT_DELAY_MS = 720;
+
 export function usePageActions(state: PageState, api: ReturnType<typeof usePlatformApi>) {
   const {
     packResult,
@@ -266,7 +270,20 @@ export function usePageActions(state: PageState, api: ReturnType<typeof usePlatf
   }, [connectorType, setConnectorLabel]);
 
   useEffect(() => {
-    void refreshProviderCatalog();
+    let cancelled = false;
+
+    const loadCatalog = () => {
+      if (cancelled) return;
+      void refreshProviderCatalog();
+    };
+
+    const bootTimer = window.setTimeout(loadCatalog, PROVIDER_CATALOG_BOOT_DELAY_MS);
+    const interval = window.setInterval(loadCatalog, PROVIDER_REFRESH_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(bootTimer);
+      window.clearInterval(interval);
+    };
   }, [refreshProviderCatalog]);
 
   useEffect(() => {
@@ -316,11 +333,24 @@ export function usePageActions(state: PageState, api: ReturnType<typeof usePlatf
   }, [connectionMode, credentials, credentialId, provider, setCredentialId, setSetupStatus]);
 
   useEffect(() => {
+    let cancelled = false;
     const selectedCredential =
       connectionMode === 'byok'
         ? providerCredentialOptions.find((item) => item.id === credentialId)?.id
         : undefined;
-    void refreshProviderModels(provider, selectedCredential);
+
+    const loadProviderModels = () => {
+      if (cancelled) return;
+      void refreshProviderModels(provider, selectedCredential);
+    };
+
+    const bootTimer = window.setTimeout(loadProviderModels, PROVIDER_MODELS_BOOT_DELAY_MS);
+    const interval = window.setInterval(loadProviderModels, PROVIDER_REFRESH_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(bootTimer);
+      window.clearInterval(interval);
+    };
   }, [connectionMode, credentialId, provider, providerCredentialOptions, refreshProviderModels]);
 
   useEffect(() => {

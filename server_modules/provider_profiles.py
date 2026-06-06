@@ -265,6 +265,14 @@ def resolve_provider_adapter(provider: Any, credentials: Optional[Dict[str, Any]
 OPENAI_RESPONSES_URL = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
 OPENAI_ORG_ID = os.getenv("OPENAI_ORG_ID")
 OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID")
+OPENAI_CODEX_MODEL_CATALOG = [
+    "gpt-5.4",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.1-codex",
+]
 
 
 class ProviderAdapter:
@@ -404,7 +412,7 @@ class OpenAIAdapter(ProviderAdapter):
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
         if self._uses_oauth_token(credentials):
-            return []
+            return list(OPENAI_CODEX_MODEL_CATALOG)
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
         data = res.get("json", {}) or {}
         models = []

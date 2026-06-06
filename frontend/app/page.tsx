@@ -829,10 +829,31 @@ function resolveWorkbenchMessageStatus(
   return status === 'error' ? 'error' : 'running';
 }
 
+function shouldHoldForStructuredReply(
+  status: string,
+  lastRunPayload: Record<string, unknown> | null,
+  latestRunSummary: string | null,
+  topError: string | null,
+): boolean {
+  if (!['completed', 'error'].includes(status)) return false;
+  if (hasStructuredAssistantReply(lastRunPayload, latestRunSummary)) return false;
+  if (status === 'error' && topError && topError.trim()) return false;
+  return true;
+}
+
 function extractRunIdFromPayload(lastRunPayload: Record<string, unknown> | null): string | null {
   if (!lastRunPayload || typeof lastRunPayload !== 'object') return null;
   const runId = String(lastRunPayload.run_id || '').trim();
   return runId || null;
+}
+
+function matchLatestRunSummary(
+  expectedRunId: string | null,
+  latestRunId: string | null,
+  latestRunSummary: string | null,
+): string | null {
+  if (!expectedRunId || !latestRunId || expectedRunId !== latestRunId) return null;
+  return latestRunSummary;
 }
 
 function migrateLegacyWorkbenchChats(
@@ -1567,10 +1588,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     () => providerOptions.find((item) => item.id === provider) || providerOptions[0] || null,
     [provider, providerOptions],
   );
-  const simpleChatModelLabel = useMemo(() => {
-    const providerLabel = activeProviderOption?.label || homeTitleCase(provider);
-    return `${providerLabel} · ${model}`;
-  }, [activeProviderOption, model, provider]);
   const simpleChatTrustLabel = useMemo(
     () => formatSimpleChatTrustLabel(trustMode, accessMode),
     [accessMode, trustMode],
@@ -2001,16 +2018,24 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       ((!payloadRunId || status === 'waiting') && runId === pendingSimpleChat.runId);
     if (!isMatchingRun) return;
 
-    const replyText = extractWorkbenchReplyText(lastRunPayload, controlCenter.latestRunSummary, topError, status);
+    const matchingLatestRunSummary = matchLatestRunSummary(
+      pendingSimpleChat.runId,
+      controlCenter.latestRunId,
+      controlCenter.latestRunSummary,
+    );
+    if (shouldHoldForStructuredReply(status, lastRunPayload, matchingLatestRunSummary, topError)) {
+      return;
+    }
+    const replyText = extractWorkbenchReplyText(lastRunPayload, matchingLatestRunSummary, topError, status);
     patchSimpleChatMessage(pendingSimpleChat.sessionId, pendingSimpleChat.placeholderId, {
       content: replyText,
-      status: resolveWorkbenchMessageStatus(status, lastRunPayload, controlCenter.latestRunSummary),
+      status: resolveWorkbenchMessageStatus(status, lastRunPayload, matchingLatestRunSummary),
       run_id: pendingSimpleChat.runId || runId,
       ts: new Date().toISOString(),
     });
     if (status === 'waiting') return;
     setPendingSimpleChat(null);
-  }, [controlCenter.latestRunSummary, lastRunPayload, patchSimpleChatMessage, pendingSimpleChat, runId, status, topError]);
+  }, [controlCenter.latestRunId, controlCenter.latestRunSummary, lastRunPayload, patchSimpleChatMessage, pendingSimpleChat, runId, status, topError]);
 
   const submitSimpleChatPermissionDecision = useCallback(async (
     decision: 'Proceed' | 'Hold',
@@ -2093,15 +2118,23 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       ((!payloadRunId || status === 'waiting') && runId === pendingWorkbenchChat.runId);
     if (!isMatchingRun) return;
 
-    const replyText = extractWorkbenchReplyText(lastRunPayload, controlCenter.latestRunSummary, topError, status);
+    const matchingLatestRunSummary = matchLatestRunSummary(
+      pendingWorkbenchChat.runId,
+      controlCenter.latestRunId,
+      controlCenter.latestRunSummary,
+    );
+    if (shouldHoldForStructuredReply(status, lastRunPayload, matchingLatestRunSummary, topError)) {
+      return;
+    }
+    const replyText = extractWorkbenchReplyText(lastRunPayload, matchingLatestRunSummary, topError, status);
     patchWorkbenchAgentChat(pendingWorkbenchChat.agentRole, pendingWorkbenchChat.placeholderId, {
       content: replyText,
-      status: resolveWorkbenchMessageStatus(status, lastRunPayload, controlCenter.latestRunSummary),
+      status: resolveWorkbenchMessageStatus(status, lastRunPayload, matchingLatestRunSummary),
       run_id: pendingWorkbenchChat.runId || runId,
       ts: new Date().toISOString(),
     });
     setPendingWorkbenchChat(null);
-  }, [controlCenter.latestRunSummary, lastRunPayload, patchWorkbenchAgentChat, pendingWorkbenchChat, runId, status, topError]);
+  }, [controlCenter.latestRunId, controlCenter.latestRunSummary, lastRunPayload, patchWorkbenchAgentChat, pendingWorkbenchChat, runId, status, topError]);
 
   const sendSimpleChat = useCallback(async () => {
     const text = goal.trim();
@@ -2237,7 +2270,12 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       deckControlsEnabled={!isMobile}
       singleAgentMode={singleAgentMode}
     >
-      <div style={{ display: 'grid', gridTemplateColumns: workbenchColumns, gap: 10, alignItems: 'start', alignContent: 'start' }}>
+      <div
+        className="orion-workbench-grid"
+        style={{
+          gridTemplateColumns: workbenchColumns,
+        }}
+      >
         {showActivityRail ? (
           <WorkbenchActivityRail
             isMobile={isMobile}
@@ -2268,7 +2306,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
             emptyAction={emptySimpleChatAction}
             targetLabel={defaultAssistantProfile.label}
             targetHref="/agents"
-            modelLabel={simpleChatModelLabel}
             selectedModel={model}
             modelOptions={modelOptions}
             modelsLoading={modelsLoading}

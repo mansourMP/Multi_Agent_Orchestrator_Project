@@ -59,7 +59,7 @@ The Full Access warning copy should stay short:
 
 > Full Access lets Sage run commands, read, write, delete files, and access
 > secrets, browser data, tokens, SSH keys, and connected accounts on this Agent
-> Computer; dedicated Agent hardware is recommended.
+> Computer; dedicated hardware is recommended.
 
 Custom policy is stored through the existing Agent Computer policy shape and
 starts with:

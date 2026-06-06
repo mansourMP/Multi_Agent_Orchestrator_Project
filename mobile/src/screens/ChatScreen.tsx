@@ -183,16 +183,22 @@ function readRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function normalizeRuntimeAccessMode(value: unknown): "default_guarded" | "full_access" {
+function normalizeRuntimeAccessMode(value: unknown): "default_guarded" | "custom" | "full_access" {
   const token = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (["full_access", "autonomous_agent", "trusted_full_access", "agent_owned_full_access"].includes(token)) {
+  if (token === "full_access") {
     return "full_access";
+  }
+  if (token === "custom") {
+    return "custom";
   }
   return "default_guarded";
 }
 
 function runtimeAccessModeLabel(value: unknown) {
-  return normalizeRuntimeAccessMode(value) === "full_access" ? "Autonomous Agent" : "Default Guarded";
+  const mode = normalizeRuntimeAccessMode(value);
+  if (mode === "full_access") return "Full Access";
+  if (mode === "custom") return "Custom";
+  return "Default";
 }
 
 function runtimeAccessModeFromRecord(record: Record<string, unknown> | null | undefined): string {
@@ -1466,7 +1472,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           <InspectorCard
             eyebrow="Approvals"
             title={pendingGatewayApprovals > 0 ? `${pendingGatewayApprovals} waiting` : "None waiting"}
-            body="Guarded actions ask inside chat. Autonomous Agent hardware skips Empyralis per-action prompts."
+            body="Default asks inside chat. Full Access skips Empyralis per-action prompts on approved Agent Computer hardware."
           >
             <InspectorAction label="Review approvals" route="/approvals" />
           </InspectorCard>

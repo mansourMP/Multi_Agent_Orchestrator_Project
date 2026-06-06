@@ -13,11 +13,11 @@ Sage is a cloud-first agent with optional runtime power from a paired physical d
 
 ## Execution Modes
 
-- `Default Guarded`: obvious low-risk tools can run; destructive actions, dangerous shell, file write/delete, connector side effects, and external sends require approval.
-- `Autonomous Full Access`: only for explicitly selected dedicated Agent Computers. This means allowed computer actions can run without per-action Empyralis approval prompts after explicit owner approval.
+- `Default`: obvious low-risk tools can run; destructive actions, dangerous shell, file write/delete, connector side effects, and external sends require approval.
+- `Full Access`: only for explicitly selected dedicated Agent Computers. This means allowed computer actions can run without per-action Empyralis approval prompts after explicit owner approval.
 - `Custom`: the owner defines allowed folders, terminal/network policy, app/browser access, approval memory, runtime/budget caps, and emergency stop behavior. Until a custom policy is saved, this remains approval-gated.
 
-Autonomous Full Access still has hard guardrails: audit events, revocation, stop/abort, quotas, blocked actions, OS permissions, and secret redaction. Cloud Computer does not use physical-machine access semantics. It runs inside a metered sandbox with TTL cleanup, spend controls, artifacts, and audit events. This keeps the distinction clear: physical computer power is owner-approved; cloud computer power is sandboxed and billed.
+Full Access still has hard guardrails: audit events, revocation, stop/abort, quotas, blocked actions, OS permissions, and secret redaction. Cloud Computer does not use physical-machine access semantics. It runs inside a metered sandbox with TTL cleanup, spend controls, artifacts, and audit events. This keeps the distinction clear: physical computer power is owner-approved; cloud computer power is sandboxed and billed.
 
 ## Transparency Requirements
 

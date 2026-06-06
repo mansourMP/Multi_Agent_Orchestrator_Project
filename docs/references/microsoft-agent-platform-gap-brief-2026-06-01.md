@@ -56,7 +56,7 @@ These are the internal repo sources that show Empyralis already has the foundati
 | --- | --- | --- |
 | `docs/domains/agent-computer/gateway-architecture.md` | 46-50, 69-78, 96-103, 121-149 | Cloud owns identity/policy/approvals, Gateway owns personal local sessions, supervisor stays narrow, personal and Studio channels stay separate. |
 | `docs/domains/agent-computer/runtime.md` | 6-21, 23-43, 88-121 | Agent Computer is the user-facing runtime for local files, browser, terminal, desktop apps, personal channels, and machine execution. |
-| `docs/agent-runtime-simplification.md` | 7-17, 19-34, 36-48 | Public runtime vocabulary is already clear: Cloud, Agent Computer, This Device, Dedicated Computer, Cloud Computer, Server/VPS; access modes are Default Guarded, Autonomous Full Access, Custom. |
+| `docs/agent-runtime-simplification.md` | 7-17, 19-34, 36-48 | Public runtime vocabulary is already clear: Cloud, Agent Computer, This Device, Dedicated Computer, Cloud Computer, Server/VPS; access modes are Default, Full Access, Custom. |
 | `empyralis-supervisor/src/main.rs` | 243-274 | Rust supervisor already supports shell, filesystem, screenshot, OCR, mouse, click, type, keypress, clipboard, window listing, launch, notifications, AppleScript, and speech. |
 | `server_modules/agent_registry_models.py` | 41-115 | Agent definitions, versions, manifests, installs, owners, status, enablement, and runtime profile references already exist. |
 | `server_modules/agent_transparency_events.py` | 1-15, 29-50, 102-125 | Transparency events already model owner/admin/auditor views, policy blocks, tool actions, approvals, gateway actions, channel messages, and redacted metadata. |
@@ -323,8 +323,8 @@ Use public product names:
 - Dedicated Computer
 - Cloud Computer
 - Server/VPS
-- Default Guarded
-- Autonomous Full Access
+- Default
+- Full Access
 - Custom
 
 Avoid exposing internal names in normal UI:

@@ -37,7 +37,7 @@ class ExecutionModePolicyTests(unittest.TestCase):
     def test_summary_declares_safety_boundary(self) -> None:
         summary = execution_mode_policy.routing_contract_summary()
 
-        self.assertEqual(summary["default_guarded_public_label"], "Default Guarded")
+        self.assertEqual(summary["default_guarded_public_label"], "Default")
         self.assertEqual(summary["custom_public_label"], "Custom")
         self.assertEqual(summary["full_access_public_label"], "Full Access")
         self.assertEqual(summary["autonomous_full_access_runtime_access_mode"], "full_access")
@@ -78,10 +78,10 @@ class ExecutionModePolicyTests(unittest.TestCase):
             execution_mode_policy.runtime_access_setup_warning("full_access") or "",
         )
         self.assertIn(
-            "dedicated Agent hardware is recommended",
+            "dedicated hardware is recommended",
             execution_mode_policy.runtime_access_setup_warning("full_access") or "",
         )
-        self.assertEqual(execution_mode_policy.public_runtime_access_label("default_guarded"), "Default Guarded")
+        self.assertEqual(execution_mode_policy.public_runtime_access_label("default_guarded"), "Default")
         self.assertIsNone(execution_mode_policy.runtime_access_setup_warning("custom"))
         self.assertIsNone(execution_mode_policy.runtime_access_setup_warning("default_guarded"))
 

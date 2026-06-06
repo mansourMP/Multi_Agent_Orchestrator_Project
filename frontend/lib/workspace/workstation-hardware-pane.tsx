@@ -117,7 +117,7 @@ const TRAY_STATUS_URL = 'http://127.0.0.1:7790/status';
 const TRAY_CONNECT_URL = 'http://127.0.0.1:7790/connect';
 const AGENT_DOWNLOAD_URL = 'https://empyralis.io/downloads/empyralis-agent/macos/Empyralis-Agent.dmg';
 const AGENT_COMPUTER_FULL_ACCESS_WARNING_VERSION = '2026-06-06';
-const AGENT_COMPUTER_FULL_ACCESS_WARNING_COPY = 'Full Access lets Sage run commands, read, write, delete files, and access secrets, browser data, tokens, SSH keys, and connected accounts on this Agent Computer; dedicated Agent hardware is recommended.';
+const AGENT_COMPUTER_FULL_ACCESS_WARNING_COPY = 'Full Access lets Sage run commands, read, write, delete files, and access secrets, browser data, tokens, SSH keys, and connected accounts on this Agent Computer; dedicated hardware is recommended.';
 
 const HARDWARE_KINDS: Array<{
   kind: HardwareKind;

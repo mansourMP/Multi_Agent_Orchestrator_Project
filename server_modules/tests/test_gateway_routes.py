@@ -546,7 +546,7 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertEqual(registration_response.status_code, 200)
         payload = registration_response.json()
         self.assertEqual(payload["gateway"]["runtime_access_mode"], "default_guarded")
-        self.assertEqual(payload["gateway"]["runtime_access_label"], "Default Guarded")
+        self.assertEqual(payload["gateway"]["runtime_access_label"], "Default")
 
     def test_dedicated_workstation_bind_creates_profile_and_readiness(self) -> None:
         registration_payload = self._register_gateway()

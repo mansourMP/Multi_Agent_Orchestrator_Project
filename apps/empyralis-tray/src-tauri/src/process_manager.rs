@@ -238,19 +238,34 @@ impl ProcessManager {
     }
 
     pub fn maintain_connection(&self) {
-        let should_recover = match self.lock_state() {
+        let (desired_connected, gateway_running, supervisor_running) = match self.lock_state() {
             Ok(mut guard) => {
                 refresh_process_state(&mut guard);
-                guard.desired_connected
+                if guard.supervisor.is_none()
+                    && guard.adopted_supervisor_pid.is_none()
+                    && supervisor_healthy()
+                {
+                    guard.adopted_supervisor_pid = listening_pid_for_port(7788);
+                }
+                if guard.gateway.is_none() && guard.adopted_gateway_pid.is_none() {
+                    guard.adopted_gateway_pid = self.live_gateway_lock_pid().ok().flatten();
+                }
+                let supervisor_running = guard.supervisor.as_ref().map(process_still_running).unwrap_or(false)
+                    || guard.adopted_supervisor_pid.map(process_alive).unwrap_or(false)
+                    || supervisor_healthy();
+                let gateway_running = guard.gateway.as_ref().map(process_still_running).unwrap_or(false)
+                    || guard.adopted_gateway_pid.map(process_alive).unwrap_or(false)
+                    || self.live_gateway_lock_pid().ok().flatten().is_some();
+                (guard.desired_connected, gateway_running, supervisor_running)
             }
-            Err(_) => false,
+            Err(_) => (false, false, false),
         };
-        if !should_recover {
+
+        if !desired_connected && !gateway_running {
             return;
         }
 
-        let status = self.status();
-        if !status.supervisor_running || !status.gateway_running {
+        if desired_connected && (!supervisor_running || !gateway_running) {
             self.record_error("Recovering hardware connection...".to_string());
             if let Err(error) = self.start_gateway() {
                 self.record_error(error);
@@ -258,8 +273,10 @@ impl ProcessManager {
             return;
         }
 
-        let result = self.poll_session_once();
-        self.update_session_verification(result);
+        if gateway_running {
+            let result = self.poll_session_once();
+            self.update_session_verification(result);
+        }
     }
 
     fn start_supervisor(&self) -> Result<(), String> {

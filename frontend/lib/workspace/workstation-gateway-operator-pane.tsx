@@ -483,7 +483,7 @@ function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord,
     return 'Custom';
   }
   if (accessMode === 'default_guarded') {
-    return pendingCount > 0 ? 'Needs approval' : 'Default Guarded';
+    return pendingCount > 0 ? 'Needs approval' : 'Default';
   }
   const explicitMode = readString(session.permission_mode ?? session.approval_mode, '');
   if (explicitMode) {
@@ -493,16 +493,16 @@ function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord,
     return 'Needs approval';
   }
   if (session.interactive_approvals === false) {
-    return 'Autopilot inside runtime';
+    return 'Runs inside runtime';
   }
   if (readString(session.approval_reviewer, '')) {
     return `Reviewed by ${humanizeToken(session.approval_reviewer)}`;
   }
   switch (String(session.runtime_binding ?? '').trim().toLowerCase()) {
     case 'my_computer_agent':
-      return 'Default Guarded';
+      return 'Default';
     case 'cloud_computer_agent':
-      return 'Autopilot capable';
+      return 'Runtime capable';
     default:
       return 'Policy guarded';
   }
@@ -531,7 +531,7 @@ function gatewayRuntimeAccessLabel(gateway: GatewayRegistrationRecord | null): s
   if (mode === 'custom') {
     return 'Custom';
   }
-  return 'Default Guarded';
+  return 'Default';
 }
 
 function browserTakeoverStatus(session: GatewayBrowserSessionRecord): string {
@@ -2085,7 +2085,7 @@ export function WorkstationGatewayOperatorPane({
                 <option value="full_access" disabled={!autonomousAgentAvailable}>
                   {autonomousAgentMode?.label || 'Full Access'}
                 </option>
-                <option value="default_guarded">{defaultAccessMode?.label || 'Default Guarded'}</option>
+                <option value="default_guarded">{defaultAccessMode?.label || 'Default'}</option>
                 <option value="custom">
                   {customAccessMode?.label || 'Custom'}
                 </option>
@@ -2100,7 +2100,7 @@ export function WorkstationGatewayOperatorPane({
             <div className="gateway-runtime-access-warning">
               <WorkstationSurfaceNotice tone="warning">
                 {autonomousAgentMode?.setupWarning
-                  || 'Full Access lets Sage run commands, read, write, delete files, and access secrets, browser data, tokens, SSH keys, and connected accounts on this Agent Computer; dedicated Agent hardware is recommended.'}
+                  || 'Full Access lets Sage run commands, read, write, delete files, and access secrets, browser data, tokens, SSH keys, and connected accounts on this Agent Computer; dedicated hardware is recommended.'}
               </WorkstationSurfaceNotice>
               <label className="gateway-runtime-access-warning__ack">
                 <input
@@ -2127,7 +2127,7 @@ export function WorkstationGatewayOperatorPane({
           {selectedGateway ? (
             <FormSection
               title="Custom access policy"
-              description="Saved policy is required before Custom can become less restrictive than Default Guarded."
+              description="Custom starts from Default and only changes after a saved policy."
             >
               <FormGrid columns="repeat(2, minmax(0, 1fr))">
                 <FormField label="Allowed folders" hint="Add explicit folder paths this Agent Computer may use.">
@@ -2336,7 +2336,7 @@ export function WorkstationGatewayOperatorPane({
                     ? 'Full Access'
                     : runtimeAccessModeToken(readRecord(pairingIntent.metadata).runtime_access_mode) === 'custom'
                       ? 'Custom'
-                      : 'Default Guarded'}
+                      : 'Default'}
                 />
             </FormGrid>
             <div className="gateway-pairing-command-card">

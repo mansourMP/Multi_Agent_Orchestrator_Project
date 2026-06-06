@@ -315,7 +315,7 @@ const AGENT_COMPUTER_PERMISSION_MODE_ITEMS: Array<{
   {
     id: 'default',
     label: 'Default',
-    detail: 'Guarded hardware access',
+    detail: 'Default access',
   },
   {
     id: 'custom',
@@ -4417,7 +4417,7 @@ export function WorkstationChatPane() {
           <span>
             Full Access lets Sage run commands, read, write, delete files, and access secrets,
             browser data, tokens, SSH keys, and connected accounts on this Agent Computer;
-            dedicated Agent hardware is recommended.
+            dedicated hardware is recommended.
           </span>
         )}
         confirmLabel="Allow Full Access"

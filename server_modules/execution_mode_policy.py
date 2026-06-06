@@ -8,7 +8,7 @@ EXECUTION_MODE_POLICY_VERSION = "2026-05-23"
 GUARDED_RUNTIME_ACCESS_MODE = "default_guarded"
 FULL_RUNTIME_ACCESS_MODE = "full_access"
 CUSTOM_RUNTIME_ACCESS_MODE = "custom"
-GUARDED_RUNTIME_ACCESS_PUBLIC_LABEL = "Default Guarded"
+GUARDED_RUNTIME_ACCESS_PUBLIC_LABEL = "Default"
 FULL_RUNTIME_ACCESS_PUBLIC_LABEL = "Full Access"
 CUSTOM_RUNTIME_ACCESS_PUBLIC_LABEL = "Custom"
 
@@ -93,7 +93,7 @@ MODE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "setup_warning": (
             "Full Access lets Sage run commands, read, write, delete files, and access secrets, "
             "browser data, tokens, SSH keys, and connected accounts on this Agent Computer; "
-            "dedicated Agent hardware is recommended."
+            "dedicated hardware is recommended."
         ),
     },
 }

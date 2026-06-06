@@ -8,6 +8,7 @@ use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
 const LOCAL_ORIGIN: &str = "http://localhost:3000";
+const LOCAL_ORIGIN_LOOPBACK: &str = "http://127.0.0.1:3000";
 
 pub fn start_status_server(manager: Arc<ProcessManager>, app_handle: AppHandle) {
     thread::spawn(move || {
@@ -34,9 +35,10 @@ fn handle_stream(mut stream: TcpStream, manager: Arc<ProcessManager>, app_handle
     let mut parts = first_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let path = parts.next().unwrap_or("/").split('?').next().unwrap_or("/");
+    let cors_origin = cors_origin_for_request(&request);
 
     if method == "OPTIONS" {
-        write_response(&mut stream, "204 No Content", "");
+        write_response(&mut stream, "204 No Content", "", &cors_origin);
         return;
     }
 
@@ -54,7 +56,25 @@ fn handle_stream(mut stream: TcpStream, manager: Arc<ProcessManager>, app_handle
         ),
     };
 
-    write_response(&mut stream, status, &body);
+    write_response(&mut stream, status, &body, &cors_origin);
+}
+
+fn cors_origin_for_request(request: &str) -> String {
+    for line in request.lines().skip(1) {
+        if line.is_empty() {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("origin") {
+            let origin = value.trim();
+            if origin == LOCAL_ORIGIN || origin == LOCAL_ORIGIN_LOOPBACK {
+                return origin.to_string();
+            }
+        }
+    }
+    LOCAL_ORIGIN.to_string()
 }
 
 fn request_json_body(request: &str) -> Value {
@@ -132,9 +152,9 @@ fn status_json(status: TrayStatus) -> Value {
     value
 }
 
-fn write_response(stream: &mut TcpStream, status: &str, body: &str) {
+fn write_response(stream: &mut TcpStream, status: &str, body: &str, cors_origin: &str) {
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: {LOCAL_ORIGIN}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: {}\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: {cors_origin}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nVary: Origin\r\nContent-Length: {}\r\n\r\n{body}",
         body.as_bytes().len(),
     );
     let _ = stream.write_all(response.as_bytes());

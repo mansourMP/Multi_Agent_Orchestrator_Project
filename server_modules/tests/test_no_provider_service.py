@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from server_modules import no_provider_service
 
@@ -79,11 +79,25 @@ class NoProviderServiceTests(unittest.TestCase):
             (source_dir / "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
             (source_dir / "b.py").write_text("async def b():\n    return 2\n", encoding="utf-8")
 
-            reply = no_provider_service.count_functions_and_write_summary(
-                f"Read all .py files in {source_dir} and count functions, write a summary to {output_path}",
-                compact_text=_compact_text,
-                resolve_local_path=Path,
-            )
+            with (
+                patch(
+                    "server_modules.rust_runtime_kernel_client.runtime_state_store_decision",
+                    side_effect=lambda **kwargs: {
+                        "ok": True,
+                        "decision": "allow",
+                        "next_action": kwargs.get("operation"),
+                    },
+                ),
+                patch(
+                    "server_modules.rust_runtime_kernel_client.enforce_kernel_decision",
+                    side_effect=lambda _command, decision: decision,
+                ),
+            ):
+                reply = no_provider_service.count_functions_and_write_summary(
+                    f"Read all .py files in {source_dir} and count functions, write a summary to {output_path}",
+                    compact_text=_compact_text,
+                    resolve_local_path=Path,
+                )
 
             written = output_path.read_text(encoding="utf-8")
 
@@ -115,9 +129,10 @@ class NoProviderServiceTests(unittest.TestCase):
 
     def test_no_provider_reasoning_required_response_is_stable(self) -> None:
         payload = no_provider_service.no_provider_reasoning_required_response()
-        self.assertEqual(payload["mode"], "answer")
-        self.assertEqual(payload["error"], "")
-        self.assertIn("Connect an AI provider", payload["reply"])
+        self.assertEqual(payload["mode"], "error")
+        self.assertEqual(payload["error"], "no_provider")
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["interventions"][0]["code"], "no_provider")
 
     def test_execute_no_provider_request_handles_memory_reply_before_tool_path(self) -> None:
         services = no_provider_service.NoProviderExecutionServices(

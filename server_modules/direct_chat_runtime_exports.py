@@ -112,7 +112,20 @@ SLACK_KEYWORDS = ("slack", "slack dm", "slack message", "post to slack", "send t
 DISCORD_KEYWORDS = ("discord", "discord dm", "discord message", "post to discord", "send to discord")
 DROPBOX_KEYWORDS = ("dropbox", "dropbox folder", "shared link", "dropbox file")
 S3_KEYWORDS = ("s3", "amazon s3", "bucket", "buckets", "presigned url", "object storage")
-BROWSER_KEYWORDS = ("browser", "go to", "open page", "page title", "main heading", "click", "fill form")
+BROWSER_KEYWORDS = (
+    "browser",
+    "go to",
+    "open page",
+    "open website",
+    "open site",
+    "visit",
+    "page title",
+    "main heading",
+    "click",
+    "fill form",
+    "screenshot",
+    "screen shot",
+)
 CHAT_MAX_ITERATIONS_DEFAULT = 30
 CHAT_MAX_ITERATIONS_CEILING = 100
 LOCAL_FILE_KEYWORDS = (
@@ -183,8 +196,12 @@ WEB_LOOKUP_KEYWORDS = (
     "current",
     "look up",
     "lookup",
+    "research",
+    "web search",
     "search the web",
     "search web",
+    "search online",
+    "internet search",
     "online",
     "website",
     "web",

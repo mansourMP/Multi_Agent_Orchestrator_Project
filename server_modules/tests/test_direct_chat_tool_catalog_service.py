@@ -193,6 +193,36 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
             )
         )
 
+    def test_message_can_use_builtin_direct_tools_detects_web_lookup_cases(self) -> None:
+        callbacks = _callbacks()
+        for message in (
+            "do some web search!",
+            "search the web for Netanyahu news",
+            "research current Netanyahu news",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(
+                    service.message_can_use_builtin_direct_tools(
+                        message,
+                        tools=[{"name": "web__search"}, {"name": "web__fetch"}],
+                        callbacks=callbacks,
+                    )
+                )
+        self.assertFalse(
+            service.message_can_use_builtin_direct_tools(
+                "Open https://example.com and tell me the page title",
+                tools=[{"name": "web__search"}, {"name": "web__fetch"}],
+                callbacks=callbacks,
+            )
+        )
+        self.assertFalse(
+            service.message_can_use_builtin_direct_tools(
+                "what is your current working directory?",
+                tools=[{"name": "web__search"}, {"name": "web__fetch"}],
+                callbacks=callbacks,
+            )
+        )
+
     def test_message_can_use_direct_connector_tools_detects_workspace_connector(self) -> None:
         callbacks = _callbacks()
         allowed = service.message_can_use_direct_connector_tools(

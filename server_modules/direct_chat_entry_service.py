@@ -280,6 +280,7 @@ def prepare_direct_chat_request(
             ),
         },
     )
+    hosted_empyralis_tier = ""
     if empyralis_tier_route:
         requested_public_tier = empyralis_model_tier_contract.normalize_model_tier(
             empyralis_tier_route.get("public_tier") or normalized_requested_model or "pro",
@@ -306,6 +307,7 @@ def prepare_direct_chat_request(
                     str(requested_tier_contract.reasoning_effort or "")
                 )
         else:
+            hosted_empyralis_tier = requested_public_tier
             normalized_requested_provider = str(empyralis_tier_route.get("provider") or "").strip().lower()
             normalized_requested_model = str(empyralis_tier_route.get("model") or "").strip()
             if not normalized_reasoning_effort:
@@ -397,6 +399,11 @@ def prepare_direct_chat_request(
     proactive_suggestions = build_proactive_suggestions_fn(normalized_workspace_id) if not normalized_prior_messages else []
     tool_loop_session_key = direct_tool_session_key_fn(normalized_workspace_id, normalized_thread_id)
     availability_override = dict(availability) if isinstance(availability, dict) else {}
+    if hosted_empyralis_tier:
+        availability_override.setdefault("ai_tier", hosted_empyralis_tier)
+        availability_override.setdefault("billing_source", "empyralis_credits")
+        availability_override.setdefault("credential_plane", "platform_runtime")
+        availability_override.setdefault("force_platform_runtime", True)
     if resolved_turn_request is not None:
         source_token = str(
             resolved_turn_metadata.get("source")

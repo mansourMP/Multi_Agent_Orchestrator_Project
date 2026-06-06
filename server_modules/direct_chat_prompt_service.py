@@ -74,11 +74,19 @@ def build_system_prompt(
         tool_lines=tool_lines,
     )
     sections = [base_prompt.strip()] if str(base_prompt or "").strip() else []
+    follow_through_rule = (
+        "Do not end a turn by saying you will check, inspect, look into it, or get back later. "
+        "If the user asks you to check, inspect, search, read, or verify something and a listed tool can do it, use that tool in this turn. "
+        "If no listed tool or permission can do it, say exactly what is missing and answer from the current context."
+    )
     if tool_lines:
         sections.append(
             "## Tool Use Rules\n"
-            "Use matching tools when available. Do not claim lack of access when a listed tool can do it. Request approval for risky actions."
+            "Use matching tools when available. Do not claim lack of access when a listed tool can do it. Request approval for risky actions.\n"
+            f"{follow_through_rule}"
         )
+    else:
+        sections.append(f"## Follow-through Rule\n{follow_through_rule}")
     memory_section = memory_recall_section(tools, memory_tool_names=memory_tool_names)
     if memory_section:
         sections.append(memory_section)

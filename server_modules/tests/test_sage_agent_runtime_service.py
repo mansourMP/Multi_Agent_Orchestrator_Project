@@ -4,6 +4,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from server_modules import sage_agent_runtime_service
@@ -345,26 +346,42 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             requires_approval=True,
         )
         mocks = self._setup_mocks(skills=[dangerous])
-        kill_switch_gate.set_kill_switch("agent:sage_main_agent", active=True)
-        try:
-            with (
-                mocks["profile"], mocks["files"], mocks["memory"], mocks["heartbeat"],
-                mocks["skills"], mocks["provider"],
-                mocks["generate"], mocks["persist"], mocks["activity"], mocks["audit"],
-                mocks["approval"] as mock_approval,
-            ):
-                result = _run(sage_agent_runtime_service.handle_sage_chat(
-                    workspace_id="ws-1",
-                    message="send email to boss",
-                    current_user={"user_id": "owner-1"},
-                ))
+        with (
+            patch.object(
+                kill_switch_gate.rust_runtime_kernel_client,
+                "runtime_state_store_decision",
+                side_effect=lambda **kwargs: {
+                    "ok": True,
+                    "decision": "allow",
+                    "next_action": kwargs.get("operation"),
+                },
+            ),
+            patch.object(
+                kill_switch_gate.rust_runtime_kernel_client,
+                "enforce_kernel_decision",
+                side_effect=lambda _command, decision: decision,
+            ),
+        ):
+            kill_switch_gate.set_kill_switch("agent:sage_main_agent", active=True)
+            try:
+                with (
+                    mocks["profile"], mocks["files"], mocks["memory"], mocks["heartbeat"],
+                    mocks["skills"], mocks["provider"],
+                    mocks["generate"], mocks["persist"], mocks["activity"], mocks["audit"],
+                    mocks["approval"] as mock_approval,
+                ):
+                    result = _run(sage_agent_runtime_service.handle_sage_chat(
+                        workspace_id="ws-1",
+                        message="send email to boss",
+                        current_user={"user_id": "owner-1"},
+                    ))
 
-                self.assertEqual(result["message"], "Reply")
-                self.assertEqual(result["blocked_tools"], [])
-                self.assertEqual(result["approvals_required"], [])
-                mock_approval.assert_not_called()
-        finally:
-            kill_switch_gate.clear_kill_switch("agent:sage_main_agent")
+                    self.assertEqual(result["message"], "Reply")
+                    self.assertEqual(result["blocked_tools"], [])
+                    self.assertEqual(result["approvals_required"], [])
+                    mock_approval.assert_not_called()
+            finally:
+                kill_switch_gate.clear_kill_switch("agent:sage_main_agent")
 
     def test_execute_skill_terms_do_not_preempt_model(self):
         from server_modules.skill_registry import SkillDefinition
@@ -618,6 +635,156 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             self.assertIsNotNone(result["trace_id"])
             self.assertEqual(result["provider"], "openai")
             self.assertEqual(result["model"], "gpt-4o")
+
+    def test_main_sage_chat_executes_web_search_tool(self):
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider", return_value=("openai", {"api_key": "test-key"})),
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False}),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call", return_value="1. Result\nURL: https://example.com\nSnippet: Found it.") as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="search the web for OpenClaw browser docs",
+            ))
+
+        self.assertEqual(result["action_execution_mode"], "tools_executed")
+        self.assertEqual(result["tool_calls"][0]["name"], "web__search")
+        self.assertIn("OpenClaw browser docs", result["tool_calls"][0]["arguments"]["query"])
+        self.assertIn("https://example.com", result["message"])
+        self.assertFalse(mock_generate.called)
+        self.assertTrue(mock_execute.called)
+
+    def test_main_sage_chat_executes_web_fetch_tool_for_url_fetch(self):
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider", return_value=("openai", {"api_key": "test-key"})),
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False}),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call", return_value="Fetched page text.") as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="fetch https://example.com/docs and summarize it",
+            ))
+
+        self.assertEqual(result["action_execution_mode"], "tools_executed")
+        self.assertEqual(result["tool_calls"][0]["name"], "web__fetch")
+        self.assertEqual(result["tool_calls"][0]["arguments"]["url"], "https://example.com/docs")
+        self.assertEqual(result["message"], "Fetched page text.")
+        self.assertFalse(mock_generate.called)
+        self.assertTrue(mock_execute.called)
+
+    def test_main_sage_chat_blocks_browser_when_agent_computer_offline(self):
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider", return_value=("openai", {"api_key": "test-key"})),
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False, "local_gateway_online": False}),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call") as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="open https://example.com in the browser",
+            ))
+
+        self.assertEqual(result["action_execution_mode"], "tool_blocked")
+        self.assertEqual(result["blocked_tools"][0]["name"], "browser__navigate")
+        self.assertEqual(result["blocked_tools"][0]["reason"], "agent_computer_unavailable")
+        self.assertFalse(mock_generate.called)
+        self.assertFalse(mock_execute.called)
+
+    def test_main_sage_chat_requests_approval_for_unsafe_shell_tool(self):
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider", return_value=("openai", {"api_key": "test-key"})),
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": True, "local_gateway_online": True}),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call") as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="run command: rm -rf /tmp/sage-action-loop-test",
+            ))
+
+        self.assertEqual(result["action_execution_mode"], "approval_required")
+        self.assertEqual(result["tool_calls"][0]["name"], "shell__exec")
+        self.assertGreater(len(result["approvals_required"]), 0)
+        self.assertFalse(mock_generate.called)
+        self.assertFalse(mock_execute.called)
+
+    def test_main_sage_chat_invokes_matching_mcp_skill(self):
+        mcp_skill = SimpleNamespace(
+            id="mcp:inventory-feed:lookup_stock",
+            label="Inventory Lookup",
+            description="Lookup stock",
+            action_class="read",
+            requires_approval=False,
+            execution_mode="live",
+            enabled=True,
+            available=True,
+            execution_adapter="mcp_tool",
+            trigger_terms=("inventory", "stock"),
+            connector_scopes=("mcp", "mcp:inventory-feed"),
+        )
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[mcp_skill]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider", return_value=("openai", {"api_key": "test-key"})),
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False}),
+            patch("server_modules.sage_agent_runtime_service.skill_registry.execute_skill", new=AsyncMock(return_value={"status": "ok", "reply": "Inventory says 12 units."})) as mock_skill,
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="use the inventory MCP tool to check stock",
+            ))
+
+        self.assertEqual(result["action_execution_mode"], "tools_executed")
+        self.assertEqual(result["tool_calls"][0]["name"], "mcp:inventory-feed:lookup_stock")
+        self.assertEqual(result["message"], "Inventory says 12 units.")
+        self.assertFalse(mock_generate.called)
+        self.assertTrue(mock_skill.called)
 
     def test_raises_on_provider_error(self):
         with (

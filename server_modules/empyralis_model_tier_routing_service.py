@@ -188,7 +188,7 @@ def infer_migrated_public_tier_from_legacy_selection(
         if model_token in {"light", "pro", "max"}:
             return empyralis_model_tier_contract.normalize_model_tier(model_token, fallback="pro")
         if not model_token or model_token == "deepseek_chat":
-            return "light" if model_token == "deepseek_chat" else "pro"
+            return "pro"
         if model_token == "deepseek_v4_flash" or _model_matches_any(model_token, LEGACY_LIGHT_MODEL_MARKERS):
             return "light"
         if model_token == "deepseek_reasoner" or _model_matches_any(model_token, LEGACY_MAX_MODEL_MARKERS):

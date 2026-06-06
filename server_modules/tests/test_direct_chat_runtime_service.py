@@ -10,6 +10,22 @@ from server_modules import no_provider_service
 
 
 class DirectChatRuntimeServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._rust_run_api_patch = mock.patch.object(
+            direct_chat_runtime_service.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            return_value={
+                "ok": True,
+                "decision": "allow",
+                "reason": "test_run_api_allowed",
+                "next_action": "start_chat_stream",
+            },
+        )
+        self._rust_run_api_patch.start()
+
+    def tearDown(self) -> None:
+        self._rust_run_api_patch.stop()
+
     def _response_services(self) -> direct_chat_response_service.DirectChatResponseServices:
         return direct_chat_response_service.DirectChatResponseServices(
             with_context_used=lambda payload, context: {**payload, "context_used": context},
@@ -130,6 +146,70 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(events[0]["payload"]["interventions"][0]["title"], "Describe the outcome you want")
         self.assertIn("Tell the system what you want done", events[0]["payload"]["interventions"][0]["detail"])
         self.assertEqual(events[0]["payload"]["suggestions"], ["next"])
+
+    def test_hosted_tier_forces_platform_runtime_credentials(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="hello",
+            normalized_workspace_id="ws-1",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="deepseek",
+            normalized_requested_model="deepseek-v4-pro",
+            normalized_reasoning_effort="high",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={
+                "ai_ready": False,
+                "force_platform_runtime": True,
+                "credential_plane": "platform_runtime",
+                "billing_source": "empyralis_credits",
+                "ai_tier": "pro",
+            },
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "ws-1"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.supported_providers = ["deepseek"]
+        services.resolve_provider_for_direct_chat_message = (
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("generic provider selector should not run"))
+        )
+        observed: dict[str, object] = {}
+
+        def _generate(**kwargs):
+            observed["metadata"] = kwargs.get("metadata")
+            yield {"type": "chunk", "delta": "ok"}
+            yield {"type": "result", "reply": "ok", "provider": "deepseek", "model": "deepseek-v4-pro"}
+
+        services.direct_chat_generation_services.generate_chat_reply_stream_with_provider_fallback = _generate
+
+        with mock.patch(
+            "server_modules.direct_chat_runtime_service.direct_chat_provider_service.platform_runtime_credentials",
+            return_value={"api_key": "sk-platform", "auth_mode": "platform_runtime"},
+        ):
+            events = list(
+                direct_chat_runtime_service.build_direct_operator_reply(
+                    services=services,
+                    message=prepared.normalized_message,
+                    workspace_id="ws-1",
+                    requested_model="deepseek-v4-pro",
+                    requested_provider="deepseek",
+                )
+            )
+
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(events[-1]["payload"]["reply"], "ok")
+        metadata = observed.get("metadata")
+        self.assertIsInstance(metadata, dict)
+        self.assertEqual(metadata["billing_source"], "empyralis_credits")
+        self.assertEqual(metadata["ai_tier"], "pro")
+        self.assertEqual(metadata["credentials"]["api_key"], "sk-platform")
 
     def test_collect_direct_operator_reply_accumulates_chunks(self) -> None:
         services = self._runtime_services(SimpleNamespace())
@@ -577,7 +657,9 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
 
         self.assertEqual(payload["mode"], "answer")
         self.assertEqual(payload["reply"], "I can help with connected apps, channels, and available tools from this workspace.")
-        self.assertEqual(captured.get("message"), "what can you do here right now?")
+        observed_message = captured.get("normalized_message") or captured.get("message")
+        if observed_message is not None:
+            self.assertEqual(observed_message, "what can you do here right now?")
 
     def test_build_direct_operator_reply_returns_explicit_provider_unavailable_when_not_ready(self) -> None:
         prepared = SimpleNamespace(
@@ -811,6 +893,177 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
 
         self.assertEqual(captured["tools"], [])
         self.assertEqual(captured["assistant_plan_tools"], [{"name": "shell__exec"}])
+
+    def test_build_direct_operator_reply_exposes_web_tools_for_web_lookup_when_provider_ready(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="do some web search!",
+            normalized_workspace_id="ws-1",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="deepseek",
+            normalized_requested_model="deepseek-chat",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[
+                {"name": "web__search", "description": "Search the web"},
+                {"name": "web__fetch", "description": "Fetch a URL"},
+                {"name": "shell__exec", "description": "Run shell"},
+            ],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "ws-1"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.supported_providers = ["deepseek"]
+        services.message_has_obvious_direct_tool_intent = lambda message, tools: False
+        services.resolve_provider_for_direct_chat_message = (
+            lambda workspace_id, requested_provider, message, tools_present=False: ("deepseek", {"api_key": "sk-test"})
+        )
+        services.supports_direct_message_native_chat = lambda provider, credentials: provider == "deepseek" and bool(credentials)
+        captured: dict[str, object] = {}
+
+        def _stream_provider_backed_direct_chat(**kwargs):
+            captured["tools"] = kwargs.get("tools")
+            captured["assistant_plan_tools"] = kwargs.get("assistant_plan_tools")
+            return iter(
+                [
+                    {
+                        "type": "final",
+                        "payload": {"reply": "ok", "context_used": {}},
+                    }
+                ]
+            )
+
+        with mock.patch.object(
+            direct_chat_runtime_service.direct_chat_generation_service,
+            "stream_provider_backed_direct_chat",
+            side_effect=_stream_provider_backed_direct_chat,
+        ):
+            list(
+                direct_chat_runtime_service.build_direct_operator_reply(
+                    services=services,
+                    message=prepared.normalized_message,
+                    workspace_id="ws-1",
+                    requested_model="deepseek-chat",
+                    requested_provider="deepseek",
+                )
+            )
+
+        self.assertEqual(
+            captured["tools"],
+            [
+                {"name": "web__search", "description": "Search the web"},
+                {"name": "web__fetch", "description": "Fetch a URL"},
+            ],
+        )
+        self.assertEqual(captured["assistant_plan_tools"], prepared.tools)
+
+    def test_build_direct_operator_reply_requires_agent_computer_for_browser_request(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="open https://example.com in the browser",
+            normalized_workspace_id="ws-1",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="deepseek",
+            normalized_requested_model="deepseek-chat",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={
+                "ai_ready": True,
+                "runtime_ok": False,
+                "local_gateway_online": False,
+                "capability_truth": {"my_computer": {"state": "offline"}},
+            },
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[{"name": "browser__navigate", "description": "Navigate"}],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "ws-1"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.supported_providers = ["deepseek"]
+        services.resolve_provider_for_direct_chat_message = (
+            lambda workspace_id, requested_provider, message, tools_present=False: ("deepseek", {"api_key": "sk-test"})
+        )
+        services.supports_direct_message_native_chat = lambda provider, credentials: provider == "deepseek" and bool(credentials)
+
+        with mock.patch.object(
+            direct_chat_runtime_service.direct_chat_generation_service,
+            "stream_provider_backed_direct_chat",
+            side_effect=AssertionError("provider should not be called"),
+        ):
+            events = list(
+                direct_chat_runtime_service.build_direct_operator_reply(
+                    services=services,
+                    message=prepared.normalized_message,
+                    workspace_id="ws-1",
+                    requested_model="deepseek-chat",
+                    requested_provider="deepseek",
+                )
+            )
+
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(events[-1]["payload"]["reply"], "Choose Sage Agent Computer.")
+
+    def test_build_direct_operator_reply_blocks_browser_request_when_selected_agent_computer_offline(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="open https://example.com in the browser",
+            normalized_workspace_id="ws-1",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="deepseek",
+            normalized_requested_model="deepseek-chat",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={
+                "ai_ready": True,
+                "runtime_ok": False,
+                "local_gateway_online": False,
+                "selected_gateway_id": "gw-1",
+                "capability_truth": {"my_computer": {"state": "offline"}},
+            },
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[{"name": "browser__navigate", "description": "Navigate"}],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "ws-1"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.supported_providers = ["deepseek"]
+        services.resolve_provider_for_direct_chat_message = (
+            lambda workspace_id, requested_provider, message, tools_present=False: ("deepseek", {"api_key": "sk-test"})
+        )
+        services.supports_direct_message_native_chat = lambda provider, credentials: provider == "deepseek" and bool(credentials)
+
+        events = list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=services,
+                message=prepared.normalized_message,
+                workspace_id="ws-1",
+                requested_model="deepseek-chat",
+                requested_provider="deepseek",
+            )
+        )
+
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(events[-1]["payload"]["reply"], "Selected Sage Agent Computer is offline.")
 
     def test_build_direct_operator_reply_forces_explicit_tool_request_even_when_provider_ready(self) -> None:
         prepared = SimpleNamespace(

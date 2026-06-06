@@ -5,13 +5,17 @@ from typing import Any, Dict, List, Optional
 
 from server_modules import (
     activity_ledger_service,
+    direct_chat_runtime_exports,
+    direct_chat_tool_catalog_service,
     kill_switch_gate,
+    no_provider_service,
     sage_instruction_compiler_service,
     sage_heartbeat_service,
     sage_memory_service,
     sage_profile_service,
     secret_redaction_service,
     security_audit_service,
+    skill_registry,
     workspace_context,
 )
 from server_modules.conversation_memory_facade_service import (
@@ -77,6 +81,9 @@ _COMMUNICATION_SCOPES = {
 _MEMORY_SCOPES = {"memory", "sage_memory", "agent_memory"}
 _FILE_SCOPES = {"file", "files", "filesystem", "drive"}
 _CLOUD_STORAGE_SCOPES = {"dropbox", "google_drive", "icloud", "onedrive"}
+_SAGE_TOOL_RESULT_MAX_CHARS = 4000
+_AGENT_COMPUTER_TOOL_PREFIXES = ("browser__", "computer__", "file__", "shell__", "screenshot__")
+_AGENT_COMPUTER_TOOL_NAMES = {"hardware__action"}
 
 
 def _coerce_text(value: Any) -> str:
@@ -344,6 +351,367 @@ def _create_approval_for_blocked_action(
         return None
 
 
+def _dedupe_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        name = _coerce_text(item.get("name"))
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(item)
+    return out
+
+
+def _tool_requires_agent_computer(tool_name: str) -> bool:
+    normalized = _coerce_text(tool_name)
+    return normalized in _AGENT_COMPUTER_TOOL_NAMES or normalized.startswith(_AGENT_COMPUTER_TOOL_PREFIXES)
+
+
+def _summarize_tool_output(value: Any, *, max_chars: int = _SAGE_TOOL_RESULT_MAX_CHARS) -> str:
+    text = secret_redaction_service.redact_text(str(value or "").replace("\0", "")).strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars].rstrip()}\n...[truncated]"
+
+
+def _direct_tool_bundle(*, workspace_id: str, provider: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    try:
+        tool_capabilities = direct_chat_runtime_exports.resolve_workspace_tool_capabilities(workspace_id)
+    except Exception:
+        tool_capabilities = []
+    try:
+        availability = direct_chat_runtime_exports._resolve_direct_chat_availability(
+            workspace_id,
+            requested_provider=provider,
+        )
+    except Exception:
+        availability = {}
+
+    tools: list[dict[str, Any]] = []
+    try:
+        tools.extend(direct_chat_runtime_exports._build_direct_chat_tools(tool_capabilities))
+    except Exception:
+        pass
+    try:
+        tools.extend(direct_chat_runtime_exports._build_local_direct_chat_tools(availability))
+    except Exception:
+        pass
+    try:
+        tools.extend(direct_chat_runtime_exports._build_builtin_direct_chat_tools())
+    except Exception:
+        pass
+
+    runtime_ready = bool(
+        availability.get("runtime_ok")
+        or availability.get("local_gateway_online")
+        or availability.get("local_worker_online")
+    )
+    if not runtime_ready:
+        tools = [tool for tool in tools if not _tool_requires_agent_computer(_coerce_text(tool.get("name")))]
+    return _dedupe_tools(tools), tool_capabilities, availability
+
+
+def _plan_sage_direct_tool_calls(
+    *,
+    message: str,
+    tools: list[dict[str, Any]],
+    services: no_provider_service.NoProviderExecutionServices,
+) -> list[dict[str, Any]]:
+    compact = services.compact_text(message)
+    tool_names = {_coerce_text(item.get("name")) for item in tools if isinstance(item, dict)}
+    url = services.extract_first_url(message)
+    browser_requested = bool(
+        url
+        and any(
+            token in compact
+            for token in (
+                "browser",
+                "go to",
+                "open",
+                "visit",
+                "click",
+                "fill",
+                "page title",
+                "main heading",
+                "screenshot",
+                "screen shot",
+            )
+        )
+    )
+    if url and not browser_requested and "web__fetch" in tool_names and (
+        "fetch" in compact or "read" in compact or "summarize" in compact or "check" in compact
+    ):
+        return [{"name": "web__fetch", "arguments": {"url": url}}]
+
+    planned = no_provider_service.plan_tool_calls(
+        message,
+        tools,
+        compact_text=services.compact_text,
+        extract_first_path_reference=services.extract_first_path_reference,
+        extract_first_url=services.extract_first_url,
+    )
+    return [item for item in planned if isinstance(item, dict) and _coerce_text(item.get("name")) in tool_names]
+
+
+def _blocked_agent_computer_tool_for_message(message: str, availability: dict[str, Any]) -> dict[str, Any] | None:
+    if availability.get("runtime_ok") or availability.get("local_gateway_online") or availability.get("local_worker_online"):
+        return None
+    compact = " ".join(str(message or "").lower().split())
+    if direct_chat_tool_catalog_service.message_has_browser_automation_intent(message):
+        return {"name": "browser__navigate", "reason": "agent_computer_unavailable", "status": "blocked"}
+    if any(
+        token in compact
+        for token in (
+            "shell command",
+            "terminal command",
+            "run command",
+            "execute command",
+            "screenshot",
+            "screen shot",
+            "read file",
+            "write file",
+        )
+    ):
+        return {"name": "hardware__action", "reason": "agent_computer_unavailable", "status": "blocked"}
+    return None
+
+
+def _matching_mcp_skill(*, workspace_id: str, message: str) -> Any | None:
+    compact = " ".join(str(message or "").lower().split())
+    if not compact:
+        return None
+    candidates = [
+        skill
+        for skill in list_skill_definitions(workspace_id=workspace_id, include_disabled=False)
+        if _coerce_text(getattr(skill, "execution_adapter", "")).lower() == "mcp_tool"
+    ]
+    if not candidates:
+        return None
+    for skill in candidates:
+        terms = {
+            _coerce_text(getattr(skill, "id", "")).lower(),
+            _coerce_text(getattr(skill, "label", "")).lower(),
+            *[
+                _coerce_text(term).lower()
+                for term in (getattr(skill, "trigger_terms", ()) or ())
+                if _coerce_text(term)
+            ],
+        }
+        if any(term and term in compact for term in terms):
+            return skill
+    if len(candidates) == 1 and "mcp" in compact:
+        return candidates[0]
+    return None
+
+
+def _message_might_need_sage_action_loop(message: str) -> bool:
+    compact = " ".join(str(message or "").lower().split())
+    if not compact:
+        return False
+    if "mcp" in compact:
+        return True
+    if direct_chat_tool_catalog_service.message_has_web_lookup_intent(message):
+        return True
+    if direct_chat_tool_catalog_service.message_has_browser_automation_intent(message):
+        return True
+    if any(
+        token in compact
+        for token in (
+            "fetch http",
+            "fetch https",
+            "read http",
+            "read https",
+            "summarize http",
+            "summarize https",
+            "shell command",
+            "terminal command",
+            "run command",
+            "execute command",
+            "screenshot",
+            "screen shot",
+            "read file",
+            "write file",
+            "current working directory",
+            "current directory",
+            "cwd",
+        )
+    ):
+        return True
+    return False
+
+
+async def _run_sage_action_loop_v1(
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    message: str,
+    provider: str,
+    model: str,
+    credentials: dict[str, Any],
+    trace_id: str,
+    actor_user_id: str,
+    normalized_channel_context: dict[str, str],
+) -> dict[str, Any] | None:
+    tools, tool_capabilities, availability = _direct_tool_bundle(workspace_id=workspace_id, provider=provider)
+    try:
+        services = direct_chat_runtime_exports._no_provider_execution_services()
+    except Exception:
+        services = None
+    blocked_tools: list[dict[str, Any]] = []
+    tool_calls: list[dict[str, Any]] = []
+    outputs: list[str] = []
+    session_ctx = {
+        "tenant_id": tenant_id or "default",
+        "workspace_id": workspace_id,
+        "thread_id": trace_id,
+        "metadata": {
+            "source": "sage_chat",
+            "surface": "sage",
+            "trace_id": trace_id,
+            "agent_scope": "sage",
+            "sage_agent_id": SAGE_MAIN_AGENT_ID,
+            "channel_context": normalized_channel_context or None,
+        },
+        "agent_turn_request": {
+            "tenant_id": tenant_id or "default",
+            "workspace_id": workspace_id,
+            "thread_id": trace_id,
+            "session_id": trace_id,
+            "policy_context": {
+                "agent_scope": "sage",
+                "agent_id": SAGE_MAIN_AGENT_ID,
+            },
+            "context_hints": {
+                "metadata": {
+                    "source": "sage_chat",
+                    "trace_id": trace_id,
+                    "user_id": actor_user_id or None,
+                }
+            },
+        },
+    }
+
+    direct_tool_calls: list[dict[str, Any]] = []
+    if services is not None:
+        direct_tool_calls = _plan_sage_direct_tool_calls(
+            message=message,
+            tools=tools,
+            services=services,
+        )
+        if not direct_tool_calls:
+            blocked = _blocked_agent_computer_tool_for_message(message, availability)
+            if blocked is not None:
+                blocked_tools.append(blocked)
+
+    mcp_skill = _matching_mcp_skill(workspace_id=workspace_id, message=message)
+    if not direct_tool_calls and mcp_skill is None and not blocked_tools:
+        return None
+
+    if direct_tool_calls and services is not None:
+        approval_payload = direct_chat_runtime_exports._build_direct_tool_approval_response(
+            tool_calls=direct_tool_calls,
+            tool_capabilities=tool_capabilities,
+            session_ctx=session_ctx,
+        )
+        if approval_payload is not None:
+            approvals = list(approval_payload.get("approvals") or [])
+            return {
+                "message": "Approval is required before Sage can run that action.",
+                "tool_calls": [
+                    {
+                        "name": _coerce_text(call.get("name")),
+                        "arguments": call.get("arguments") if isinstance(call.get("arguments"), dict) else {},
+                        "status": "approval_required",
+                    }
+                    for call in direct_tool_calls
+                ],
+                "blocked_tools": [],
+                "approvals_required": approvals,
+                "action_execution_mode": "approval_required",
+                "available_tools": tools,
+            }
+        for index, call in enumerate(direct_tool_calls, start=1):
+            tool_name = _coerce_text(call.get("name"))
+            arguments = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+            try:
+                output = direct_chat_runtime_exports._execute_single_direct_tool_call(
+                    tool_call=call,
+                    workspace_id=workspace_id,
+                    thread_id=trace_id,
+                    index=index,
+                    provider=provider,
+                    model=model,
+                    credentials=credentials,
+                    reasoning_effort="",
+                    session_ctx=session_ctx,
+                )
+                summary = _summarize_tool_output(output)
+                tool_calls.append({
+                    "name": tool_name,
+                    "arguments": arguments,
+                    "status": "completed",
+                    "output": summary,
+                })
+                if summary:
+                    outputs.append(summary)
+            except Exception as exc:
+                error = _summarize_tool_output(str(exc), max_chars=800)
+                blocked_tools.append({"name": tool_name, "reason": error or type(exc).__name__, "status": "blocked"})
+                tool_calls.append({
+                    "name": tool_name,
+                    "arguments": arguments,
+                    "status": "failed",
+                    "error": error,
+                })
+
+    if mcp_skill is not None:
+        skill_id = _coerce_text(getattr(mcp_skill, "id", ""))
+        try:
+            result = await skill_registry.execute_skill(
+                skill_id=skill_id,
+                tenant_id=tenant_id or "default",
+                workspace_id=workspace_id,
+                goal=message,
+                agent_label="Sage",
+                hard_context="Main Sage action loop v1.",
+                operational_policy="Use approved MCP tools only; preserve Sage approval and audit policy.",
+            )
+            reply = _summarize_tool_output((result or {}).get("reply") or result)
+            tool_calls.append({
+                "name": skill_id,
+                "tool_name": skill_id,
+                "arguments": {"goal": message},
+                "status": "completed" if str((result or {}).get("status") or "ok").lower() not in {"blocked", "failed", "error"} else "failed",
+                "output": reply,
+            })
+            if reply:
+                outputs.append(reply)
+        except Exception as exc:
+            error = _summarize_tool_output(str(exc), max_chars=800)
+            blocked_tools.append({"name": skill_id, "reason": error or type(exc).__name__, "status": "blocked"})
+            tool_calls.append({
+                "name": skill_id,
+                "tool_name": skill_id,
+                "arguments": {"goal": message},
+                "status": "failed",
+                "error": error,
+            })
+
+    mode = "tools_executed" if tool_calls and not blocked_tools else "tool_blocked" if blocked_tools else "text_only"
+    return {
+        "message": "\n\n".join(output for output in outputs if output).strip()
+        or ("Sage could not run that action because the required runtime is unavailable." if blocked_tools else "Tool execution completed."),
+        "tool_calls": tool_calls,
+        "blocked_tools": blocked_tools,
+        "approvals_required": [],
+        "action_execution_mode": mode,
+        "available_tools": tools,
+    }
+
+
 def _emit_failed_audit_event(
     *,
     tenant_id: str,
@@ -459,6 +827,149 @@ async def handle_sage_chat(
         metadata["channel_context"] = normalized_channel_context
     requested_model = resolve_requested_model(context, metadata, provider)
 
+    action_result = None
+    if _message_might_need_sage_action_loop(normalized_message):
+        action_result = await _run_sage_action_loop_v1(
+            workspace_id=normalized_workspace_id,
+            tenant_id=normalized_tenant_id,
+            message=normalized_message,
+            provider=provider,
+            model=requested_model,
+            credentials=credentials,
+            trace_id=trace_id,
+            actor_user_id=actor_user_id,
+            normalized_channel_context=normalized_channel_context,
+        )
+    if action_result is not None:
+        if "sage_action_loop" not in used_context:
+            used_context.append("sage_action_loop")
+        reply = _coerce_text(action_result.get("message"))
+        tool_calls = list(action_result.get("tool_calls") or [])
+        blocked_tools = list(action_result.get("blocked_tools") or [])
+        approvals_required = list(action_result.get("approvals_required") or [])
+        action_execution_mode = _coerce_text(action_result.get("action_execution_mode")) or "tools_executed"
+        prompt_diagnostics = {
+            "action_loop_v1": True,
+            "tool_call_count": len(tool_calls),
+            "blocked_tool_count": len(blocked_tools),
+            "approval_required_count": len(approvals_required),
+        }
+
+        try:
+            persist_interaction(
+                subject=ConversationMemorySubject(
+                    workspace_id=normalized_workspace_id,
+                    tenant_id=normalized_tenant_id,
+                    surface_kind=DIRECT_CHAT_SURFACE,
+                ),
+                policy_profile=DIRECT_CHAT_PROFILE,
+                user_message=normalized_message,
+                assistant_reply=reply or "",
+                metadata={"trace_id": trace_id, "source": "sage_chat", "channel_context": normalized_channel_context or None},
+            )
+        except Exception:
+            pass
+
+        try:
+            await activity_ledger_service.append_activity_event(
+                tenant_id=normalized_tenant_id,
+                workspace_id=normalized_workspace_id,
+                actor_type="user",
+                actor_id=actor_user_id or "unknown",
+                event_class="sage_activity",
+                action="sage_chat.completed",
+                trace_id=trace_id,
+                title="Sage chat completed",
+                summary=(normalized_message[:120] + "..." if len(normalized_message) > 120 else normalized_message),
+                status="logged",
+                detail_level="timeline_detail",
+                metadata={
+                    "used_context": used_context,
+                    "provider": provider,
+                    "model": requested_model or None,
+                    "surface": normalized_surface,
+                    "blocked_action_count": len(blocked_tools),
+                    "action_execution_mode": action_execution_mode,
+                    "prompt_diagnostics": prompt_diagnostics,
+                    "channel_context": normalized_channel_context or None,
+                },
+            )
+        except Exception:
+            pass
+
+        try:
+            security_audit_service.emit_security_audit_event(
+                action="sage_chat.completed",
+                status="success" if not blocked_tools else "blocked",
+                tenant_id=normalized_tenant_id,
+                workspace_id=normalized_workspace_id,
+                actor_user_id=actor_user_id or None,
+                actor_email=actor_email or None,
+                actor_auth_type=actor_auth_type or None,
+                trace_id=trace_id,
+                detail=f"Sage action loop completed via {action_execution_mode}",
+                metadata={
+                    "used_context": used_context,
+                    "provider": provider,
+                    "model": requested_model or None,
+                    "surface": normalized_surface,
+                    "tool_calls": tool_calls,
+                    "blocked_tools": blocked_tools,
+                    "approval_required_count": len(approvals_required),
+                    "action_execution_mode": action_execution_mode,
+                    "channel_context": normalized_channel_context or None,
+                },
+                idempotency_key=f"sage_chat:{trace_id}",
+            )
+        except Exception:
+            pass
+
+        try:
+            transparency_events = emit_sage_turn_transparency_events(
+                trace_id=trace_id,
+                workspace_id=normalized_workspace_id,
+                user_message=normalized_message,
+                sage_result={
+                    "message": reply or "",
+                    "used_context": [{"name": ctx_label} for ctx_label in used_context],
+                    "tool_calls": tool_calls,
+                    "blocked_tools": blocked_tools,
+                    "approvals_required": approvals_required,
+                    "error": None,
+                },
+                surface=normalized_surface,
+            )
+        except Exception:
+            transparency_events = []
+
+        if transparency_events:
+            try:
+                await persist_transparency_events(
+                    trace_id=trace_id,
+                    tenant_id=normalized_tenant_id,
+                    workspace_id=normalized_workspace_id,
+                    events=[e.to_user_payload() for e in transparency_events],
+                    surface=normalized_surface,
+                )
+            except Exception:
+                pass
+
+        return {
+            "message": reply or "",
+            "error": None,
+            "used_context": used_context,
+            "tool_calls": tool_calls,
+            "available_tools": list(action_result.get("available_tools") or []) or safe_skills,
+            "blocked_tools": blocked_tools,
+            "approvals_required": approvals_required,
+            "memory_updates": [],
+            "action_execution_mode": action_execution_mode,
+            "trace_id": trace_id,
+            "provider": provider,
+            "model": requested_model or None,
+            "transparency_events": transparency_events,
+        }
+
     # --- Build prompt ---
     instruction_bundle = sage_instruction_compiler_service.build_sage_instruction_bundle(
         workspace_id=normalized_workspace_id,
@@ -487,6 +998,11 @@ async def handle_sage_chat(
         "explain Sage's role in the current workspace in plain language. Do not dump a "
         "tool inventory, Agent Studio agent list, or provider/runtime details unless the "
         "user explicitly asks for tools, capabilities, agents, or diagnostics.\n"
+        "Follow-through rule: do not end a turn by saying you will check, inspect, look "
+        "into it, or get back later. If the user asks you to check, inspect, search, read, "
+        "or verify something and an available tool can do it, use that tool in this turn. "
+        "If no available tool or permission can do it, say exactly what is missing and "
+        "answer from current context.\n"
         "Approval rule: require explicit approval before sending messages, "
         "changing files, spending credits, controlling a computer, publishing "
         "apps, or making external changes when policy requires approval."

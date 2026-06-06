@@ -76,7 +76,7 @@ class EmpyralisModelTierRoutingServiceTests(unittest.TestCase):
             requested_model="deepseek-chat",
         )
 
-        self.assertEqual(tier, "light")
+        self.assertEqual(tier, "pro")
 
     def test_legacy_fast_route_migrates_to_light(self) -> None:
         tier = empyralis_model_tier_routing_service.infer_migrated_public_tier_from_legacy_selection(

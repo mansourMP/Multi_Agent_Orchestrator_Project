@@ -6,7 +6,9 @@ import time
 from typing import Any, Dict, Optional
 
 from server_modules import (
+    agent_computer_policy_service,
     artifact_service,
+    execution_mode_policy,
     gateway_activity_service,
     gateway_inventory_service,
     gateway_registry_service,
@@ -63,6 +65,85 @@ def _gateway_supervisor_capability(
         args.setdefault("mode", "write")
         return "filesystem.read_write", args
     return normalized, args
+
+
+def _registration_metadata(registration: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
+    return dict(metadata or {})
+
+
+def _runtime_access_mode_for_dispatch(
+    *,
+    registration: Dict[str, Any],
+    explicit_mode: Optional[str],
+) -> str:
+    metadata = _registration_metadata(registration)
+    return execution_mode_policy.normalize_runtime_access_mode(
+        explicit_mode or metadata.get("runtime_access_mode")
+    )
+
+
+def _full_access_warning_acknowledged(registration: Dict[str, Any]) -> bool:
+    metadata = _registration_metadata(registration)
+    return bool(metadata.get("autonomous_agent_setup_warning_acknowledged"))
+
+
+def _policy_payload_for_dispatch(
+    *,
+    registration: Dict[str, Any],
+    runtime_access_mode: str,
+    agent_scope: str,
+) -> Dict[str, Any]:
+    metadata = _registration_metadata(registration)
+    policy_payload = (
+        metadata.get("agent_computer_policy")
+        or metadata.get("computer_policy")
+        or metadata.get("gateway_policy")
+    )
+    policy = None
+    if isinstance(policy_payload, dict):
+        try:
+            policy = agent_computer_policy_service.normalize_agent_computer_policy(policy_payload)
+        except Exception:
+            policy = None
+    if policy is None:
+        policy_id = str(metadata.get("agent_computer_policy_id") or "").strip()
+        workspace_id = str(registration.get("workspace_id") or "").strip()
+        if policy_id and workspace_id:
+            try:
+                policy = agent_computer_policy_service.get_saved_agent_computer_policy(
+                    workspace_id=workspace_id,
+                    policy_id=policy_id,
+                )
+            except Exception:
+                policy = None
+    if policy is None:
+        autonomy_mode = (
+            agent_computer_policy_service.AUTONOMY_YOLO
+            if runtime_access_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+            else agent_computer_policy_service.AUTONOMY_ASK_EVERY_TIME
+        )
+        policy = agent_computer_policy_service.build_default_agent_computer_policy(
+            autonomy_mode=autonomy_mode,
+            policy_id=str(metadata.get("agent_computer_policy_id") or "").strip()
+            or f"gateway:{str(registration.get('gateway_id') or 'default').strip() or 'default'}",
+            filesystem_scope=("/",) if runtime_access_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE else (),
+        )
+    mode = "default"
+    if runtime_access_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE:
+        mode = "full_access"
+    elif runtime_access_mode == execution_mode_policy.CUSTOM_RUNTIME_ACCESS_MODE:
+        mode = "custom"
+    return {
+        "mode": mode,
+        "agent_scope": str(agent_scope or "").strip() or "studio_agent",
+        "filesystem_scope": list(policy.filesystem_scope),
+        "allowed_paths": list(policy.filesystem_scope),
+        "blocked_filesystem_scope": list(policy.blocked_filesystem_scope),
+        "full_access_warning_acknowledged": _full_access_warning_acknowledged(registration),
+        "policy_id": policy.policy_id,
+        "policy_version": policy.policy_version,
+    }
 
 
 def _has_gateway_capability(registration: Dict[str, Any], capability_id: str) -> bool:
@@ -373,6 +454,7 @@ async def execute_tool_via_gateway(
     screenshot_retention: Optional[str] = None,
     gateway_session_id: Optional[str] = None,
     actor_id: Optional[str] = None,
+    agent_scope: Optional[str] = None,
 ) -> Dict[str, Any]:
     registration = _require_active_gateway_registration(gateway_id, workspace_id=workspace_id)
     _gw = str(registration.get("gateway_id") or "").strip()
@@ -381,6 +463,28 @@ async def execute_tool_via_gateway(
     _cap = str(capability_id or "").strip()
     supervisor_capability_id, supervisor_arguments = _gateway_supervisor_capability(_cap, arguments)
     registration_metadata = dict(registration.get("metadata") or {})
+    resolved_agent_scope = str(agent_scope or "").strip().lower() or "studio_agent"
+    resolved_runtime_access_mode = _runtime_access_mode_for_dispatch(
+        registration=registration,
+        explicit_mode=runtime_access_mode,
+    )
+    if (
+        resolved_runtime_access_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+        and resolved_agent_scope != "sage"
+    ):
+        raise PermissionError("full_access Agent Computer execution is available only to Sage.")
+    if (
+        resolved_runtime_access_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+        and not _full_access_warning_acknowledged(registration)
+    ):
+        raise PermissionError(
+            "full_access Agent Computer execution requires the Sage setup warning acknowledgement."
+        )
+    policy_payload = _policy_payload_for_dispatch(
+        registration=registration,
+        runtime_access_mode=resolved_runtime_access_mode,
+        agent_scope=resolved_agent_scope,
+    )
     _session_id = _text(
         gateway_session_id
         or registration.get("active_session_id")
@@ -455,8 +559,10 @@ async def execute_tool_via_gateway(
             workspace_id=_ws,
             timeout_seconds=timeout_seconds,
             request_id=request_id,
-            runtime_access_mode=runtime_access_mode,
+            runtime_access_mode=resolved_runtime_access_mode,
             empyralis_approved=empyralis_approved,
+            agent_scope=resolved_agent_scope,
+            policy=policy_payload,
         )
         result = _materialize_gateway_artifacts(
             capability_id=_cap,

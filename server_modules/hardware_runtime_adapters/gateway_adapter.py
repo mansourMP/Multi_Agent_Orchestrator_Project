@@ -173,6 +173,7 @@ async def execute_gateway_action(
     timeout_seconds: Optional[int],
     tool_call_id: str,
     runtime_target: str = "user_device_gateway",
+    agent_scope: str = "studio_agent",
 ) -> Dict[str, Any]:
     registration = find_gateway_registration(
         gateway_id=gateway_id,
@@ -286,6 +287,7 @@ async def execute_gateway_action(
             runtime_access_mode=runtime_access_mode,
             runtime_session_binding=HARDWARE_RUNTIME_SESSION_BINDING,
             thread_id=thread_id,
+            agent_scope=agent_scope,
         )
         approval_id = text(approval.get("approval_id"))
         if approval_id:
@@ -341,6 +343,7 @@ async def execute_gateway_action(
             request_id=request_id,
             runtime_access_mode=runtime_access_mode,
             empyralis_approved=runtime_access_mode == FULL_RUNTIME_ACCESS_MODE,
+            agent_scope=agent_scope,
         )
     except Exception as exc:
         failure = agent_computer_permission_secret_model.local_failure_classification(exc)

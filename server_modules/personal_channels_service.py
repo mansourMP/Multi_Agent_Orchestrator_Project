@@ -19,6 +19,16 @@ from server_modules import (
 )
 
 
+class _LazyGatewayProtocolService:
+    def __getattr__(self, name: str) -> Any:
+        from server_modules import gateway_protocol_service as module
+
+        return getattr(module, name)
+
+
+gateway_protocol_service = _LazyGatewayProtocolService()
+
+
 WHATSAPP_PERSONAL_CHANNEL_KEY = "whatsapp_personal"
 WHATSAPP_PERSONAL_PROVIDER = channel_lane_contract_service.assert_personal_gateway_channel(
     WHATSAPP_PERSONAL_CHANNEL_KEY
@@ -1185,8 +1195,6 @@ async def _deliver_whatsapp_personal_reply(
         idempotency_key=idempotency_key,
     )
 
-    from server_modules import gateway_protocol_service
-
     try:
         _enforce_personal_channel_dispatch_decision(
             gateway_id=str(gateway_id or "").strip(),
@@ -1483,8 +1491,6 @@ async def _handle_telegram_gateway_channel_inbound(
         idempotency_key=idempotency_key,
     )
 
-    from server_modules import gateway_protocol_service
-
     try:
         _enforce_personal_channel_dispatch_decision(
             gateway_id=str(gateway_id or "").strip(),
@@ -1659,8 +1665,6 @@ async def _deliver_local_bridge_personal_reply(
         idempotency_key=idempotency_key,
     )
 
-    from server_modules import gateway_protocol_service
-
     _enforce_personal_channel_dispatch_decision(
         gateway_id=str(gateway_id or "").strip(),
         registration=registration,
@@ -1806,8 +1810,6 @@ async def send_local_bridge_personal_message(
     if str(outbound.get("status") or "").strip() == "delivered":
         return outbound
 
-    from server_modules import gateway_protocol_service
-
     _enforce_personal_channel_dispatch_decision(
         gateway_id=str(gateway_id or "").strip(),
         registration=registration,
@@ -1858,8 +1860,6 @@ async def send_whatsapp_personal_message(
     )
     if str(outbound.get("status") or "").strip() == "delivered":
         return outbound
-
-    from server_modules import gateway_protocol_service
 
     _enforce_personal_channel_dispatch_decision(
         gateway_id=str(gateway_id or "").strip(),
@@ -1937,6 +1937,7 @@ async def configure_whatsapp_personal_gateway(
         run_id=run_id,
         trace_id=trace_id,
         workspace_id=str(registration.get("workspace_id") or "").strip(),
+        agent_scope="sage",
     )
     result = execution.get("result") if isinstance(execution.get("result"), dict) else {}
     return {
@@ -1996,8 +1997,6 @@ async def dispatch_approved_personal_channel_outbound(
     )
     if str(outbound.get("status") or "").strip() == "delivered":
         return {"status": "completed", "outbound": outbound, "gateway_id": str(gateway_id or "").strip(), "channel_key": channel_key}
-    from server_modules import gateway_protocol_service
-
     dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
         gateway_id=str(gateway_id or "").strip(),
         channel_key=channel_key,
@@ -2049,8 +2048,6 @@ async def send_telegram_personal_message(
     )
     if str(outbound.get("status") or "").strip() == "delivered":
         return outbound
-
-    from server_modules import gateway_protocol_service
 
     _enforce_personal_channel_dispatch_decision(
         gateway_id=str(gateway_id or "").strip(),
@@ -2161,6 +2158,7 @@ async def configure_telegram_personal_gateway(
         run_id=run_id,
         trace_id=trace_id,
         workspace_id=str(registration.get("workspace_id") or "").strip(),
+        agent_scope="sage",
     )
     result = execution.get("result") if isinstance(execution.get("result"), dict) else {}
     return {

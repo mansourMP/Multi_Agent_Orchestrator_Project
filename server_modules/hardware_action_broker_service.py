@@ -643,6 +643,7 @@ async def execute_hardware_action(
     runtime_access_mode: Optional[str] = None,
     execution_mode: Optional[str] = None,
     cost_metadata: Optional[Dict[str, Any]] = None,
+    agent_scope: str = "studio_agent",
 ) -> Dict[str, Any]:
     args = _dict(arguments)
     target_ids = _runtime_target_ids(runtime_target)
@@ -832,6 +833,7 @@ async def execute_hardware_action(
         timeout_seconds=timeout_seconds,
         tool_call_id=tool_call_id,
         runtime_target=canonical_target_id,
+        agent_scope=agent_scope,
     )
 
 

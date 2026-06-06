@@ -547,6 +547,7 @@ async def execute_browser_capability_via_gateway(
         workspace_id=_ws,
         timeout_seconds=timeout_seconds,
         request_id=request_id,
+        agent_scope="sage",
     )
     session = _persist_browser_session_result(
         registration=registration,

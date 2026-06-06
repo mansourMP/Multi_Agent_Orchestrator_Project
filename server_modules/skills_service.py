@@ -1847,6 +1847,15 @@ def _runtime_access_mode_from_direct_tool_context(
     return "default_guarded"
 
 
+def _agent_scope_from_direct_tool_context(session_ctx: Dict[str, Any] | None) -> str:
+    metadata = _direct_tool_session_metadata(session_ctx)
+    for key in ("agent_scope", "scope"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    return "studio_agent"
+
+
 def _tenant_id_from_direct_tool_context(session_ctx: Dict[str, Any] | None) -> str:
     session_payload = session_ctx if isinstance(session_ctx, dict) else {}
     agent_turn_request = session_payload.get("agent_turn_request") if isinstance(session_payload.get("agent_turn_request"), dict) else {}
@@ -2085,6 +2094,7 @@ def _execute_direct_tool_via_gateway(
     workspace_id: str,
     runtime_target: str = "user_device_gateway",
     runtime_access_mode: str = "default_guarded",
+    agent_scope: str = "studio_agent",
     tenant_id: str = "default",
     thread_id: str = "",
     request_id: str = "",
@@ -2102,6 +2112,7 @@ def _execute_direct_tool_via_gateway(
             action_id=capability_id,
             runtime_target=runtime_target,
             runtime_access_mode=runtime_access_mode,
+            agent_scope=agent_scope,
             gateway_id=gateway_id,
             capability_id=capability_id,
             arguments=arguments,
@@ -2254,6 +2265,7 @@ def _execute_hardware_action_tool_call(
                 explicit_mode=payload.get("runtime_access_mode") or payload.get("execution_mode") or payload.get("permission_mode"),
                 session_ctx=session_ctx,
             ),
+            agent_scope=_agent_scope_from_direct_tool_context(session_ctx),
             gateway_id=gateway_id,
             device_id=str(payload.get("device_id") or "").strip() or None,
             node_id=str(payload.get("node_id") or "").strip() or None,
@@ -2498,6 +2510,7 @@ def _execute_safe_direct_local_tool_call(
                 session_ctx=session_ctx,
             ),
             runtime_access_mode=_runtime_access_mode_from_direct_tool_context(session_ctx=session_ctx),
+            agent_scope=_agent_scope_from_direct_tool_context(session_ctx),
             tenant_id=tenant_id,
             thread_id=str(thread_id or "").strip(),
             request_id=gateway_request_id,

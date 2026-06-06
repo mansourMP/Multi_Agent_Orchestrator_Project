@@ -107,6 +107,8 @@ export interface GatewayToolInvokePayload {
   workspace_id: string;
   runtime_access_mode?: string;
   empyralis_approved?: boolean;
+  agent_scope?: string;
+  policy?: Record<string, unknown> | null;
 }
 
 export interface GatewayToolInterruptPayload {

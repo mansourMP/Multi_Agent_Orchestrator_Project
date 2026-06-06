@@ -201,6 +201,7 @@ async def _execute_personal_channel_send_approval(
     request_id: Optional[str] = None,
     runtime_access_mode: Optional[str] = None,
     empyralis_approved: bool = False,
+    agent_scope: Optional[str] = None,
 ) -> Dict[str, Any]:
     from server_modules import personal_channels_service
 
@@ -275,6 +276,7 @@ async def request_gateway_tool_approval(
     runtime_access_mode: Optional[str] = None,
     runtime_session_binding: Optional[str] = None,
     thread_id: Optional[str] = None,
+    agent_scope: Optional[str] = None,
 ) -> Dict[str, Any]:
     request_payload = {
         "capability_id": str(capability_id or "").strip(),
@@ -296,6 +298,8 @@ async def request_gateway_tool_approval(
         request_payload["runtime_access_mode"] = str(runtime_access_mode or "").strip()
     if str(runtime_session_binding or "").strip():
         request_payload["runtime_session_binding"] = str(runtime_session_binding or "").strip()
+    if str(agent_scope or "").strip():
+        request_payload["agent_scope"] = str(agent_scope or "").strip()
     _enforce_gateway_approval_transition(
         operation="create_gateway_tool_approval",
         registration=registration,
@@ -537,6 +541,7 @@ async def resolve_gateway_tool_approval(
     if resolved_execute_fn is default_execute_fn:
         execute_kwargs["runtime_access_mode"] = str(request_payload.get("runtime_access_mode") or "").strip() or None
         execute_kwargs["empyralis_approved"] = True
+        execute_kwargs["agent_scope"] = str(request_payload.get("agent_scope") or "").strip() or None
         if _is_personal_channel_send_capability(str(execute_kwargs.get("capability_id") or "")):
             resolved_execute_fn = _execute_personal_channel_send_approval
     try:

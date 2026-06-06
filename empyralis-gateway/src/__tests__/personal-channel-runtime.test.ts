@@ -138,6 +138,47 @@ test("local bridge personal channel runtime fails closed until bridge is configu
   );
 });
 
+test("local bridge personal channel runtime rejects public bridge URLs by default", async () => {
+  const wechatConfig = LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.find(
+    (item) => item.channelKey === "wechat_personal",
+  );
+  assert.ok(wechatConfig);
+  const previousUrl = process.env.EMPYRALIS_WECHAT_BRIDGE_URL;
+  process.env.EMPYRALIS_WECHAT_BRIDGE_URL = "https://public-bridge.example.com";
+  try {
+    const runtime = new LocalBridgePersonalChannelRuntime(wechatConfig);
+    const health = await runtime.getHealthSnapshot();
+
+    assert.equal(health.status, "invalid_config");
+    assert.deepEqual(health.issues, ["wechat_personal_bridge_url_invalid"]);
+    await assert.rejects(
+      () =>
+        runtime.handleChannelOutbound({
+          id: "req-public-bridge",
+          kind: "request",
+          protocolVersion: "v1alpha2",
+          type: "channel.outbound",
+          ts: new Date().toISOString(),
+          scope: { tenant_id: "t1", workspace_id: "w1", user_id: "u1", device_id: "d1", gateway_id: "g1" },
+          payload: {
+            channel_key: "wechat_personal",
+            provider: "wechat_local_bridge",
+            idempotency_key: "idem-public",
+            remote_jid: "peer",
+            text: "hello",
+          },
+        }),
+      /private-network Agent Computer bridge/,
+    );
+  } finally {
+    if (previousUrl === undefined) {
+      delete process.env.EMPYRALIS_WECHAT_BRIDGE_URL;
+    } else {
+      process.env.EMPYRALIS_WECHAT_BRIDGE_URL = previousUrl;
+    }
+  }
+});
+
 test("local bridge personal channel runtime sends through configured bridge", async () => {
   const signalConfig = LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.find(
     (item) => item.channelKey === "signal_personal",
@@ -196,81 +237,81 @@ test("local bridge manifest list includes Signal, iMessage, and WeChat as live-c
   assert.equal(byKey.get("wechat_personal")?.liveCapable, true);
 });
 
-test("local bridge harness proves health, outbound, and inbound event contract", async () => {
-  const signalConfig = LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.find(
-    (item) => item.channelKey === "signal_personal",
-  );
-  assert.ok(signalConfig);
+test("local bridge harness proves health, outbound, and inbound event contract for all bridge channels", async () => {
   const harness = await startLocalBridgeHarness();
-  const previousUrl = process.env.EMPYRALIS_SIGNAL_BRIDGE_URL;
-  const previousPollMs = process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS;
-  process.env.EMPYRALIS_SIGNAL_BRIDGE_URL = harness.url;
-  process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS = "25";
-  const runtime = new LocalBridgePersonalChannelRuntime(signalConfig);
-  const inbound: unknown[] = [];
-  runtime.setPublisher({
-    publishStateUpdate: async () => undefined,
-    publishEvent: async (_type, payload) => {
-      inbound.push(payload);
-    },
-  });
+  const previousEnv = new Map<string, string | undefined>();
+  const runtimes: LocalBridgePersonalChannelRuntime[] = [];
   try {
-    const health = await runtime.getHealthSnapshot();
-    assert.equal(health.connected, true);
-    assert.equal(health.status, "connected");
+    for (const config of LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS) {
+      previousEnv.set(`${config.envPrefix}_URL`, process.env[`${config.envPrefix}_URL`]);
+      previousEnv.set(`${config.envPrefix}_POLL_MS`, process.env[`${config.envPrefix}_POLL_MS`]);
+      process.env[`${config.envPrefix}_URL`] = harness.url;
+      process.env[`${config.envPrefix}_POLL_MS`] = "25";
 
-    const result = await runtime.handleChannelOutbound({
-      id: "req-1",
-      kind: "request",
-      protocolVersion: "v1alpha2",
-      type: "channel.outbound",
-      ts: new Date().toISOString(),
-      scope: { tenant_id: "t1", workspace_id: "w1", user_id: "u1", device_id: "d1", gateway_id: "g1" },
-      payload: {
-        channel_key: "signal_personal",
-        provider: "signal_local_bridge",
-        idempotency_key: "idem-harness-1",
-        remote_jid: "signal-peer",
-        text: "hello through harness",
-      },
-    });
-    assert.equal(result.delivered, true);
-    assert.equal(harness.sentMessages()[0].text, "hello through harness");
-    const sentResponse = await fetch(`${harness.url}/sent`);
-    const sentPayload = await sentResponse.json() as { items?: Array<{ idempotency_key?: string }> };
-    assert.equal(sentPayload.items?.[0]?.idempotency_key, "idem-harness-1");
+      const runtime = new LocalBridgePersonalChannelRuntime(config);
+      runtimes.push(runtime);
+      const inbound: unknown[] = [];
+      runtime.setPublisher({
+        publishStateUpdate: async () => undefined,
+        publishEvent: async (_type, payload) => {
+          inbound.push(payload);
+        },
+      });
 
-    await runtime.start();
-    const eventResponse = await fetch(`${harness.url}/events`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        channel_key: "signal_personal",
-        external_message_id: "incoming-1",
-        remote_jid: "signal-peer",
-        push_name: "Mansur",
-        text: "hello sage",
-      }),
-    });
-    assert.equal(eventResponse.ok, true);
-    await eventually(() => {
-      assert.equal(inbound.length, 1);
-      const payload = inbound[0] as { channel_key?: string; message?: { text?: string } };
-      assert.equal(payload.channel_key, "signal_personal");
-      assert.equal(payload.message?.text, "hello sage");
-    });
-  } finally {
-    await runtime.stop();
-    await harness.close();
-    if (previousUrl === undefined) {
-      delete process.env.EMPYRALIS_SIGNAL_BRIDGE_URL;
-    } else {
-      process.env.EMPYRALIS_SIGNAL_BRIDGE_URL = previousUrl;
+      const health = await runtime.getHealthSnapshot();
+      assert.equal(health.connected, true);
+      assert.equal(health.status, "connected");
+
+      const result = await runtime.handleChannelOutbound({
+        id: `req-${config.channelKey}`,
+        kind: "request",
+        protocolVersion: "v1alpha2",
+        type: "channel.outbound",
+        ts: new Date().toISOString(),
+        scope: { tenant_id: "t1", workspace_id: "w1", user_id: "u1", device_id: "d1", gateway_id: "g1" },
+        payload: {
+          channel_key: config.channelKey,
+          provider: config.provider,
+          idempotency_key: `idem-harness-${config.channelKey}`,
+          remote_jid: `${config.channelKey}-peer`,
+          text: `hello through ${config.channelKey}`,
+        },
+      });
+      assert.equal(result.delivered, true);
+      const sent = harness.sentMessages().find((item) => item.channel_key === config.channelKey);
+      assert.equal(sent?.text, `hello through ${config.channelKey}`);
+
+      await runtime.start();
+      const eventResponse = await fetch(`${harness.url}/events`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          channel_key: config.channelKey,
+          external_message_id: `incoming-${config.channelKey}`,
+          remote_jid: `${config.channelKey}-peer`,
+          push_name: "Mansur",
+          text: `hello sage from ${config.channelKey}`,
+        }),
+      });
+      assert.equal(eventResponse.ok, true);
+      await eventually(() => {
+        assert.equal(inbound.length, 1);
+        const payload = inbound[0] as { channel_key?: string; message?: { text?: string } };
+        assert.equal(payload.channel_key, config.channelKey);
+        assert.equal(payload.message?.text, `hello sage from ${config.channelKey}`);
+      });
     }
-    if (previousPollMs === undefined) {
-      delete process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS;
-    } else {
-      process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS = previousPollMs;
+  } finally {
+    for (const runtime of runtimes) {
+      await runtime.stop();
+    }
+    await harness.close();
+    for (const [key, value] of previousEnv.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   }
 });

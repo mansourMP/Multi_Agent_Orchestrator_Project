@@ -26,6 +26,7 @@ pub struct ConnectOptions {
 pub struct TrayStatus {
     pub state: String,
     pub device_name: String,
+    pub workspace_id: String,
     pub supervisor_running: bool,
     pub gateway_running: bool,
     pub supervisor_adopted: bool,
@@ -87,6 +88,12 @@ impl ProcessManager {
 
     pub fn connect_device_with_options(&self, options: ConnectOptions) -> Result<TrayStatus, String> {
         self.apply_connect_options(options)?;
+        if !self.has_gateway_launch_material()? {
+            let error = "Open Empyralis Hardware and connect this device to create a fresh pairing token.".to_string();
+            let _ = self.set_desired_connected(false);
+            self.record_error(error.clone());
+            return Err(error);
+        }
         self.set_desired_connected(true)?;
         match self.start_gateway() {
             Ok(status) => Ok(status),
@@ -105,6 +112,11 @@ impl ProcessManager {
     }
 
     pub fn start_gateway(&self) -> Result<TrayStatus, String> {
+        let launch = self.gateway_launch_options()?;
+        if launch.pairing_token.is_none() && !self.has_saved_gateway_token() {
+            let _ = self.set_desired_connected(false);
+            return Err("Open Empyralis Hardware and connect this device to create a fresh pairing token.".to_string());
+        }
         self.set_desired_connected(true)?;
         self.start_supervisor()?;
         self.ensure_gateway_dist()?;
@@ -128,7 +140,6 @@ impl ProcessManager {
         let node = node_binary();
         let gateway_entry = self.repo_root().join("empyralis-gateway/dist/index.js");
         let secret = self.supervisor_secret()?;
-        let launch = self.gateway_launch_options()?;
         let repo_root = self.repo_root();
         let mut command = Command::new(node);
         command
@@ -161,7 +172,13 @@ impl ProcessManager {
         }
 
         self.verify_session();
-        Ok(self.status())
+        let status = self.status();
+        if !status.gateway_running && !status.session_verified {
+            let error = "Empyralis Gateway stopped before it could verify the workspace session.".to_string();
+            self.record_error(error.clone());
+            return Err(error);
+        }
+        Ok(status)
     }
 
     pub fn stop_gateway(&self) -> Result<TrayStatus, String> {
@@ -195,6 +212,7 @@ impl ProcessManager {
             Err(error) => TrayStatus {
                 state: "error".to_string(),
                 device_name: self.device_name(),
+                workspace_id: self.workspace_id.clone(),
                 supervisor_running: false,
                 gateway_running: false,
                 supervisor_adopted: false,
@@ -308,6 +326,10 @@ impl ProcessManager {
         TrayStatus {
             state: state.to_string(),
             device_name: self.device_name(),
+            workspace_id: guard
+                .workspace_id
+                .clone()
+                .unwrap_or_else(|| self.workspace_id.clone()),
             supervisor_running,
             gateway_running,
             supervisor_adopted: guard.adopted_supervisor_pid.is_some(),
@@ -392,6 +414,32 @@ impl ProcessManager {
                 .clone()
                 .unwrap_or_else(|| self.gateway_api_url.clone()),
         })
+    }
+
+    fn has_gateway_launch_material(&self) -> Result<bool, String> {
+        let guard = self.lock_state()?;
+        let has_pairing_token = guard
+            .pairing_token
+            .as_ref()
+            .map(|token| !token.trim().is_empty())
+            .unwrap_or(false);
+        drop(guard);
+        Ok(has_pairing_token || self.has_saved_gateway_token())
+    }
+
+    fn has_saved_gateway_token(&self) -> bool {
+        let path = self.gateway_state_dir().join("tokens.json");
+        let Ok(payload) = fs::read_to_string(path) else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&payload) else {
+            return false;
+        };
+        value
+            .get("gatewayToken")
+            .and_then(Value::as_str)
+            .map(|token| !token.trim().is_empty())
+            .unwrap_or(false)
     }
 
     fn record_error(&self, error: String) {
@@ -522,7 +570,7 @@ impl ProcessManager {
         if self.supervisor_binary().exists() {
             return Ok(());
         }
-        let status = Command::new("cargo")
+        let status = Command::new(cargo_binary())
             .arg("build")
             .arg("--release")
             .arg("--manifest-path")
@@ -974,20 +1022,70 @@ fn listening_pid_for_port(port: u16) -> Option<u32> {
         .find_map(|line| line.trim().parse::<u32>().ok())
 }
 
-fn node_binary() -> &'static str {
+fn resolve_binary(binary_name: &str, windows_name: &str, unix_candidates: &[PathBuf]) -> PathBuf {
     if cfg!(target_os = "windows") {
-        "node.exe"
-    } else {
-        "node"
+        return PathBuf::from(windows_name);
     }
+
+    if let Ok(path) = std::env::var("PATH") {
+        for directory in std::env::split_paths(&path) {
+            let candidate = directory.join(binary_name);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    for candidate in unix_candidates {
+        if candidate.is_file() {
+            return candidate.clone();
+        }
+    }
+
+    PathBuf::from(binary_name)
 }
 
-fn npm_binary() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "npm.cmd"
-    } else {
-        "npm"
-    }
+fn home_relative(path: &str) -> PathBuf {
+    std::env::var("HOME")
+        .map(|home| PathBuf::from(home).join(path))
+        .unwrap_or_else(|_| PathBuf::from(path))
+}
+
+fn node_binary() -> PathBuf {
+    resolve_binary(
+        "node",
+        "node.exe",
+        &[
+            PathBuf::from("/opt/homebrew/bin/node"),
+            PathBuf::from("/usr/local/bin/node"),
+            PathBuf::from("/usr/bin/node"),
+        ],
+    )
+}
+
+fn npm_binary() -> PathBuf {
+    resolve_binary(
+        "npm",
+        "npm.cmd",
+        &[
+            PathBuf::from("/opt/homebrew/bin/npm"),
+            PathBuf::from("/usr/local/bin/npm"),
+            PathBuf::from("/usr/bin/npm"),
+        ],
+    )
+}
+
+fn cargo_binary() -> PathBuf {
+    resolve_binary(
+        "cargo",
+        "cargo.exe",
+        &[
+            home_relative(".cargo/bin/cargo"),
+            PathBuf::from("/opt/homebrew/bin/cargo"),
+            PathBuf::from("/usr/local/bin/cargo"),
+            PathBuf::from("/usr/bin/cargo"),
+        ],
+    )
 }
 
 fn current_uid() -> String {

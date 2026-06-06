@@ -84,7 +84,11 @@ test("system service mode does not advertise desktop-only capabilities without b
       { supportedCapabilities: () => capabilities } as unknown as GatewaySupervisorClient,
       { requestedCapabilities: () => ["browser.session.start"] } as unknown as GatewayBrowserRuntime,
     );
-    assert.deepEqual(router.supportedCapabilities(), ["filesystem.read_write", "shell.execute"]);
+    assert.deepEqual(router.supportedCapabilities(), [
+      "filesystem.read_write",
+      "shell.execute",
+      "external_agent_proxy",
+    ]);
   });
 });
 

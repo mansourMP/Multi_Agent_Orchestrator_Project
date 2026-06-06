@@ -340,6 +340,45 @@ class DirectChatHostedUsageServiceTests(unittest.TestCase):
         self.assertIsInstance(ctx.exception.__cause__, RuntimeError)
         self.assertIn("ledger unavailable", str(ctx.exception.__cause__))
 
+    def test_persist_direct_chat_hosted_usage_best_effort_surfaces_debit_result_failure(self) -> None:
+        with patch(
+            "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_workspace_hosted_ai_monthly_cost_ledger_entry",
+            new=AsyncMock(return_value={"id": "shost_1"}),
+        ), patch(
+            "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_credit_ledger_event",
+            new=AsyncMock(return_value={"id": "cled_1"}),
+        ), patch(
+            "server_modules.billing_service.debit_workspace_credit_balance_for_hosted_usage",
+            return_value={"ok": False, "error": "insufficient_credits"},
+        ), patch(
+            "server_modules.direct_chat_hosted_usage_service.release_direct_chat_hosted_usage_reservation_best_effort",
+        ) as release_reservation:
+            with self.assertRaisesRegex(RuntimeError, "insufficient_credits"):
+                direct_chat_hosted_usage_service.persist_direct_chat_hosted_usage_best_effort(
+                    workspace_id="ws-1",
+                    thread_id="thread-1",
+                    session_ctx={"tenant_id": "tenant-1", "request_id": "req-1"},
+                    availability_payload={
+                        "credential_plane": "platform_runtime",
+                        "platform_runtime_allowed": True,
+                    },
+                    usage_masked={
+                        "usage_accounting": {
+                            "input_tokens": 10,
+                            "output_tokens": 6,
+                            "total_tokens": 16,
+                            "estimated_cost_usd": 0.0011,
+                            "effective_provider": "deepseek",
+                            "effective_model": "deepseek-chat",
+                        }
+                    },
+                    requested_provider="deepseek",
+                    effective_provider="deepseek",
+                    requested_model="deepseek-chat",
+                    effective_model="deepseek-chat",
+                )
+        release_reservation.assert_not_called()
+
     def test_persist_direct_chat_hosted_usage_best_effort_surfaces_ledger_none(self) -> None:
         with patch(
             "server_modules.direct_chat_hosted_usage_service.control_plane_repository.record_workspace_hosted_ai_monthly_cost_ledger_entry",

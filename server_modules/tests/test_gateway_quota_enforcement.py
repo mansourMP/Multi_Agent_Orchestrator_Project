@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
+from unittest.mock import patch
 
+from server_modules import durable_quota_store
 from server_modules.gateway_quota_enforcement import (
     QuotaWindow,
     GatewayQuotaDecision,
@@ -71,6 +75,21 @@ class GatewayQuotaEnforcementTests(unittest.TestCase):
             self.assertIn("remaining", info)
             self.assertIn("max_requests", info)
             self.assertIn("window_seconds", info)
+
+    def test_gateway_quota_uses_durable_store_when_quota_db_is_configured(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quota_db = os.path.join(tmp_dir, "quota.sqlite3")
+            with patch.dict(os.environ, {"EMPYRALIS_QUOTA_DB": quota_db}, clear=False):
+                durable_quota_store.reset_quota_store_for_tests()
+                decision = evaluate_gateway_quota(
+                    profile=GATEWAY_TOOL_EXECUTION,
+                    gateway_id="gw_durable_1",
+                )
+                snapshot = get_gateway_quota_snapshot("gw_durable_1")
+                durable_quota_store.reset_quota_store_for_tests()
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(snapshot[GATEWAY_TOOL_EXECUTION]["storage"], "sqlite")
 
     def test_gateway_quota_decision_is_immutable(self):
         decision = GatewayQuotaDecision(

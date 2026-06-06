@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Platform
-Last verified: 2026-06-06
+Last verified: 2026-06-07
 Source of truth: code
 
 ## Responsibilities
@@ -16,8 +16,10 @@ surfaces before calling runtime code.
 
 Default Sage chat behavior is cloud text generation. `handle_sage_chat()` in
 `server_modules/sage_agent_runtime_service.py` loads profile, memory, context
-files, heartbeat, and safe skills, resolves a configured cloud provider, builds
-the prompt envelope, calls
+files, heartbeat, and safe skills, resolves a configured cloud provider, and
+then chooses between the Sage action loop and the plain text-generation path.
+Action-shaped prompts use action loop v2 for web search/fetch, guarded direct
+tools, and approved MCP skills. Plain chat builds the prompt envelope, calls
 `generate_chat_reply_with_provider_fallback()`, then returns the reply plus
 `used_context`, `available_tools`, `trace_id`, `provider`, `model`, and
 transparency events.
@@ -59,7 +61,6 @@ hardware/gateway state and policy gates documented in
 `docs/domains/agent-computer/runtime.md` and enforced by gateway routes in
 `server_modules/routes_gateway.py`.
 
-Not implemented in the inspected code: direct local browser, shell, filesystem,
-or personal-channel send execution from `/api/sage/chat` itself. Those actions
-are represented through tool availability, gateway routes, approvals, or the
-streaming direct-chat surface.
+Personal-channel send execution is not a raw `/api/sage/chat` side effect.
+Those actions are represented through tool availability, gateway routes,
+approvals, or the streaming direct-chat/personal-channel dispatch surfaces.

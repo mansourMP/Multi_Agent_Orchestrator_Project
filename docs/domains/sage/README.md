@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Platform
-Last verified: 2026-06-06
+Last verified: 2026-06-07
 Source of truth: code, tests, and active decisions
 
 Sage is the main workspace agent. This folder owns factual documentation for
@@ -16,12 +16,14 @@ approval resolve routes registered from `server_modules/sage_chat_api.py`.
 mode/surface, and delegates the turn to
 `server_modules/sage_agent_runtime_service.py`.
 
-The inspected `/api/sage/chat` path is a model-backed text turn. It loads Sage
-profile, Sage memory, workspace context files, heartbeat summary, and safe
-read-only skills before calling the selected cloud provider. It persists direct
-chat memory, activity, security audit, and transparency events on a best-effort
-basis. It does not directly execute Agent Computer browser, shell, filesystem,
-or personal-channel dispatch from that route.
+The inspected `/api/sage/chat` path is cloud model-backed by default, but now
+has a Sage action loop for action-shaped prompts. It loads Sage profile, Sage
+memory, workspace context files, heartbeat summary, and safe read-only skills.
+For normal chat it calls the selected cloud provider. For direct actions it can
+execute built-in web/search/fetch tools, approved MCP skills, and guarded direct
+tools through the existing direct-chat execution services. Local Agent Computer
+work remains gated by selected gateway state and policy; personal-channel send
+dispatch still belongs to the approval/channel routes, not raw chat text.
 
 Agent Computer and personal channels are separate runtime lanes. Sage must use a
 selected Agent Computer for local hardware work and personal-channel sessions;
@@ -44,7 +46,6 @@ and `docs/domains/channels/personal-vs-studio-channel-model.md`.
 ## Existing Source Docs
 
 - `docs/SAGE_PROFESSIONAL_IMPLEMENTATION_PLAN.md`
-- `docs/references/openclaw-sage-gap-analysis.md`
 - `docs/domains/agent-computer/runtime.md`
 - `docs/domains/channels/personal-vs-studio-channel-model.md`
 - `docs/codex-chat-surface-parity.md`

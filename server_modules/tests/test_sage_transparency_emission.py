@@ -68,8 +68,38 @@ class SageTransparencyEmissionTests(unittest.TestCase):
             ),
         )
         types = [e.event_type for e in events]
+        self.assertIn("tool_started", types)
         self.assertIn("tool_completed", types)
         self.assertIn("tool_failed", types)
+
+    def test_completed_tool_emits_started_before_completed(self):
+        events = emit_sage_turn_transparency_events(
+            trace_id=self.TRACE_ID,
+            workspace_id=self.WORKSPACE,
+            user_message="search the web",
+            sage_result=self._result(
+                tool_calls=[{"name": "web__search", "status": "completed", "iteration": 1, "action_loop_version": "v2"}],
+            ),
+        )
+        types = [e.event_type for e in events]
+        self.assertLess(types.index("tool_started"), types.index("tool_completed"))
+        started = next(e for e in events if e.event_type == "tool_started")
+        self.assertEqual(started.tool_name, "web__search")
+        self.assertEqual(started.metadata["action_loop_version"], "v2")
+
+    def test_running_tool_emits_single_started_event(self):
+        events = emit_sage_turn_transparency_events(
+            trace_id=self.TRACE_ID,
+            workspace_id=self.WORKSPACE,
+            user_message="open browser",
+            sage_result=self._result(
+                tool_calls=[{"name": "browser__open", "status": "running"}],
+            ),
+        )
+        types = [e.event_type for e in events]
+        self.assertEqual(types.count("tool_started"), 1)
+        self.assertNotIn("tool_completed", types)
+        self.assertNotIn("tool_failed", types)
 
     def test_approval_events_emitted(self):
         events = emit_sage_turn_transparency_events(

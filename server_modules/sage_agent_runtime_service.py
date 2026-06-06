@@ -82,6 +82,8 @@ _MEMORY_SCOPES = {"memory", "sage_memory", "agent_memory"}
 _FILE_SCOPES = {"file", "files", "filesystem", "drive"}
 _CLOUD_STORAGE_SCOPES = {"dropbox", "google_drive", "icloud", "onedrive"}
 _SAGE_TOOL_RESULT_MAX_CHARS = 4000
+_SAGE_ACTION_LOOP_VERSION = "v2"
+_SAGE_ACTION_LOOP_MAX_TOOL_CALLS = 5
 _AGENT_COMPUTER_TOOL_PREFIXES = ("browser__", "computer__", "file__", "shell__", "screenshot__")
 _AGENT_COMPUTER_TOOL_NAMES = {"hardware__action"}
 
@@ -377,6 +379,48 @@ def _summarize_tool_output(value: Any, *, max_chars: int = _SAGE_TOOL_RESULT_MAX
     return f"{text[:max_chars].rstrip()}\n...[truncated]"
 
 
+def _tool_call_signature(tool_call: dict[str, Any]) -> str:
+    name = _coerce_text(tool_call.get("name"))
+    arguments = tool_call.get("arguments") if isinstance(tool_call.get("arguments"), dict) else {}
+    try:
+        import json
+
+        args_text = json.dumps(arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except Exception:
+        args_text = str(arguments)
+    return f"{name}:{args_text}"
+
+
+def _budget_sage_tool_calls(tool_calls: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    allowed: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        name = _coerce_text(call.get("name"))
+        if not name:
+            continue
+        signature = _tool_call_signature(call)
+        if signature in seen:
+            blocked.append({
+                "name": name,
+                "reason": "sage_action_loop_repeated_tool_call",
+                "status": "blocked",
+            })
+            continue
+        seen.add(signature)
+        if len(allowed) >= _SAGE_ACTION_LOOP_MAX_TOOL_CALLS:
+            blocked.append({
+                "name": name,
+                "reason": "sage_action_loop_tool_budget_exhausted",
+                "status": "blocked",
+            })
+            continue
+        allowed.append(call)
+    return allowed, blocked
+
+
 def _direct_tool_bundle(*, workspace_id: str, provider: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     try:
         tool_capabilities = direct_chat_runtime_exports.resolve_workspace_tool_capabilities(workspace_id)
@@ -543,7 +587,7 @@ def _message_might_need_sage_action_loop(message: str) -> bool:
     return False
 
 
-async def _run_sage_action_loop_v1(
+async def _run_sage_action_loop_v2(
     *,
     workspace_id: str,
     tenant_id: str,
@@ -601,6 +645,8 @@ async def _run_sage_action_loop_v1(
             tools=tools,
             services=services,
         )
+        direct_tool_calls, budget_blocked_tools = _budget_sage_tool_calls(direct_tool_calls)
+        blocked_tools.extend(budget_blocked_tools)
         if not direct_tool_calls:
             blocked = _blocked_agent_computer_tool_for_message(message, availability)
             if blocked is not None:
@@ -625,6 +671,8 @@ async def _run_sage_action_loop_v1(
                         "name": _coerce_text(call.get("name")),
                         "arguments": call.get("arguments") if isinstance(call.get("arguments"), dict) else {},
                         "status": "approval_required",
+                        "iteration": 1,
+                        "action_loop_version": _SAGE_ACTION_LOOP_VERSION,
                     }
                     for call in direct_tool_calls
                 ],
@@ -654,6 +702,8 @@ async def _run_sage_action_loop_v1(
                     "arguments": arguments,
                     "status": "completed",
                     "output": summary,
+                    "iteration": 1,
+                    "action_loop_version": _SAGE_ACTION_LOOP_VERSION,
                 })
                 if summary:
                     outputs.append(summary)
@@ -665,6 +715,8 @@ async def _run_sage_action_loop_v1(
                     "arguments": arguments,
                     "status": "failed",
                     "error": error,
+                    "iteration": 1,
+                    "action_loop_version": _SAGE_ACTION_LOOP_VERSION,
                 })
 
     if mcp_skill is not None:
@@ -676,7 +728,7 @@ async def _run_sage_action_loop_v1(
                 workspace_id=workspace_id,
                 goal=message,
                 agent_label="Sage",
-                hard_context="Main Sage action loop v1.",
+                hard_context="Main Sage action loop v2.",
                 operational_policy="Use approved MCP tools only; preserve Sage approval and audit policy.",
             )
             reply = _summarize_tool_output((result or {}).get("reply") or result)
@@ -686,6 +738,8 @@ async def _run_sage_action_loop_v1(
                 "arguments": {"goal": message},
                 "status": "completed" if str((result or {}).get("status") or "ok").lower() not in {"blocked", "failed", "error"} else "failed",
                 "output": reply,
+                "iteration": 1,
+                "action_loop_version": _SAGE_ACTION_LOOP_VERSION,
             })
             if reply:
                 outputs.append(reply)
@@ -698,9 +752,19 @@ async def _run_sage_action_loop_v1(
                 "arguments": {"goal": message},
                 "status": "failed",
                 "error": error,
+                "iteration": 1,
+                "action_loop_version": _SAGE_ACTION_LOOP_VERSION,
             })
 
-    mode = "tools_executed" if tool_calls and not blocked_tools else "tool_blocked" if blocked_tools else "text_only"
+    mode = (
+        "partial_tools_executed"
+        if tool_calls and blocked_tools
+        else "tools_executed"
+        if tool_calls
+        else "tool_blocked"
+        if blocked_tools
+        else "text_only"
+    )
     return {
         "message": "\n\n".join(output for output in outputs if output).strip()
         or ("Sage could not run that action because the required runtime is unavailable." if blocked_tools else "Tool execution completed."),
@@ -709,7 +773,17 @@ async def _run_sage_action_loop_v1(
         "approvals_required": [],
         "action_execution_mode": mode,
         "available_tools": tools,
+        "action_loop_version": _SAGE_ACTION_LOOP_VERSION,
+        "loop_budget": {
+            "max_tool_calls": _SAGE_ACTION_LOOP_MAX_TOOL_CALLS,
+            "planned_tool_calls": len(direct_tool_calls) + len(blocked_tools),
+            "executed_tool_calls": len(tool_calls),
+            "blocked_tool_calls": len(blocked_tools),
+        },
     }
+
+
+_run_sage_action_loop_v1 = _run_sage_action_loop_v2
 
 
 def _emit_failed_audit_event(
@@ -829,7 +903,7 @@ async def handle_sage_chat(
 
     action_result = None
     if _message_might_need_sage_action_loop(normalized_message):
-        action_result = await _run_sage_action_loop_v1(
+        action_result = await _run_sage_action_loop_v2(
             workspace_id=normalized_workspace_id,
             tenant_id=normalized_tenant_id,
             message=normalized_message,
@@ -849,7 +923,9 @@ async def handle_sage_chat(
         approvals_required = list(action_result.get("approvals_required") or [])
         action_execution_mode = _coerce_text(action_result.get("action_execution_mode")) or "tools_executed"
         prompt_diagnostics = {
-            "action_loop_v1": True,
+            "action_loop_v2": True,
+            "action_loop_version": _coerce_text(action_result.get("action_loop_version")) or _SAGE_ACTION_LOOP_VERSION,
+            "loop_budget": action_result.get("loop_budget") if isinstance(action_result.get("loop_budget"), dict) else {},
             "tool_call_count": len(tool_calls),
             "blocked_tool_count": len(blocked_tools),
             "approval_required_count": len(approvals_required),

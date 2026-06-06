@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Platform
-Last verified: 2026-06-06
+Last verified: 2026-06-07
 Source of truth: tool catalog code
 
 ## Cloud And Built-In Tools
@@ -46,6 +46,16 @@ The `/api/sage/chat` runtime loads installed skills but filters out skills whose
 as `available_tools`; blocked/write skills are not auto-executed from that route.
 Source: `server_modules/sage_agent_runtime_service.py`.
 
+## Sage Action Loop
+
+Action-shaped Sage chat prompts enter `server_modules/sage_agent_runtime_service.py`
+action loop v2. The loop reuses direct-chat tool availability and execution
+services, can execute `web__search` and `web__fetch`, can invoke matching
+approved MCP skills, and can request approval before guarded write/execute
+tools. It records action-loop version and budget metadata, blocks repeated or
+surplus direct tool calls, and returns real `tool_calls`, `blocked_tools`, and
+`approvals_required` in the Sage result.
+
 ## Personal-Channel Tools
 
 Personal-channel setup and sends are not generic Studio connector tools. They
@@ -62,5 +72,6 @@ connector request detection, and inventory output. `server_modules/tests/test_sa
 covers safe skill loading and verifies write/execute terms do not create
 keyword-triggered approval cards.
 
-Not implemented in the inspected `/api/sage/chat` path: direct tool execution
-loops, local hardware dispatch, or personal-channel sends.
+Not implemented in the inspected `/api/sage/chat` path: personal-channel sends
+as raw chat side effects. Those still require the personal-channel approval and
+dispatch routes.

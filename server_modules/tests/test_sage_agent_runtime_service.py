@@ -786,6 +786,38 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         self.assertFalse(mock_generate.called)
         self.assertTrue(mock_skill.called)
 
+    def test_main_sage_chat_enforces_action_loop_tool_budget(self):
+        planned_calls = [
+            {"name": "web__search", "arguments": {"query": f"query {idx}"}}
+            for idx in range(sage_agent_runtime_service._SAGE_ACTION_LOOP_MAX_TOOL_CALLS + 2)
+        ]
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider", return_value=("openai", {"api_key": "test-key"})),
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False}),
+            patch("server_modules.sage_agent_runtime_service._plan_sage_direct_tool_calls", return_value=planned_calls),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call", return_value="ok") as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="search the web for a lot of things",
+            ))
+
+        self.assertEqual(result["action_execution_mode"], "partial_tools_executed")
+        self.assertEqual(len(result["tool_calls"]), sage_agent_runtime_service._SAGE_ACTION_LOOP_MAX_TOOL_CALLS)
+        self.assertEqual(mock_execute.call_count, sage_agent_runtime_service._SAGE_ACTION_LOOP_MAX_TOOL_CALLS)
+        self.assertTrue(any(item["reason"] == "sage_action_loop_tool_budget_exhausted" for item in result["blocked_tools"]))
+        self.assertFalse(mock_generate.called)
+
     def test_raises_on_provider_error(self):
         with (
             patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile") as mock_profile,

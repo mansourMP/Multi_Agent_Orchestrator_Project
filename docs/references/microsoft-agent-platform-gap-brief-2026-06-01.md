@@ -66,7 +66,6 @@ These are the internal repo sources that show Empyralis already has the foundati
 | `docs/domains/apps/platform-inventory-and-user-owned-apps.md` | 208-220, 1604-1613 | Applications, Discover, Agents, and Agent Computer are separate surfaces; apps must not silently become agents, channels, or runtimes. |
 | `docs/domains/channels/personal-vs-studio-channel-model.md` | 15-27, 30-50, 69-85, 102-123 | Personal channel sessions belong behind Gateway; business/API channels belong in the cloud connector stack. |
 | `docs/domains/channels/foundation-strategy.md` | 11-17, 56-66, 101-118, 217-238 | Personal/private channels belong to Sage through Agent Computer; business/customer channels belong to Studio Agents through official cloud connectors. |
-| `docs/references/openclaw-sage-gap-analysis.md` | 67-89, 144-172, 187-218 | Sage has strong platform structure, but gaps remain around user Chrome attach, browser state, diagnostics export, gateway profiling, status/doctor depth, and ACP-style integration. |
 
 ## What Empyralis Already Has
 

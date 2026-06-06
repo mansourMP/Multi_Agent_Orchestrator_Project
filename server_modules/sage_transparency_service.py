@@ -158,6 +158,29 @@ def emit_sage_turn_transparency_events(
         if not tc_name:
             continue
 
+        events.append(
+            AgentTransparencyEvent(
+                event_id=f"stevt-{uuid4().hex[:12]}",
+                trace_id=trace_id,
+                workspace_id=workspace_id,
+                agent_id=agent_id,
+                actor_type="sage",
+                surface="chat",
+                audience=audience,
+                visibility_level=visibility_level,
+                event_type="tool_started",
+                title=f"Tool started: {tc_name}",
+                summary=f"Tool {tc_name} started.",
+                status="running",
+                timestamp=_now(),
+                tool_name=tc_name,
+                metadata={
+                    "iteration": tc.get("iteration"),
+                    "action_loop_version": tc.get("action_loop_version"),
+                },
+            )
+        )
+
         if tc_status in ("completed", "success", "done"):
             events.append(
                 AgentTransparencyEvent(
@@ -197,24 +220,7 @@ def emit_sage_turn_transparency_events(
                 )
             )
         else:
-            events.append(
-                AgentTransparencyEvent(
-                    event_id=f"stevt-{uuid4().hex[:12]}",
-                    trace_id=trace_id,
-                    workspace_id=workspace_id,
-                    agent_id=agent_id,
-                    actor_type="sage",
-                    surface="chat",
-                    audience=audience,
-                    visibility_level=visibility_level,
-                    event_type="tool_started",
-                    title=f"Tool started: {tc_name}",
-                    summary=f"Tool {tc_name} is running.",
-                    status="running",
-                    timestamp=_now(),
-                    tool_name=tc_name,
-                )
-            )
+            continue
 
     # ── 5. approvals_required ───────────────────────────────────
     approvals_required = _safe_list(sage_result.get("approvals_required"))

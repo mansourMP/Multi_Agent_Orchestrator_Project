@@ -428,6 +428,84 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         self.assertEqual(recorded[0]["thread_id"], "thread-1")
         self.assertEqual(recorded[0]["effective_provider"], "deepseek")
 
+    def test_stream_provider_backed_direct_chat_marks_reservation_uncertain_on_settlement_failure(self) -> None:
+        released: list[dict[str, object]] = []
+        cleared: list[str] = []
+        services = self._services(
+            stream_events=[
+                {
+                    "type": "result",
+                    "reply": "Hello",
+                    "usage_masked": {
+                        "usage_accounting": {
+                            "input_tokens": 11,
+                            "output_tokens": 7,
+                            "total_tokens": 18,
+                            "estimated_cost_usd": 0.0012,
+                            "effective_provider": "deepseek",
+                            "effective_model": "deepseek-chat",
+                        }
+                    },
+                    "provider": "deepseek",
+                    "model": "deepseek-chat",
+                    "attempted_providers": "deepseek",
+                    "error": "",
+                    "tool_calls": [],
+                }
+            ]
+        )
+        services.reserve_direct_chat_hosted_usage_best_effort = lambda **kwargs: {
+            "reservation_key": "tenant-1:ws-1:req-1:sage_direct_chat",
+            "status": "active",
+        }
+        services.persist_direct_chat_hosted_usage_best_effort = lambda **kwargs: (_ for _ in ()).throw(
+            RuntimeError("Hosted AI credit debit failed: insufficient_credits.")
+        )
+        services.release_direct_chat_hosted_usage_reservation_best_effort = lambda **kwargs: released.append(dict(kwargs))
+        services.clear_direct_tool_loop_state = lambda session_key: cleared.append(session_key)
+
+        with self.assertRaisesRegex(RuntimeError, "insufficient_credits"):
+            list(
+                direct_chat_generation_service.stream_provider_backed_direct_chat(
+                    services=services,
+                    context={"provider": "deepseek"},
+                    metadata={"provider": "deepseek", "model": "deepseek-chat"},
+                    system_prompt="System prompt",
+                    normalized_workspace_id="ws-1",
+                    normalized_requested_provider="deepseek",
+                    normalized_requested_model="deepseek-chat",
+                    normalized_reasoning_effort="medium",
+                    normalized_thread_id="thread-1",
+                    normalized_message="hello",
+                    compacted_prior_messages=[],
+                    prior_messages_used=False,
+                    history_mode="none",
+                    connected_systems=[],
+                    tool_capabilities=[],
+                    availability_payload={
+                        "ai_ready": True,
+                        "credential_plane": "platform_runtime",
+                        "platform_runtime_allowed": True,
+                    },
+                    tools=[],
+                    direct_chat_credentials={},
+                    proactive_suggestions=["next"],
+                    tool_loop_session_key="session-1",
+                    fallback_reason=None,
+                    session_ctx={"tenant_id": "tenant-1", "request_id": "req-1"},
+                    trace_context=None,
+                    resolved_chat_max_iterations=3,
+                    direct_tool_result_summary_system_message="Summarize tool results.",
+                )
+            )
+
+        self.assertEqual(len(released), 1)
+        self.assertEqual(released[0]["workspace_id"], "ws-1")
+        self.assertEqual(released[0]["thread_id"], "thread-1")
+        self.assertEqual(released[0]["session_ctx"], {"tenant_id": "tenant-1", "request_id": "req-1"})
+        self.assertEqual(released[0]["status"], "uncertain")
+        self.assertEqual(cleared, ["session-1"])
+
     def test_stream_provider_backed_direct_chat_returns_error_reply_on_failure(self) -> None:
         events = list(
             direct_chat_generation_service.stream_provider_backed_direct_chat(

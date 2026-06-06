@@ -335,7 +335,7 @@ fn resume_decision(
 ) -> Value {
     if !matches!(
         run_status,
-        "pending_approval" | "interrupted" | "paused" | "waiting"
+        "pending_approval" | "interrupted" | "paused" | "waiting" | "waiting_for_input"
     ) {
         return block("run_api_resume_state_invalid");
     }
@@ -654,6 +654,20 @@ mod tests {
             "run_status": "completed"
         }));
         assert_eq!(response["decision"], "block");
+    }
+
+    #[test]
+    fn resume_allows_restored_waiting_for_input_run() {
+        let response = run_api_decision_command(&json!({
+            "operation": "resume_run",
+            "workspace_id": "w1",
+            "tenant_id": "t1",
+            "run_id": "run1",
+            "user_role": "system",
+            "run_status": "waiting_for_input"
+        }));
+        assert_eq!(response["decision"], "allow");
+        assert_eq!(response["next_action"], "resume_run");
     }
 
     #[test]

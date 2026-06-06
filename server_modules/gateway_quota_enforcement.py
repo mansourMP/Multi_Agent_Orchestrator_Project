@@ -13,20 +13,20 @@ _last_restart_time: float = time.time()
 _restart_count: int = 1
 _STARTUP_QUOTA_GRACE_SECONDS: float = 60.0
 
-# Quota windows are in-memory and reset on server restart.
-# Full persistence (e.g. Redis or a control-plane table) would require:
-#  - a durable store for per-gateway per-profile counters
-#  - periodic flush (every few seconds) to balance durability vs. write pressure
-#  - reload on module import / service startup
-# Until then, operators should monitor restart events and inspect quota
-# snapshots after any deploy or crash-recovery.
-
-_log.warning(
-    "Gateway quota windows initialized in-memory (restart=%s, time=%s). "
-    "Quota counters reset on restart. Monitor gateway quota after deploys.",
-    _restart_count,
-    _last_restart_time,
-)
+_quota_storage_mode = "memory" if durable_quota_store.use_in_memory_quota_mode() else "sqlite_window"
+if _quota_storage_mode == "memory":
+    _log.warning(
+        "Gateway quota windows initialized in explicit in-memory mode (restart=%s, time=%s). "
+        "Quota counters reset on restart. Use EMPYRALIS_QUOTA_DB or unset EMPYRALIS_DEV_IN_MEMORY_QUOTAS for production.",
+        _restart_count,
+        _last_restart_time,
+    )
+else:
+    _log.info(
+        "Gateway quota windows initialized with durable sqlite storage (restart=%s, time=%s).",
+        _restart_count,
+        _last_restart_time,
+    )
 
 
 GATEWAY_TOOL_EXECUTION = "gateway_tool_execution"

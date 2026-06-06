@@ -393,6 +393,27 @@ def _mask_platform_paid_final_payload(payload: Dict[str, Any], identity: Optiona
     return _sanitize_public_value(masked)
 
 
+def _persist_direct_chat_hosted_usage_with_reservation_guard(
+    *,
+    services: DirectChatGenerationServices,
+    hosted_usage_reservation: Optional[Dict[str, Any]],
+    usage_kwargs: Dict[str, Any],
+    release_kwargs: Dict[str, Any],
+) -> None:
+    try:
+        services.persist_direct_chat_hosted_usage_best_effort(**usage_kwargs)
+    except Exception:
+        if hosted_usage_reservation:
+            try:
+                services.release_direct_chat_hosted_usage_reservation_best_effort(
+                    **release_kwargs,
+                    status="uncertain",
+                )
+            except Exception as release_exc:
+                services.capture_exception(release_exc)
+        raise
+
+
 def stream_provider_backed_direct_chat(
     *,
     services: DirectChatGenerationServices,
@@ -1287,39 +1308,50 @@ def stream_provider_backed_direct_chat(
                 )
 
                 yield final_payload
-                should_persist_final_reply = not is_public_generation_error_message(final_reply)
-                if should_persist_final_reply:
-                    services.persist_direct_chat_memory_best_effort(
-                        workspace_id=normalized_workspace_id,
-                        provider=effective_provider,
-                        model=effective_model,
-                        credentials=direct_chat_credentials,
-                        reasoning_effort=normalized_reasoning_effort,
-                        prior_messages=compacted_prior_messages,
-                        user_message=normalized_message,
-                        assistant_reply=final_reply,
+                try:
+                    should_persist_final_reply = not is_public_generation_error_message(final_reply)
+                    if should_persist_final_reply:
+                        services.persist_direct_chat_memory_best_effort(
+                            workspace_id=normalized_workspace_id,
+                            provider=effective_provider,
+                            model=effective_model,
+                            credentials=direct_chat_credentials,
+                            reasoning_effort=normalized_reasoning_effort,
+                            prior_messages=compacted_prior_messages,
+                            user_message=normalized_message,
+                            assistant_reply=final_reply,
+                        )
+                        services.persist_direct_chat_transcript_best_effort(
+                            workspace_id=normalized_workspace_id,
+                            thread_id=normalized_thread_id,
+                            provider=effective_provider,
+                            model=effective_model,
+                            messages=conversation_messages,
+                            user_message=normalized_message,
+                            assistant_reply=final_reply,
+                        )
+                    _persist_direct_chat_hosted_usage_with_reservation_guard(
+                        services=services,
+                        hosted_usage_reservation=hosted_usage_reservation,
+                        usage_kwargs={
+                            "workspace_id": normalized_workspace_id,
+                            "thread_id": normalized_thread_id,
+                            "session_ctx": session_ctx,
+                            "availability_payload": availability_payload,
+                            "usage_masked": usage_masked,
+                            "requested_provider": normalized_requested_provider,
+                            "effective_provider": effective_provider,
+                            "requested_model": normalized_requested_model,
+                            "effective_model": effective_model,
+                        },
+                        release_kwargs={
+                            "workspace_id": normalized_workspace_id,
+                            "thread_id": normalized_thread_id,
+                            "session_ctx": session_ctx,
+                        },
                     )
-                    services.persist_direct_chat_transcript_best_effort(
-                        workspace_id=normalized_workspace_id,
-                        thread_id=normalized_thread_id,
-                        provider=effective_provider,
-                        model=effective_model,
-                        messages=conversation_messages,
-                        user_message=normalized_message,
-                        assistant_reply=final_reply,
-                    )
-                services.persist_direct_chat_hosted_usage_best_effort(
-                    workspace_id=normalized_workspace_id,
-                    thread_id=normalized_thread_id,
-                    session_ctx=session_ctx,
-                    availability_payload=availability_payload,
-                    usage_masked=usage_masked,
-                    requested_provider=normalized_requested_provider,
-                    effective_provider=effective_provider,
-                    requested_model=normalized_requested_model,
-                    effective_model=effective_model,
-                )
-                services.clear_direct_tool_loop_state(tool_loop_session_key)
+                finally:
+                    services.clear_direct_tool_loop_state(tool_loop_session_key)
                 return
             if event_type == "failure":
                 attempted_providers = str(event.get("attempted_providers") or "").strip()

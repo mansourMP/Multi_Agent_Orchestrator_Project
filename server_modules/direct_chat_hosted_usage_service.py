@@ -563,13 +563,22 @@ def persist_direct_chat_hosted_usage_best_effort(
     try:
         from server_modules import billing_service
 
-        billing_service.debit_workspace_credit_balance_for_hosted_usage(
+        debit_result = billing_service.debit_workspace_credit_balance_for_hosted_usage(
             workspace_id=workspace_token,
             tenant_id=tenant_id,
             request_id=request_id,
         )
     except Exception as exc:
         raise RuntimeError("Hosted AI credit debit failed.") from exc
+    debit_payload = _coerce_dict(debit_result)
+    if debit_payload.get("ok") is not True:
+        reason = (
+            _text(debit_payload.get("error"))
+            or _text(debit_payload.get("reason"))
+            or _text(debit_payload.get("code"))
+            or "unknown debit failure"
+        )
+        raise RuntimeError(f"Hosted AI credit debit failed: {reason}.")
     release_direct_chat_hosted_usage_reservation_best_effort(
         workspace_id=workspace_token,
         thread_id=thread_token,

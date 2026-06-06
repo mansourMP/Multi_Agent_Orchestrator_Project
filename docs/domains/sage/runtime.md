@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Platform
-Last verified: 2026-06-06
+Last verified: 2026-06-07
 Source of truth: Sage runtime and Agent Computer code
 
 ## Cloud Default
@@ -12,6 +12,12 @@ The inspected `/api/sage/chat` path is cloud-provider backed by default.
 workspace credentials in priority order `anthropic`, `deepseek`, `openai`,
 `gemini`, then calls `generate_chat_reply_with_provider_fallback()` with
 `disable_provider_fallback=True` in the context.
+
+For action-shaped prompts, `handle_sage_chat()` enters the Sage action loop v2
+before the plain text-generation path. That loop reuses the direct-chat tool
+catalog/execution services for web search, web fetch, guarded direct tools, and
+approved MCP skills. It returns real `tool_calls`, `blocked_tools`,
+`approvals_required`, `action_execution_mode`, and action-loop budget metadata.
 
 `server_modules/direct_chat_provider_service.py` separates credential planes:
 workspace BYOK credentials, platform runtime credentials, and local runtime
@@ -26,9 +32,11 @@ detection for local file/shell/screenshot/computer requests lives in
 `server_modules/direct_chat_tool_catalog_service.py`; actual gateway execution
 is guarded in `server_modules/routes_gateway.py` and personal-channel services.
 
-`/api/sage/chat` itself does not dispatch these local actions. It can expose
-safe skill catalog entries and include setup/readiness context, but execution
-requires the selected gateway/Agent Computer path.
+`/api/sage/chat` can plan and request guarded local actions, but successful
+execution still requires the selected gateway/Agent Computer path and the
+direct-tool approval layer. When Agent Computer is offline, browser/shell/file
+requests are blocked with runtime-unavailable tool records rather than fake
+assistant text.
 
 ## Offline Behavior
 

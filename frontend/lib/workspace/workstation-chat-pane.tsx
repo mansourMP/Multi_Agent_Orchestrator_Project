@@ -2081,6 +2081,10 @@ export function WorkstationChatPane() {
     () => routeManifest.routeIndex.approvals?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`,
     [bootstrap.workspace.id, routeManifest.routeIndex.approvals],
   );
+  const hardwareHref = useMemo(
+    () => routeManifest.routeIndex.hardware?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/hardware`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.hardware],
+  );
   const sageSlashCommands = useMemo<ComposerSlashCommand[]>(
     () => (
       SAGE_COMMAND_CATALOG.map((command) => ({
@@ -2107,10 +2111,6 @@ export function WorkstationChatPane() {
       }];
     }),
     [routeManifest.routeIndex],
-  );
-  const hardwareHref = useMemo(
-    () => routeManifest.routeIndex.hardware?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/hardware`,
-    [bootstrap.workspace.id, routeManifest.routeIndex.hardware],
   );
   const composerModelOptions = useMemo(
     () => {
@@ -3486,7 +3486,7 @@ export function WorkstationChatPane() {
             ? error.retryable
             : true,
           actions: localComputerNeedsAttention
-            ? [{ label: 'Open Hardware', target: 'gateway' }]
+            ? [{ label: 'Open Hardware', target: 'hardware' }]
             : approvalNeedsAttention
               ? [{ label: 'Review approvals', target: 'approvals' }]
               : authNeedsAttention
@@ -3942,6 +3942,10 @@ export function WorkstationChatPane() {
                       router.push(hardwareHref);
                       return;
                     }
+                    if (pill.target === 'hardware') {
+                      router.push(hardwareHref);
+                      return;
+                    }
                     router.push(integrationsHref);
                   }}
                 >
@@ -4099,6 +4103,10 @@ export function WorkstationChatPane() {
                       router.push(integrationsHref);
                       return;
                     }
+                    if (action?.target === 'hardware') {
+                      router.push(hardwareHref);
+                      return;
+                    }
                     router.push(
                       action?.target === 'gateway'
                         ? hardwareHref
@@ -4134,6 +4142,11 @@ export function WorkstationChatPane() {
               label: statusNotice?.actionLabel ?? (statusNotice?.requiresLocalAccess ? 'Got it' : 'Dismiss'),
               onClick: () => {
                 if (statusNotice?.actionTarget === 'gateway') {
+                  setStatusMessage(null);
+                  router.push(hardwareHref);
+                  return;
+                }
+                if (statusNotice?.actionTarget === 'hardware') {
                   setStatusMessage(null);
                   router.push(hardwareHref);
                   return;

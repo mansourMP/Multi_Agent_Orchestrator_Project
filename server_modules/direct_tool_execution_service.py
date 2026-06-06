@@ -220,8 +220,13 @@ def direct_tool_step_payload(
         kind = "screenshot"
         detail = detail or callbacks.compact_step_detail(arguments.get("path") or arguments.get("file_path") or "Current screen")
     elif normalized_connector == "hardware":
-        label = "Using hardware runtime"
-        kind = "computer"
+        hardware_action = str(arguments.get("action") or arguments.get("capability_id") or "").strip()
+        if hardware_action == "screenshot.capture":
+            label = "Capturing screen"
+            kind = "screenshot"
+        else:
+            label = "Using hardware runtime"
+            kind = "computer"
         detail = detail or callbacks.compact_step_detail(
             arguments.get("action")
             or arguments.get("capability_id")
@@ -566,6 +571,72 @@ def _parse_web_search_results(result_text: str) -> List[Dict[str, str]]:
     return results[:5]
 
 
+def _parse_result_json_object(result_text: str) -> Dict[str, Any]:
+    try:
+        payload = json.loads(str(result_text or "").strip())
+    except Exception:
+        return {}
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _first_artifact_id_from_result_payload(payload: Dict[str, Any]) -> str:
+    containers: List[Dict[str, Any]] = []
+    if isinstance(payload, dict):
+        containers.append(payload)
+        execution = payload.get("execution")
+        if isinstance(execution, dict):
+            containers.append(execution)
+            execution_result = execution.get("result")
+            if isinstance(execution_result, dict):
+                containers.append(execution_result)
+        result = payload.get("result")
+        if isinstance(result, dict):
+            containers.append(result)
+
+    for container in containers:
+        for key in ("artifact_id", "screenshot_artifact_id", "id"):
+            candidate = str(container.get(key) or "").strip()
+            if candidate:
+                return candidate
+        artifacts = container.get("artifacts")
+        if isinstance(artifacts, list):
+            for item in artifacts:
+                if isinstance(item, dict):
+                    candidate = str(item.get("artifact_id") or item.get("id") or "").strip()
+                else:
+                    candidate = str(item or "").strip()
+                if candidate:
+                    return candidate
+    return ""
+
+
+def _hardware_result_summary(
+    *,
+    capability_id: str,
+    result_payload: Dict[str, Any],
+    fallback: str,
+) -> str:
+    result = result_payload.get("result")
+    if isinstance(result, dict):
+        summary = str(result.get("summary") or "").strip()
+        if summary:
+            return summary
+
+    status = str(result_payload.get("status") or "").strip().lower()
+    reason = str(result_payload.get("reason") or "").strip()
+    if status == "completed":
+        if capability_id == "screenshot.capture":
+            return "Captured screenshot from Agent Computer."
+        return f"{capability_id or 'Hardware action'} completed."
+    if status == "waiting_approval":
+        return f"Waiting for approval to run {capability_id or 'hardware action'}."
+    if status in {"offline", "degraded"}:
+        return "Agent Computer is not connected. Open Hardware to connect this Mac."
+    if status == "failed":
+        return reason or "Hardware action failed."
+    return fallback
+
+
 def build_direct_tool_trace_metadata(
     connector_id: str,
     action_id: str,
@@ -580,6 +651,7 @@ def build_direct_tool_trace_metadata(
     search_results: List[Dict[str, str]] = []
     browser_action: Optional[Dict[str, Any]] = None
     browser_screenshot: Optional[Dict[str, Any]] = None
+    result_summary = _compact_trace_text(result_text or payload.get("query") or payload.get("url"))
 
     if normalized_connector == "web" and normalized_action == "search":
         search_query = str(payload.get("query") or payload.get("input") or "").strip()
@@ -615,15 +687,33 @@ def build_direct_tool_trace_metadata(
             }
 
     if normalized_connector == "hardware":
+        result_payload = _parse_result_json_object(result_text)
+        capability_id = str(payload.get("action") or payload.get("capability_id") or normalized_action or "action").strip()
         target_summary = (
-            str(payload.get("action") or payload.get("capability_id") or "").strip()
+            capability_id
             or str(payload.get("runtime_target") or "").strip()
         )
         browser_action = {
-            "action": str(payload.get("action") or normalized_action or "action").strip(),
+            "action": capability_id or "action",
             "target_summary": _compact_trace_text(target_summary or "hardware action"),
             "url": None,
         }
+        result_summary = _compact_trace_text(
+            _hardware_result_summary(
+                capability_id=capability_id,
+                result_payload=result_payload,
+                fallback=result_summary,
+            )
+        )
+        if capability_id == "screenshot.capture":
+            artifact_ref = _first_artifact_id_from_result_payload(result_payload)
+            if artifact_ref:
+                browser_screenshot = {
+                    "artifact_id": artifact_ref,
+                    "caption": "Agent Computer screenshot",
+                    "width": 0,
+                    "height": 0,
+                }
 
     return {
         "capability_id": (
@@ -635,7 +725,7 @@ def build_direct_tool_trace_metadata(
         "search_results": search_results,
         "browser_action": browser_action,
         "browser_screenshot": browser_screenshot,
-        "result_summary": _compact_trace_text(result_text or payload.get("query") or payload.get("url")),
+        "result_summary": result_summary,
     }
 
 

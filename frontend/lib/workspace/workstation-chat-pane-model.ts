@@ -53,7 +53,7 @@ export type SageReadinessPill = {
   id: string;
   label: string;
   tone: 'muted' | 'warning' | 'danger';
-  target: 'gateway' | 'integrations';
+  target: 'gateway' | 'hardware' | 'integrations';
 };
 
 export type GatewayReadinessRegistration = Record<string, unknown> & {
@@ -675,6 +675,9 @@ export function connectorSetupNoticeFromInterventions(interventions: unknown[]):
     || combinedText.includes('my computer')
     || combinedText.includes('local computer')
     || combinedText.includes('agent computer')
+    || combinedText.includes('hardware')
+    || combinedText.includes('gateway')
+    || combinedText.includes('screenshot')
     || combinedText.includes('smtp')
     || combinedText.includes('email connector')
     || combinedText.includes('telegram')
@@ -691,10 +694,18 @@ export function connectorSetupNoticeFromInterventions(interventions: unknown[]):
 
   if (code.startsWith('google_workspace_') || combinedText.includes('google workspace')) {
     message = 'Connect Google Workspace to let Sage use Gmail, Calendar, or Drive actions. You can keep chatting normally.';
-  } else if (code === 'local_setup_required' || combinedText.includes('my computer') || combinedText.includes('local computer')) {
-    message = 'Connect Agent Computer in Hardware before Sage uses local computer actions. You can keep chatting normally.';
+  } else if (
+    code === 'local_setup_required'
+    || combinedText.includes('agent computer')
+    || combinedText.includes('hardware')
+    || combinedText.includes('gateway')
+    || combinedText.includes('my computer')
+    || combinedText.includes('local computer')
+    || combinedText.includes('screenshot')
+  ) {
+    message = 'Connect Agent Computer in Hardware before Sage uses this computer. You can keep chatting normally.';
     actionLabel = 'Open Hardware';
-    actionTarget = 'gateway';
+    actionTarget = 'hardware';
   } else if (
     code.startsWith('smtp_')
     || code.startsWith('email_connector_')
@@ -2409,7 +2420,7 @@ export function classifyStatusNotice(message: string): {
   title: string;
   body: string;
   requiresLocalAccess: boolean;
-  actionTarget: 'gateway' | 'integrations' | null;
+  actionTarget: 'gateway' | 'hardware' | 'integrations' | null;
   actionLabel: string | null;
 } {
   if (/^(memory|notification|policy|service|channel).*(saved|updated|pinned|unpinned|forgotten|corrected)/i.test(message)) {
@@ -2448,7 +2459,7 @@ export function classifyStatusNotice(message: string): {
       title: 'Agent Computer browser needed',
       body: 'Localhost pages, signed-in sites, and private browser sessions stay on Agent Computer. Open Hardware to manage access.',
       requiresLocalAccess: true,
-      actionTarget: 'gateway',
+      actionTarget: 'hardware',
       actionLabel: 'Open Hardware',
     };
   }
@@ -2458,7 +2469,7 @@ export function classifyStatusNotice(message: string): {
       title: 'Agent Computer attention needed',
       body: message,
       requiresLocalAccess: true,
-      actionTarget: 'gateway',
+      actionTarget: 'hardware',
       actionLabel: 'Open Hardware',
     };
   }

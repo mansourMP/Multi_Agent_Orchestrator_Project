@@ -107,7 +107,7 @@ export type SendFailureNotice = {
   retryDraft?: string | null;
   actions?: {
     label: string;
-    target: 'gateway' | 'integrations' | 'approvals';
+    target: 'gateway' | 'hardware' | 'integrations' | 'approvals';
   }[];
 };
 

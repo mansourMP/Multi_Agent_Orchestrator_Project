@@ -199,6 +199,7 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
             "do some web search!",
             "search the web for Netanyahu news",
             "research current Netanyahu news",
+            "search the web for OpenClaw browser docs",
         ):
             with self.subTest(message=message):
                 self.assertTrue(
@@ -222,6 +223,14 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
                 callbacks=callbacks,
             )
         )
+
+    def test_browser_automation_intent_requires_control_intent(self) -> None:
+        self.assertFalse(service.message_has_browser_automation_intent("search the web for OpenClaw browser docs"))
+        self.assertFalse(service.message_has_browser_automation_intent("fetch https://browser.example.com/docs"))
+        self.assertTrue(service.message_has_browser_automation_intent("open https://example.com in the browser"))
+        self.assertTrue(service.message_has_browser_automation_intent("go to example.com and tell me the page title"))
+        self.assertTrue(service.message_has_browser_automation_intent("click the login button"))
+        self.assertTrue(service.message_has_browser_automation_intent("use the browser to check this page"))
 
     def test_message_can_use_direct_connector_tools_detects_workspace_connector(self) -> None:
         callbacks = _callbacks()

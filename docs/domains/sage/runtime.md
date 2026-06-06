@@ -13,11 +13,13 @@ workspace credentials in priority order `anthropic`, `deepseek`, `openai`,
 `gemini`, then calls `generate_chat_reply_with_provider_fallback()` with
 `disable_provider_fallback=True` in the context.
 
-For action-shaped prompts, `handle_sage_chat()` enters the Sage action loop v2
-before the plain text-generation path. That loop reuses the direct-chat tool
-catalog/execution services for web search, web fetch, guarded direct tools, and
-approved MCP skills. It returns real `tool_calls`, `blocked_tools`,
-`approvals_required`, `action_execution_mode`, and action-loop budget metadata.
+For action-shaped prompts, `handle_sage_chat()` enters the Sage operator loop
+v3 before the plain text-generation path. That loop routes through the
+provider-backed direct-chat tool stream so Sage can plan a tool, receive the
+tool result, and finish with the result in context. It covers web search, web
+fetch, guarded direct tools, approval handoff, and compatible MCP skill
+execution. It returns real `tool_calls`, `blocked_tools`,
+`approvals_required`, `action_execution_mode`, and loop budget metadata.
 
 `server_modules/direct_chat_provider_service.py` separates credential planes:
 workspace BYOK credentials, platform runtime credentials, and local runtime

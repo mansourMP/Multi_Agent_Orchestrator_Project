@@ -17,9 +17,10 @@ surfaces before calling runtime code.
 Default Sage chat behavior is cloud text generation. `handle_sage_chat()` in
 `server_modules/sage_agent_runtime_service.py` loads profile, memory, context
 files, heartbeat, and safe skills, resolves a configured cloud provider, and
-then chooses between the Sage action loop and the plain text-generation path.
-Action-shaped prompts use action loop v2 for web search/fetch, guarded direct
-tools, and approved MCP skills. Plain chat builds the prompt envelope, calls
+then chooses between the Sage operator loop and the plain text-generation path.
+Action-shaped prompts use operator loop v3 for model-planned web search/fetch,
+guarded direct tools, approval handoff, and compatible MCP skill execution.
+Plain chat builds the prompt envelope, calls
 `generate_chat_reply_with_provider_fallback()`, then returns the reply plus
 `used_context`, `available_tools`, `trace_id`, `provider`, `model`, and
 transparency events.

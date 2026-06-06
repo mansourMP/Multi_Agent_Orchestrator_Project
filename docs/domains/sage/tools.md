@@ -49,12 +49,13 @@ Source: `server_modules/sage_agent_runtime_service.py`.
 ## Sage Action Loop
 
 Action-shaped Sage chat prompts enter `server_modules/sage_agent_runtime_service.py`
-action loop v2. The loop reuses direct-chat tool availability and execution
-services, can execute `web__search` and `web__fetch`, can invoke matching
-approved MCP skills, and can request approval before guarded write/execute
-tools. It records action-loop version and budget metadata, blocks repeated or
-surplus direct tool calls, and returns real `tool_calls`, `blocked_tools`, and
-`approvals_required` in the Sage result.
+operator loop v3. The loop reuses the provider-backed direct-chat tool stream
+so Sage can plan a tool, run it, receive the result, and answer with that result
+in context. It can execute `web__search` and `web__fetch`, can invoke matching
+approved MCP skills through the compatibility path, and can request approval
+before guarded write/execute tools. It records loop version and budget
+metadata, blocks unavailable or over-budget tool work, and returns real
+`tool_calls`, `blocked_tools`, and `approvals_required` in the Sage result.
 
 ## Personal-Channel Tools
 

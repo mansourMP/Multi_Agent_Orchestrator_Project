@@ -601,6 +601,17 @@ class SageAgentRuntimeAuditTests(unittest.TestCase):
 
 
 class SageAgentRuntimeResultShapeTests(unittest.TestCase):
+    @staticmethod
+    def _trace(event_type, *, tool_call_id=None, data=None):
+        return {
+            "type": "trace",
+            "payload": {
+                "event_type": event_type,
+                "tool_call_id": tool_call_id,
+                "data": dict(data or {}),
+            },
+        }
+
     def test_returns_full_contract(self):
         with (
             patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile") as mock_profile,
@@ -637,6 +648,20 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             self.assertEqual(result["model"], "gpt-4o")
 
     def test_main_sage_chat_executes_web_search_tool(self):
+        stream_events = [
+            self._trace(
+                "tool.started",
+                tool_call_id="call-search-1",
+                data={"tool_name": "web__search", "args_preview": {"query": "OpenClaw browser docs"}},
+            ),
+            self._trace(
+                "tool.result",
+                tool_call_id="call-search-1",
+                data={"status": "ok", "summary": "1. Result\nURL: https://example.com\nSnippet: Found it."},
+            ),
+            {"type": "chunk", "delta": "I found the OpenClaw browser docs."},
+            {"type": "final", "payload": {"reply": "I found the OpenClaw browser docs.", "actions": [], "error": ""}},
+        ]
         with (
             patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
             patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
@@ -647,7 +672,7 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
             patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[]),
             patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False}),
-            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call", return_value="1. Result\nURL: https://example.com\nSnippet: Found it.") as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_generation_service.stream_provider_backed_direct_chat", return_value=iter(stream_events)) as mock_stream,
             patch("server_modules.sage_agent_runtime_service.persist_interaction"),
             patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
             patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
@@ -658,13 +683,31 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             ))
 
         self.assertEqual(result["action_execution_mode"], "tools_executed")
+        self.assertEqual(result["action_loop_version"], "v3")
         self.assertEqual(result["tool_calls"][0]["name"], "web__search")
         self.assertIn("OpenClaw browser docs", result["tool_calls"][0]["arguments"]["query"])
-        self.assertIn("https://example.com", result["message"])
+        self.assertEqual(result["message"], "I found the OpenClaw browser docs.")
         self.assertFalse(mock_generate.called)
-        self.assertTrue(mock_execute.called)
+        self.assertTrue(mock_stream.called)
+        stream_kwargs = mock_stream.call_args.kwargs
+        self.assertIn("You are Sage", stream_kwargs["system_prompt"])
+        self.assertEqual(stream_kwargs["session_ctx"]["agent_turn_request"]["policy_context"]["agent_scope"], "sage")
+        self.assertEqual(stream_kwargs["session_ctx"]["agent_turn_request"]["policy_context"]["agent_id"], "sage_main_agent")
 
     def test_main_sage_chat_executes_web_fetch_tool_for_url_fetch(self):
+        stream_events = [
+            self._trace(
+                "tool.started",
+                tool_call_id="call-fetch-1",
+                data={"tool_name": "web__fetch", "args_preview": {"url": "https://example.com/docs"}},
+            ),
+            self._trace(
+                "tool.result",
+                tool_call_id="call-fetch-1",
+                data={"status": "ok", "summary": "Fetched page text."},
+            ),
+            {"type": "final", "payload": {"reply": "Fetched page text.", "actions": [], "error": ""}},
+        ]
         with (
             patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
             patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
@@ -675,7 +718,7 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
             patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[]),
             patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False}),
-            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call", return_value="Fetched page text.") as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_generation_service.stream_provider_backed_direct_chat", return_value=iter(stream_events)) as mock_stream,
             patch("server_modules.sage_agent_runtime_service.persist_interaction"),
             patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
             patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
@@ -690,7 +733,7 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         self.assertEqual(result["tool_calls"][0]["arguments"]["url"], "https://example.com/docs")
         self.assertEqual(result["message"], "Fetched page text.")
         self.assertFalse(mock_generate.called)
-        self.assertTrue(mock_execute.called)
+        self.assertTrue(mock_stream.called)
 
     def test_main_sage_chat_blocks_browser_when_agent_computer_offline(self):
         with (
@@ -720,6 +763,33 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         self.assertFalse(mock_execute.called)
 
     def test_main_sage_chat_requests_approval_for_unsafe_shell_tool(self):
+        stream_events = [
+            {
+                "type": "final",
+                "payload": {
+                    "reply": "",
+                    "actions": [
+                        {
+                            "type": "approval_required",
+                            "kind": "approval_required",
+                            "connector": "shell",
+                            "action": "exec",
+                            "input": '{"command":"rm -rf /tmp/sage-action-loop-test"}',
+                        }
+                    ],
+                    "approvals": [
+                        {
+                            "prompt": "Approve Shell to exec before continuing.",
+                            "labels": ["shell.exec"],
+                            "capabilities": ["shell"],
+                            "actions": ["exec"],
+                            "status": "waiting",
+                        }
+                    ],
+                    "error": "",
+                },
+            }
+        ]
         with (
             patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
             patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
@@ -730,7 +800,7 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
             patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[]),
             patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": True, "local_gateway_online": True}),
-            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call") as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_generation_service.stream_provider_backed_direct_chat", return_value=iter(stream_events)) as mock_stream,
             patch("server_modules.sage_agent_runtime_service.persist_interaction"),
             patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
             patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
@@ -742,9 +812,10 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
 
         self.assertEqual(result["action_execution_mode"], "approval_required")
         self.assertEqual(result["tool_calls"][0]["name"], "shell__exec")
+        self.assertEqual(result["tool_calls"][0]["status"], "approval_required")
         self.assertGreater(len(result["approvals_required"]), 0)
         self.assertFalse(mock_generate.called)
-        self.assertFalse(mock_execute.called)
+        self.assertTrue(mock_stream.called)
 
     def test_main_sage_chat_invokes_matching_mcp_skill(self):
         mcp_skill = SimpleNamespace(
@@ -786,10 +857,23 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         self.assertFalse(mock_generate.called)
         self.assertTrue(mock_skill.called)
 
-    def test_main_sage_chat_enforces_action_loop_tool_budget(self):
-        planned_calls = [
-            {"name": "web__search", "arguments": {"query": f"query {idx}"}}
-            for idx in range(sage_agent_runtime_service._SAGE_ACTION_LOOP_MAX_TOOL_CALLS + 2)
+    def test_main_sage_chat_reports_operator_loop_budget_exhaustion(self):
+        stream_events = [
+            self._trace(
+                "trace.failed",
+                data={
+                    "code": "max_tool_iterations_reached:6",
+                    "message": "The Sage operator loop hit its iteration budget.",
+                },
+            ),
+            {
+                "type": "final",
+                "payload": {
+                    "reply": "",
+                    "actions": [],
+                    "error": "max_tool_iterations_reached:6",
+                },
+            },
         ]
         with (
             patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
@@ -801,8 +885,7 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
             patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[]),
             patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False}),
-            patch("server_modules.sage_agent_runtime_service._plan_sage_direct_tool_calls", return_value=planned_calls),
-            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call", return_value="ok") as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_generation_service.stream_provider_backed_direct_chat", return_value=iter(stream_events)) as mock_stream,
             patch("server_modules.sage_agent_runtime_service.persist_interaction"),
             patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
             patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
@@ -812,11 +895,11 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
                 message="search the web for a lot of things",
             ))
 
-        self.assertEqual(result["action_execution_mode"], "partial_tools_executed")
-        self.assertEqual(len(result["tool_calls"]), sage_agent_runtime_service._SAGE_ACTION_LOOP_MAX_TOOL_CALLS)
-        self.assertEqual(mock_execute.call_count, sage_agent_runtime_service._SAGE_ACTION_LOOP_MAX_TOOL_CALLS)
-        self.assertTrue(any(item["reason"] == "sage_action_loop_tool_budget_exhausted" for item in result["blocked_tools"]))
+        self.assertEqual(result["action_execution_mode"], "tool_blocked")
+        self.assertEqual(result["loop_budget"]["max_iterations"], sage_agent_runtime_service._SAGE_OPERATOR_LOOP_MAX_ITERATIONS)
+        self.assertTrue(any(item["name"] == "max_tool_iterations_reached:6" for item in result["blocked_tools"]))
         self.assertFalse(mock_generate.called)
+        self.assertTrue(mock_stream.called)
 
     def test_raises_on_provider_error(self):
         with (

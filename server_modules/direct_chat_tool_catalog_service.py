@@ -93,7 +93,6 @@ def message_has_browser_automation_intent(message: str) -> bool:
     if re.search(r"https?://", str(message or ""), flags=re.IGNORECASE) and any(
         token in compact
         for token in (
-            "browser",
             "go to",
             "open",
             "visit",
@@ -106,9 +105,21 @@ def message_has_browser_automation_intent(message: str) -> bool:
         )
     ):
         return True
+    if re.search(
+        r"\b(?:(?:use|open|launch|control|drive|automate)\s+(?:the\s+)?browser|browser\s+(?:automation|profile|session|tab|window|control))\b",
+        compact,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\b(?:open|go\s+to|visit)\s+(?:https?://|www\.|[a-z0-9][a-z0-9.-]*\.[a-z]{2,})(?:\b|/)",
+        compact,
+        flags=re.IGNORECASE,
+    ):
+        return True
     return bool(
         re.search(
-            r"\b(?:browser|open\s+(?:a\s+)?(?:website|site|webpage|page)|click|fill\s+form|page\s+title|main\s+heading|screenshot|screen\s+shot)\b",
+            r"\b(?:open\s+(?:a\s+)?(?:website|site|webpage|page)|click|fill\s+form|page\s+title|main\s+heading|screenshot|screen\s+shot)\b",
             compact,
             flags=re.IGNORECASE,
         )
@@ -159,10 +170,10 @@ def message_requests_browser_tool(message: str, callbacks: DirectChatToolPolicyC
     if message_has_browser_automation_intent(message):
         return True
     if callbacks.extract_first_url(message) and (
-        callbacks.mentions_any(compact, callbacks.browser_keywords) or any(token in compact for token in ("go to", "open", "title", "heading"))
+        any(token in compact for token in ("go to", "open", "visit", "click", "fill", "title", "heading", "screenshot", "screen shot"))
     ):
         return True
-    return callbacks.mentions_any(compact, callbacks.browser_keywords)
+    return False
 
 
 def message_requests_web_lookup_tool(message: str, callbacks: DirectChatToolPolicyCallbacks) -> bool:

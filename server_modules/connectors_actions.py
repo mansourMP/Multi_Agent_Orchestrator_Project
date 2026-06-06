@@ -7,8 +7,11 @@ from server_modules import secrets_broker, tool_broker
 from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules.connectors.github_connector import (
+    build_run_goal_from_event as github_build_run_goal_from_event,
+    event_matches_connector as github_event_matches_connector,
     parse_inbound_event as github_parse_inbound_event,
     request_signature_header as github_request_signature_header,
+    should_trigger_agent_run as github_should_trigger_agent_run,
     verify_request_signature as github_verify_request_signature,
 )
 from server_modules.connectors.discord_connector import (
@@ -20,12 +23,15 @@ from server_modules.connectors.discord_connector import (
     verify_interaction_signature as discord_verify_interaction_signature,
 )
 from server_modules.connectors.slack_connector import (
+    build_run_goal_from_event as slack_build_run_goal_from_event,
     exchange_oauth_code as slack_exchange_oauth_code,
+    event_matches_connector as slack_event_matches_connector,
     get_channel_history as slack_get_channel_history,
     list_channels as slack_list_channels,
     parse_inbound_event as slack_parse_inbound_event,
     send_dm as slack_send_dm_message,
     send_message as slack_send_channel_message,
+    should_trigger_agent_run as slack_should_trigger_agent_run,
     verify_request_signature as slack_verify_request_signature,
 )
 from server_modules.schemas import ConnectorCreate, ConnectorDocumentCreateRequest, ConnectorSpreadsheetCreateRequest
@@ -1102,40 +1108,87 @@ async def slack_events_webhook(request: Request):
             return {"challenge": str(parsed.get("challenge") or "").strip()}
 
         if parsed.get("kind") == "event":
-            # Inbound event only — not yet wired to execution pipeline.
             append_fn = globals().get("_append_channel_event")
-            if callable(append_fn):
-                team_id = str(parsed.get("team_id") or "").strip().lower()
-                channel_id = str(parsed.get("channel") or "").strip() or "slack"
-                vault = load_vault()
-                items = vault.get("credentials", [])
-                if not isinstance(items, list):
-                    items = []
-                matched_workspaces: List[str] = []
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    if str(item.get("provider") or "").strip().lower() != "slack":
-                        continue
-                    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-                    item_team_id = str(metadata.get("team_id") or "").strip().lower()
-                    if team_id and item_team_id and item_team_id != team_id:
-                        continue
-                    workspace_id = _normalize_workspace_id(item.get("workspace_id"))
-                    if workspace_id in matched_workspaces:
-                        continue
-                    matched_workspaces.append(workspace_id)
+            from server_modules import agent_channel_router
+
+            channel_id = str(parsed.get("channel") or "").strip() or "slack"
+            vault = load_vault()
+            items = vault.get("credentials", [])
+            if not isinstance(items, list):
+                items = []
+            slack_rows = [
+                item
+                for item in items
+                if isinstance(item, dict) and str(item.get("provider") or "").strip().lower() == "slack"
+            ]
+            handled = 0
+            triggered = 0
+            triggered_run_id = ""
+            for item in slack_rows:
+                row_id = str(item.get("id") or "").strip()
+                if not row_id:
+                    continue
+                workspace_id = _normalize_workspace_id(item.get("workspace_id"))
+                try:
+                    secret = resolve_vault_credential(row_id, workspace_id)
+                except Exception:
+                    secret = {}
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                if not slack_event_matches_connector(parsed, secret, metadata):
+                    continue
+                handled += 1
+                trace_token = str(parsed.get("event_id") or parsed.get("message_ts") or parsed.get("ts") or "").strip() or uuid.uuid4().hex
+                message_id = str(parsed.get("message_ts") or parsed.get("ts") or parsed.get("event_id") or "").strip()
+                session_key = str(parsed.get("thread_ts") or parsed.get("channel") or "").strip() or "slack"
+                if callable(append_fn):
                     append_fn(
                         channel="slack",
                         direction="inbound",
                         event_type=str(parsed.get("event_type") or parsed.get("message_type") or "event"),
                         text=str(parsed.get("text") or parsed.get("reaction") or "").strip() or None,
                         workspace_id=workspace_id,
-                        session_key=channel_id,
-                        message_id=str(parsed.get("message_ts") or parsed.get("ts") or parsed.get("event_id") or "").strip() or None,
-                        trace_id=f"slack:{str(parsed.get('event_id') or parsed.get('ts') or uuid.uuid4()).strip()}",
+                        session_key=session_key,
+                        message_id=message_id or None,
+                        trace_id=f"slack:{trace_token}",
                         metadata=parsed,
                     )
+                if not slack_should_trigger_agent_run(parsed, secret, metadata=metadata):
+                    continue
+                goal = slack_build_run_goal_from_event(parsed)
+                if not goal:
+                    continue
+                route_result = await agent_channel_router.route_inbound_channel_message(
+                    tenant_id=await _resolve_connector_tenant_id(item, workspace_id),
+                    workspace_id=workspace_id,
+                    channel_key="slack",
+                    endpoint_key=_resolve_channel_endpoint_key(
+                        entry=item,
+                        channel_key="slack",
+                        connector_id=row_id,
+                        fallback=channel_id,
+                    ),
+                    customer_message=goal,
+                    session_key=session_key,
+                    message_id=message_id or None,
+                    actor_id=str(parsed.get("user_id") or "").strip() or None,
+                    actor_display_name=str(parsed.get("user_id") or "").strip() or None,
+                    metadata={
+                        "connector_id": row_id,
+                        "delivery_source": "webhook",
+                        "slack_team_id": str(parsed.get("team_id") or "").strip() or None,
+                        "slack_channel_id": channel_id,
+                        "slack_thread_ts": str(parsed.get("thread_ts") or "").strip() or None,
+                        "slack_message_ts": message_id or None,
+                        "source_event_id": trace_token,
+                    },
+                    allow_master_fallback=False,
+                )
+                route_payload = route_result if isinstance(route_result, dict) else {}
+                if str(route_payload.get("run_id") or "").strip():
+                    triggered += 1
+                    if not triggered_run_id:
+                        triggered_run_id = str(route_payload.get("run_id") or "").strip()
+            return {"ok": True, "handled": handled, "triggered": triggered, "run_id": triggered_run_id or None}
         return {"ok": True}
     except HTTPException:
         raise
@@ -1350,21 +1403,28 @@ async def github_events_webhook(request: Request):
             event_type=str(headers.get("x-github-event") or headers.get("X-GitHub-Event") or "").strip(),
             delivery_id=str(headers.get("x-github-delivery") or headers.get("X-GitHub-Delivery") or "").strip(),
         )
-        # Inbound event only — not yet wired to execution pipeline.
         append_fn = globals().get("_append_channel_event")
-        if callable(append_fn):
-            matched_workspaces: List[str] = []
-            owner = str(parsed.get("owner") or "").strip().lower()
-            repository = str(parsed.get("repository") or "").strip() or "github"
-            for item in github_rows:
-                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-                item_username = str(metadata.get("username") or "").strip().lower()
-                if owner and item_username and item_username != owner:
-                    continue
-                workspace_id = _normalize_workspace_id(item.get("workspace_id"))
-                if workspace_id in matched_workspaces:
-                    continue
-                matched_workspaces.append(workspace_id)
+        from server_modules import agent_channel_router
+
+        handled = 0
+        triggered = 0
+        triggered_run_id = ""
+        repository = str(parsed.get("repository") or "").strip() or "github"
+        message_id = str(parsed.get("delivery_id") or parsed.get("after") or parsed.get("pull_request_number") or parsed.get("issue_number") or "").strip()
+        for item in github_rows:
+            row_id = str(item.get("id") or "").strip()
+            if not row_id:
+                continue
+            workspace_id = _normalize_workspace_id(item.get("workspace_id"))
+            try:
+                secret = resolve_vault_credential(row_id, workspace_id)
+            except Exception:
+                secret = {}
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            if not github_event_matches_connector(parsed, secret, metadata):
+                continue
+            handled += 1
+            if callable(append_fn):
                 append_fn(
                     channel="github",
                     direction="inbound",
@@ -1379,7 +1439,42 @@ async def github_events_webhook(request: Request):
                     trace_id=f"github:{str(parsed.get('delivery_id') or parsed.get('after') or uuid.uuid4()).strip()}",
                     metadata=parsed,
                 )
-        return {"ok": True}
+            if not github_should_trigger_agent_run(parsed, secret, metadata=metadata):
+                continue
+            goal = github_build_run_goal_from_event(parsed)
+            if not goal:
+                continue
+            route_result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id=await _resolve_connector_tenant_id(item, workspace_id),
+                workspace_id=workspace_id,
+                channel_key="github",
+                endpoint_key=_resolve_channel_endpoint_key(
+                    entry=item,
+                    channel_key="github",
+                    connector_id=row_id,
+                    fallback=repository,
+                ),
+                customer_message=goal,
+                session_key=repository,
+                message_id=message_id or None,
+                actor_id=str(parsed.get("sender") or "").strip() or None,
+                actor_display_name=str(parsed.get("sender") or "").strip() or None,
+                metadata={
+                    "connector_id": row_id,
+                    "delivery_source": "webhook",
+                    "github_repository": repository,
+                    "github_event_type": str(parsed.get("event_type") or "").strip() or None,
+                    "github_delivery_id": str(parsed.get("delivery_id") or "").strip() or None,
+                    "source_event_id": message_id or str(parsed.get("delivery_id") or "").strip() or None,
+                },
+                allow_master_fallback=False,
+            )
+            route_payload = route_result if isinstance(route_result, dict) else {}
+            if str(route_payload.get("run_id") or "").strip():
+                triggered += 1
+                if not triggered_run_id:
+                    triggered_run_id = str(route_payload.get("run_id") or "").strip()
+        return {"ok": True, "handled": handled, "triggered": triggered, "run_id": triggered_run_id or None}
     except HTTPException:
         raise
     except Exception as exc:

@@ -42,6 +42,23 @@ type HardwareSummary = {
   detail: string;
 };
 
+type LocalTrayStatus = {
+  ok?: boolean;
+  connected?: boolean;
+  desired_connected?: boolean;
+  device_name?: string;
+  session_verified?: boolean;
+  heartbeat_fresh?: boolean;
+  session_status?: string;
+  state?: string;
+  supervisor_running?: boolean;
+  gateway_running?: boolean;
+  workspace_id?: string;
+  error?: string | null;
+};
+
+const LOCAL_TRAY_STATUS_URL = 'http://127.0.0.1:7790/status';
+
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
@@ -134,7 +151,7 @@ function toneForStatus(status: string, online = false, healthy = false): Hardwar
   if ((online && healthy) || ['ready', 'online', 'healthy', 'ok', 'available'].includes(normalized)) {
     return 'ready';
   }
-  if (['busy', 'degraded', 'stale', 'warning', 'warn', 'reconnecting', 'registered', 'promptable'].includes(normalized)) {
+  if (['busy', 'connecting', 'degraded', 'stale', 'warning', 'warn', 'reconnecting', 'registered', 'promptable'].includes(normalized)) {
     return 'warning';
   }
   if (['blocked', 'revoked', 'error', 'failed', 'fail', 'unhealthy', 'denied', 'restricted', 'offline', 'missing', 'unavailable'].includes(normalized)) {
@@ -146,6 +163,9 @@ function toneForStatus(status: string, online = false, healthy = false): Hardwar
 function offlineAttachmentStatus(rawStatus: string): string {
   const normalized = readString(rawStatus, 'offline').toLowerCase();
   if (['blocked', 'revoked', 'error', 'failed', 'fail', 'unhealthy', 'denied', 'restricted'].includes(normalized)) {
+    return normalized;
+  }
+  if (['connecting', 'reconnecting', 'stale', 'registered', 'promptable'].includes(normalized)) {
     return normalized;
   }
   return 'offline';
@@ -236,6 +256,34 @@ function selectHardwareTarget(targets: WorkspaceBootstrapRuntimeTarget[]): Works
     ?? null;
 }
 
+function trayStatusToAttachment(status: LocalTrayStatus | null): HardwareAttachment | null {
+  if (!status || status.ok === false) {
+    return null;
+  }
+  const statusToken = status.error
+    ? 'error'
+    : status.session_verified && status.gateway_running && status.heartbeat_fresh
+      ? 'online'
+      : status.session_verified && status.gateway_running
+        ? 'degraded'
+        : status.desired_connected || status.gateway_running
+          ? 'connecting'
+          : 'offline';
+  return {
+    attachmentId: 'local-tray',
+    attachmentKind: 'local_companion',
+    label: readString(status.device_name, 'Agent Computer'),
+    online: statusToken === 'online',
+    healthy: statusToken === 'online',
+    status: statusToken,
+    statusReason: status.error || (statusToken === 'connecting' ? 'Gateway is not verified yet.' : null),
+    heartbeatAt: null,
+    capabilities: [],
+    capabilityReadiness: {},
+    nativeRuntime: null,
+  };
+}
+
 function buildSummary(
   attachment: HardwareAttachment | null,
   target: WorkspaceBootstrapRuntimeTarget | null,
@@ -257,7 +305,7 @@ function buildSummary(
       statusLabel: humanizeToken(status),
       tone: toneForStatus(status, attachment.online, attachment.healthy),
       icon: iconForAttachment(attachment, target),
-      detail: runtimeBits,
+      detail: attachment.statusReason || runtimeBits,
     };
   }
 
@@ -334,6 +382,7 @@ export function WorkstationHardwareStatus({
 }) {
   const services = useWorkspaceServices();
   const [attachments, setAttachments] = useState<HardwareAttachment[]>([]);
+  const [localTrayStatus, setLocalTrayStatus] = useState<LocalTrayStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -365,6 +414,42 @@ export function WorkstationHardwareStatus({
   }, [services.client]);
 
   useEffect(() => {
+    let cancelled = false;
+    const loadTrayStatus = async () => {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 800);
+      try {
+        const response = await fetch(LOCAL_TRAY_STATUS_URL, {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error('Local tray status unavailable.');
+        }
+        const payload = await response.json() as LocalTrayStatus;
+        if (!cancelled) {
+          setLocalTrayStatus(payload);
+        }
+      } catch {
+        if (!cancelled) {
+          setLocalTrayStatus(null);
+        }
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    };
+
+    void loadTrayStatus();
+    const interval = window.setInterval(() => {
+      void loadTrayStatus();
+    }, 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!open) {
       return;
     }
@@ -386,7 +471,14 @@ export function WorkstationHardwareStatus({
     };
   }, [open]);
 
-  const selectedAttachment = useMemo(() => selectHardwareAttachment(attachments), [attachments]);
+  const selectedAttachment = useMemo(() => {
+    const backendAttachment = selectHardwareAttachment(attachments);
+    const localAttachment = trayStatusToAttachment(localTrayStatus);
+    if (localAttachment && (!backendAttachment || backendAttachment.attachmentKind === 'local_companion')) {
+      return localAttachment;
+    }
+    return backendAttachment;
+  }, [attachments, localTrayStatus]);
   const selectedTarget = useMemo(() => selectHardwareTarget(runtimeTargets), [runtimeTargets]);
   const summary = useMemo(
     () => buildSummary(selectedAttachment, selectedTarget, error),

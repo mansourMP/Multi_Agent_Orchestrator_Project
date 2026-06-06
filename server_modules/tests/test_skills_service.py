@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from server_modules.agent_turn import AgentTurnRequest, TurnActor
 from server_modules import direct_tool_execution_service
 from server_modules import no_provider_service
 from server_modules import skills_service
@@ -727,6 +728,26 @@ class SkillsServiceTests(unittest.TestCase):
         execute_gateway_mock.assert_called_once()
         call_kwargs = execute_gateway_mock.call_args.kwargs
         self.assertEqual(call_kwargs["request_id"], "chat-request-2")
+        self.assertEqual(call_kwargs["runtime_access_mode"], "full_access")
+
+    def test_agent_turn_object_policy_context_selects_full_access_for_agent_computer(self) -> None:
+        turn_request = AgentTurnRequest(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            thread_id="thread-1",
+            session_id="thread-1",
+            channel="web",
+            actor=TurnActor(type="user", id="user-1", display_name="Mansur"),
+            message="run something on this hardware",
+            policy_context={"execution_target": "local_companion"},
+        )
+
+        self.assertEqual(
+            skills_service._runtime_access_mode_from_direct_tool_context(
+                session_ctx={"agent_turn_request": turn_request}
+            ),
+            "full_access",
+        )
 
     def test_execute_single_direct_tool_call_uses_direct_worker_when_gateway_not_live(self) -> None:
         callbacks = self._execution_callbacks()
@@ -954,6 +975,7 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(call_kwargs["action_id"], "screenshot.capture")
         self.assertEqual(call_kwargs["gateway_id"], "gw-1")
         self.assertEqual(call_kwargs["request_id"], "chat-request-1")
+        self.assertEqual(call_kwargs["runtime_access_mode"], "full_access")
 
 
 if __name__ == "__main__":

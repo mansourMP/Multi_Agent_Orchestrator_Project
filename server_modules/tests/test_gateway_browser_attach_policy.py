@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from server_modules import auth, gateway_state_repository, personal_channels_repository, routes_gateway
+from server_modules import auth, gateway_execution_service, gateway_state_repository, personal_channels_repository, routes_gateway
 
 
 class GatewayBrowserAttachPolicyTests(unittest.TestCase):
@@ -183,6 +183,60 @@ class GatewayBrowserAttachPolicyTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["status"], "approval_required")
         self.assertEqual(payload["approval"]["capability_id"], "browser.session.action")
+
+    def test_browser_click_dispatches_in_full_access_even_with_stale_approval_policy(self) -> None:
+        registration_payload = self._register_gateway()
+        gateway_id = registration_payload["gateway"]["gateway_id"]
+        gateway_state_repository.update_gateway_registration_state(
+            gateway_id=gateway_id,
+            metadata={
+                "runtime_access_mode": "full_access",
+                "autonomous_agent_setup_warning_acknowledged": True,
+                "agent_computer_policy": {"autonomy_mode": "ask_every_time"},
+            },
+        )
+        gateway_state_repository.upsert_gateway_browser_session(
+            browser_session_id="gbsess-click-full-1",
+            gateway_id=gateway_id,
+            device_id="device-local-1",
+            tenant_id="default",
+            workspace_id="default",
+            user_id="owner-1",
+            run_id="run-browser-seed-full-1",
+            status="active",
+            execution_target="local_gateway",
+            current_url="https://example.com",
+            metadata={"browser_session_mode": "managed_profile"},
+        )
+        execute_mock = AsyncMock(
+            return_value={
+                "status": "active",
+                "browser_session": {
+                    "browser_session_id": "gbsess-click-full-1",
+                    "status": "active",
+                    "current_url": "https://example.com/after-click",
+                    "metadata": {},
+                },
+            }
+        )
+
+        with patch(
+            "server_modules.routes_gateway.gateway_browser_service.execute_browser_capability_via_gateway",
+            execute_mock,
+        ):
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/browser/sessions/gbsess-click-full-1/actions",
+                json={
+                    "action": "click",
+                    "action_args": {"selector": "#pay"},
+                    "run_id": "run-browser-click-full-1",
+                    "trace_id": "trace-browser-click-full-1",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["browser_session"]["current_url"], "https://example.com/after-click")
+        execute_mock.assert_awaited_once()
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ _CONNECTOR_MANIFESTS: Dict[str, Dict[str, Any]] = {
     "google_workspace": {
         "label": "Google Workspace",
         "resources": [{"id": "gmail_threads", "access": ["read", "write"]}, {"id": "calendar_events", "access": ["read", "write"]}, {"id": "drive_files", "access": ["read", "write"]}],
-        "actions": [{"id": "draft_email"}, {"id": "send_email"}, {"id": "create_calendar_event"}, {"id": "create_doc"}, {"id": "create_sheet"}],
+        "actions": [{"id": "fetch_emails"}, {"id": "draft_email"}, {"id": "send_email"}, {"id": "create_calendar_event"}, {"id": "create_doc"}, {"id": "create_sheet"}],
     },
     "smtp": {
         "label": "SMTP Email",
@@ -201,7 +201,7 @@ def _connector_write_actions(connector_id: str, manifest: Dict[str, Any]) -> Lis
         if isinstance(item, dict) and str(item.get("id") or "").strip()
     ]
     if connector_id == "google_workspace":
-        return [action_id for action_id in out if action_id in {"draft_email", "send_email", "create_calendar_event", "create_doc", "create_sheet"}]
+        return [action_id for action_id in out if action_id in {"fetch_emails", "draft_email", "send_email", "create_calendar_event", "create_doc", "create_sheet"}]
     if connector_id == "microsoft_365":
         return [action_id for action_id in out if action_id in {"draft_email", "send_email", "create_calendar_event", "upload_drive_file"}]
     return out
@@ -223,7 +223,7 @@ def capability_verification_from_test_result(connector_id: str, test_result: Any
     write_actions: List[str] = []
     if normalized_connector_id == "google_workspace":
         read_actions.append("gmail_threads.read")
-        write_actions.extend(["draft_email", "send_email"])
+        write_actions.extend(["fetch_emails", "draft_email", "send_email"])
         if bool(test_result.get("calendar_access")):
             read_actions.append("calendar_events.read")
             write_actions.append("create_calendar_event")

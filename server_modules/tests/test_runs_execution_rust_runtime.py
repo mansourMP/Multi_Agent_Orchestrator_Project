@@ -338,10 +338,52 @@ class RunsExecutionRustRuntimeTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "execution-runtime-decision")
         self.assertEqual(calls[0][1]["operation"], "connector_action")
         self.assertEqual(calls[0][1]["workflow_node_id"], "node-1")
+        self.assertEqual(calls[0][1]["execution_target"], runs_execution.EXECUTION_TARGET_CLOUD)
         self.assertEqual(calls[0][1]["connector_id"], "google_workspace")
         self.assertEqual(calls[0][1]["connector_action"], "send_email")
         self.assertEqual(calls[0][1]["idempotency_key"], "run-1:node-1:google_workspace:send_email")
         self.assertTrue(calls[0][1]["external_write_requested"])
+
+    def test_execution_runtime_helper_preserves_explicit_local_connector_target(self) -> None:
+        calls = []
+
+        def fake_rust(command, payload, **kwargs):
+            calls.append((command, payload, kwargs))
+            return {
+                "ok": True,
+                "decision": "allow",
+                "reason": "execution_runtime_policy_satisfied",
+                "operation": payload["operation"],
+                "next_action": "execute_connector_action",
+                "audit_visibility": "standard",
+                "approval_required": False,
+                "cacheable": False,
+            }
+
+        with patch.object(
+            runs_execution.rust_runtime_kernel_client,
+            "run_runtime_kernel_enforced",
+            side_effect=fake_rust,
+        ):
+            runs_execution._enforce_execution_runtime_decision(
+                "run-1",
+                operation="connector_action",
+                context={
+                    "workspace_id": "ws-1",
+                    "metadata": {
+                        "actor_id": "user-1",
+                        "execution_target_selected": runs_execution.EXECUTION_TARGET_LOCAL_COMPANION,
+                    },
+                },
+                workflow_node_id="node-1",
+                connector_id="telegram_personal",
+                connector_action="send_message",
+                idempotency_key="run-1:node-1:telegram_personal:send_message",
+                policy_decision="allow",
+                external_write_requested=True,
+            )
+
+        self.assertEqual(calls[0][1]["execution_target"], runs_execution.EXECUTION_TARGET_LOCAL_COMPANION)
 
     def test_execution_runtime_helper_passes_usage_metering_fields(self) -> None:
         calls = []
@@ -377,6 +419,7 @@ class RunsExecutionRustRuntimeTests(unittest.TestCase):
 
         self.assertEqual(calls[0][0], "execution-runtime-decision")
         self.assertEqual(calls[0][1]["operation"], "usage_metering")
+        self.assertEqual(calls[0][1]["execution_target"], runs_execution.EXECUTION_TARGET_CLOUD)
         self.assertEqual(calls[0][1]["usage_unit_count"], 1)
         self.assertTrue(calls[0][1]["metering_enabled"])
 

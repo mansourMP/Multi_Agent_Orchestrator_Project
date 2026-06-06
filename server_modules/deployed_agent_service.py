@@ -971,7 +971,7 @@ def _validate_computer_safety_contract_snapshot(
     if _normalize_text(snapshot.get("filesystem_default_access")).lower() not in {"none", "session_scoped", "workspace_scoped"}:
         return False
     terminal_policy = _normalize_text(snapshot.get("terminal_command_policy")).lower()
-    if terminal_policy not in {"blocked", "allowlist", "review_required"}:
+    if terminal_policy not in {"allow", "blocked", "allowlist", "review_required"}:
         return False
     if not bool(snapshot.get("sensitive_action_confirmation_required")):
         return False

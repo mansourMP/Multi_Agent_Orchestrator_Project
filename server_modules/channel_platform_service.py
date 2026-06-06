@@ -464,6 +464,12 @@ def _validate_account_for_catalog(
             403,
             "Personal channels are Agent Computer/Sage runtime channels and cannot be bound to Studio cloud agents.",
         )
+    if not bool(item.get("launch_allowed")) or not bool(item.get("live_capable")):
+        label = _text(item.get("label")) or _text(item.get("channel_key")) or "Channel"
+        raise ChannelPlatformError(
+            409,
+            f"{label} is not launch-ready for Studio channel binding.",
+        )
     required_providers = _supported_account_providers(item)
     if required_providers and not account_ref:
         raise ChannelPlatformError(400, "A saved channel account is required for this channel.")

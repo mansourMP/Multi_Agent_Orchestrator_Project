@@ -16,6 +16,17 @@ _INTERNAL_TOOL_MARKUP_RE = re.compile(
     r"<\s*\|\s*\|\s*DSML(?:\s*\|\s*\|\s*tool_calls\s*>?)?.*",
     re.I | re.S,
 )
+_REDACTED_PLACEHOLDER_RE = re.compile(
+    r"\[redacted-(?:secret|token|private-key|phone|private-context)\]|\[redacted\]",
+    re.I,
+)
+_REDACTED_PLACEHOLDER_FLOOD_LIMIT = 24
+
+
+def _collapse_redacted_placeholder_flood(value: str) -> Tuple[str, bool]:
+    if len(_REDACTED_PLACEHOLDER_RE.findall(value)) < _REDACTED_PLACEHOLDER_FLOOD_LIMIT:
+        return value, False
+    return "[redacted-sensitive-output]", True
 
 
 @dataclass(frozen=True)
@@ -44,11 +55,13 @@ def guard_model_response(value: Any) -> ResponseLeakGuardResult:
     findings = [name for name, pattern in _RED_MEMORY_PATTERNS if pattern.search(without_internal_tool_markup)]
     redacted = secret_redaction_service.redact_text(without_internal_tool_markup)
     redacted_changed = redacted != without_internal_tool_markup
+    redacted, collapsed_redacted_flood = _collapse_redacted_placeholder_flood(redacted)
     if findings:
         guarded = without_internal_tool_markup
         for _name, pattern in _RED_MEMORY_PATTERNS:
             guarded = pattern.sub("[redacted-private-context]", guarded)
         guarded = secret_redaction_service.redact_text(guarded)
+        guarded, guarded_collapsed_redacted_flood = _collapse_redacted_placeholder_flood(guarded)
         return ResponseLeakGuardResult(
             text=guarded,
             redacted=True,
@@ -56,16 +69,18 @@ def guard_model_response(value: Any) -> ResponseLeakGuardResult:
             findings=tuple(sorted(set([
                 *findings,
                 *([] if not redacted_changed else ["secret_pattern"]),
+                *(["redacted_placeholder_flood"] if collapsed_redacted_flood or guarded_collapsed_redacted_flood else []),
                 *(["internal_tool_markup"] if removed_internal_tool_markup else []),
             ]))),
         )
     return ResponseLeakGuardResult(
         text=redacted,
-        redacted=redacted_changed or removed_internal_tool_markup,
+        redacted=redacted_changed or removed_internal_tool_markup or collapsed_redacted_flood,
         blocked=False,
         findings=tuple([
             *(["internal_tool_markup"] if removed_internal_tool_markup else []),
             *(["secret_pattern"] if redacted_changed else []),
+            *(["redacted_placeholder_flood"] if collapsed_redacted_flood else []),
         ]),
     )
 

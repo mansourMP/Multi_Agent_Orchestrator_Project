@@ -483,6 +483,13 @@ class PolicyServiceTests(unittest.TestCase):
         )
         self.assertEqual(evaluation["execution_decision"], "allow")
 
+    def test_workflow_app_tool_aliases_map_to_rust_capability_classes(self) -> None:
+        self.assertEqual(policy_service._rust_capability_for_tool_policy("http_request"), "network_access")
+        self.assertEqual(policy_service._rust_capability_for_tool_policy("draft_email"), "communication_draft")
+        self.assertEqual(policy_service._rust_capability_for_tool_policy("document_create"), "external_write")
+        self.assertEqual(policy_service._rust_capability_for_tool_policy("spreadsheet_read"), "read_files")
+        self.assertEqual(policy_service._rust_capability_for_tool_policy("connector.action.write"), "external_write")
+
     def test_evaluate_tool_policy_decision_emits_rejected_action_audit_event(self) -> None:
         with patch(
             "server_modules.security_audit_service.emit_security_audit_event"

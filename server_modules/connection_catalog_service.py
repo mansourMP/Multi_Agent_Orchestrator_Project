@@ -11,6 +11,7 @@ from server_modules import (
     runtime_common,
     sage_agent_computer_selection_service,
 )
+from server_modules.runtime_config import CONNECTOR_CATALOG
 
 
 LANE_SAGE_PERSONAL_CHANNEL = "sage_personal_channel"
@@ -29,6 +30,7 @@ LAUNCH_PLANNED = "planned"
 LAUNCH_LOCKED = "locked"
 
 _USABLE_LAUNCH_STATUSES = {LAUNCH_LIVE, LAUNCH_LIVE_WHEN_CONFIGURED}
+_GENERIC_CONNECTION_TEST_RUNNER = "not_implemented"
 
 
 def _text(value: Any, fallback: str = "") -> str:
@@ -81,6 +83,13 @@ def _item(
     normalized_account_provider = account_provider or normalized_connector_id
     normalized_runtime_provider = runtime_provider or provider or connection_id
     normalized_vault_provider = vault_provider or normalized_account_provider
+    auth_catalog = CONNECTOR_CATALOG.get(normalized_vault_provider) or CONNECTOR_CATALOG.get(normalized_connector_id) or {}
+    auth_required_fields = list(auth_catalog.get("auth") or [])
+    launch_blockers = _static_launch_blockers(
+        launch_status=normalized_status,
+        setup_available=setup,
+        runtime_usable=usable,
+    )
     return {
         "id": connection_id,
         "display_name": display_name,
@@ -104,7 +113,29 @@ def _item(
         "account_provider": normalized_account_provider,
         "setup_available": setup,
         "runtime_usable": usable,
+        "launchable": usable and setup and not launch_blockers,
+        "launch_blockers": launch_blockers,
+        "proof_blockers": ["generic_connection_test_not_implemented"] if test_action else [],
+        "auth_required_fields": auth_required_fields,
+        "test_runner": _GENERIC_CONNECTION_TEST_RUNNER if test_action else "not_required",
     }
+
+
+def _static_launch_blockers(
+    *,
+    launch_status: str,
+    setup_available: bool,
+    runtime_usable: bool,
+) -> list[str]:
+    blockers: list[str] = []
+    normalized_status = _token(launch_status)
+    if normalized_status not in _USABLE_LAUNCH_STATUSES:
+        blockers.append(f"launch_status:{normalized_status or LAUNCH_LOCKED}")
+    if not setup_available:
+        blockers.append("setup_unavailable")
+    if not runtime_usable:
+        blockers.append("runtime_unusable")
+    return blockers
 
 
 _CATALOG: tuple[Dict[str, Any], ...] = (
@@ -173,9 +204,11 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_SAGE_PERSONAL_CHANNEL,
         surfaces=("sage", "agent_computer"),
         setup_kind="local_bridge",
-        launch_status=LAUNCH_PARTIAL,
-        description="Requires Agent Computer bridge · Coming soon.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Personal Signal through the selected Agent Computer Signal bridge.",
         requires_gateway=True,
+        supports_inbound=True,
+        supports_outbound=True,
         media_support=_media(text=True),
         approval_policy="owner_approval_required",
         health_check="bridge_runtime",
@@ -184,8 +217,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connector_id="signal_personal",
         account_provider="signal_personal",
         vault_provider="signal_personal",
-        setup_available=False,
-        runtime_usable=False,
+        setup_available=True,
+        runtime_usable=True,
     ),
     _item(
         connection_id="imessage_personal",
@@ -193,9 +226,11 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_SAGE_PERSONAL_CHANNEL,
         surfaces=("sage", "agent_computer"),
         setup_kind="mac_bridge",
-        launch_status=LAUNCH_PLANNED,
-        description="Requires Agent Computer bridge · Coming soon.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Personal iMessage through a selected Mac Agent Computer BlueBubbles bridge.",
         requires_gateway=True,
+        supports_inbound=True,
+        supports_outbound=True,
         media_support=_media(text=True),
         approval_policy="owner_approval_required",
         health_check="bridge_runtime",
@@ -204,8 +239,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connector_id="imessage_personal",
         account_provider="imessage_personal",
         vault_provider="imessage_personal",
-        setup_available=False,
-        runtime_usable=False,
+        setup_available=True,
+        runtime_usable=True,
     ),
     _item(
         connection_id="wechat_personal",
@@ -213,9 +248,11 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_SAGE_PERSONAL_CHANNEL,
         surfaces=("sage", "agent_computer"),
         setup_kind="local_bridge",
-        launch_status=LAUNCH_PLANNED,
-        description="Requires Agent Computer bridge · Coming soon.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Personal WeChat through a selected Agent Computer bridge implementing the Empyralis local-bridge contract.",
         requires_gateway=True,
+        supports_inbound=True,
+        supports_outbound=True,
         media_support=_media(text=True),
         approval_policy="owner_approval_required",
         health_check="bridge_runtime",
@@ -224,8 +261,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connector_id="wechat_personal",
         account_provider="wechat_personal",
         vault_provider="wechat_personal",
-        setup_available=False,
-        runtime_usable=False,
+        setup_available=True,
+        runtime_usable=True,
     ),
     _item(
         connection_id="telegram_bot",
@@ -288,8 +325,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_STUDIO_BUSINESS_CHANNEL,
         surfaces=("sage", "studio"),
         setup_kind="oauth",
-        launch_status=LAUNCH_PARTIAL,
-        description="Slack setup stays locked until OAuth install, health, and safe test are complete.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Install Slack with OAuth and route signed mentions or DMs into Sage/Studio channels.",
         supports_inbound=True,
         supports_outbound=True,
         media_support=_media(text=True, files=True),
@@ -300,8 +337,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connector_id="slack",
         account_provider="slack",
         vault_provider="slack",
-        setup_available=False,
-        runtime_usable=False,
+        setup_available=True,
+        runtime_usable=True,
     ),
     _item(
         connection_id="discord_bot",
@@ -309,8 +346,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_STUDIO_BUSINESS_CHANNEL,
         surfaces=("sage", "studio"),
         setup_kind="bot_install",
-        launch_status=LAUNCH_PLANNED,
-        description="Planned Discord bot channel.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Install a Discord bot and route signed messages or interactions into Sage/Studio channels.",
         supports_inbound=True,
         supports_outbound=True,
         media_support=_media(text=True),
@@ -321,8 +358,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connector_id="discord_bot",
         account_provider="discord_bot",
         vault_provider="discord_bot",
-        setup_available=False,
-        runtime_usable=False,
+        setup_available=True,
+        runtime_usable=True,
     ),
     _item(
         connection_id="whatsapp_twilio",
@@ -392,8 +429,9 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_WORK_APP_CONNECTOR,
         surfaces=("sage", "studio", "apps"),
         setup_kind="oauth_or_app_install",
-        launch_status=LAUNCH_PARTIAL,
-        description="GitHub stays locked until setup, health, and safe test are real.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Connect GitHub for repository actions and signed Issues/PR/push webhooks.",
+        supports_inbound=True,
         supports_outbound=True,
         media_support=_media(text=True),
         approval_policy="workspace_app_policy",
@@ -403,8 +441,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connector_id="github",
         account_provider="github",
         vault_provider="github",
-        setup_available=False,
-        runtime_usable=False,
+        setup_available=True,
+        runtime_usable=True,
     ),
     _item(
         connection_id="notion",
@@ -412,14 +450,14 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_WORK_APP_CONNECTOR,
         surfaces=("sage", "studio", "apps"),
         setup_kind="oauth",
-        launch_status=LAUNCH_PLANNED,
-        description="Planned · Coming soon.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Connect Notion for page, database, and approved write actions.",
         supports_outbound=True,
         media_support=_media(text=True),
         approval_policy="workspace_app_policy",
         health_check="oauth_credential",
-        setup_available=False,
-        runtime_usable=False,
+        setup_available=True,
+        runtime_usable=True,
         runtime_provider="notion",
         connector_id="notion",
         account_provider="notion",
@@ -431,18 +469,113 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_WORK_APP_CONNECTOR,
         surfaces=("sage", "studio", "apps"),
         setup_kind="oauth",
-        launch_status=LAUNCH_PLANNED,
-        description="Planned · Coming soon.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Connect Linear for teams, issues, projects, and approved issue updates.",
         supports_outbound=True,
         media_support=_media(text=True),
         approval_policy="workspace_app_policy",
         health_check="oauth_credential",
-        setup_available=False,
-        runtime_usable=False,
+        setup_available=True,
+        runtime_usable=True,
         runtime_provider="linear",
         connector_id="linear",
         account_provider="linear",
         vault_provider="linear",
+    ),
+    _item(
+        connection_id="dropbox",
+        display_name="Dropbox",
+        lane=LANE_WORK_APP_CONNECTOR,
+        surfaces=("sage", "studio", "apps"),
+        setup_kind="access_token",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Connect Dropbox for folder, file, shared-link, and approved storage actions.",
+        supports_outbound=True,
+        media_support=_media(text=True, files=True),
+        approval_policy="workspace_app_policy",
+        health_check="credential_health",
+        setup_available=True,
+        runtime_usable=True,
+        runtime_provider="dropbox",
+        connector_id="dropbox",
+        account_provider="dropbox",
+        vault_provider="dropbox",
+    ),
+    _item(
+        connection_id="s3",
+        display_name="Amazon S3",
+        lane=LANE_WORK_APP_CONNECTOR,
+        surfaces=("sage", "studio", "apps"),
+        setup_kind="access_key",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Connect Amazon S3 for bucket, object, presigned URL, and approved storage actions.",
+        supports_outbound=True,
+        media_support=_media(text=True, files=True),
+        approval_policy="workspace_app_policy",
+        health_check="credential_health",
+        setup_available=True,
+        runtime_usable=True,
+        runtime_provider="s3",
+        connector_id="s3",
+        account_provider="s3",
+        vault_provider="s3",
+    ),
+    _item(
+        connection_id="smtp",
+        display_name="SMTP / IMAP Email",
+        lane=LANE_WORK_APP_CONNECTOR,
+        surfaces=("sage", "studio", "apps"),
+        setup_kind="smtp_imap_credentials",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Connect a custom mailbox for direct send and fetch actions. Durable email-as-channel routing remains separate.",
+        supports_outbound=True,
+        media_support=_media(text=True, files=True),
+        approval_policy="workspace_app_policy",
+        health_check="credential_health",
+        setup_available=True,
+        runtime_usable=True,
+        runtime_provider="smtp",
+        connector_id="smtp",
+        account_provider="smtp",
+        vault_provider="smtp",
+    ),
+    _item(
+        connection_id="wechat_work",
+        display_name="WeChat Work",
+        lane=LANE_WORK_APP_CONNECTOR,
+        surfaces=("sage", "studio", "apps"),
+        setup_kind="webhook_url",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Connect WeChat Work for approved outbound workspace messages through a webhook.",
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="workspace_app_policy",
+        health_check="webhook_health",
+        setup_available=True,
+        runtime_usable=True,
+        runtime_provider="wechat_work",
+        connector_id="wechat_work",
+        account_provider="wechat_work",
+        vault_provider="wechat_work",
+    ),
+    _item(
+        connection_id="instagram_business",
+        display_name="Instagram Business",
+        lane=LANE_WORK_APP_CONNECTOR,
+        surfaces=("sage", "studio", "apps"),
+        setup_kind="graph_api_token",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Connect Instagram Business for approved comment replies and direct-message sends.",
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="workspace_app_policy",
+        health_check="credential_health",
+        setup_available=True,
+        runtime_usable=True,
+        runtime_provider="instagram_business",
+        connector_id="instagram_business",
+        account_provider="instagram_business",
+        vault_provider="instagram_business",
     ),
     _item(
         connection_id="webhook",
@@ -522,6 +655,7 @@ def catalog_item(connection_id: str) -> Optional[Dict[str, Any]]:
     for item in _CATALOG:
         if _token(item.get("id")) == normalized:
             return deepcopy(item)
+    for item in _CATALOG:
         if normalized in {_token(alias) for alias in item.get("connector_ids", []) if _text(alias)}:
             return deepcopy(item)
     return None
@@ -597,7 +731,10 @@ def _next_action(
     if connected:
         return "manage"
     if configured and item.get("test_action"):
-        return "test"
+        # Generic /connections/{id}/test is not a real test runner yet. Keep
+        # unconnected configured items on the setup/manage surface instead of
+        # advertising a dead primary action.
+        return "connect"
     return "connect" if item.get("setup_available") else "locked"
 
 

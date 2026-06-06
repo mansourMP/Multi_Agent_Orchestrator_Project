@@ -1777,7 +1777,6 @@ def register_runtime_routes(app) -> None:
         runtime_token = str(runtime_id or "").strip()
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
-        local_queue._assert_runtime_session(runtime_token, session_token, instance_id=instance_id)
         _enforce_runtime_session_api_decision(
             operation="runtime_control_stream",
             tenant_id="default",
@@ -1787,6 +1786,7 @@ def register_runtime_routes(app) -> None:
             session_token=session_token,
             runtime_session_valid=True,
         )
+        local_queue._assert_runtime_session(runtime_token, session_token, instance_id=instance_id)
         safe_heartbeat = max(1.0, min(float(heartbeat_seconds), 60.0))
         return EventSourceResponse(
             local_queue.aiter_runtime_control_stream(

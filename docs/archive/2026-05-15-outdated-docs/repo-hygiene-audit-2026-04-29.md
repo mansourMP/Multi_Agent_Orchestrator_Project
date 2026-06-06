@@ -55,7 +55,7 @@ These are not safe to delete blindly. They need one focused pass each:
 
 ## Current Quality Risks
 
-- Docs had drifted from mounted mobile reality. This pass corrected `docs/DECISIONS.md`, `docs/frontend-map.md`, and `shared/nav-manifest.js` for the active `(tabs)` shell.
+- Docs had drifted from mounted mobile reality. This pass corrected `docs/decisions/architectural-decisions.md`, `docs/platform/frontend-map.md`, and `shared/nav-manifest.js` for the active `(tabs)` shell.
 - The repo still contains many runtime/generated folders in the working directory. Do not stage them.
 - Chat still needs live browser proof after each streaming/lifecycle change. Static tests and E2E are necessary but not enough for public demo confidence.
 - Provider/gateway parity is architecturally wired locally, but public-demo readiness still depends on production provider credential save, Render credential vault health, and live gateway pairing.

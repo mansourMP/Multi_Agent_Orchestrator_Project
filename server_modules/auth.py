@@ -77,7 +77,7 @@ ORION_AUTH_REFRESH_RATE_LIMIT_PER_MINUTE = int(
     os.getenv("ORION_AUTH_REFRESH_RATE_LIMIT_PER_MINUTE", "10")
 )
 ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED = str(
-    os.getenv("ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED", "1")
+    os.getenv("ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED", "0")
 ).strip().lower() in {"1", "true", "yes", "on"}
 RBAC_ROLE_ORDER = {"viewer": 0, "member": 1, "owner": 2}
 WORKSPACE_CAPABILITY_ALL = "*"

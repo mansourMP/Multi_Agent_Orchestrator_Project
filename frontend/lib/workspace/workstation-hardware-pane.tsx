@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Cloud, Copy, Monitor, Plus, Server, X } from 'lucide-react';
 import { toDataURL } from 'qrcode';
 
+import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
@@ -59,12 +61,15 @@ type PairingIntentRecord = {
 type TrayLocalStatus = {
   ok?: boolean;
   connected?: boolean;
+  desired_connected?: boolean;
+  device_name?: string;
   session_verified?: boolean;
   heartbeat_fresh?: boolean;
   session_status?: string;
   state?: string;
   supervisor_running?: boolean;
   gateway_running?: boolean;
+  workspace_id?: string;
   error?: string | null;
 };
 
@@ -111,6 +116,8 @@ type SshAuthMode = 'password' | 'ssh_key';
 const TRAY_STATUS_URL = 'http://127.0.0.1:7790/status';
 const TRAY_CONNECT_URL = 'http://127.0.0.1:7790/connect';
 const AGENT_DOWNLOAD_URL = 'https://empyralis.io/downloads/empyralis-agent/macos/Empyralis-Agent.dmg';
+const AGENT_COMPUTER_FULL_ACCESS_WARNING_VERSION = '2026-06-06';
+const AGENT_COMPUTER_FULL_ACCESS_WARNING_COPY = 'Full Access lets Sage run commands, read, write, delete files, and access secrets, browser data, tokens, SSH keys, and connected accounts on this Agent Computer; dedicated Agent hardware is recommended.';
 
 const HARDWARE_KINDS: Array<{
   kind: HardwareKind;
@@ -441,6 +448,22 @@ function trayStatusConnected(status: TrayLocalStatus | null): boolean {
   return trayProcessConnected(status) && status?.session_verified === true;
 }
 
+function localTrayConnectionNote(status: TrayLocalStatus | null): string {
+  if (!status) {
+    return 'Connecting...';
+  }
+  if (status.gateway_running && !status.session_verified) {
+    return 'Gateway is running; verifying workspace session.';
+  }
+  if (status.desired_connected && !status.gateway_running) {
+    return 'Local runner is ready; gateway is stopped. Connect again to create a fresh pairing.';
+  }
+  if (status.supervisor_running && !status.gateway_running) {
+    return 'Local runner is ready; gateway is stopped.';
+  }
+  return 'Connecting...';
+}
+
 function trayProcessConnected(status: TrayLocalStatus | null): boolean {
   return Boolean(
     status?.connected ||
@@ -486,6 +509,17 @@ function capabilityFixTarget(name: string): string {
   return '';
 }
 
+function normalizeHardwareTab(value: string | null): HardwareTab {
+  if (
+    value === 'this_device'
+    || value === 'other_computers'
+    || value === 'ssh_server'
+  ) {
+    return value;
+  }
+  return 'this_device';
+}
+
 function hardwareActivityLabel(capability: string | null | undefined): string {
   const normalized = String(capability || '').trim();
   if (!normalized) {
@@ -513,6 +547,114 @@ function timeAgo(timestamp: string | null | undefined): string {
     return `${minutes}m ago`;
   }
   return `${Math.floor(minutes / 60)}h ago`;
+}
+
+function gatewayTimestampMs(gateway: GatewayRegistrationRecord, ...keys: string[]): number {
+  const value = readString(gateway, ...keys);
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function gatewayHostIdentity(gateway: GatewayRegistrationRecord): string {
+  const metadata = readRecord(gateway.metadata);
+  const nativeRuntime = readRecord(metadata?.native_runtime);
+  const deviceMetadata = readRecord(metadata?.device_metadata);
+  const rawHost = (
+    readString(nativeRuntime, 'hostname')
+    || readString(deviceMetadata, 'hostname')
+    || readString(metadata, 'hostname')
+    || readString(gateway, 'display_name')
+  );
+  const normalized = rawHost
+    .trim()
+    .toLowerCase()
+    .replace(/\.local$/i, '')
+    .replace(/-\d+$/i, '');
+  return normalized || readString(gateway, 'device_id', 'gateway_id').toLowerCase();
+}
+
+function gatewayIdentityKey(gateway: GatewayRegistrationRecord): string {
+  const metadata = readRecord(gateway.metadata);
+  const deviceMetadata = readRecord(metadata?.device_metadata);
+  const platform = (
+    readString(gateway, 'platform')
+    || readString(deviceMetadata, 'platform')
+    || readString(metadata, 'platform')
+    || 'computer'
+  ).toLowerCase();
+  return `${platform}:${gatewayHostIdentity(gateway)}`;
+}
+
+function gatewayRecentlySeen(gateway: GatewayRegistrationRecord): boolean {
+  const seenAt = gatewayTimestampMs(gateway, 'last_seen_at', 'updated_at');
+  return seenAt > 0 && Date.now() - seenAt <= 120_000;
+}
+
+function gatewayConnectionStatus(gateway: GatewayRegistrationRecord): string {
+  const metadata = readRecord(gateway.metadata);
+  const rawStatus = (
+    readString(gateway, 'connection_status')
+    || readString(metadata, 'health_state')
+    || readString(gateway, 'status')
+    || 'offline'
+  ).toLowerCase();
+  if (rawStatus === 'active') {
+    return 'offline';
+  }
+  if (rawStatus === 'offline' && readString(metadata, 'health_state').toLowerCase() === 'online' && gatewayRecentlySeen(gateway)) {
+    return 'online';
+  }
+  return rawStatus;
+}
+
+function gatewayStatusRank(gateway: GatewayRegistrationRecord): number {
+  const status = gatewayConnectionStatus(gateway);
+  if (status === 'online') {
+    return 4;
+  }
+  if (status === 'reconnecting') {
+    return 3;
+  }
+  if (status === 'degraded') {
+    return 2;
+  }
+  if (status === 'offline') {
+    return 1;
+  }
+  return 0;
+}
+
+function gatewayPreferenceScore(gateway: GatewayRegistrationRecord, selectedGatewayId: string): number {
+  const metadata = readRecord(gateway.metadata);
+  const gatewayId = readString(gateway, 'gateway_id');
+  const seenAt = gatewayTimestampMs(gateway, 'last_seen_at', 'updated_at', 'created_at');
+  return (
+    (gatewayId && gatewayId === selectedGatewayId ? 1_000_000_000 : 0)
+    + (readBoolean(metadata, 'sage_agent_computer_selected') ? 100_000_000 : 0)
+    + gatewayStatusRank(gateway) * 1_000_000
+    + Math.floor(seenAt / 1000)
+  );
+}
+
+function dedupeGatewayRegistrations(
+  registrations: GatewayRegistrationRecord[],
+  selectedGatewayId: string,
+): GatewayRegistrationRecord[] {
+  const byIdentity = new Map<string, GatewayRegistrationRecord>();
+  for (const gateway of registrations) {
+    const key = gatewayIdentityKey(gateway);
+    const existing = byIdentity.get(key);
+    if (!existing || gatewayPreferenceScore(gateway, selectedGatewayId) > gatewayPreferenceScore(existing, selectedGatewayId)) {
+      byIdentity.set(key, gateway);
+    }
+  }
+  return Array.from(byIdentity.values()).sort((left, right) => {
+    const scoreDelta = gatewayPreferenceScore(right, selectedGatewayId) - gatewayPreferenceScore(left, selectedGatewayId);
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+    return readString(left, 'display_name', 'gateway_id').localeCompare(readString(right, 'display_name', 'gateway_id'));
+  });
 }
 
 function wait(ms: number): Promise<void> {
@@ -577,10 +719,13 @@ async function writeClipboardText(text: string): Promise<boolean> {
 export function WorkstationHardwarePane() {
   const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
+  const searchParams = useSearchParams();
+  const requestedSection = searchParams.get('section');
+  const requestedHardwareTab = normalizeHardwareTab(requestedSection);
   const [attachments, setAttachments] = useState<HardwareAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [expandedKind, setExpandedKind] = useState<HardwareKind | null>(null);
-  const [activeTab, setActiveTab] = useState<HardwareTab>('this_device');
+  const [activeTab, setActiveTab] = useState<HardwareTab>(requestedHardwareTab);
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectContext, setConnectContext] = useState<ConnectModalContext>('all');
   const [selectedConnectOption, setSelectedConnectOption] = useState<ConnectOptionId>('this_device');
@@ -605,6 +750,7 @@ export function WorkstationHardwarePane() {
   const [remoteExpanded, setRemoteExpanded] = useState(false);
   const [remoteError, setRemoteError] = useState<string | null>(null);
   const [manualCommandOpen, setManualCommandOpen] = useState(false);
+  const [pendingFullAccessPairingOption, setPendingFullAccessPairingOption] = useState<ConnectOptionId | null>(null);
   const [sshHost, setSshHost] = useState('');
   const [sshPort, setSshPort] = useState('22');
   const [sshUsername, setSshUsername] = useState('');
@@ -614,6 +760,10 @@ export function WorkstationHardwarePane() {
   const workspaceRecord = readRecord(bootstrap.workspace);
   const workspaceId = readString(workspaceRecord, 'id', 'workspace_id') || 'ws-1';
   const workspaceLabel = workspaceId || readString(workspaceRecord, 'label', 'name') || 'this workspace';
+
+  useEffect(() => {
+    setActiveTab(requestedHardwareTab);
+  }, [requestedHardwareTab]);
 
   async function refreshHardwareAttachments(): Promise<void> {
     try {
@@ -758,6 +908,20 @@ export function WorkstationHardwarePane() {
     readRecord(sageAgentComputerSelection?.selection),
     'selected_gateway_id',
   ) || readString(readRecord(sageAgentComputerSelection), 'selected_gateway_id');
+  const visibleGatewayRegistrations = useMemo(
+    () => dedupeGatewayRegistrations(gatewayRegistrations, selectedSageGatewayId),
+    [gatewayRegistrations, selectedSageGatewayId],
+  );
+  const selectedSageGateway = useMemo(() => {
+    if (selectedSageGatewayId) {
+      const registered = gatewayRegistrations.find((gateway) => readString(gateway, 'gateway_id') === selectedSageGatewayId);
+      if (registered) {
+        return registered;
+      }
+    }
+    const selectedGateway = readRecord(sageAgentComputerSelection?.gateway);
+    return selectedGateway ? selectedGateway as GatewayRegistrationRecord : null;
+  }, [gatewayRegistrations, sageAgentComputerSelection, selectedSageGatewayId]);
   const visibleCards = useMemo(() => {
     if (activeTab === 'this_device') {
       return localCard ? [localCard] : [];
@@ -827,7 +991,10 @@ export function WorkstationHardwarePane() {
     return undefined;
   }
 
-  async function createPairingIntent(optionOverride?: ConnectOptionId): Promise<PairingIntentRecord | null> {
+  async function createPairingIntent(
+    optionOverride?: ConnectOptionId,
+    options: { acknowledgedFullAccessWarning?: boolean } = {},
+  ): Promise<PairingIntentRecord | null> {
     const option = optionOverride ?? selectedConnectOption;
     setSelectedConnectOption(option);
     setBusy(true);
@@ -851,8 +1018,11 @@ export function WorkstationHardwarePane() {
                 ? 'Other computer'
                 : 'This device',
             platform: optionPlatform(option),
-            runtime_access_mode: 'default_guarded',
-            autonomous_agent_setup_warning_acknowledged: false,
+            runtime_access_mode: 'full_access',
+            autonomous_agent_setup_warning_acknowledged: options.acknowledgedFullAccessWarning === true,
+            metadata: options.acknowledgedFullAccessWarning === true ? {
+              autonomous_agent_setup_warning_version: AGENT_COMPUTER_FULL_ACCESS_WARNING_VERSION,
+            } : {},
           }),
         },
       });
@@ -902,12 +1072,16 @@ export function WorkstationHardwarePane() {
     return null;
   }
 
-  async function connectThisMac() {
+  async function connectThisMac(acknowledgedFullAccessWarning = false) {
+    if (!acknowledgedFullAccessWarning) {
+      setPendingFullAccessPairingOption('this_device');
+      return;
+    }
     setLocalConnectBusy(true);
     setLocalConnectError(null);
     setStatusMessage(null);
     try {
-      const intent = await createPairingIntent('this_device');
+      const intent = await createPairingIntent('this_device', { acknowledgedFullAccessWarning: true });
       if (!intent?.pairing_token) {
         throw new Error('Could not create a hardware pairing token.');
       }
@@ -936,7 +1110,7 @@ export function WorkstationHardwarePane() {
         setLocalConnectError('Connection timed out');
         return;
       }
-      setConnectOpen(false);
+      closeConnect();
       await refreshHardwareAttachments();
       await refreshSageAgentComputerState();
       await refreshHardwareCapabilities();
@@ -947,7 +1121,7 @@ export function WorkstationHardwarePane() {
     }
   }
 
-  async function connectRemoteServer() {
+  async function connectRemoteServer(acknowledgedFullAccessWarning = false) {
     const trimmedHost = sshHost.trim();
     const trimmedUsername = sshUsername.trim();
     const parsedPort = Number.parseInt(sshPort, 10);
@@ -967,10 +1141,14 @@ export function WorkstationHardwarePane() {
       setRemoteError('Paste an SSH key or switch to Password.');
       return;
     }
+    if (!acknowledgedFullAccessWarning) {
+      setPendingFullAccessPairingOption('ssh_server');
+      return;
+    }
     setRemoteConnectBusy(true);
     setRemoteError(null);
     setStatusMessage(null);
-    const intent = await createPairingIntent('ssh_server');
+    const intent = await createPairingIntent('ssh_server', { acknowledgedFullAccessWarning: true });
     if (!intent) {
       setRemoteConnectBusy(false);
       return;
@@ -1006,10 +1184,14 @@ export function WorkstationHardwarePane() {
     }
   }
 
-  async function createOtherComputerSetupLink() {
+  async function createOtherComputerSetupLink(acknowledgedFullAccessWarning = false) {
+    if (!acknowledgedFullAccessWarning) {
+      setPendingFullAccessPairingOption('other_computer');
+      return;
+    }
     setOtherSetupIntent(null);
     setManualCommandOpen(false);
-    const intent = await createPairingIntent('other_computer');
+    const intent = await createPairingIntent('other_computer', { acknowledgedFullAccessWarning: true });
     if (intent) {
       setOtherSetupIntent(intent);
       setStatusMessage('Setup link created.');
@@ -1050,12 +1232,33 @@ export function WorkstationHardwarePane() {
     setManualCommandOpen(false);
   }
 
+  function closeConnect() {
+    setConnectOpen(false);
+    setPendingFullAccessPairingOption(null);
+  }
+
   function handleCardAction(card: HardwareCard) {
     if (card.status === 'Connected') {
       setExpandedKind(expandedKind === card.kind ? null : card.kind);
       return;
     }
     openConnect(card.kind === 'self_hosted_business_node' ? 'ssh_server' : 'this_device');
+  }
+
+  function confirmFullAccessPairing() {
+    const option = pendingFullAccessPairingOption;
+    setPendingFullAccessPairingOption(null);
+    if (option === 'this_device') {
+      void connectThisMac(true);
+      return;
+    }
+    if (option === 'ssh_server') {
+      void connectRemoteServer(true);
+      return;
+    }
+    if (option === 'other_computer') {
+      void createOtherComputerSetupLink(true);
+    }
   }
 
   async function setAsSageAgentComputer(gatewayId: string) {
@@ -1136,10 +1339,12 @@ export function WorkstationHardwarePane() {
           </header>
           {selectionError ? <p className="workstation-hardware-section__notice">{selectionError}</p> : null}
           <div className="workstation-hardware-list">
-            {gatewayRegistrations.length ? gatewayRegistrations.map((gateway) => {
+            {visibleGatewayRegistrations.length ? visibleGatewayRegistrations.map((gateway) => {
               const gatewayId = readString(gateway, 'gateway_id');
               const selected = Boolean(gatewayId && gatewayId === selectedSageGatewayId);
-              const connectionStatus = readString(gateway, 'connection_status', 'status') || 'offline';
+              const connectionStatus = selected && (trayStatusConnected(trayStatus) || localCard?.status === 'Connected')
+                ? 'online'
+                : gatewayConnectionStatus(gateway);
               const displayName = readString(gateway, 'display_name', 'device_id', 'gateway_id') || 'Agent Computer';
               const platform = readString(gateway, 'platform') || 'Computer';
               const busySelecting = selectionBusyGatewayId === gatewayId;
@@ -1273,14 +1478,14 @@ export function WorkstationHardwarePane() {
 
       {connectOpen ? (
         <div className="workstation-hardware-sheet" role="dialog" aria-modal="true" aria-label="Connect hardware">
-          <button className="workstation-hardware-sheet__scrim" type="button" aria-label="Close connect hardware" onClick={() => setConnectOpen(false)} />
+          <button className="workstation-hardware-sheet__scrim" type="button" aria-label="Close connect hardware" onClick={closeConnect} />
           <section className="workstation-hardware-sheet__panel">
 	            <header className="workstation-hardware-sheet__header">
 	              <div>
 	                <h2>{connectModalTitle}</h2>
 	                <p>Empyralis controls the paired computer through Agent Computer.</p>
 	              </div>
-              <button className="workstation-hardware-sheet__close" type="button" onClick={() => setConnectOpen(false)} aria-label="Close">
+              <button className="workstation-hardware-sheet__close" type="button" onClick={closeConnect} aria-label="Close">
                 <X size={17} strokeWidth={2} />
               </button>
             </header>
@@ -1320,7 +1525,7 @@ export function WorkstationHardwarePane() {
                 {localConnectError ? <p className="workstation-hardware-connect-card__error">{localConnectError}</p> : null}
                 {trayStatus?.error ? <p className="workstation-hardware-connect-card__error">{trayStatus.error}</p> : null}
 	                {trayProcessConnected(trayStatus) && !trayStatusConnected(trayStatus) ? (
-	                  <p className="workstation-hardware-connect-card__note">Connecting...</p>
+	                  <p className="workstation-hardware-connect-card__note">{localTrayConnectionNote(trayStatus)}</p>
 	                ) : null}
 	              </article>
 	              ) : null}
@@ -1431,6 +1636,17 @@ export function WorkstationHardwarePane() {
           </section>
         </div>
       ) : null}
+      <ConfirmDialog
+        open={Boolean(pendingFullAccessPairingOption)}
+        title="Full Access warning"
+        body={AGENT_COMPUTER_FULL_ACCESS_WARNING_COPY}
+        confirmLabel="Allow Full Access"
+        cancelLabel="Cancel"
+        confirmTone="danger"
+        busy={localConnectBusy || remoteConnectBusy || busy}
+        onConfirm={confirmFullAccessPairing}
+        onCancel={() => setPendingFullAccessPairingOption(null)}
+      />
     </section>
   );
 }

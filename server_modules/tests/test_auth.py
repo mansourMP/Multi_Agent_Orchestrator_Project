@@ -802,6 +802,15 @@ def test_mobile_register_user_allows_default_workspace_plan(monkeypatch: pytest.
     assert created["current_workspace_entitlements"]["capabilities"]["mobile_app_enabled"] is True
 
 
+def test_mobile_beta_auto_signin_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+
+    assert auth.mobile_beta_auto_signin_enabled() is False
+    with pytest.raises(HTTPException) as exc:
+        auth.login_mobile_beta_user(device_id="iphone-default")
+    assert exc.value.status_code == 403
+
+
 def test_mobile_register_user_issues_device_bound_session(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path, {"ORION_MOBILE_JWT_EXP_SECONDS": "7200"})
 

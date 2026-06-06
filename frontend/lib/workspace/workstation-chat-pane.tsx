@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, ChevronRight, Cloud, Monitor, Settings, SlidersHorizontal } from 'lucide-react';
+import { ArrowDown, Check, ChevronDown, ChevronRight, Monitor, ShieldCheck } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
@@ -16,7 +16,6 @@ import {
   ChatComposer,
   type ComposerCapabilityItem,
   type ComposerCapabilitySubItem,
-  type ComposerComputerStatus,
   type ComposerPreRunCostEstimate,
   type ComposerSlashCommand,
 } from '@/lib/workspace/chat-composer';
@@ -43,6 +42,8 @@ import {
   subscribeWorkstationApprovalResolved,
 } from '@/lib/workspace/workstation-approval-events';
 import {
+  emitWorkstationChatHistoryInvalidated,
+  emitWorkstationChatThreadSelected,
   subscribeWorkstationChatNewThreadRequested,
   subscribeWorkstationChatThreadSelected,
 } from '@/lib/workspace/workstation-chat-thread-events';
@@ -144,6 +145,7 @@ import {
   sortProviderProfiles,
   profileMetadataRecord,
   normalizeTimelineItems,
+  normalizeRecentThreadsFromThreadList,
   deriveRecentThreads,
   summarizeThreadForHistory,
   readExecutionTarget,
@@ -164,6 +166,7 @@ import {
   normalizeHostedCreditStateForChat,
   buildPreRunCostEstimate,
   formatContextWindowLabel,
+  formatRelativeTime,
   reasoningLabel,
   findProviderFailureIntervention,
   stripInternalToolMarkup,
@@ -278,6 +281,87 @@ const SAGE_MODEL_PICKER_PROVIDERS = [
 ] as const;
 
 type SageModelPickerProviderId = (typeof SAGE_MODEL_PICKER_PROVIDERS)[number]['id'];
+type AgentComputerPermissionMode = 'default' | 'custom' | 'full_access';
+type AgentComputerMenuPanel = 'hardware' | 'permissions' | null;
+type AgentComputerHardwareSection = 'this_device' | 'other_computers' | 'ssh_server';
+
+const AGENT_COMPUTER_HARDWARE_ITEMS: Array<{
+  id: AgentComputerHardwareSection;
+  label: string;
+  detail: string;
+}> = [
+  {
+    id: 'this_device',
+    label: 'This device',
+    detail: 'Local Agent Computer',
+  },
+  {
+    id: 'other_computers',
+    label: 'Other computers',
+    detail: 'Connected machines',
+  },
+  {
+    id: 'ssh_server',
+    label: 'Server / VPS',
+    detail: 'Remote hardware',
+  },
+];
+
+const AGENT_COMPUTER_PERMISSION_MODE_ITEMS: Array<{
+  id: AgentComputerPermissionMode;
+  label: string;
+  detail: string;
+}> = [
+  {
+    id: 'default',
+    label: 'Default',
+    detail: 'Guarded hardware access',
+  },
+  {
+    id: 'custom',
+    label: 'Custom',
+    detail: 'Default access, editable',
+  },
+  {
+    id: 'full_access',
+    label: 'Full Access',
+    detail: 'Sage controls this computer',
+  },
+];
+
+const AGENT_COMPUTER_FULL_ACCESS_WARNING_VERSION = '2026-06-06';
+
+function runtimeAccessModeForAgentComputerPermissionMode(mode: AgentComputerPermissionMode): string {
+  return mode === 'default' ? 'default_guarded' : mode;
+}
+
+function normalizeAgentComputerPermissionModeToken(value: unknown): AgentComputerPermissionMode {
+  const token = readString(value).toLowerCase().replace(/[-\s]+/g, '_');
+  if (token === 'full_access') {
+    return 'full_access';
+  }
+  if (token === 'custom') {
+    return 'custom';
+  }
+  return 'default';
+}
+
+function agentComputerPermissionModeLabel(mode: AgentComputerPermissionMode): string {
+  return AGENT_COMPUTER_PERMISSION_MODE_ITEMS.find((item) => item.id === mode)?.label ?? 'Default';
+}
+
+function agentComputerPermissionModeFromSelectionPayload(payload: unknown): AgentComputerPermissionMode {
+  const root = readObject(payload);
+  const gateway = readObject(root.gateway);
+  const gatewayMetadata = readObject(gateway.metadata);
+  const selection = readObject(root.selection);
+  const selectionMetadata = readObject(selection.metadata);
+  return normalizeAgentComputerPermissionModeToken(
+    readString(gateway.runtime_access_mode)
+    || readString(gatewayMetadata.runtime_access_mode)
+    || readString(selectionMetadata.runtime_access_mode),
+  );
+}
 
 const SAGE_MODEL_PICKER_PROVIDER_IMAGES: Record<SageModelPickerProviderId, string | null> = {
   empyralis: null,
@@ -543,6 +627,8 @@ interface SageChatEmptyStateProps {
   modelLabel: string;
   providerGateVisible: boolean;
   integrationsHref: string;
+  recentThreads: RecentThreadSummary[];
+  onOpenThread: (threadId: string) => void;
   onSelectPrompt: (prompt: string) => void;
 }
 
@@ -550,8 +636,11 @@ function SageChatEmptyState({
   modelLabel,
   providerGateVisible,
   integrationsHref,
+  recentThreads,
+  onOpenThread,
   onSelectPrompt,
 }: SageChatEmptyStateProps) {
+  const visibleRecentThreads = recentThreads.slice(0, 5);
   return (
     <div className="app-chat-empty-state app-chat-empty-state--sage">
       <div className="app-chat-empty-state__content">
@@ -569,7 +658,10 @@ function SageChatEmptyState({
           </p>
         ) : (
           <div
-            className="app-chat-empty-state__suggestions app-chat-empty-state__suggestions--composer-clearance"
+            className={[
+              'app-chat-empty-state__suggestions',
+              visibleRecentThreads.length === 0 && 'app-chat-empty-state__suggestions--composer-clearance',
+            ].filter(Boolean).join(' ')}
             aria-label="Suggested prompts"
           >
             {SAGE_EMPTY_STATE_PROMPTS.map((prompt) => (
@@ -586,6 +678,26 @@ function SageChatEmptyState({
             ))}
           </div>
         )}
+
+        {visibleRecentThreads.length > 0 ? (
+          <div className="app-chat-empty-state__recent" aria-label="Previous chats">
+            {visibleRecentThreads.map((item) => (
+              <button
+                key={item.threadId}
+                type="button"
+                className="app-chat-empty-run-row"
+                onClick={() => {
+                  onOpenThread(item.threadId);
+                }}
+              >
+                <span className="app-chat-empty-run-row__time">
+                  {item.updatedAt ? formatRelativeTime(item.updatedAt) : 'Recent'}
+                </span>
+                <span className="app-chat-empty-run-row__preview">{item.title}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -612,6 +724,8 @@ const TYPED_EXECUTION_STREAM_EVENTS = new Set([
   'response',
 ]);
 
+const CHAT_TRANSCRIPT_BOTTOM_THRESHOLD_PX = 96;
+
 function typedTimelineEventFromStreamEvent(event: { event: string; payload: Record<string, unknown> }): TimelineProjectionEvent | null {
   const eventType = readString(event.event).toLowerCase();
   if (!TYPED_EXECUTION_STREAM_EVENTS.has(eventType)) {
@@ -626,13 +740,21 @@ function typedTimelineEventFromStreamEvent(event: { event: string; payload: Reco
   };
 }
 
-function HardwareOptionIcon({ value }: { value: string }) {
-  const Icon = value === 'auto'
-    ? SlidersHorizontal
-    : value === 'local'
-      ? Monitor
-      : Cloud;
-  return <Icon className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />;
+function isChatTranscriptNearBottom(element: HTMLElement | null): boolean {
+  if (!element) {
+    return true;
+  }
+  const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+  return remaining <= CHAT_TRANSCRIPT_BOTTOM_THRESHOLD_PX;
+}
+
+function transcriptCellScrollKey(cell: CodexTranscriptCell): string {
+  const record = cell as unknown as Record<string, unknown>;
+  const id = readString(record.id);
+  const content = readString(record.content) || readString(record.text) || readString(record.output);
+  const status = readString(record.status);
+  const streaming = record.isStreaming === true ? 'streaming' : '';
+  return `${cell.kind}:${id}:${content.length}:${status}:${streaming}`;
 }
 
 export function WorkstationChatPane() {
@@ -646,6 +768,11 @@ export function WorkstationChatPane() {
   const [workspaceCommandPaletteOpen, setWorkspaceCommandPaletteOpen] = useState(false);
   const [legacyTraceEventsByTraceId, setLegacyTraceEventsByTraceId] = useState<Record<string, TimelineProjectionEvent[]>>({});
   const pendingLegacyTraceIdsRef = useRef<Set<string>>(new Set());
+  const transcriptScrollRef = useRef<HTMLDivElement | null>(null);
+  const transcriptShouldStickRef = useRef(true);
+  const transcriptForceStickRef = useRef(false);
+  const transcriptScrollFrameRef = useRef<number | null>(null);
+  const [showTranscriptJump, setShowTranscriptJump] = useState(false);
   const actor = useMemo<WorkstationSessionActor>(() => ({
     type: 'user',
     id: bootstrap.account.id,
@@ -777,6 +904,9 @@ export function WorkstationChatPane() {
   const [billingSummary, setBillingSummary] = useState<Record<string, unknown> | null>(null);
   const [workspaceAiRoute, setWorkspaceAiRoute] = useState<WorkspaceAiRoutePayload | null>(null);
   const [sageComposerSkills, setSageComposerSkills] = useState<SageComposerSkillRecord[]>([]);
+  const [sageAgentComputerSelection, setSageAgentComputerSelection] = useState<Record<string, unknown> | null>(null);
+  const [agentComputerPermissionBusyMode, setAgentComputerPermissionBusyMode] = useState<AgentComputerPermissionMode | null>(null);
+  const [pendingFullAccessConfirmation, setPendingFullAccessConfirmation] = useState(false);
   const submitInFlightRef = useRef(false);
   const streamAbortHandleRef = useRef<WorkstationTurnStreamAbortHandle | null>(null);
   const streamAbortRequestedRef = useRef(false);
@@ -900,6 +1030,15 @@ export function WorkstationChatPane() {
     }).catch(() => null);
     setBrowserGatewayDoctor(doctorPayload && typeof doctorPayload === 'object' ? doctorPayload : null);
   }, [bootstrap.workspace.id, services.client, services.queryClient]);
+
+  const refreshSageAgentComputerSelection = useCallback(async () => {
+    const payload = await services.client.getSageAgentComputerSelection().catch(() => null);
+    setSageAgentComputerSelection(payload && typeof payload === 'object' ? payload : null);
+  }, [services.client]);
+
+  useEffect(() => {
+    void refreshSageAgentComputerSelection();
+  }, [refreshSageAgentComputerSelection]);
 
   const refreshBillingSummary = useCallback(async () => {
     const payload = await services.queryClient.run('chat:billing-summary', async () => {
@@ -1090,14 +1229,28 @@ export function WorkstationChatPane() {
       }
       throw error;
     });
+    const threadListRequest = services.client.listThreads({
+      includeTurns: true,
+      limit: 80,
+    }).then(normalizeRecentThreadsFromThreadList).catch((error) => {
+      if (isTransientBackgroundReadError(error)) {
+        return recentThreadsFallback;
+      }
+      throw error;
+    });
 
     await withTimeout(services.queryClient.run('chat:canonical:overview', async () => {
-      const [nextRuns, nextApprovals, timelineItems] = await Promise.all([
+      const [nextRuns, nextApprovals, timelineItems, threadItems] = await Promise.all([
         runsRequest,
         approvalsRequest,
         timelineRequest,
+        threadListRequest,
       ]);
       writeOverview({ nextRuns, nextApprovals });
+      if (threadItems.length > 0) {
+        writeRecentThreads(threadItems);
+        return;
+      }
       if (timelineItems.length > 0) {
         writeRecentThreads(deriveRecentThreads(timelineItems, activeThreadIdRef.current));
         return;
@@ -1228,6 +1381,13 @@ export function WorkstationChatPane() {
       action === 'allow_session' ? 'session' : 'once',
     );
   };
+
+  useEffect(() => () => {
+    if (transcriptScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(transcriptScrollFrameRef.current);
+      transcriptScrollFrameRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (approvals.length === 0 || resolvingApprovalId) {
@@ -1404,7 +1564,10 @@ export function WorkstationChatPane() {
     try {
       activeThreadIdRef.current = nextThreadId;
       setActiveThreadId(nextThreadId);
-      await refreshCanonicalState(nextThreadId);
+      const emptyThread = normalizeCanonicalChatThread(null, nextThreadId);
+      emptyThread.session = null;
+      services.queryClient.set(threadQueryKey(nextThreadId), emptyThread);
+      setThread(emptyThread);
       const nextRecentThreads = [
         previousThread,
         ...recentThreads.filter((item) => item.threadId !== nextThreadId && item.threadId !== previousThread?.threadId),
@@ -1441,15 +1604,17 @@ export function WorkstationChatPane() {
     if (activityVersion === 0) {
       return;
     }
-    void Promise.all([
-      loadOverview(),
-    ]).catch((error) => {
+    const refreshes: Array<Promise<unknown>> = [loadOverview()];
+    if (!isSending) {
+      refreshes.push(refreshCanonicalState(activeThreadId));
+    }
+    void Promise.all(refreshes).catch((error) => {
       if (shouldSuppressBackgroundRefreshNotice(error)) {
         return;
       }
       setStatusMessage(error instanceof Error ? error.message : 'Chat refresh failed.');
     });
-  }, [activeThreadId, activityVersion]);
+  }, [activeThreadId, activityVersion, isSending]);
 
   useEffect(() => {
     if (activityConnectionState !== 'closed' && notificationsConnectionState !== 'closed') {
@@ -1476,6 +1641,9 @@ export function WorkstationChatPane() {
     setShowProjectedAssistant(false);
     setTimelineSettled(false);
     setLiveTimelineEvents([]);
+    transcriptForceStickRef.current = true;
+    transcriptShouldStickRef.current = true;
+    setShowTranscriptJump(false);
     activeThreadIdRef.current = nextThreadId;
     setActiveThreadId(nextThreadId);
     setIsLoading(true);
@@ -1660,6 +1828,52 @@ export function WorkstationChatPane() {
   const showBlankTranscript = !isLoading
     && visibleTranscriptCells.length === 0
     && !liveTrace;
+  const transcriptScrollSignature = useMemo(
+    () => [...visibleTranscriptCells, ...pinnedTimelineCells].map(transcriptCellScrollKey).join('|'),
+    [pinnedTimelineCells, visibleTranscriptCells],
+  );
+  const scrollTranscriptToLatest = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const element = transcriptScrollRef.current;
+    if (!element) {
+      return;
+    }
+    transcriptShouldStickRef.current = true;
+    setShowTranscriptJump(false);
+    if (transcriptScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(transcriptScrollFrameRef.current);
+    }
+    transcriptScrollFrameRef.current = window.requestAnimationFrame(() => {
+      transcriptScrollFrameRef.current = null;
+      element.scrollTo({
+        top: element.scrollHeight,
+        behavior,
+      });
+    });
+  }, []);
+  const handleTranscriptScroll = useCallback(() => {
+    const atBottom = isChatTranscriptNearBottom(transcriptScrollRef.current);
+    transcriptShouldStickRef.current = atBottom;
+    if (atBottom) {
+      setShowTranscriptJump(false);
+    } else if (hasConversationContent) {
+      setShowTranscriptJump(true);
+    }
+  }, [hasConversationContent]);
+  useEffect(() => {
+    const element = transcriptScrollRef.current;
+    if (!element) {
+      return;
+    }
+    const shouldFollow = transcriptForceStickRef.current || transcriptShouldStickRef.current;
+    transcriptForceStickRef.current = false;
+    if (shouldFollow) {
+      scrollTranscriptToLatest('auto');
+      return;
+    }
+    if (hasConversationContent && !isChatTranscriptNearBottom(element)) {
+      setShowTranscriptJump(true);
+    }
+  }, [hasConversationContent, scrollTranscriptToLatest, transcriptScrollSignature]);
   const latestRun = runs[0];
   const assistantTurnCount = useMemo(
     () => thread.messages.filter((message) => message.role !== 'user').length,
@@ -2002,10 +2216,11 @@ export function WorkstationChatPane() {
   const pendingDeleteMemory = pendingDeleteMemoryId
     ? memoryItems.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null
     : null;
-  const [selectedHardwareTarget, setSelectedHardwareTarget] = useState<'auto' | 'cloud' | 'local'>('auto');
   const [modelCanvasPickerOpen, setModelCanvasPickerOpen] = useState(false);
   const [modelPickerSubpanel, setModelPickerSubpanel] = useState<'model' | 'provider' | null>(null);
   const [hardwareCanvasPickerOpen, setHardwareCanvasPickerOpen] = useState(false);
+  const [hardwareActivePanel, setHardwareActivePanel] = useState<AgentComputerMenuPanel>(null);
+  const [selectedHardwareMenuItem, setSelectedHardwareMenuItem] = useState<AgentComputerHardwareSection | null>(null);
   const [activeModelPickerProviderId, setActiveModelPickerProviderId] = useState<SageModelPickerProviderId>('empyralis');
   const [expandedModelPickerProviderIds, setExpandedModelPickerProviderIds] = useState<readonly SageModelPickerProviderId[]>([]);
   const modelCanvasPickerRef = useRef<HTMLDivElement | null>(null);
@@ -2014,61 +2229,128 @@ export function WorkstationChatPane() {
     () => (statusMessage ? classifyStatusNotice(statusMessage) : null),
     [statusMessage],
   );
-  const localRuntimeTargetId = localCompanionOnline ? readString(localRuntimeTarget?.id) : null;
-  const hardwareOptions = useMemo<NonNullable<ComposerComputerStatus['options']>>(
-    () => {
-      const options: NonNullable<ComposerComputerStatus['options']> = [
-        {
-          value: 'auto',
-          label: 'Auto',
-          detail: localCompanionConnected
-            ? 'Use Agent Computer only when the turn needs it.'
-            : 'Use hosted chat unless Agent Computer comes online.',
-        },
-        {
-          value: 'cloud',
-          label: 'Cloud',
-          detail: 'Use the selected tier without local computer tools.',
-        },
-      ];
-
-      options.push({
-        value: 'local',
-        label: 'Agent Computer',
-        detail: localCompanionConnected
-          ? readString(localRuntimeTarget?.sampleAttachmentLabel || localRuntimeTarget?.label) || 'Ready'
-          : readString(localRuntimeTarget?.statusLabel) || 'Offline',
-        disabled: !localCompanionConnected,
-      });
-
-      return options;
-    },
-    [localCompanionConnected, localRuntimeTarget],
+  const sageAgentComputerSelectionRecord = useMemo(
+    () => readObject(sageAgentComputerSelection?.selection),
+    [sageAgentComputerSelection],
   );
-  useEffect(() => {
-    const selectedOption = hardwareOptions.find((option) => option.value === selectedHardwareTarget);
-    if (!selectedOption || selectedOption.disabled) {
-      setSelectedHardwareTarget('auto');
+  const sageAgentComputerGatewayRecord = useMemo(
+    () => readObject(sageAgentComputerSelection?.gateway),
+    [sageAgentComputerSelection],
+  );
+  const sageAgentComputerSelectionMetadata = useMemo(
+    () => readObject(sageAgentComputerSelectionRecord.metadata),
+    [sageAgentComputerSelectionRecord],
+  );
+  const sageAgentComputerGatewayMetadata = useMemo(
+    () => readObject(sageAgentComputerGatewayRecord.metadata),
+    [sageAgentComputerGatewayRecord],
+  );
+  const selectedSageAgentComputerId = (
+    readString(sageAgentComputerGatewayRecord.gateway_id)
+    || readString(sageAgentComputerSelectionRecord.selected_gateway_id)
+    || readString(sageAgentComputerSelection?.selected_gateway_id)
+  );
+  const activeAgentComputerPermissionMode = normalizeAgentComputerPermissionModeToken(
+    readString(sageAgentComputerGatewayRecord.runtime_access_mode)
+    || readString(sageAgentComputerGatewayMetadata.runtime_access_mode)
+    || readString(sageAgentComputerSelectionMetadata.runtime_access_mode),
+  );
+  const applyAgentComputerPermissionMode = useCallback(async (
+    mode: AgentComputerPermissionMode,
+    options: { acknowledgedFullAccessWarning?: boolean } = {},
+  ) => {
+    if (!selectedSageAgentComputerId) {
+      setStatusMessage('Select an Agent Computer before changing permissions.');
+      return;
     }
-  }, [hardwareOptions, selectedHardwareTarget]);
+    setAgentComputerPermissionBusyMode(mode);
+    try {
+      const isFullAccess = mode === 'full_access';
+      const payload = await services.client.setSageAgentComputerSelection({
+        selectedGatewayId: selectedSageAgentComputerId,
+        metadata: {
+          source: 'sage_agent_computer_permissions_menu',
+          agent_scope: 'sage',
+          runtime_access_mode: runtimeAccessModeForAgentComputerPermissionMode(mode),
+          autonomous_agent_setup_warning_acknowledged: isFullAccess
+            ? options.acknowledgedFullAccessWarning === true
+            : false,
+          ...(isFullAccess ? {
+            autonomous_agent_setup_warning_version: AGENT_COMPUTER_FULL_ACCESS_WARNING_VERSION,
+          } : {}),
+        },
+      });
+      const nextSelection = payload && typeof payload === 'object' ? payload : null;
+      const returnedMode = agentComputerPermissionModeFromSelectionPayload(nextSelection);
+      setSageAgentComputerSelection(nextSelection);
+      setPendingFullAccessConfirmation(false);
+      if (returnedMode === mode) {
+        setStatusMessage(`${agentComputerPermissionModeLabel(returnedMode)} applied to Sage Agent Computer.`);
+      } else {
+        setStatusMessage(
+          `Agent Computer stayed on ${agentComputerPermissionModeLabel(returnedMode)}. ${agentComputerPermissionModeLabel(mode)} was not applied.`,
+        );
+      }
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Could not update Agent Computer permissions.');
+    } finally {
+      setAgentComputerPermissionBusyMode(null);
+    }
+  }, [selectedSageAgentComputerId, services.client, setStatusMessage]);
+  const handleAgentComputerPermissionModeSelect = useCallback((mode: AgentComputerPermissionMode) => {
+    if (mode === activeAgentComputerPermissionMode) {
+      return;
+    }
+    if (mode === 'full_access') {
+      setHardwareCanvasPickerOpen(false);
+      setHardwareActivePanel(null);
+      setPendingFullAccessConfirmation(true);
+      return;
+    }
+    void applyAgentComputerPermissionMode(mode);
+  }, [activeAgentComputerPermissionMode, applyAgentComputerPermissionMode]);
+  const localRuntimeTargetId = localCompanionOnline ? readString(localRuntimeTarget?.id) : null;
   const selectedHardwareRuntimeTarget = useMemo(() => {
-    if (selectedHardwareTarget === 'cloud') {
-      return 'cloud';
-    }
-    if (selectedHardwareTarget === 'local') {
-      return localCompanionConnected && localRuntimeTargetId ? localRuntimeTargetId : 'cloud';
-    }
     return localCompanionConnected && localRuntimeTargetId ? localRuntimeTargetId : 'cloud';
-  }, [localCompanionConnected, localRuntimeTargetId, selectedHardwareTarget]);
-  const selectedHardwareLabel = useMemo(() => {
-    if (selectedHardwareTarget === 'local') {
-      return 'Agent Computer';
+  }, [localCompanionConnected, localRuntimeTargetId]);
+  const agentComputerDeviceLabel = useMemo(
+    () => (
+      readString(localRuntimeTarget?.sampleAttachmentLabel || localRuntimeTarget?.label)
+      || localDevicePlatformLabel(desktop.platform, desktop.localCompanion.label)
+      || 'Mac'
+    ),
+    [desktop.localCompanion.label, desktop.platform, localRuntimeTarget],
+  );
+  const agentComputerHeaderLabel = useMemo(() => {
+    if (localCompanionConnected) {
+      return agentComputerDeviceLabel;
     }
-    if (selectedHardwareTarget === 'cloud') {
-      return 'Cloud';
+    if (localRuntimeTarget) {
+      return 'Offline';
     }
-    return 'Auto';
-  }, [selectedHardwareTarget]);
+    return 'Not selected';
+  }, [agentComputerDeviceLabel, localCompanionConnected, localRuntimeTarget]);
+  const agentComputerMenuStatus = useMemo(() => {
+    if (localCompanionConnected) {
+      return {
+        label: 'Connected',
+        detail: agentComputerDeviceLabel,
+        tone: 'ready' as const,
+      };
+    }
+    if (localCompanionOnline) {
+      return {
+        label: 'Online',
+        detail: agentComputerDeviceLabel,
+        tone: 'warning' as const,
+      };
+    }
+    return {
+      label: 'Not connected',
+      detail: 'Connect Agent Computer before hardware permissions are active.',
+      tone: 'setup' as const,
+    };
+  }, [agentComputerDeviceLabel, localCompanionConnected, localCompanionOnline]);
   const canvasModelOptions = useMemo<SageCompanyModelOption[]>(
     () => ([
       { id: 'light', label: 'Light' },
@@ -2210,17 +2492,6 @@ export function WorkstationChatPane() {
       visibleModels: expanded ? [...initialModels, ...overflowModels] : initialModels,
     };
   }, [activeModelPickerProvider, expandedModelPickerProviderIds]);
-  const handleHardwareTargetChange = useCallback((nextValue: string) => {
-    if (
-      nextValue !== 'auto'
-      && nextValue !== 'cloud'
-      && nextValue !== 'local'
-    ) {
-      return;
-    }
-    setSelectedHardwareTarget(nextValue);
-    setHardwareCanvasPickerOpen(false);
-  }, []);
   useEffect(() => {
     if (!hardwareCanvasPickerOpen && !modelCanvasPickerOpen) {
       return undefined;
@@ -2239,6 +2510,7 @@ export function WorkstationChatPane() {
       setModelCanvasPickerOpen(false);
       setModelPickerSubpanel(null);
       setHardwareCanvasPickerOpen(false);
+      setHardwareActivePanel(null);
     };
     window.addEventListener('pointerdown', handlePointerDown);
     return () => {
@@ -2564,9 +2836,7 @@ export function WorkstationChatPane() {
     setShowProjectedAssistant(false);
     setTimelineSettled(true);
     finalizePartialAssistantResponse(activeThreadIdRef.current);
-    setLiveTimelineEvents([]);
-    setLiveActivitySteps([]);
-    setLiveTrace(null);
+    setLiveActivitySteps((current) => settleLiveActivitySteps(current, 'done'));
     streamInFlightRef.current = false;
     submitInFlightRef.current = false;
     setIsSending(false);
@@ -2655,6 +2925,9 @@ export function WorkstationChatPane() {
     }
     const displayMessage = outboundMessage;
     submitInFlightRef.current = true;
+    transcriptForceStickRef.current = true;
+    transcriptShouldStickRef.current = true;
+    setShowTranscriptJump(false);
     const resolvedProviderId = readString(selectedProviderContext.providerId) || null;
     const resolvedModelId = readString(selectedProviderContext.modelId)
       || (effectiveSelectedModel === 'default' ? null : effectiveSelectedModel);
@@ -2776,6 +3049,10 @@ export function WorkstationChatPane() {
         session,
       };
       writeThreadState(persistedThreadState);
+      emitWorkstationChatHistoryInvalidated({
+        workspaceId: bootstrap.workspace.id,
+        threadId: persistedThreadState.threadId,
+      });
 
       let observedTraceId: string | null = null;
       let observedThreadId = requestedThreadId;
@@ -2926,8 +3203,7 @@ export function WorkstationChatPane() {
             if (event.event === 'response') {
               const delta = readString(event.payload.delta)
                 || readString(event.payload.text)
-                || readString(event.payload.content)
-                || readString(event.payload.message);
+                || readString(event.payload.content);
               if (delta) {
                 setStreamingAssistantText((current) => stripInternalToolMarkup(`${current}${delta}`));
               }
@@ -2967,8 +3243,7 @@ export function WorkstationChatPane() {
             }]);
             setTimelineSettled(true);
             const finalReply = readString(event.payload.reply)
-              || readString(event.payload.content)
-              || readString(event.payload.message);
+              || readString(event.payload.content);
             const visibleFinalReply = stripInternalToolMarkup(finalReply);
             if (visibleFinalReply && !isProviderRuntimeGateMessage(visibleFinalReply)) {
               observedFinalReply = visibleFinalReply;
@@ -3083,12 +3358,20 @@ export function WorkstationChatPane() {
           ...canonicalThread,
           session,
         });
+        emitWorkstationChatHistoryInvalidated({
+          workspaceId: bootstrap.workspace.id,
+          threadId: canonicalThread.threadId,
+        });
       } else if (responseMessage) {
         writeThreadState({
           ...thread,
           threadId: nextThreadId,
           messages: immediateMessages,
           session,
+        });
+        emitWorkstationChatHistoryInvalidated({
+          workspaceId: bootstrap.workspace.id,
+          threadId: nextThreadId,
         });
       }
       const hasPendingApprovals = Array.isArray(normalizedResponse.approvals) && normalizedResponse.approvals.length > 0;
@@ -3141,9 +3424,7 @@ export function WorkstationChatPane() {
         setShowProjectedAssistant(false);
         setTimelineSettled(true);
         finalizePartialAssistantResponse(activeThreadIdRef.current);
-        setLiveTimelineEvents([]);
-        setLiveActivitySteps([]);
-        setLiveTrace(null);
+        setLiveActivitySteps((current) => settleLiveActivitySteps(current, 'done'));
         setSendFailureNotice(incompleteWithPartial
           ? {
               message: 'Response interrupted before completion.',
@@ -3452,57 +3733,146 @@ export function WorkstationChatPane() {
         <button
           type="button"
           className="sage-canvas-hardware__trigger"
-          aria-label={`Choose Agent Computer mode. Current: ${selectedHardwareLabel}`}
+          aria-label={`Choose Agent Computer. Current: ${agentComputerHeaderLabel}`}
           aria-expanded={hardwareCanvasPickerOpen}
           disabled={isSending || isPersistingModelSelection}
           onClick={() => {
             setModelCanvasPickerOpen(false);
             setModelPickerSubpanel(null);
-            setHardwareCanvasPickerOpen((current) => !current);
+            setHardwareCanvasPickerOpen((current) => {
+              const nextOpen = !current;
+              if (!nextOpen) {
+                setHardwareActivePanel(null);
+              }
+              return nextOpen;
+            });
           }}
         >
-          {selectedHardwareTarget === 'local' ? selectedHardwareLabel : `Agent Computer: ${selectedHardwareLabel}`}
+          {`Agent Computer: ${agentComputerHeaderLabel}`}
         </button>
         {hardwareCanvasPickerOpen ? (
-          <div className="sage-canvas-hardware__menu" role="dialog" aria-label="Agent Computer">
-            <div className="sage-canvas-hardware__options" role="listbox" aria-label="Agent Computer">
-              {hardwareOptions.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`sage-canvas-hardware__option${option.value === selectedHardwareTarget ? ' sage-canvas-hardware__option--selected' : ''}`}
-                  disabled={isSending || isPersistingModelSelection || option.disabled}
-                  onClick={() => {
-                    handleHardwareTargetChange(option.value);
-                  }}
-                  role="option"
-                  aria-selected={option.value === selectedHardwareTarget}
-                >
-                  <span className="sage-canvas-hardware__option-copy">
-                    <HardwareOptionIcon value={option.value} />
-                    <span>{option.label}</span>
-                  </span>
-                  {option.value === selectedHardwareTarget ? (
-                    <Check size={16} strokeWidth={2} aria-hidden="true" />
-                  ) : null}
-                </button>
-              ))}
-            </div>
+          <div
+            className="sage-canvas-hardware__menu"
+            role="dialog"
+            aria-label="Agent Computer"
+          >
             <button
               type="button"
-              className="sage-canvas-hardware__option sage-canvas-hardware__option--manage"
-              disabled={isSending || isPersistingModelSelection}
+              className={`sage-canvas-hardware__option sage-canvas-hardware__option--has-submenu${hardwareActivePanel === 'hardware' ? ' sage-canvas-hardware__option--active' : ''}`}
+              aria-haspopup="menu"
+              aria-expanded={hardwareActivePanel === 'hardware'}
+              onPointerEnter={() => {
+                setHardwareActivePanel('hardware');
+              }}
+              onPointerMove={() => {
+                setHardwareActivePanel('hardware');
+              }}
+              onMouseEnter={() => {
+                setHardwareActivePanel('hardware');
+              }}
+              onFocus={() => {
+                setHardwareActivePanel('hardware');
+              }}
               onClick={() => {
-                setHardwareCanvasPickerOpen(false);
-                router.push(`${integrationsHref}?section=connections`);
+                setHardwareActivePanel('hardware');
               }}
             >
               <span className="sage-canvas-hardware__option-copy">
-                <Settings className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
-                <span>Agent Computer settings</span>
+                <Monitor className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
+                <span className="sage-canvas-hardware__option-label">
+                  <strong>Hardware</strong>
+                  <small>{agentComputerMenuStatus.label}</small>
+                </span>
               </span>
               <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
             </button>
+            <button
+              type="button"
+              className={`sage-canvas-hardware__option sage-canvas-hardware__option--has-submenu${hardwareActivePanel === 'permissions' ? ' sage-canvas-hardware__option--active' : ''}`}
+              aria-haspopup="menu"
+              aria-expanded={hardwareActivePanel === 'permissions'}
+              onPointerEnter={() => {
+                setHardwareActivePanel('permissions');
+              }}
+              onPointerMove={() => {
+                setHardwareActivePanel('permissions');
+              }}
+              onMouseEnter={() => {
+                setHardwareActivePanel('permissions');
+              }}
+              onFocus={() => {
+                setHardwareActivePanel('permissions');
+              }}
+              onClick={() => {
+                setHardwareActivePanel('permissions');
+              }}
+            >
+              <span className="sage-canvas-hardware__option-copy">
+                <ShieldCheck className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
+                <span className="sage-canvas-hardware__option-label">
+                  <strong>Permissions</strong>
+                  <small>{selectedSageAgentComputerId ? agentComputerPermissionModeLabel(activeAgentComputerPermissionMode) : 'Select Agent Computer'}</small>
+                </span>
+              </span>
+              <ChevronRight size={16} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+            {hardwareActivePanel ? (
+              <div
+                className="sage-canvas-hardware__subpanel"
+                role="menu"
+                aria-label={hardwareActivePanel === 'hardware' ? 'Agent Computer hardware' : 'Agent Computer permissions'}
+              >
+                <div className="sage-canvas-hardware__subpanel-title">
+                  {hardwareActivePanel === 'hardware' ? 'Hardware' : 'Permissions'}
+                </div>
+                <div className="sage-canvas-hardware__subpanel-list" role="list">
+                  {hardwareActivePanel === 'hardware'
+                    ? AGENT_COMPUTER_HARDWARE_ITEMS.map((item) => {
+                        const selected = selectedHardwareMenuItem === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className={`sage-canvas-hardware__subrow${selected ? ' sage-canvas-hardware__subrow--active' : ''}`}
+                            aria-pressed={selected}
+                            onClick={() => {
+                              setSelectedHardwareMenuItem(item.id);
+                              setHardwareActivePanel('hardware');
+                            }}
+                          >
+                            <Monitor className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
+                            <span className="sage-canvas-hardware__subrow-copy">
+                              <strong>{item.label}</strong>
+                              <small>{item.detail}</small>
+                            </span>
+                          </button>
+                        );
+                      })
+                    : AGENT_COMPUTER_PERMISSION_MODE_ITEMS.map((mode) => {
+                        const selected = activeAgentComputerPermissionMode === mode.id;
+                        const busy = agentComputerPermissionBusyMode === mode.id;
+                        return (
+                          <button
+                            key={mode.id}
+                            type="button"
+                            className={`sage-canvas-hardware__subrow${selected ? ' sage-canvas-hardware__subrow--active' : ''}`}
+                            aria-pressed={selected}
+                            disabled={agentComputerPermissionBusyMode !== null}
+                            onClick={() => {
+                              handleAgentComputerPermissionModeSelect(mode.id);
+                            }}
+                          >
+                            <ShieldCheck className="sage-canvas-hardware__option-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
+                            <span className="sage-canvas-hardware__subrow-copy">
+                              <strong>{mode.label}</strong>
+                              <small>{busy ? 'Saving...' : selected ? 'Active' : mode.detail}</small>
+                            </span>
+                          </button>
+                        );
+                      })}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -3581,7 +3951,12 @@ export function WorkstationChatPane() {
               ))}
             </div>
           ) : null}
-          <ScrollRegion className="app-chat-thread__scroll">
+          <ScrollRegion
+            ref={transcriptScrollRef}
+            className="app-chat-thread__scroll"
+            aria-label="Sage conversation"
+            onScroll={handleTranscriptScroll}
+          >
             <div className="app-chat-thread__body">
               {showSageSetupLoadingCard ? (
                 <AppNotice tone="neutral" className="app-chat-status-notice">
@@ -3659,6 +4034,18 @@ export function WorkstationChatPane() {
                   modelLabel={selectedModelOption.label}
                   providerGateVisible={!activeProviderSummary.connected}
                   integrationsHref={integrationsHref}
+                  recentThreads={recentThreads}
+                  onOpenThread={(threadId) => {
+                    const nextThreadId = readString(threadId);
+                    if (!nextThreadId) {
+                      return;
+                    }
+                    persistActiveThread(bootstrap.workspace.id, nextThreadId);
+                    emitWorkstationChatThreadSelected({
+                      workspaceId: bootstrap.workspace.id,
+                      threadId: nextThreadId,
+                    });
+                  }}
                   onSelectPrompt={setDraft}
                 />
               ) : null}
@@ -3682,6 +4069,19 @@ export function WorkstationChatPane() {
               ))}
             </div>
           </ScrollRegion>
+          {showTranscriptJump ? (
+            <button
+              type="button"
+              className="app-chat-thread__jump"
+              onClick={() => {
+                transcriptForceStickRef.current = true;
+                scrollTranscriptToLatest('smooth');
+              }}
+            >
+              <ArrowDown size={14} strokeWidth={2} aria-hidden="true" />
+              <span>Latest</span>
+            </button>
+          ) : null}
         </section>
 
         {sendFailureNotice ? (
@@ -3996,6 +4396,30 @@ export function WorkstationChatPane() {
           </FormGrid>
         </FormSection>
       </CommandSheet>
+
+      <ConfirmDialog
+        open={pendingFullAccessConfirmation}
+        title="Full Access warning"
+        body={(
+          <span>
+            Full Access lets Sage run commands, read, write, delete files, and access secrets,
+            browser data, tokens, SSH keys, and connected accounts on this Agent Computer;
+            dedicated Agent hardware is recommended.
+          </span>
+        )}
+        confirmLabel="Allow Full Access"
+        cancelLabel="Keep current access"
+        confirmTone="danger"
+        busy={agentComputerPermissionBusyMode === 'full_access'}
+        onConfirm={() => {
+          void applyAgentComputerPermissionMode('full_access', {
+            acknowledgedFullAccessWarning: true,
+          });
+        }}
+        onCancel={() => {
+          setPendingFullAccessConfirmation(false);
+        }}
+      />
 
       <ConfirmDialog
         open={Boolean(pendingDeleteMemory)}

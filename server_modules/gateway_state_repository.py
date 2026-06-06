@@ -1685,6 +1685,7 @@ def update_gateway_registration_state(
     *,
     gateway_id: str,
     metadata: Optional[Dict[str, Any]] = None,
+    metadata_keys_to_remove: Optional[List[str]] = None,
     journal_cursor: Optional[int] = None,
     checkpoint_cursor: Optional[int] = None,
     device_trust_state: Optional[str] = None,
@@ -1703,6 +1704,10 @@ def update_gateway_registration_state(
             if registration is None:
                 return None
             merged_metadata = dict(registration.get("metadata") or {})
+            for key in metadata_keys_to_remove or []:
+                clean_key = str(key or "").strip()
+                if clean_key:
+                    merged_metadata.pop(clean_key, None)
             merged_metadata.update(dict(metadata or {}))
             next_status = str(status or registration.get("status") or "active").strip() or "active"
             _enforce_gateway_state_decision(

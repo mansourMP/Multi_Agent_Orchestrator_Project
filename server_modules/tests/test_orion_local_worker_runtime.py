@@ -169,6 +169,23 @@ class LocalWorkerRuntimeClientTests(TestCase):
         self.assertEqual(captured["payload"]["policy_mode"], "trusted_full_access")
         self.assertEqual(captured["payload"]["permission_probe"]["screen_recording"]["status"], "granted")
 
+    def test_register_runtime_sends_enrollment_token_when_available(self):
+        client = worker_runtime.RuntimeClient(
+            base_url="http://runtime",
+            api_key="key",
+            enrollment_token="enroll-1",
+        )
+        captured = {}
+
+        def fake_request(method, path, payload=None):
+            captured["payload"] = payload
+            return {"ok": True, "session_token": "fresh", "instance_id": "instance"}
+
+        with patch.object(client, "_request", side_effect=fake_request):
+            client.register_runtime("worker-1", display_name="Worker")
+
+        self.assertEqual(captured["payload"]["enrollment_token"], "enroll-1")
+
     def test_heartbeat_worker_can_send_permission_probe(self):
         client = self._client()
         captured = {}

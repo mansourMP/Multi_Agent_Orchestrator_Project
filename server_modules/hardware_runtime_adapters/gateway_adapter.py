@@ -67,6 +67,7 @@ def _enforce_gateway_action_decision(
         decision = rust_runtime_kernel_client.enforce_kernel_decision(
             "gateway-action-decision",
             decision,
+            allow_approval_required=operation == "tool_execute",
         )
     except rust_runtime_kernel_client.RustKernelDecisionError as exc:
         reason = text(getattr(exc, "reason", "")) or "rust_gateway_action_denied"

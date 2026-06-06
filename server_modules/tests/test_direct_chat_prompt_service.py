@@ -82,6 +82,7 @@ class DirectChatPromptServiceTests(unittest.TestCase):
         self.assertIn("memory_search: Search memory", str(prompt))
         self.assertIn("## Tool Use Rules", str(prompt))
         self.assertIn("Use matching tools when available", str(prompt))
+        self.assertIn("Do not end a turn by saying you will check", str(prompt))
         self.assertIn("## Memory Recall", str(prompt))
 
     def test_combine_workspace_context_prefers_prompt_then_context(self) -> None:
@@ -96,6 +97,19 @@ class DirectChatPromptServiceTests(unittest.TestCase):
             workspace_context_text="Workspace context",
         )
         self.assertEqual(context_only, "Workspace context")
+
+    def test_build_system_prompt_includes_follow_through_rule_without_tools(self) -> None:
+        prompt = direct_chat_prompt_service.build_system_prompt(
+            workspace_id="default",
+            availability={"ai_ready": True},
+            tools=[],
+            availability_lines=lambda workspace_id, availability: [f"Workspace: {workspace_id}"],
+            build_operator_system_prompt=lambda lines, tool_lines=None: "\n".join([*lines, *(tool_lines or [])]),
+            memory_tool_names={"memory_search", "memory_get"},
+        )
+
+        self.assertIn("## Follow-through Rule", str(prompt))
+        self.assertIn("Do not end a turn by saying you will check", str(prompt))
 
     def test_combine_workspace_context_places_identity_before_workspace_context(self) -> None:
         combined = direct_chat_prompt_service.combine_workspace_context(

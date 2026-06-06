@@ -13,7 +13,7 @@ class AgentComputerPolicyServiceTests(unittest.TestCase):
             "run_runtime_kernel_enforced",
             side_effect=self._fake_rust_kernel,
         )
-        self._kernel_patch.start()
+        self._kernel_mock = self._kernel_patch.start()
 
     def tearDown(self) -> None:
         self._kernel_patch.stop()
@@ -139,9 +139,16 @@ class AgentComputerPolicyServiceTests(unittest.TestCase):
         contract = policy.build_default_agent_computer_policy(autonomy_mode="trusted_workstation")
 
         self.assertEqual(policy.decision_for_capability(contract, "file.write"), "allow")
+        self.assertEqual(policy.decision_for_capability(contract, "browser.click"), "allow")
+        self.assertEqual(policy.decision_for_capability(contract, "app.control"), "allow")
+        self.assertEqual(policy.decision_for_capability(contract, "terminal.command"), "allow")
         self.assertEqual(policy.decision_for_capability(contract, "terminal.approved_script"), "allow")
         self.assertEqual(policy.decision_for_capability(contract, "commerce.payment"), "approval_required")
         self.assertEqual(policy.decision_for_capability(contract, "install.extension"), "block")
+        self.assertEqual(contract.terminal_policy, "allow")
+        self.assertEqual(contract.network_policy, "allow")
+        self.assertEqual(contract.browser_access_policy, "allow")
+        self.assertEqual(contract.app_access_policy, "allow")
 
     def test_emergency_stop_blocks_everything(self) -> None:
         contract = policy.build_default_agent_computer_policy(autonomy_mode="emergency_stop")
@@ -155,7 +162,7 @@ class AgentComputerPolicyServiceTests(unittest.TestCase):
         decision = policy.decision_for_capability(contract, "browser.click")
 
         self.assertEqual(decision, "approval_required")
-        self.assertEqual(self._kernel_patch.mock.call_args.args[0], "validate-policy")
+        self.assertEqual(self._kernel_mock.call_args.args[0], "validate-policy")
 
     def test_normalize_rejects_unknown_capability(self) -> None:
         with self.assertRaises(policy.AgentComputerPolicyError):

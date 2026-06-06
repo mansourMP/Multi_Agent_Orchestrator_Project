@@ -721,11 +721,27 @@ def _rust_capability_for_tool_policy(tool_id: str, *, known_read_only_system_pro
         "filesystem.read": "filesystem_read",
         "filesystem.read_write": "filesystem_read_write",
         "browser_automation.interactive": "browser_automation_interactive",
+        "http_request": "network_access",
+        "external_research": "network_access",
+        "draft_email": "communication_draft",
+        "create_calendar_event": "calendar_write",
+        "publish_content": "external_write",
+        "document_create": "external_write",
+        "document_update": "external_write",
+        "presentation_create": "external_write",
+        "presentation_update": "external_write",
+        "spreadsheet_create": "external_write",
+        "spreadsheet_update": "external_write",
+        "spreadsheet_append": "external_write",
+        "spreadsheet_read": "read_files",
+        "screenshot.capture": "read_files",
         "send_message": "send_message",
         "post_message": "post_message",
         "reply_message": "reply_message",
         "transfer_funds": "transfer_funds",
         "connector.action.read": "connector_action_read",
+        "connector.action.write": "external_write",
+        "connector.action.execute": "external_write",
     }
     return mapping.get(clean_tool_id, clean_tool_id.replace(".", "_"))
 
@@ -890,6 +906,11 @@ def _rust_tool_policy_result(
         decision = dict(exc.decision)
     rust_decision = str(decision.get("decision") or "").strip().lower()
     rust_next_action = str(decision.get("next_action") or "").strip()
+    decision_reason = str(decision.get("reason") or "").strip()
+    nested_authorization = decision.get("authorization") if isinstance(decision.get("authorization"), dict) else {}
+    nested_authorization_reason = str(nested_authorization.get("reason") or "").strip()
+    if decision_reason in {"execution_allowed", "execution_requires_approval"} and nested_authorization_reason:
+        decision_reason = nested_authorization_reason
     expected_next_action = (
         "request_tool_execution_approval"
         if (bool(decision.get("approval_required")) or rust_decision in {"require_approval", "approval_required"})
@@ -907,7 +928,7 @@ def _rust_tool_policy_result(
         return {
             "execution_decision": "deny",
             "decision": "blocked",
-            "reason": str(decision.get("reason") or reason or "rust_authorization_blocked").strip(),
+            "reason": str(decision_reason or reason or "rust_authorization_blocked").strip(),
             "rust_authorization": dict(decision),
             "rust_execution_plan": dict(rust_execution_plan) if isinstance(rust_execution_plan, dict) else None,
         }
@@ -915,14 +936,14 @@ def _rust_tool_policy_result(
         return {
             "execution_decision": "require_confirmation",
             "decision": "approval_required",
-            "reason": str(decision.get("reason") or reason or "rust_authorization_requires_approval").strip(),
+            "reason": str(decision_reason or reason or "rust_authorization_requires_approval").strip(),
             "rust_authorization": dict(decision),
             "rust_execution_plan": dict(rust_execution_plan) if isinstance(rust_execution_plan, dict) else None,
         }
     return {
         "execution_decision": "allow",
         "decision": "allow",
-        "reason": str(decision.get("reason") or reason or "rust_authorization_allowed").strip(),
+        "reason": str(decision_reason or reason or "rust_authorization_allowed").strip(),
         "rust_authorization": dict(decision),
         "rust_execution_plan": dict(rust_execution_plan) if isinstance(rust_execution_plan, dict) else None,
     }

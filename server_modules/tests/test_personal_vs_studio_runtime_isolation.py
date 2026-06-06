@@ -48,6 +48,25 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
             patcher.stop()
         self.tmpdir.cleanup()
 
+    def _assert_pending_approval_reply(self, result: dict) -> None:
+        self.assertTrue(result["approval_required"])
+        self.assertEqual(result["outbound"]["status"], "pending")
+        self.assertIsNone(result["outbound"]["external_message_id"])
+        self.assertEqual(result["approval"]["status"], "pending")
+        self.assertEqual(result["normalized_approval"]["status"], "pending")
+
+    def _assert_approval_required_audit(self, audit_mock, *, action: str) -> None:
+        audit_mock.assert_called_once()
+        audit_kwargs = audit_mock.call_args.kwargs
+        self.assertEqual(audit_kwargs["action"], action)
+        self.assertEqual(audit_kwargs["status"], "approval_required")
+        metadata = audit_kwargs["metadata"]
+        self.assertEqual(metadata["action_class"], "automatic_inbound_reply")
+        self.assertTrue(metadata["requires_approval"])
+        self.assertTrue(metadata["approval_required"])
+        self.assertFalse(metadata["external_side_effect"])
+        self.assertEqual(metadata["outbound_status"], "pending")
+
     def test_connector_failure_does_not_poison_personal_gateway_inbound_flow(self) -> None:
         pairing = gateway_pairing_service.create_gateway_pairing_intent(
             tenant_id="tenant-1",
@@ -79,7 +98,7 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
             patch(
                 "server_modules.gateway_protocol_service.dispatch_channel_outbound",
                 new=AsyncMock(return_value={"external_message_id": "wa-out-1"}),
-            ),
+            ) as dispatch_mock,
             patch(
                 "server_modules.personal_channels_service.security_audit_service.emit_security_audit_event",
             ) as audit_mock,
@@ -105,21 +124,21 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
             )
 
         self.assertFalse(personal_result["duplicate"])
-        self.assertEqual(personal_result["outbound"]["status"], "delivered")
-        audit_mock.assert_called_once()
-        self.assertEqual(audit_mock.call_args.kwargs["action"], "personal_channel.whatsapp.automatic_reply")
-        self.assertEqual(audit_mock.call_args.kwargs["status"], "success")
-        self.assertEqual(audit_mock.call_args.kwargs["metadata"]["action_class"], "automatic_inbound_reply")
-        self.assertTrue(audit_mock.call_args.kwargs["metadata"]["external_side_effect"])
+        self._assert_pending_approval_reply(personal_result)
+        self._assert_approval_required_audit(
+            audit_mock,
+            action="personal_channel.whatsapp.automatic_reply",
+        )
+        dispatch_mock.assert_not_awaited()
         recent_messages = personal_channels_repository.list_recent_gateway_messages(
             "gateway-local-1",
             channel_key="whatsapp_personal",
         )
         self.assertEqual(len(recent_messages["inbound"]), 1)
         self.assertEqual(len(recent_messages["outbound"]), 1)
-        self.assertEqual(recent_messages["outbound"][0]["status"], "delivered")
+        self.assertEqual(recent_messages["outbound"][0]["status"], "pending")
 
-    def test_duplicate_whatsapp_inbound_retries_pending_personal_reply_after_disconnect(self) -> None:
+    def test_duplicate_whatsapp_inbound_reuses_pending_personal_reply_for_owner_approval(self) -> None:
         pairing = gateway_pairing_service.create_gateway_pairing_intent(
             tenant_id="tenant-1",
             workspace_id="default",
@@ -149,29 +168,25 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
         }
 
         dispatch_mock = AsyncMock(
-            side_effect=[
-                ValueError("Gateway is not currently connected."),
-                {"external_message_id": "wa-out-2"},
-            ]
+            side_effect=AssertionError("automatic personal replies require owner approval before dispatch")
         )
         with (
             patch(
                 "server_modules.personal_channel_sage_bridge_service.build_whatsapp_personal_reply",
                 return_value={"text": "Recovered Sage reply", "source": "test_bridge"},
-            ),
+            ) as reply_mock,
             patch(
                 "server_modules.gateway_protocol_service.dispatch_channel_outbound",
                 new=dispatch_mock,
             ),
         ):
-            with self.assertRaisesRegex(ValueError, "not currently connected"):
-                asyncio.run(
-                    personal_channels_service.handle_gateway_channel_inbound(
-                        gateway_id="gateway-local-1",
-                        registration=registration,
-                        payload=inbound_payload,
-                    )
+            first = asyncio.run(
+                personal_channels_service.handle_gateway_channel_inbound(
+                    gateway_id="gateway-local-1",
+                    registration=registration,
+                    payload=inbound_payload,
                 )
+            )
 
             recovered = asyncio.run(
                 personal_channels_service.handle_gateway_channel_inbound(
@@ -181,17 +196,20 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
                 )
             )
 
+        self.assertFalse(first["duplicate"])
+        self._assert_pending_approval_reply(first)
         self.assertTrue(recovered["duplicate"])
-        self.assertEqual(recovered["outbound"]["status"], "delivered")
-        self.assertEqual(recovered["outbound"]["external_message_id"], "wa-out-2")
+        self._assert_pending_approval_reply(recovered)
+        self.assertEqual(recovered["outbound"]["idempotency_key"], first["outbound"]["idempotency_key"])
         recent_messages = personal_channels_repository.list_recent_gateway_messages(
             "gateway-local-1",
             channel_key="whatsapp_personal",
         )
         self.assertEqual(len(recent_messages["inbound"]), 1)
         self.assertEqual(len(recent_messages["outbound"]), 1)
-        self.assertEqual(recent_messages["outbound"][0]["status"], "delivered")
-        self.assertEqual(dispatch_mock.await_count, 2)
+        self.assertEqual(recent_messages["outbound"][0]["status"], "pending")
+        reply_mock.assert_called_once()
+        dispatch_mock.assert_not_awaited()
 
     def test_telegram_automatic_inbound_reply_emits_security_audit(self) -> None:
         pairing = gateway_pairing_service.create_gateway_pairing_intent(
@@ -216,7 +234,7 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
             patch(
                 "server_modules.gateway_protocol_service.dispatch_channel_outbound",
                 new=AsyncMock(return_value={"external_message_id": "tg-out-1"}),
-            ),
+            ) as dispatch_mock,
             patch(
                 "server_modules.personal_channels_service.security_audit_service.emit_security_audit_event",
             ) as audit_mock,
@@ -242,11 +260,12 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
             )
 
         self.assertFalse(personal_result["duplicate"])
-        self.assertEqual(personal_result["outbound"]["status"], "delivered")
-        audit_mock.assert_called_once()
-        self.assertEqual(audit_mock.call_args.kwargs["action"], "personal_channel.telegram.automatic_reply")
-        self.assertEqual(audit_mock.call_args.kwargs["status"], "success")
-        self.assertEqual(audit_mock.call_args.kwargs["metadata"]["action_class"], "automatic_inbound_reply")
+        self._assert_pending_approval_reply(personal_result)
+        self._assert_approval_required_audit(
+            audit_mock,
+            action="personal_channel.telegram.automatic_reply",
+        )
+        dispatch_mock.assert_not_awaited()
 
     def test_personal_channel_control_command_is_blocked_before_sage_reply(self) -> None:
         pairing = gateway_pairing_service.create_gateway_pairing_intent(
@@ -305,7 +324,7 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
         self.assertEqual(audit_mock.call_args.kwargs["status"], "denied")
         self.assertEqual(audit_mock.call_args.kwargs["metadata"]["command"], "model")
 
-    def test_duplicate_telegram_inbound_retries_pending_personal_reply_after_disconnect(self) -> None:
+    def test_duplicate_telegram_inbound_reuses_pending_personal_reply_for_owner_approval(self) -> None:
         pairing = gateway_pairing_service.create_gateway_pairing_intent(
             tenant_id="tenant-1",
             workspace_id="default",
@@ -335,29 +354,25 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
         }
 
         dispatch_mock = AsyncMock(
-            side_effect=[
-                ValueError("Gateway is not currently connected."),
-                {"external_message_id": "tg-out-2"},
-            ]
+            side_effect=AssertionError("automatic personal replies require owner approval before dispatch")
         )
         with (
             patch(
                 "server_modules.personal_channel_sage_bridge_service.build_telegram_personal_reply",
                 return_value={"text": "Recovered Telegram reply", "source": "test_bridge"},
-            ),
+            ) as reply_mock,
             patch(
                 "server_modules.gateway_protocol_service.dispatch_channel_outbound",
                 new=dispatch_mock,
             ),
         ):
-            with self.assertRaisesRegex(ValueError, "not currently connected"):
-                asyncio.run(
-                    personal_channels_service.handle_gateway_channel_inbound(
-                        gateway_id="gateway-local-1",
-                        registration=registration,
-                        payload=inbound_payload,
-                    )
+            first = asyncio.run(
+                personal_channels_service.handle_gateway_channel_inbound(
+                    gateway_id="gateway-local-1",
+                    registration=registration,
+                    payload=inbound_payload,
                 )
+            )
 
             recovered = asyncio.run(
                 personal_channels_service.handle_gateway_channel_inbound(
@@ -367,17 +382,20 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
                 )
             )
 
+        self.assertFalse(first["duplicate"])
+        self._assert_pending_approval_reply(first)
         self.assertTrue(recovered["duplicate"])
-        self.assertEqual(recovered["outbound"]["status"], "delivered")
-        self.assertEqual(recovered["outbound"]["external_message_id"], "tg-out-2")
+        self._assert_pending_approval_reply(recovered)
+        self.assertEqual(recovered["outbound"]["idempotency_key"], first["outbound"]["idempotency_key"])
         recent_messages = personal_channels_repository.list_recent_gateway_messages(
             "gateway-local-1",
             channel_key="telegram_personal",
         )
         self.assertEqual(len(recent_messages["inbound"]), 1)
         self.assertEqual(len(recent_messages["outbound"]), 1)
-        self.assertEqual(recent_messages["outbound"][0]["status"], "delivered")
-        self.assertEqual(dispatch_mock.await_count, 2)
+        self.assertEqual(recent_messages["outbound"][0]["status"], "pending")
+        reply_mock.assert_called_once()
+        dispatch_mock.assert_not_awaited()
 
 
 if __name__ == "__main__":

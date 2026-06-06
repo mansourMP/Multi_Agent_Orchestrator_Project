@@ -403,7 +403,7 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
         self.assertEqual(normalized["runtime_access_mode"], "custom")
         self.assertTrue(normalized["requires_owner_approval"])
 
-    def test_normalize_computer_automation_requires_explicit_full_access_to_disable_owner_approval(self):
+    def test_normalize_computer_automation_rejects_studio_full_access_semantics(self):
         guarded = contract.normalize_computer_automation_config(
             {
                 "enabled": True,
@@ -416,7 +416,7 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
                 "max_session_runtime_seconds": 900,
             }
         )
-        full_access = contract.normalize_computer_automation_config(
+        attempted_full_access = contract.normalize_computer_automation_config(
             {
                 "enabled": True,
                 "runtime_class": "local_browser",
@@ -432,27 +432,30 @@ class DeployedAgentRuntimeContractServiceTests(unittest.TestCase):
 
         self.assertEqual(guarded["runtime_access_mode"], "default_guarded")
         self.assertTrue(guarded["requires_owner_approval"])
-        self.assertEqual(full_access["runtime_access_mode"], "full_access")
-        self.assertFalse(full_access["requires_owner_approval"])
+        self.assertEqual(attempted_full_access["runtime_access_mode"], "default_guarded")
+        self.assertTrue(attempted_full_access["requires_owner_approval"])
 
-    def test_validate_mode_capability_matrix_allows_full_access_computer_mode(self):
-        contract.validate_mode_capability_matrix(
-            studio_agent_mode="my_computer_agent",
-            runtime_placement="customer_local",
-            runtime_target="local",
-            computer_automation={
-                "enabled": True,
-                "runtime_class": "local_browser",
-                "allowed_domains": ["example.com"],
-                "max_concurrent_sessions": 1,
-                "daily_budget_usd": 5,
-                "monthly_budget_usd": 25,
-                "runtime_access_mode": "full_access",
-                "requires_owner_approval": False,
-                "max_session_runtime_seconds": 900,
-            },
-            stage="create",
-        )
+    def test_validate_mode_capability_matrix_rejects_studio_full_access(self):
+        with self.assertRaises(ValueError) as error:
+            contract.validate_mode_capability_matrix(
+                studio_agent_mode="my_computer_agent",
+                runtime_placement="customer_local",
+                runtime_target="local",
+                computer_automation={
+                    "enabled": True,
+                    "runtime_class": "local_browser",
+                    "allowed_domains": ["example.com"],
+                    "max_concurrent_sessions": 1,
+                    "daily_budget_usd": 5,
+                    "monthly_budget_usd": 25,
+                    "runtime_access_mode": "full_access",
+                    "requires_owner_approval": False,
+                    "max_session_runtime_seconds": 900,
+                },
+                stage="create",
+            )
+
+        self.assertIn("Studio agents cannot use Sage Full Access", str(error.exception))
 
     def test_marketplace_package_cannot_force_customer_runtime_without_installer_opt_in(self):
         payload = contract.normalize_runtime_supply_contract(

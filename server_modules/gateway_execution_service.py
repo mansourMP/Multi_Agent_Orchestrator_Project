@@ -20,6 +20,7 @@ from server_modules import (
     rust_runtime_kernel_client,
     secret_redaction_service,
 )
+from server_modules import execution_mode_policy
 
 
 SCREEN_REQUIRED_CAPABILITIES = {
@@ -86,6 +87,20 @@ def _runtime_access_mode_for_dispatch(
 def _full_access_warning_acknowledged(registration: Dict[str, Any]) -> bool:
     metadata = _registration_metadata(registration)
     return bool(metadata.get("autonomous_agent_setup_warning_acknowledged"))
+
+
+def _registration_sage_full_access_metadata(registration: Dict[str, Any]) -> bool:
+    metadata = _registration_metadata(registration)
+    runtime_access_mode = execution_mode_policy.normalize_runtime_access_mode(
+        metadata.get("runtime_access_mode")
+    )
+    agent_scope = str(metadata.get("agent_scope") or "").strip().lower()
+    warning_acknowledged = bool(metadata.get("autonomous_agent_setup_warning_acknowledged"))
+    return (
+        runtime_access_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+        and agent_scope == "sage"
+        and warning_acknowledged
+    )
 
 
 def _policy_payload_for_dispatch(
@@ -475,10 +490,10 @@ async def execute_tool_via_gateway(
         raise PermissionError("full_access Agent Computer execution is available only to Sage.")
     if (
         resolved_runtime_access_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
-        and not _full_access_warning_acknowledged(registration)
+        and not _registration_sage_full_access_metadata(registration)
     ):
         raise PermissionError(
-            "full_access Agent Computer execution requires the Sage setup warning acknowledgement."
+            "full_access Agent Computer execution requires the current Sage Full Access setup warning acknowledgement."
         )
     policy_payload = _policy_payload_for_dispatch(
         registration=registration,

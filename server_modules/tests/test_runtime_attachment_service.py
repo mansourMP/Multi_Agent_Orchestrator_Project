@@ -498,6 +498,7 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(targets["local_companion"]["runtime_fabric_target"], "user_device_gateway")
         self.assertEqual(targets["local_companion"]["hardware_edge"], "empyralis_gateway")
         self.assertTrue(targets["local_companion"]["runtime_session_required"])
+        self.assertEqual(targets["local_companion"]["default_runtime_access_mode"], "full_access")
         self.assertFalse(targets["local_companion"]["direct_mobile_connection_required"])
         local_modes = {item["id"]: item for item in targets["local_companion"]["execution_modes"]}
         self.assertTrue(local_modes["full_access"]["available"])

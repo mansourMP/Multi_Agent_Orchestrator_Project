@@ -936,8 +936,7 @@ function projectTypedStreamEvent(payload: Record<string, unknown>, fallbackIndex
   if (rawType === 'response') {
     const text = readString(merged.delta)
       || readString(merged.text)
-      || readString(merged.content)
-      || readString(merged.message);
+      || readString(merged.content);
     return text
       ? [{ type: 'assistant_delta', id: 'assistant', delta: text, provider: null, model: null }]
       : [];
@@ -978,7 +977,7 @@ export function projectRawEventToCodexEvents(
 
   const payload = readObject(event.payload);
   const metadata = readObject(payload.metadata);
-  const reply = readString(payload.reply) || readString(payload.content) || readString(payload.message);
+  const reply = readString(payload.reply) || readString(payload.content);
   const status = readString(payload.status).toLowerCase();
   return [{
     type: 'assistant_final',

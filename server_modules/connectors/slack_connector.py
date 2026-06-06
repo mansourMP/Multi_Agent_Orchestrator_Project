@@ -671,3 +671,83 @@ def parse_inbound_event(payload: Dict[str, Any]) -> Dict[str, Any]:
         "message_type": "ignored",
         "raw_event": event,
     }
+
+
+def event_matches_connector(
+    parsed: Dict[str, Any],
+    credentials: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Return whether a verified Slack event belongs to this connector install."""
+    if not isinstance(parsed, dict) or str(parsed.get("kind") or "").strip() != "event":
+        return False
+    metadata = metadata if isinstance(metadata, dict) else {}
+
+    parsed_team_id = str(parsed.get("team_id") or "").strip()
+    parsed_channel = str(parsed.get("channel") or "").strip()
+    parsed_app_id = str(parsed.get("api_app_id") or "").strip()
+
+    team_candidates = (
+        credentials.get("team_id"),
+        metadata.get("team_id"),
+        metadata.get("slack_team_id"),
+    )
+    configured_team = next((str(value or "").strip() for value in team_candidates if str(value or "").strip()), "")
+    if parsed_team_id and configured_team and parsed_team_id != configured_team:
+        return False
+
+    app_candidates = (
+        credentials.get("api_app_id"),
+        credentials.get("app_id"),
+        metadata.get("api_app_id"),
+        metadata.get("slack_app_id"),
+    )
+    configured_app = next((str(value or "").strip() for value in app_candidates if str(value or "").strip()), "")
+    if parsed_app_id and configured_app and parsed_app_id != configured_app:
+        return False
+
+    channel_candidates = (
+        credentials.get("channel_id"),
+        metadata.get("channel_id"),
+        metadata.get("slack_channel_id"),
+    )
+    configured_channel = next((str(value or "").strip() for value in channel_candidates if str(value or "").strip()), "")
+    if configured_channel and parsed_channel and parsed_channel != configured_channel:
+        return False
+
+    return True
+
+
+def should_trigger_agent_run(
+    parsed: Dict[str, Any],
+    credentials: Dict[str, Any],
+    *,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    if not event_matches_connector(parsed, credentials, metadata):
+        return False
+    if str(parsed.get("message_type") or "").strip() not in {"mention", "message"}:
+        return False
+    text = str(parsed.get("text") or "").strip()
+    if not text:
+        return False
+    user_id = str(parsed.get("user_id") or "").strip()
+    bot = credentials.get("bot") if isinstance(credentials.get("bot"), dict) else {}
+    bot_user_id = str(credentials.get("bot_user_id") or bot.get("user_id") or "").strip()
+    if user_id and bot_user_id and user_id == bot_user_id:
+        return False
+    subtype = str(parsed.get("subtype") or "").strip()
+    if subtype in {"bot_message", "message_changed", "message_deleted"}:
+        return False
+    if str(parsed.get("message_type") or "").strip() == "mention":
+        return True
+    metadata = metadata if isinstance(metadata, dict) else {}
+    channel_type = str(parsed.get("channel_type") or "").strip()
+    return bool(metadata.get("trigger_on_all_messages")) or channel_type == "im"
+
+
+def build_run_goal_from_event(parsed: Dict[str, Any]) -> str:
+    text = str(parsed.get("text") or "").strip()
+    if not text:
+        return ""
+    return text

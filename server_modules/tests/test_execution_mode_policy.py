@@ -19,7 +19,7 @@ class ExecutionModePolicyTests(unittest.TestCase):
         }
 
         self.assertTrue(cloud_modes["full_access"]["available"])
-        self.assertEqual(cloud_modes["full_access"]["label"], "Autonomous Full Access")
+        self.assertEqual(cloud_modes["full_access"]["label"], "Full Access")
         self.assertTrue(cloud_modes["autopilot"]["available"])
         self.assertTrue(cloud_modes["custom"]["available"])
         self.assertEqual(cloud_modes["custom"]["runtime_access_mode"], "custom")
@@ -39,7 +39,7 @@ class ExecutionModePolicyTests(unittest.TestCase):
 
         self.assertEqual(summary["default_guarded_public_label"], "Default Guarded")
         self.assertEqual(summary["custom_public_label"], "Custom")
-        self.assertEqual(summary["full_access_public_label"], "Autonomous Full Access")
+        self.assertEqual(summary["full_access_public_label"], "Full Access")
         self.assertEqual(summary["autonomous_full_access_runtime_access_mode"], "full_access")
         self.assertEqual(summary["full_access_scope"], "dedicated_runtime_targets")
         self.assertEqual(summary["destructive_actions_require_approval"], "default_guarded_and_custom")
@@ -70,11 +70,15 @@ class ExecutionModePolicyTests(unittest.TestCase):
     def test_runtime_access_public_helpers_keep_internal_mode_stable(self) -> None:
         self.assertEqual(
             execution_mode_policy.public_runtime_access_label("full_access"),
-            "Autonomous Full Access",
+            "Full Access",
         )
         self.assertEqual(execution_mode_policy.public_runtime_access_label("custom"), "Custom")
         self.assertIn(
-            "without Empyralis asking for each allowed action",
+            "Full Access lets Sage run commands",
+            execution_mode_policy.runtime_access_setup_warning("full_access") or "",
+        )
+        self.assertIn(
+            "dedicated Agent hardware is recommended",
             execution_mode_policy.runtime_access_setup_warning("full_access") or "",
         )
         self.assertEqual(execution_mode_policy.public_runtime_access_label("default_guarded"), "Default Guarded")

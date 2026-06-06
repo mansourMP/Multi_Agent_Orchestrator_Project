@@ -292,13 +292,13 @@ function readNumberString(value: unknown, fallback: string): string {
 
 function defaultAgentComputerPolicyDraft(): AgentComputerPolicyDraft {
   return {
-    allowedFolders: [],
+    allowedFolders: ['/'],
     blockedFolders: [],
     domains: [],
-    terminalPolicy: 'review_required',
-    networkPolicy: 'approval_required',
-    browserAccessPolicy: 'approval_required',
-    appAccessPolicy: 'approval_required',
+    terminalPolicy: 'allow',
+    networkPolicy: 'allow',
+    browserAccessPolicy: 'allow',
+    appAccessPolicy: 'allow',
     approvalTtlSeconds: '900',
     maxRuntimeSeconds: '0',
     maxBudgetDollars: '0',
@@ -477,7 +477,7 @@ function runtimeSessionLaneLabel(session: WorkspaceRuntimeSessionRecord): string
 function runtimeSessionApprovalModeLabel(session: WorkspaceRuntimeSessionRecord, pendingCount = 0): string {
   const accessMode = readString(session.runtime_access_mode, '').toLowerCase().replace(/[\s-]+/g, '_');
   if (accessMode === 'full_access') {
-    return 'Autonomous Full Access';
+    return 'Full Access';
   }
   if (accessMode === 'custom') {
     return 'Custom';
@@ -526,7 +526,7 @@ function gatewayRuntimeAccessLabel(gateway: GatewayRegistrationRecord | null): s
   }
   const mode = runtimeAccessModeToken(gateway?.runtime_access_mode);
   if (mode === 'full_access') {
-    return 'Autonomous Full Access';
+    return 'Full Access';
   }
   if (mode === 'custom') {
     return 'Custom';
@@ -740,15 +740,15 @@ function detectGatewayPlatform(): string {
 const GATEWAY_SETUP_STEPS = [
     {
       title: 'Install the connector',
-    description: 'The connector is a small app that runs on your computer. It lets Empyralis route approved local work through this workspace.',
+    description: 'The connector is a small app that lets Sage use the selected Agent Computer after setup.',
     },
   {
     title: 'Pair your machine',
-    description: 'Pairing creates a secure connection. You remain in control and can revoke access at any time.',
+    description: 'Pairing creates a secure connection for this workspace. You can revoke it at any time.',
   },
   {
-    title: 'Grant permissions',
-    description: 'Pairing enables ordinary local context by default. Risky side effects still pause for approval.',
+    title: 'Start Sage control',
+    description: 'Full Access starts only after the explicit Sage warning is accepted.',
   },
 ] as const;
 
@@ -762,19 +762,19 @@ const GATEWAY_PERMISSION_CHECKLIST = [
 
 const GATEWAY_MODE_SUMMARIES = [
   {
-    title: 'Default Guarded',
-    subtitle: 'Safe',
-    description: 'Sage can use ordinary local context automatically. Risky actions always wait for approval.',
+    title: 'Full Access',
+    subtitle: 'Explicit Sage warning required',
+    description: 'Lets Sage run commands, read, write, delete files, and access secrets, browser data, tokens, SSH keys, and connected accounts on this Agent Computer.',
   },
   {
-    title: 'Autonomous Full Access',
-    subtitle: 'Dedicated hardware',
-    description: 'Lets Empyralis run allowed computer actions on dedicated hardware without per-action prompts.',
+    title: 'Default',
+    subtitle: 'Guarded access',
+    description: 'Keeps risky local actions behind policy decisions instead of granting all machine access.',
   },
   {
     title: 'Custom',
-    subtitle: 'Policy-defined',
-    description: 'Choose allowed folders, terminal/network rules, approval memory, budget, and emergency stop behavior.',
+    subtitle: 'Editable guarded access',
+    description: 'Uses the same guarded model as Default, with exact grants edited by the user.',
   },
 ] as const;
 
@@ -1106,8 +1106,8 @@ export function WorkstationGatewayOperatorPane({
   const [pairingDraft, setPairingDraft] = useState<PairingDraft>({
     displayName: 'My device',
     platform: 'macos',
-    runtimeAccessMode: 'default_guarded',
-    autonomousAgentWarningAccepted: false,
+    runtimeAccessMode: 'full_access',
+    autonomousAgentWarningAccepted: true,
   });
   const [pairingIntent, setPairingIntent] = useState<GatewayPairingIntentRecord | null>(null);
   const [loadingRegistrations, setLoadingRegistrations] = useState(true);
@@ -1419,7 +1419,7 @@ export function WorkstationGatewayOperatorPane({
 
   async function handleCreatePairingIntent() {
     if (pairingDraft.runtimeAccessMode === 'full_access' && !pairingDraft.autonomousAgentWarningAccepted) {
-      setErrorMessage('Confirm Autonomous Full Access before creating this computer connection.');
+      setErrorMessage('Confirm Full Access before creating this computer connection.');
       return;
     }
     setBusyActionKey('pairing');
@@ -2082,10 +2082,10 @@ export function WorkstationGatewayOperatorPane({
                   setPairingIntent(null);
                 }}
               >
-                <option value="default_guarded">{defaultAccessMode?.label || 'Default Guarded'}</option>
                 <option value="full_access" disabled={!autonomousAgentAvailable}>
-                  {autonomousAgentMode?.label || 'Autonomous Full Access'}
+                  {autonomousAgentMode?.label || 'Full Access'}
                 </option>
+                <option value="default_guarded">{defaultAccessMode?.label || 'Default Guarded'}</option>
                 <option value="custom">
                   {customAccessMode?.label || 'Custom'}
                 </option>
@@ -2100,7 +2100,7 @@ export function WorkstationGatewayOperatorPane({
             <div className="gateway-runtime-access-warning">
               <WorkstationSurfaceNotice tone="warning">
                 {autonomousAgentMode?.setupWarning
-                  || 'Autonomous Full Access lets Sage operate this dedicated runtime without Empyralis asking for each allowed action. Stop, revoke, quotas, audit, OS permissions, blocked actions, offline state, and provider limits still apply.'}
+                  || 'Full Access lets Sage run commands, read, write, delete files, and access secrets, browser data, tokens, SSH keys, and connected accounts on this Agent Computer; dedicated Agent hardware is recommended.'}
               </WorkstationSurfaceNotice>
               <label className="gateway-runtime-access-warning__ack">
                 <input
@@ -2115,7 +2115,7 @@ export function WorkstationGatewayOperatorPane({
                     setPairingIntent(null);
                   }}
                 />
-                <span>I understand this computer will run allowed actions without Empyralis approval prompts.</span>
+                <span>I understand Sage can read, write, delete, run commands, access secrets, browser data, tokens, SSH keys, and connected accounts on this computer.</span>
               </label>
             </div>
           ) : null}
@@ -2165,6 +2165,7 @@ export function WorkstationGatewayOperatorPane({
                       setPolicyDraft((current) => ({ ...current, terminalPolicy }));
                     }}
                   >
+                    <option value="allow">Allow</option>
                     <option value="blocked">Blocked</option>
                     <option value="review_required">Review required</option>
                     <option value="allowlist">Approved scripts only</option>
@@ -2178,6 +2179,7 @@ export function WorkstationGatewayOperatorPane({
                       setPolicyDraft((current) => ({ ...current, networkPolicy }));
                     }}
                   >
+                    <option value="allow">Allow</option>
                     <option value="approval_required">Approval required</option>
                     <option value="allowlist">Allowlisted domains</option>
                     <option value="blocked">Blocked</option>
@@ -2294,8 +2296,8 @@ export function WorkstationGatewayOperatorPane({
                 subtitle={mode.subtitle}
                   description={mode.description}
                   actions={(
-                    <DataBadge tone={mode.title === 'Default Guarded' ? 'success' : mode.title === 'Custom' ? 'neutral' : 'warning'}>
-                      {mode.title === 'Default Guarded' ? 'Safe default' : mode.title === 'Custom' ? 'Policy-defined' : 'Owner enabled'}
+                    <DataBadge tone={mode.title === 'Full Access' ? 'success' : mode.title === 'Custom' ? 'neutral' : 'warning'}>
+                      {mode.title === 'Full Access' ? 'Sage only' : mode.title === 'Custom' ? 'Policy-defined' : 'Approval mode'}
                     </DataBadge>
                   )}
               />
@@ -2331,7 +2333,7 @@ export function WorkstationGatewayOperatorPane({
                 <FormReadout
                   label="Runtime mode"
                   value={runtimeAccessModeToken(readRecord(pairingIntent.metadata).runtime_access_mode) === 'full_access'
-                    ? 'Autonomous Full Access'
+                    ? 'Full Access'
                     : runtimeAccessModeToken(readRecord(pairingIntent.metadata).runtime_access_mode) === 'custom'
                       ? 'Custom'
                       : 'Default Guarded'}

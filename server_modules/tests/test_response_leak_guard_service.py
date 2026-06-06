@@ -28,3 +28,29 @@ def test_guard_model_response_removes_internal_tool_markup() -> None:
     assert "internal_tool_markup" in result.findings
     assert result.text == "Let me check."
     assert "DSML" not in result.text
+
+
+def test_guard_model_response_removes_spaced_internal_tool_markup() -> None:
+    result = response_leak_guard_service.guard_model_response(
+        "Running checks.\n"
+        "< | | DSML | | tool_calls>"
+        "< | | DSML | | invoke name=\"bash\">"
+        "< | | DSML | | parameter name=\"command\" string=\"true\">env</ | | DSML | | parameter>"
+        "</ | | DSML | | invoke>"
+    )
+
+    assert result.redacted is True
+    assert "internal_tool_markup" in result.findings
+    assert result.text == "Running checks."
+    assert "DSML" not in result.text
+    assert "env" not in result.text
+
+
+def test_guard_model_response_collapses_redacted_placeholder_flood() -> None:
+    result = response_leak_guard_service.guard_model_response(
+        "\n".join(f"- sk-testsecret{i:02d}abcdefghi" for i in range(30))
+    )
+
+    assert result.redacted is True
+    assert "redacted_placeholder_flood" in result.findings
+    assert result.text == "[redacted-sensitive-output]"

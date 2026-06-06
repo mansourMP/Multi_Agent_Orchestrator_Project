@@ -49,7 +49,7 @@ def _runtime_access_pairing_metadata(
         or source.get("autonomous_agent_setup_warning_acknowledged") is True
     )
     if resolved_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE and not warning_acknowledged:
-        raise ValueError("Autonomous Full Access setup warning must be acknowledged before pairing this runtime.")
+        raise ValueError("Full Access setup warning must be acknowledged before pairing this runtime.")
     out = {
         "runtime_access_mode": resolved_mode,
         "runtime_access_label": execution_mode_policy.public_runtime_access_label(resolved_mode),

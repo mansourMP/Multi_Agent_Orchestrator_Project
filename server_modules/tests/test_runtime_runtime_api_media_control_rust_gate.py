@@ -24,6 +24,9 @@ class _FakeApp:
     def get(self, path, **kwargs):
         return self._register("GET", path, **kwargs)
 
+    def delete(self, path, **kwargs):
+        return self._register("DELETE", path, **kwargs)
+
 
 class _FakeRequest:
     def __init__(self, *, content_type: str, body: bytes) -> None:

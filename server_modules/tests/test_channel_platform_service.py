@@ -37,7 +37,7 @@ def test_channel_platform_catalog_has_launch_surfaces_and_reserved_private_runti
     payload = service.list_channel_catalog()
     keys = [item["channel_key"] for item in payload["items"]]
 
-    assert len(keys) == 18
+    assert len(keys) == 23
     assert "web_chat" in keys
     assert "telegram_bot" in keys
     assert "telegram_personal" in keys
@@ -45,8 +45,18 @@ def test_channel_platform_catalog_has_launch_surfaces_and_reserved_private_runti
     assert "signal_personal" in keys
     assert "imessage_personal" in keys
     assert "wechat_personal" in keys
+    assert "dropbox" in keys
+    assert "s3" in keys
+    assert "smtp" in keys
+    assert "wechat_work" in keys
+    assert "instagram_business" in keys
     by_key = {item["channel_key"]: item for item in payload["items"]}
     assert by_key["github"]["surface_kind"] == "connected_app"
+    assert by_key["dropbox"]["surface_kind"] == "connected_app"
+    assert by_key["s3"]["launch_allowed"] is True
+    assert by_key["smtp"]["status"] == "working_when_configured"
+    assert by_key["wechat_work"]["product_surface"] == "connected_app"
+    assert by_key["instagram_business"]["live_capable"] is True
     assert by_key["telegram_bot"]["surface_kind"] == "messaging_channel"
     assert by_key["signal_personal"]["product_surface"] == "personal_messaging"
     assert payload["groups"]["business_channels"] >= 1
@@ -180,6 +190,26 @@ async def test_studio_binding_rejects_personal_agent_computer_channel(monkeypatc
             workspace_id="ws-1",
             deployed_agent_id="dagent-1",
             catalog_id="telegram_personal",
+            account_ref=None,
+            current_user={"user_id": "owner-1"},
+        )
+
+
+@pytest.mark.anyio
+async def test_studio_binding_rejects_not_launch_ready_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_get_deployed_agent_by_id(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return _agent_record()
+
+    monkeypatch.setattr(service.control_plane_repository, "get_deployed_agent_by_id", fake_get_deployed_agent_by_id)
+    monkeypatch.setattr(service.runtime_common, "list_vault_connectors", lambda workspace_id: [])
+    monkeypatch.setattr(service.gateway_state_repository, "list_workspace_gateway_registrations", lambda *args, **kwargs: [])
+
+    with pytest.raises(service.ChannelPlatformError, match="not launch-ready"):
+        await service.upsert_agent_channel_binding(
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            deployed_agent_id="dagent-1",
+            catalog_id="whatsapp_business",
             account_ref=None,
             current_user={"user_id": "owner-1"},
         )

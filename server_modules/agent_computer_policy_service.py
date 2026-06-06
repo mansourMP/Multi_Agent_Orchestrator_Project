@@ -339,19 +339,19 @@ def _default_capability_sets(mode: str) -> tuple[set[str], set[str], set[str]]:
         return allowed, approval, blocked
     if mode == AUTONOMY_TRUSTED_WORKSTATION:
         allowed = set(_SAFE_READ_CAPABILITIES) | {
+            CAPABILITY_BROWSER_CLICK,
+            CAPABILITY_BROWSER_FORM_SUBMIT,
+            CAPABILITY_APP_CONTROL,
             CAPABILITY_COMMUNICATION_DRAFT,
             CAPABILITY_FILE_READ,
             CAPABILITY_FILE_WRITE,
+            CAPABILITY_TERMINAL_COMMAND,
             CAPABILITY_TERMINAL_APPROVED_SCRIPT,
             CAPABILITY_MEMORY_WRITE,
             CAPABILITY_SCHEDULER_CREATE,
         }
         approval = {
-            CAPABILITY_BROWSER_CLICK,
-            CAPABILITY_BROWSER_FORM_SUBMIT,
-            CAPABILITY_APP_CONTROL,
             CAPABILITY_COMMUNICATION_SEND,
-            CAPABILITY_TERMINAL_COMMAND,
             CAPABILITY_FILE_DELETE,
             CAPABILITY_CLOUD_STORAGE_ACCESS,
             CAPABILITY_PAYMENT,
@@ -389,9 +389,7 @@ def build_default_agent_computer_policy(
         blocked_filesystem_scope=tuple(),
         terminal_policy=(
             "allow"
-            if mode == AUTONOMY_YOLO
-            else "allowlist"
-            if mode == AUTONOMY_TRUSTED_WORKSTATION
+            if mode in {AUTONOMY_YOLO, AUTONOMY_TRUSTED_WORKSTATION}
             else "blocked"
             if mode in {AUTONOMY_READ_ONLY, AUTONOMY_EMERGENCY_STOP}
             else "review_required"
@@ -400,8 +398,8 @@ def build_default_agent_computer_policy(
         screenshot_retention="session_only" if mode in {AUTONOMY_YOLO, AUTONOMY_SAFE_AUTOPILOT, AUTONOMY_TRUSTED_WORKSTATION} else "off",
         cloud_storage_policy="allow" if mode == AUTONOMY_YOLO else "approval_required",
         browser_access_policy="allow" if mode in {AUTONOMY_YOLO, AUTONOMY_TRUSTED_WORKSTATION} else "approval_required",
-        app_access_policy="allow" if mode == AUTONOMY_YOLO else "approval_required",
-        network_policy="allow" if mode == AUTONOMY_YOLO else ("allowlist" if domain_allowlist else "approval_required"),
+        app_access_policy="allow" if mode in {AUTONOMY_YOLO, AUTONOMY_TRUSTED_WORKSTATION} else "approval_required",
+        network_policy="allow" if mode in {AUTONOMY_YOLO, AUTONOMY_TRUSTED_WORKSTATION} else ("allowlist" if domain_allowlist else "approval_required"),
         max_runtime_seconds=0,
         max_budget_cents=0,
         emergency_stop_enabled=True,
@@ -805,5 +803,5 @@ def effective_agent_computer_policy(
     if saved is not None:
         return saved, True
     mode = str(runtime_access_mode or "").strip().lower()
-    autonomy_mode = AUTONOMY_TRUSTED_WORKSTATION if mode == "full_access" else AUTONOMY_ASK_EVERY_TIME
+    autonomy_mode = AUTONOMY_YOLO if mode == "full_access" else AUTONOMY_ASK_EVERY_TIME
     return build_default_agent_computer_policy(autonomy_mode=autonomy_mode, policy_id=policy_id), False

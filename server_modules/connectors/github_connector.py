@@ -646,3 +646,79 @@ def parse_inbound_event(payload: Dict[str, Any], *, event_type: str = "", delive
             }
         )
     return parsed
+
+
+def event_matches_connector(
+    parsed: Dict[str, Any],
+    credentials: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    if not isinstance(parsed, dict) or str(parsed.get("kind") or "").strip() != "event":
+        return False
+    metadata = metadata if isinstance(metadata, dict) else {}
+    owner = str(parsed.get("owner") or "").strip().lower()
+    repo = str(parsed.get("repository") or "").strip().lower()
+    owner_candidates = (
+        credentials.get("owner"),
+        credentials.get("username"),
+        metadata.get("owner"),
+        metadata.get("username"),
+        metadata.get("login"),
+    )
+    configured_owner = next((str(value or "").strip().lower() for value in owner_candidates if str(value or "").strip()), "")
+    if owner and configured_owner and owner != configured_owner:
+        return False
+    repo_candidates = (
+        credentials.get("repository"),
+        credentials.get("repo_full_name"),
+        metadata.get("repository"),
+        metadata.get("repo_full_name"),
+    )
+    configured_repo = next((str(value or "").strip().lower() for value in repo_candidates if str(value or "").strip()), "")
+    if repo and configured_repo and repo != configured_repo:
+        return False
+    return True
+
+
+def should_trigger_agent_run(parsed: Dict[str, Any], *_args: Any, **_kwargs: Any) -> bool:
+    if not isinstance(parsed, dict):
+        return False
+    if str(parsed.get("kind") or "").strip() != "event":
+        return False
+    return str(parsed.get("event_type") or "").strip().lower() in {"issues", "pull_request", "push"}
+
+
+def build_run_goal_from_event(parsed: Dict[str, Any]) -> str:
+    event_type = str(parsed.get("event_type") or "").strip().lower()
+    repository = str(parsed.get("repository") or "").strip() or "GitHub"
+    action = str(parsed.get("action") or "").strip()
+    sender = str(parsed.get("sender") or "").strip()
+    if event_type == "push":
+        commit_count = parsed.get("commit_count")
+        head_commit = str(parsed.get("head_commit") or "").strip()
+        ref = str(parsed.get("ref") or "").strip()
+        return (
+            f"GitHub push in {repository}"
+            f"{f' on {ref}' if ref else ''}"
+            f"{f' by {sender}' if sender else ''}: "
+            f"{commit_count or 0} commits. {head_commit}".strip()
+        ).strip()
+    if event_type == "pull_request":
+        number = parsed.get("pull_request_number")
+        title = str(parsed.get("title") or "").strip()
+        url = str(parsed.get("url") or "").strip()
+        return (
+            f"GitHub pull request {action or 'updated'} in {repository}"
+            f"{f' #{number}' if number else ''}: {title}"
+            f"{f' ({url})' if url else ''}"
+        ).strip()
+    if event_type == "issues":
+        number = parsed.get("issue_number")
+        title = str(parsed.get("title") or "").strip()
+        url = str(parsed.get("url") or "").strip()
+        return (
+            f"GitHub issue {action or 'updated'} in {repository}"
+            f"{f' #{number}' if number else ''}: {title}"
+            f"{f' ({url})' if url else ''}"
+        ).strip()
+    return ""

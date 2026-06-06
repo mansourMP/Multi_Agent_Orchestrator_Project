@@ -52,6 +52,7 @@ from server_modules import (
     agent_approval_memory_service,
     agent_computer_profile_service,
     dedicated_workstation_setup_service,
+    execution_mode_policy,
     gateway_browser_service,
     gateway_execution_service,
     gateway_approval_service,
@@ -421,11 +422,48 @@ def _gateway_policy_from_registration(registration: Dict[str, Any]):
             return saved_policy
     gateway_token = str(registration.get("gateway_id") or "").strip() or "default"
     runtime_access_mode = str(metadata.get("runtime_access_mode") or "").strip().lower()
-    explicit_full_access = runtime_access_mode == "full_access"
+    explicit_full_access = _sage_full_access_metadata(metadata)
     return build_default_agent_computer_policy(
-        autonomy_mode="trusted_workstation" if explicit_full_access else "ask_every_time",
+        autonomy_mode="yolo" if explicit_full_access else "ask_every_time",
         policy_id=policy_id or f"gateway:{gateway_token}",
         filesystem_scope=("/",) if explicit_full_access else (),
+    )
+
+
+def _sage_full_access_metadata(metadata: Dict[str, Any]) -> bool:
+    runtime_access_mode = str(metadata.get("runtime_access_mode") or "").strip().lower()
+    agent_scope = str(metadata.get("agent_scope") or "").strip().lower()
+    warning_acknowledged = bool(metadata.get("autonomous_agent_setup_warning_acknowledged"))
+    return (
+        runtime_access_mode == "full_access"
+        and agent_scope == "sage"
+        and warning_acknowledged
+    )
+
+
+def _registration_sage_full_access(registration: Dict[str, Any]) -> bool:
+    metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
+    return _sage_full_access_metadata(metadata)
+
+
+def _registration_requires_full_access_reconfirmation(registration: Dict[str, Any]) -> bool:
+    metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
+    runtime_access_mode = execution_mode_policy.normalize_runtime_access_mode(
+        metadata.get("runtime_access_mode")
+    )
+    return (
+        runtime_access_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+        and not _sage_full_access_metadata(metadata)
+    )
+
+
+def _raise_full_access_reconfirmation_required() -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "FULL_ACCESS_RECONFIRMATION_REQUIRED",
+            "reason": "This Agent Computer must be re-confirmed through the current Sage Full Access setup before full-access actions can run.",
+        },
     )
 
 
@@ -640,6 +678,9 @@ class GatewaySshPairingRequest(BaseModel):
     password: Optional[str] = None
     ssh_key: Optional[str] = None
     remote_root: Optional[str] = None
+    runtime_access_mode: Optional[str] = None
+    autonomous_agent_setup_warning_acknowledged: bool = False
+    expected_host_fingerprint: Optional[str] = None
 
 
 def _gateway_api_url_for_remote_setup() -> str:
@@ -708,6 +749,7 @@ def _run_remote_agent_computer_setup_via_ssh(
     auth_mode: str,
     password: Optional[str],
     ssh_key: Optional[str],
+    expected_host_fingerprint: Optional[str],
     command: str,
 ) -> Dict[str, Any]:
     try:
@@ -717,7 +759,18 @@ def _run_remote_agent_computer_setup_via_ssh(
 
     normalized_auth_mode = str(auth_mode or "password").strip().lower()
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    expected_fingerprint = _normalize_ssh_fingerprint(expected_host_fingerprint)
+    if expected_fingerprint:
+        host_key = _fetch_ssh_host_key(paramiko, host, int(port or 22))
+        if expected_fingerprint not in _ssh_host_key_fingerprints(host_key):
+            raise ValueError("SSH host fingerprint did not match the expected fingerprint.")
+        host_keys = client.get_host_keys()
+        host_keys.add(host, host_key.get_name(), host_key)
+        if int(port or 22) != 22:
+            host_keys.add(f"[{host}]:{int(port or 22)}", host_key.get_name(), host_key)
+    else:
+        client.load_system_host_keys()
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
     connect_kwargs: Dict[str, Any] = {
         "hostname": host,
         "port": int(port or 22),
@@ -751,6 +804,34 @@ def _run_remote_agent_computer_setup_via_ssh(
         "stdout_tail": stdout_text,
         "stderr_tail": stderr_text,
     }
+
+
+def _normalize_ssh_fingerprint(value: Optional[str]) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    if token.startswith("sha256:"):
+        return "sha256:" + token.split(":", 1)[1].rstrip("=")
+    return token.replace("-", ":")
+
+
+def _ssh_host_key_fingerprints(host_key: Any) -> set[str]:
+    import base64
+    import hashlib
+
+    md5_bytes = host_key.get_fingerprint()
+    md5_colon = ":".join(f"{byte:02x}" for byte in md5_bytes)
+    sha256 = base64.b64encode(hashlib.sha256(host_key.asbytes()).digest()).decode("ascii").rstrip("=")
+    return {md5_colon.lower(), f"sha256:{sha256.lower()}"}
+
+
+def _fetch_ssh_host_key(paramiko: Any, host: str, port: int) -> Any:
+    transport = paramiko.Transport((host, int(port or 22)))
+    try:
+        transport.start_client(timeout=12)
+        return transport.get_remote_server_key()
+    finally:
+        transport.close()
 
 
 def _ssh_exception_detail(error: Exception) -> str:
@@ -1378,9 +1459,11 @@ async def create_gateway_pairing_intent(
     workspace_id = enforce_workspace_access(
         current_user,
         payload.workspace_id or "default",
-        minimum_role="member",
+        minimum_role="owner",
     )
     tenant_id = workspace_tenant_id(current_user, workspace_id)
+    metadata = dict(payload.metadata or {})
+    metadata.setdefault("agent_scope", "sage")
     try:
         pairing = gateway_pairing_service.create_gateway_pairing_intent(
             tenant_id=tenant_id,
@@ -1389,7 +1472,7 @@ async def create_gateway_pairing_intent(
             ttl_seconds=payload.ttl_seconds,
             display_name=payload.display_name,
             platform=payload.platform,
-            metadata=payload.metadata,
+            metadata=metadata,
             runtime_access_mode=payload.runtime_access_mode,
             autonomous_agent_setup_warning_acknowledged=payload.autonomous_agent_setup_warning_acknowledged,
         )
@@ -1408,13 +1491,15 @@ async def create_gateway_ssh_pairing(
     workspace_id = enforce_workspace_access(
         current_user,
         body.workspace_id,
-        minimum_role="member",
+        minimum_role="owner",
     )
     tenant_id = workspace_tenant_id(current_user, workspace_id)
     pairing_token = str(body.pairing_token or "").strip()
     pairing: Dict[str, Any] | None = None
     if not pairing_token:
         try:
+            requested_mode = execution_mode_policy.normalize_runtime_access_mode(body.runtime_access_mode)
+            warning_acknowledged = bool(body.autonomous_agent_setup_warning_acknowledged)
             pairing = gateway_pairing_service.create_gateway_pairing_intent(
                 tenant_id=tenant_id,
                 workspace_id=workspace_id,
@@ -1426,9 +1511,10 @@ async def create_gateway_ssh_pairing(
                     "setup_source": "ssh",
                     "host": body.host,
                     "remote_root": body.remote_root or "~/Multi_Agent_Orchestrator_Project",
+                    "agent_scope": "sage",
                 },
-                runtime_access_mode="full_access",
-                autonomous_agent_setup_warning_acknowledged=True,
+                runtime_access_mode=requested_mode,
+                autonomous_agent_setup_warning_acknowledged=warning_acknowledged,
             )
             pairing_token = str(pairing.get("pairing_token") or "").strip()
         except ValueError as exc:
@@ -1452,6 +1538,7 @@ async def create_gateway_ssh_pairing(
             auth_mode=body.auth_mode,
             password=body.password,
             ssh_key=body.ssh_key,
+            expected_host_fingerprint=body.expected_host_fingerprint,
             command=command,
         )
     except ValueError as exc:
@@ -1787,6 +1874,8 @@ async def execute_gateway_tool(
     )
     if resolved_workspace_id != registration_workspace_id:
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
+    if _registration_requires_full_access_reconfirmation(registration):
+        _raise_full_access_reconfirmation_required()
 
     tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
     _enforce_gateway_safety_gates(
@@ -1815,8 +1904,7 @@ async def execute_gateway_tool(
     if risk_decision.decision == DECISION_BLOCK:
         _block_gateway_risk_decision(risk_decision=risk_decision)
 
-    registration_metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
-    explicit_full_access = str(registration_metadata.get("runtime_access_mode") or "").strip().lower() == "full_access"
+    explicit_full_access = _registration_sage_full_access(registration)
     requires_owner_approval = gateway_approval_service.capability_requires_owner_approval(body.capability_id)
     if explicit_full_access:
         requires_owner_approval = False
@@ -2051,6 +2139,8 @@ async def start_gateway_browser_session(
         workspace_id=body.workspace_id,
         minimum_role="member",
     )
+    if _registration_requires_full_access_reconfirmation(registration):
+        _raise_full_access_reconfirmation_required()
     _enforce_gateway_safety_gates(
         gateway_id=gateway_id,
         workspace_id=resolved_workspace_id,
@@ -2089,10 +2179,16 @@ async def start_gateway_browser_session(
     tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
     try:
         gateway_policy = _gateway_policy_from_registration(registration)
+        risk_payload = dict(arguments)
+        if (
+            session_mode == gateway_browser_service.BROWSER_SESSION_MODE_MANAGED_PROFILE
+            and not tuple(getattr(gateway_policy, "domain_allowlist", ()) or ())
+        ):
+            risk_payload["url"] = None
         risk_decision = classify_gateway_browser_action_risk(
             policy=gateway_policy,
             browser_action="start",
-            payload=arguments,
+            payload=risk_payload,
             reviewed_approval_required=reviewed_required,
         )
     except CapabilityRiskClassifierError as exc:
@@ -2109,8 +2205,7 @@ async def start_gateway_browser_session(
         None,
         reviewed_approval_required=reviewed_required,
     )
-    registration_metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
-    explicit_full_access = str(registration_metadata.get("runtime_access_mode") or "").strip().lower() == "full_access"
+    explicit_full_access = _registration_sage_full_access(registration)
     if explicit_full_access and risk_decision.decision != DECISION_APPROVAL_REQUIRED:
         browser_start_requires_approval = False
     remembered_approval_rule = None
@@ -2248,6 +2343,8 @@ async def execute_gateway_browser_action(
         workspace_id=body.workspace_id,
         minimum_role="member",
     )
+    if _registration_requires_full_access_reconfirmation(registration):
+        _raise_full_access_reconfirmation_required()
     _enforce_gateway_safety_gates(
         gateway_id=gateway_id,
         workspace_id=resolved_workspace_id,
@@ -2315,12 +2412,12 @@ async def execute_gateway_browser_action(
         body.action,
         reviewed_approval_required=reviewed_required,
     )
-    registration_metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
-    explicit_full_access = str(registration_metadata.get("runtime_access_mode") or "").strip().lower() == "full_access"
-    if explicit_full_access and risk_decision.decision != DECISION_APPROVAL_REQUIRED:
+    explicit_full_access = _registration_sage_full_access(registration)
+    if explicit_full_access:
         browser_action_requires_approval = False
     remembered_approval_rule = None
-    if risk_decision.decision == DECISION_APPROVAL_REQUIRED or browser_action_requires_approval:
+    risk_decision_requires_approval = risk_decision.decision == DECISION_APPROVAL_REQUIRED and not explicit_full_access
+    if risk_decision_requires_approval or browser_action_requires_approval:
         remembered_approval_rule = _consume_gateway_approval_memory(
             registration=registration,
             workspace_id=resolved_workspace_id,
@@ -2335,7 +2432,7 @@ async def execute_gateway_browser_action(
             browser_session_id=browser_session_id,
         )
     browser_action_requires_approval = browser_action_requires_approval and remembered_approval_rule is None
-    risk_requires_approval = risk_decision.decision == DECISION_APPROVAL_REQUIRED and remembered_approval_rule is None
+    risk_requires_approval = risk_decision_requires_approval and remembered_approval_rule is None
     if (
         browser_action_requires_approval
         or risk_requires_approval

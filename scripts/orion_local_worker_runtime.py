@@ -473,6 +473,8 @@ class RuntimeClient:
             "capability_digest": self._capability_digest(capabilities),
             "note": "local_worker_boot",
         }
+        if self.enrollment_token:
+            payload["enrollment_token"] = self.enrollment_token
         if isinstance(permission_probe, dict) and permission_probe:
             payload["permission_probe"] = permission_probe
         try:

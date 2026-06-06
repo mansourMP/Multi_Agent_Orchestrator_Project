@@ -7,6 +7,7 @@ export type WorkstationChatThreadSelectedEventDetail = {
 
 const WORKSTATION_CHAT_THREAD_SELECTED_EVENT = 'workstation:chat-thread-selected';
 const WORKSTATION_CHAT_NEW_THREAD_EVENT = 'workstation:chat-new-thread';
+const WORKSTATION_CHAT_HISTORY_INVALIDATED_EVENT = 'workstation:chat-history-invalidated';
 
 export function subscribeWorkstationChatThreadSelected(
   listener: (detail: WorkstationChatThreadSelectedEventDetail) => void,
@@ -71,6 +72,39 @@ export function emitWorkstationChatNewThreadRequested(detail: { workspaceId: str
   window.dispatchEvent(
     new CustomEvent<{ workspaceId: string }>(
       WORKSTATION_CHAT_NEW_THREAD_EVENT,
+      { detail },
+    ),
+  );
+}
+
+export function subscribeWorkstationChatHistoryInvalidated(
+  listener: (detail: { workspaceId: string; threadId?: string | null }) => void,
+): () => void {
+  if (typeof window === 'undefined') {
+    return () => {};
+  }
+
+  const handler = (event: Event) => {
+    const detail = (event as CustomEvent<{ workspaceId: string; threadId?: string | null }>).detail;
+    if (detail) {
+      listener(detail);
+    }
+  };
+
+  window.addEventListener(WORKSTATION_CHAT_HISTORY_INVALIDATED_EVENT, handler as EventListener);
+  return () => {
+    window.removeEventListener(WORKSTATION_CHAT_HISTORY_INVALIDATED_EVENT, handler as EventListener);
+  };
+}
+
+export function emitWorkstationChatHistoryInvalidated(detail: { workspaceId: string; threadId?: string | null }): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent<{ workspaceId: string; threadId?: string | null }>(
+      WORKSTATION_CHAT_HISTORY_INVALIDATED_EVENT,
       { detail },
     ),
   );

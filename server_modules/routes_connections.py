@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -8,6 +9,7 @@ from pydantic import BaseModel, Field
 from server_modules import auth as auth_module
 from server_modules import (
     connection_catalog_service,
+    execution_mode_policy,
     gateway_registry_service,
     gateway_state_repository,
     sage_agent_computer_selection_service,
@@ -30,6 +32,31 @@ class SageAgentComputerSelectionRequest(BaseModel):
     workspace_id: str = Field(min_length=1, max_length=120)
     selected_gateway_id: str = Field(min_length=1, max_length=160)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+LOCAL_BRIDGE_SETUP_CONTRACTS: Dict[str, Dict[str, Any]] = {
+    "signal_personal": {
+        "bridge_label": "Signal Agent Computer bridge",
+        "env_prefix": "EMPYRALIS_SIGNAL_BRIDGE",
+        "native_bridge": "empyralis-gateway/src/bridges/signal-cli-bridge.ts",
+        "required_upstream": ["EMPYRALIS_SIGNAL_CLI_RPC_URL"],
+        "optional_upstream": ["EMPYRALIS_SIGNAL_CLI_ACCOUNT"],
+    },
+    "imessage_personal": {
+        "bridge_label": "iMessage BlueBubbles Agent Computer bridge",
+        "env_prefix": "EMPYRALIS_IMESSAGE_BRIDGE",
+        "native_bridge": "empyralis-gateway/src/bridges/bluebubbles-bridge.ts",
+        "required_upstream": ["EMPYRALIS_BLUEBUBBLES_SERVER_URL", "EMPYRALIS_BLUEBUBBLES_PASSWORD"],
+        "optional_upstream": [],
+    },
+    "wechat_personal": {
+        "bridge_label": "WeChat Agent Computer bridge",
+        "env_prefix": "EMPYRALIS_WECHAT_BRIDGE",
+        "native_bridge": None,
+        "required_upstream": ["EMPYRALIS_WECHAT_BRIDGE_URL"],
+        "optional_upstream": ["EMPYRALIS_WECHAT_BRIDGE_TOKEN"],
+    },
+}
 
 
 def _user_id(current_user: Any) -> Optional[str]:
@@ -90,6 +117,72 @@ def _require_selectable_gateway(*, gateway_id: str, workspace_id: str, current_u
     if str(registration.get("device_trust_state") or "").strip().lower() == "revoked":
         raise HTTPException(status_code=409, detail="This Agent Computer was revoked.")
     return registration
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _runtime_access_mode_from_selection_metadata(metadata: Dict[str, Any]) -> str:
+    return execution_mode_policy.normalize_runtime_access_mode(
+        metadata.get("runtime_access_mode")
+        or metadata.get("mode")
+        or execution_mode_policy.GUARDED_RUNTIME_ACCESS_MODE
+    )
+
+
+def _sage_agent_computer_access_metadata(
+    selection_metadata: Dict[str, Any],
+) -> tuple[Dict[str, Any], list[str]]:
+    now_iso = _utc_now_iso()
+    requested_mode = _runtime_access_mode_from_selection_metadata(selection_metadata or {})
+    warning_acknowledged = bool((selection_metadata or {}).get("autonomous_agent_setup_warning_acknowledged"))
+    if requested_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE and not warning_acknowledged:
+        raise HTTPException(status_code=400, detail="Full Access setup warning must be acknowledged.")
+    next_metadata: Dict[str, Any] = dict(selection_metadata or {})
+    next_metadata.update({
+        "runtime_access_mode": requested_mode,
+        "runtime_access_label": execution_mode_policy.public_runtime_access_label(
+            requested_mode
+        ),
+        "agent_scope": "sage",
+        "autonomous_agent_setup_warning_acknowledged": (
+            True if requested_mode == execution_mode_policy.FULL_RUNTIME_ACCESS_MODE else False
+        ),
+        "sage_agent_computer_selected": True,
+        "sage_agent_computer_selected_at": now_iso,
+    })
+    metadata_keys_to_remove: list[str] = []
+    setup_warning = execution_mode_policy.runtime_access_setup_warning(requested_mode)
+    if setup_warning:
+        next_metadata["runtime_access_setup_warning"] = setup_warning
+        next_metadata["autonomous_agent_setup_warning_acknowledged_at"] = now_iso
+    else:
+        metadata_keys_to_remove.extend(
+            [
+                "runtime_access_setup_warning",
+                "autonomous_agent_setup_warning_acknowledged_at",
+            ]
+        )
+        next_metadata.pop("runtime_access_setup_warning", None)
+        next_metadata.pop("autonomous_agent_setup_warning_acknowledged_at", None)
+    return next_metadata, metadata_keys_to_remove
+
+
+def _apply_selected_sage_agent_computer_metadata(
+    registration: Dict[str, Any],
+    *,
+    access_metadata: Dict[str, Any],
+    metadata_keys_to_remove: list[str],
+) -> Dict[str, Any]:
+    gateway_id = str(registration.get("gateway_id") or "").strip()
+    if not gateway_id:
+        return registration
+    return gateway_state_repository.update_gateway_registration_state(
+        gateway_id=gateway_id,
+        metadata=access_metadata,
+        metadata_keys_to_remove=metadata_keys_to_remove,
+    ) or registration
 
 
 def _raise_catalog_error(error: Exception) -> None:
@@ -156,12 +249,18 @@ async def set_sage_agent_computer_selection(
         workspace_id=resolved_workspace_id,
         current_user=current_user,
     )
+    access_metadata, metadata_keys_to_remove = _sage_agent_computer_access_metadata(body.metadata)
+    registration = _apply_selected_sage_agent_computer_metadata(
+        registration,
+        access_metadata=access_metadata,
+        metadata_keys_to_remove=metadata_keys_to_remove,
+    )
     selection = sage_agent_computer_selection_service.set_selection(
         workspace_id=resolved_workspace_id,
         user_id=current_user_id,
         selected_gateway_id=str(registration.get("gateway_id") or "").strip(),
         selected_by=current_user_id,
-        metadata=body.metadata,
+        metadata=access_metadata,
     )
     return {
         "selection": selection,
@@ -212,6 +311,62 @@ async def start_connection_setup(
                 "setup_endpoint": f"/api/personal-channels/{channel}/gateways/{gateway_id}/setup",
                 "next_action": "personal_channel_setup",
             }
+        local_bridge_contract = LOCAL_BRIDGE_SETUP_CONTRACTS.get(str(item.get("id") or "").strip())
+        if local_bridge_contract:
+            env_prefix = str(local_bridge_contract.get("env_prefix") or "").strip()
+            return {
+                "ok": True,
+                "connection": item,
+                "gateway_id": gateway_id,
+                "setup_endpoint": f"/api/personal-channels/gateways/{gateway_id}/channels",
+                "message_endpoint": f"/api/personal-channels/{item.get('id')}/gateways/{gateway_id}/messages",
+                "next_action": "agent_computer_local_bridge_setup",
+                "bridge_contract": {
+                    **local_bridge_contract,
+                    "channel_key": item.get("id"),
+                    "provider": item.get("runtime_provider") or item.get("provider"),
+                    "gateway_env": {
+                        "url": f"{env_prefix}_URL",
+                        "token": f"{env_prefix}_TOKEN",
+                        "poll_ms": f"{env_prefix}_POLL_MS",
+                    },
+                    "http_contract": {
+                        "health": "GET /health",
+                        "send": "POST /messages",
+                        "events": f"GET /events?channel_key={item.get('id')}",
+                    },
+                },
+            }
+    lane = str(item.get("lane") or "").strip().lower()
+    if lane in {
+        connection_catalog_service.LANE_WORK_APP_CONNECTOR,
+        connection_catalog_service.LANE_STUDIO_BUSINESS_CHANNEL,
+    }:
+        provider = str(item.get("vault_provider") or item.get("account_provider") or item.get("connector_id") or item.get("id") or "").strip()
+        return {
+            "ok": True,
+            "connection": item,
+            "setup_endpoint": "/api/connectors/vault",
+            "next_action": "connector_vault_setup",
+            "provider": provider,
+            "connector_id": item.get("connector_id") or item.get("id"),
+            "connector_ids": item.get("connector_ids") or [],
+            "auth_required_fields": item.get("auth_required_fields") or [],
+        }
+    if lane == connection_catalog_service.LANE_MCP_PLUGIN:
+        return {
+            "ok": True,
+            "connection": item,
+            "setup_endpoint": "/api/mcp/servers",
+            "next_action": "mcp_server_setup",
+        }
+    if lane == connection_catalog_service.LANE_APPLICATION:
+        return {
+            "ok": True,
+            "connection": item,
+            "setup_endpoint": "/api/apps",
+            "next_action": "hosted_application_setup",
+        }
     session_payload = await setup_sessions.handle_create_setup_session(
         setup_sessions.SetupSessionCreateRequest(
             workspace_id=resolved_workspace_id,

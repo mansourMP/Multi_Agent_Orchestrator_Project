@@ -60,14 +60,14 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         )
         self.assertEqual(
             [entry["stage"] for entry in personal_catalog],
-            ["live", "live", "partial", "planned", "planned"],
+            ["live", "live", "live", "live", "live"],
         )
         self.assertTrue(
             all(entry["runtime_lane"] == service.PERSONAL_GATEWAY_RUNTIME_LANE for entry in personal_catalog)
         )
         self.assertEqual(
             [entry["live_capable"] for entry in personal_catalog],
-            ["true", "true", "false", "false", "false"],
+            ["true", "true", "true", "true", "true"],
         )
 
         self.assertEqual(
@@ -79,14 +79,14 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         self.assertEqual(by_key["email"]["status"], "partial")
         self.assertEqual(by_key["telegram_bot"]["status"], "working_when_configured")
         self.assertEqual(by_key["whatsapp_twilio"]["status"], "out_of_scope")
-        self.assertEqual(by_key["slack"]["status"], "partial")
-        self.assertEqual(by_key["discord_bot"]["status"], "roadmap")
+        self.assertEqual(by_key["slack"]["status"], "working_when_configured")
+        self.assertEqual(by_key["discord_bot"]["status"], "working_when_configured")
         self.assertEqual(by_key["telegram_bot"]["launch_allowed"], "true")
         self.assertTrue(
             all(
                 entry["launch_allowed"] == "false"
                 for entry in studio_catalog
-                if entry["channel_key"] != "telegram_bot"
+                if entry["channel_key"] not in {"telegram_bot", "slack", "discord_bot"}
             )
         )
         self.assertTrue(
@@ -103,7 +103,7 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         catalog = service.platform_channel_catalog()
         by_key = {entry["channel_key"]: entry for entry in catalog}
 
-        self.assertEqual(len(catalog), 18)
+        self.assertEqual(len(catalog), 23)
         self.assertEqual(by_key["telegram_bot"]["binding_channel_key"], "telegram")
         self.assertEqual(by_key["telegram_bot"]["runtime_lane"], service.STUDIO_CONNECTOR_RUNTIME_LANE)
         self.assertEqual(by_key["telegram_personal"]["runtime_lane"], service.PERSONAL_GATEWAY_RUNTIME_LANE)
@@ -113,13 +113,33 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         self.assertEqual(by_key["telegram_personal"]["navigation_group"], "personal_messaging")
         self.assertEqual(by_key["telegram_personal"]["ownership_boundary"], "agent_computer")
         self.assertEqual(by_key["whatsapp_personal"]["surface_support"], ["sage"])
-        self.assertEqual(by_key["signal_personal"]["status"], "partial")
+        self.assertEqual(by_key["signal_personal"]["status"], "agent_computer_bridge")
+        self.assertTrue(by_key["signal_personal"]["live_capable"])
         self.assertEqual(by_key["imessage_personal"]["provider"], "bluebubbles_local_bridge")
+        self.assertTrue(by_key["imessage_personal"]["live_capable"])
+        self.assertTrue(by_key["wechat_personal"]["live_capable"])
         self.assertFalse(by_key["wechat_personal"]["launch_allowed"])
         self.assertEqual(by_key["github"]["category"], "work_system")
+        self.assertEqual(by_key["github"]["status"], "working_when_configured")
+        self.assertTrue(by_key["github"]["live_capable"])
+        self.assertTrue(by_key["github"]["launch_allowed"])
         self.assertEqual(by_key["github"]["surface_kind"], "connected_app")
         self.assertEqual(by_key["github"]["product_surface"], "connected_app")
         self.assertEqual(by_key["github"]["extension_kind"], "app_connector")
+        self.assertEqual(by_key["notion"]["status"], "working_when_configured")
+        self.assertTrue(by_key["notion"]["live_capable"])
+        self.assertTrue(by_key["notion"]["launch_allowed"])
+        self.assertEqual(by_key["notion"]["product_surface"], "connected_app")
+        self.assertEqual(by_key["linear"]["status"], "working_when_configured")
+        self.assertTrue(by_key["linear"]["live_capable"])
+        self.assertTrue(by_key["linear"]["launch_allowed"])
+        self.assertEqual(by_key["linear"]["product_surface"], "connected_app")
+        for connected_app in ("dropbox", "s3", "smtp", "wechat_work", "instagram_business"):
+            self.assertEqual(by_key[connected_app]["status"], "working_when_configured")
+            self.assertTrue(by_key[connected_app]["live_capable"])
+            self.assertTrue(by_key[connected_app]["launch_allowed"])
+            self.assertEqual(by_key[connected_app]["product_surface"], "connected_app")
+            self.assertEqual(by_key[connected_app]["ownership_boundary"], "workspace_account")
         self.assertEqual(by_key["telegram_bot"]["surface_kind"], "messaging_channel")
         self.assertEqual(by_key["telegram_bot"]["product_surface"], "business_channel")
 
@@ -137,15 +157,15 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
 
             self.assertEqual(spec["runtime_lane"], service.PERSONAL_GATEWAY_RUNTIME_LANE)
             self.assertEqual(spec["memory_surface"], service.DIRECT_CHAT_MEMORY_SURFACE)
-            self.assertEqual(spec["live_capable"], "false")
+            self.assertEqual(spec["live_capable"], "true")
 
     def test_agent_computer_bridge_channels_pass_personal_preflight(self) -> None:
         for channel_key in ("signal_personal", "imessage_personal", "wechat_personal"):
             preflight = service.personal_bridge_preflight(channel_key)
 
-            self.assertEqual(preflight["status"], "blocked")
-            self.assertFalse(preflight["launch_allowed"])
-            self.assertEqual(preflight["reason"], "bridge_contract_not_live_enabled")
+            self.assertEqual(preflight["status"], "pass")
+            self.assertTrue(preflight["launch_allowed"])
+            self.assertEqual(preflight["reason"], "live_personal_gateway_runtime")
 
         telegram_preflight = service.personal_bridge_preflight("telegram_personal")
         self.assertEqual(telegram_preflight["status"], "pass")

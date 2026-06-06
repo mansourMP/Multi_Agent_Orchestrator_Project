@@ -10,7 +10,7 @@ Status: operational runbook
 - Prerequisites:
   [prompt14-public-bot-drill-report.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/operations/prompt14-public-bot-drill-report.md)
   and
-  [canonical-architecture-contract.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/architecture/canonical-architecture-contract.md)
+  [canonical-architecture-contract.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/platform/canonical-architecture-contract.md)
 
 ## Non-Negotiable Constraints
 

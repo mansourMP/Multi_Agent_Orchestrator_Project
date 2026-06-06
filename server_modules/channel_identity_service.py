@@ -4,7 +4,7 @@ import re
 from typing import Any, Dict, Optional
 
 
-SUPPORTED_CHANNEL_KEYS = frozenset({"telegram", "whatsapp", "discord", "email", "phone", "web_chat"})
+SUPPORTED_CHANNEL_KEYS = frozenset({"telegram", "whatsapp", "slack", "discord", "email", "github", "phone", "web_chat"})
 SUPPORTED_FULL_SHELL_KEYS = frozenset({"mobile", "web", "desktop"})
 WEB_CHAT_DEFAULT_ENDPOINT_KEY = "workspace-default"
 

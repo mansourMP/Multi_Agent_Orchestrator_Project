@@ -42,6 +42,14 @@ const COMPACT_ACTIVITY_PREFIXES = [
   'applied ',
 ] as const;
 
+const INTERNAL_THINKING_MARKERS = [
+  'state_payload',
+  'payload_exceeds',
+  'exceeds_default',
+  'default_limit',
+  'state payload exceeds',
+] as const;
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -55,6 +63,10 @@ function normalizedThinkingContent(rawText: string): string {
     return trimmed.slice('thinking...'.length).trim();
   }
   if (trimmed.toLowerCase() === 'thinking') {
+    return '';
+  }
+  const lowered = trimmed.toLowerCase();
+  if (INTERNAL_THINKING_MARKERS.some((marker) => lowered.includes(marker))) {
     return '';
   }
   return trimmed;

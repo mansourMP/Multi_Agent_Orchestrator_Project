@@ -59,6 +59,7 @@ COMPUTER_SAFETY_SAFE_FILESYSTEM_DEFAULTS = {
     "workspace_scoped",
 }
 COMPUTER_SAFETY_ALLOWED_TERMINAL_POLICIES = {
+    "allow",
     "blocked",
     "allowlist",
     "review_required",
@@ -233,8 +234,6 @@ def _bool(value: Any, *, default: bool = False) -> bool:
 
 def normalize_runtime_access_mode(value: Any = None, *, requires_owner_approval: Any = None) -> str:
     token = _text(value).lower().replace("-", "_").replace(" ", "_")
-    if token == RUNTIME_ACCESS_MODE_FULL_ACCESS:
-        return RUNTIME_ACCESS_MODE_FULL_ACCESS
     if token == RUNTIME_ACCESS_MODE_CUSTOM:
         return RUNTIME_ACCESS_MODE_CUSTOM
     if token in {"default_guarded", "guarded", "default"}:
@@ -573,6 +572,11 @@ def validate_mode_capability_matrix(
         (supply.get("supplier") if isinstance(supply.get("supplier"), dict) else {}).get("kind")
     ).lower()
     supply_mode = _text(supply.get("studio_agent_mode")).lower()
+    raw_automation = computer_automation if isinstance(computer_automation, dict) else {}
+    full_access_requested = (
+        _text(raw_automation.get("runtime_access_mode")).lower().replace("-", "_").replace(" ", "_")
+        == RUNTIME_ACCESS_MODE_FULL_ACCESS
+    )
     automation = normalize_computer_automation_config(computer_automation)
     errors: List[str] = []
 
@@ -615,7 +619,7 @@ def validate_mode_capability_matrix(
                     "cloud_computer_agent computer automation must use virtual_browser, virtual_desktop, or virtual_code_sandbox."
                 )
         if owner_approval_disabled_without_autonomy:
-            errors.append("cloud_computer_agent can disable owner approval only with runtime_access_mode=full_access.")
+            errors.append("cloud_computer_agent cannot disable owner approval. Use default_guarded or custom.")
     elif mode == STUDIO_AGENT_MODE_MY_COMPUTER:
         if automation.get("enabled"):
             runtime_class = _text(automation.get("runtime_class")).lower()
@@ -624,12 +628,14 @@ def validate_mode_capability_matrix(
                     "my_computer_agent computer automation must use local_browser or local_desktop."
                 )
         if owner_approval_disabled_without_autonomy:
-            errors.append("my_computer_agent can disable owner approval only with runtime_access_mode=full_access.")
+            errors.append("my_computer_agent cannot disable owner approval. Use default_guarded or custom.")
     elif mode == STUDIO_AGENT_MODE_SELF_HOSTED:
         if owner_approval_disabled_without_autonomy:
-            errors.append("self_hosted_agent can disable owner approval only with runtime_access_mode=full_access.")
+            errors.append("self_hosted_agent cannot disable owner approval. Use default_guarded or custom.")
 
     if automation.get("enabled"):
+        if full_access_requested:
+            errors.append("Studio agents cannot use Sage Full Access. Use default_guarded or custom.")
         if len(list(automation.get("allowed_domains") or [])) == 0:
             errors.append("Computer automation requires a non-empty domain allowlist.")
         if int(automation.get("max_concurrent_sessions") or 0) <= 0:

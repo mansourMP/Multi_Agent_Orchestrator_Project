@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, type HTMLAttributes, type PropsWithChildren, type ReactNode } from 'react';
+import { useEffect, useId, type HTMLAttributes, type PropsWithChildren, type ReactNode } from 'react';
 
 import { AnimatePresence, MotionSheetSurface } from '@/lib/ui/motion';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
@@ -52,17 +52,21 @@ export function Modal({
       : size === 'large'
         ? 'min(100%, 52rem)'
         : 'min(100%, 38rem)';
+  const titleId = useId();
+  const descriptionId = useId();
 
   return (
     <AnimatePresence>
       {open ? (
         <div
           aria-modal="true"
+          aria-labelledby={titleId}
+          aria-describedby={description ? descriptionId : undefined}
           role="dialog"
           style={{
             position: 'fixed',
             inset: 0,
-            zIndex: 80,
+            zIndex: 'calc(var(--z-modal, 100) + 20)',
             display: 'grid',
             placeItems: 'center',
             padding: APP_SPACING[5],
@@ -100,9 +104,10 @@ export function Modal({
               }}
             >
               <div style={{ display: 'grid', gap: APP_SPACING[1], minWidth: 0 }}>
-                <strong style={{ color: 'var(--app-text-primary)', fontSize: APP_TYPE_SCALE[16] }}>{title}</strong>
+                <strong id={titleId} style={{ color: 'var(--app-text-primary)', fontSize: APP_TYPE_SCALE[16] }}>{title}</strong>
                 {description ? (
                   <span
+                    id={descriptionId}
                     style={{
                       color: 'var(--app-text-secondary)',
                       fontSize: APP_TYPE_SCALE[13],

@@ -19,6 +19,15 @@ def _trace() -> TraceContext:
 
 
 def _registration() -> dict:
+    capabilities = [
+        "shell.execute",
+        "screenshot.capture",
+        "computer_control.click",
+        "browser_automation.interactive",
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.read_write",
+    ]
     return {
         "gateway_id": "gw-1",
         "device_id": "device-1",
@@ -27,6 +36,8 @@ def _registration() -> dict:
         "user_id": "user-1",
         "status": "active",
         "device_trust_state": "trusted",
+        "capabilities": capabilities,
+        "metadata": {"capability_readiness": {"ready": capabilities}},
     }
 
 
@@ -158,23 +169,140 @@ class _FakeCloudRuntimeRegistry:
 
 class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self._rust_runtime_action_patch = patch(
-            "server_modules.hardware_action_broker_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
-            return_value={
+        def rust_runtime_decision(command: str, payload: dict, **_kwargs):
+            operation = str((payload or {}).get("operation") or "").strip()
+            if command == "runtime-binding-decision":
+                studio_agent_mode = str((payload or {}).get("studio_agent_mode") or "").strip()
+                next_action = {
+                    "ensure_cloud_runtime_session": "create_cloud_runtime_session",
+                    "ensure_runtime_session": (
+                        "create_local_gateway_runtime_session"
+                        if studio_agent_mode == "my_computer"
+                        else "skip_runtime_binding"
+                    ),
+                }.get(operation, "skip_runtime_binding")
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": operation,
+                    "next_action": next_action,
+                    "cacheable": False,
+                    "audit_visibility": "security",
+                }
+            if command == "virtual-computer-decision":
+                next_action = {
+                    "provider_admission": "admit_virtual_computer_provider",
+                    "isolation_profile": "build_isolation_profile",
+                    "identity_context": "build_identity_context",
+                    "cost_quota": "build_cost_quota_profile",
+                    "action_payload": "validate_computer_use_action_payload",
+                    "network_policy": "assert_network_browser_security",
+                    "artifact_export": "collect_virtual_computer_artifact",
+                    "session_state": "assert_virtual_session_active",
+                }.get(operation, "validate_computer_use_action_payload")
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": operation,
+                    "next_action": next_action,
+                    "approval_required": False,
+                    "cacheable": False,
+                    "audit_visibility": "security",
+                }
+            if command == "runtime-action-decision":
+                next_action = (
+                    "execute_cloud_runtime_action"
+                    if str((payload or {}).get("studio_agent_mode") or "") == "cloud_computer"
+                    else "execute_self_hosted_runtime_action"
+                )
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "reason": "runtime_action_allowed",
+                    "operation": operation or "execute_runtime_action",
+                    "next_action": next_action,
+                    "approval_required": False,
+                    "cacheable": False,
+                    "audit_visibility": "security",
+                }
+            if command == "runtime-attachment-decision":
+                next_action = {
+                    "self_hosted_gate": "ensure_self_hosted_node_gate",
+                    "local_companion_gate": "select_local_companion_attachment",
+                    "select_attachment": "select_runtime_attachment",
+                    "normalize_target": "normalize_runtime_target_id",
+                    "build_targets": "build_workspace_runtime_targets",
+                }.get(operation, "ensure_self_hosted_node_gate")
+                return {
+                    "ok": True,
+                    "decision": "allow",
+                    "operation": operation,
+                    "next_action": next_action,
+                    "cacheable": False,
+                    "audit_visibility": "security",
+                }
+            return {
                 "ok": True,
                 "decision": "allow",
-                "reason": "runtime_action_cloud_allowed",
-                "operation": "execute_runtime_action",
-                "next_action": "execute_cloud_runtime_action",
-                "runtime_action": "open_url",
+                "operation": operation,
+                "next_action": "allow",
+                "cacheable": False,
+                "audit_visibility": "security",
+            }
+
+        def gateway_action_decision(**_payload):
+            operation = str(_payload.get("operation") or "tool_execute")
+            risk_decision = str(_payload.get("risk_decision") or "allow")
+            if operation == "browser_session_stop":
+                next_action = "stop_browser_session"
+            elif risk_decision == "require_approval":
+                next_action = "request_gateway_tool_approval"
+            else:
+                next_action = "dispatch_tool_invoke"
+            return {
+                "ok": True,
+                "decision": "require_approval" if risk_decision == "require_approval" else "allow",
+                "operation": operation,
+                "next_action": next_action,
                 "approval_required": False,
                 "cacheable": False,
                 "audit_visibility": "security",
+            }
+
+        self._rust_runtime_action_patch = patch(
+            "server_modules.hardware_action_broker_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+            side_effect=rust_runtime_decision,
+        )
+        self._gateway_action_patch = patch(
+            "server_modules.hardware_action_broker_service.rust_runtime_kernel_client.gateway_action_decision",
+            side_effect=gateway_action_decision,
+        )
+        self._gateway_public_payload_patch = patch(
+            "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+            return_value={
+                "connection_status": "online",
+                "heartbeat_fresh": True,
+                "reported_health_state": "online",
+                "capability_readiness": {
+                    "ready": [
+                        "shell.execute",
+                        "screenshot.capture",
+                        "computer_control.click",
+                        "browser_automation.interactive",
+                        "filesystem.read",
+                        "filesystem.write",
+                        "filesystem.read_write",
+                    ]
+                },
             },
         )
         self.mock_rust_runtime_action = self._rust_runtime_action_patch.start()
+        self.mock_gateway_action_decision = self._gateway_action_patch.start()
+        self.mock_gateway_public_payload = self._gateway_public_payload_patch.start()
 
     async def asyncTearDown(self) -> None:
+        self._gateway_public_payload_patch.stop()
+        self._gateway_action_patch.stop()
         self._rust_runtime_action_patch.stop()
 
     def _session_patches(self):
@@ -476,6 +604,7 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
                 request_id="req-full",
                 session_id="hrs-full",
                 trace_context=_trace(),
+                agent_scope="sage",
             )
 
         self.assertEqual(payload["status"], "completed")
@@ -484,6 +613,10 @@ class HardwareActionBrokerServiceTests(unittest.IsolatedAsyncioTestCase):
         request_approval_mock.assert_not_awaited()
         emit_approval.assert_not_awaited()
         execute_mock.assert_awaited_once()
+        execute_kwargs = execute_mock.await_args.kwargs
+        self.assertEqual(execute_kwargs["runtime_access_mode"], "full_access")
+        self.assertTrue(execute_kwargs["empyralis_approved"])
+        self.assertEqual(execute_kwargs["agent_scope"], "sage")
 
     async def test_cloud_computer_browser_action_uses_virtual_runtime_adapter(self) -> None:
         create_patch, extend_patch, started_patch, result_patch, artifact_patch, approval_patch = self._session_patches()

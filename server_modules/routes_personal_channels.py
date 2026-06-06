@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -40,6 +40,13 @@ class TelegramPersonalSetupRequest(BaseModel):
     phone_number: Optional[str] = None
     login_code: Optional[str] = None
     password: Optional[str] = None
+
+
+LOCAL_BRIDGE_CHANNELS: Dict[str, Dict[str, str]] = {
+    "signal_personal": {"provider": "signal_local_bridge", "label": "Signal"},
+    "imessage_personal": {"provider": "bluebubbles_local_bridge", "label": "iMessage"},
+    "wechat_personal": {"provider": "wechat_local_bridge", "label": "WeChat"},
+}
 
 
 def _personal_channel_governance_metadata(action: str, channel_key: str) -> dict:
@@ -611,6 +618,87 @@ async def send_telegram_personal_message(
                 "has_reply_target": bool(body.reply_to_external_message_id),
             },
             idempotency_key=f"personal_channel.telegram.send.denied:{gateway_id}:{body.idempotency_key}",
+        )
+        status_code = 409 if "not currently connected" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/personal-channels/{channel_key}/gateways/{gateway_id}/messages")
+async def send_local_bridge_personal_message(
+    request: Request,
+    channel_key: str,
+    gateway_id: str,
+    body: PersonalOutboundRequest,
+    current_user=Depends(require_api_key),
+):
+    channel_lane_contract_service.assert_personal_route_path(str(request.url.path))
+    normalized_channel_key = str(channel_key or "").strip().lower()
+    spec = LOCAL_BRIDGE_CHANNELS.get(normalized_channel_key)
+    if not spec:
+        raise HTTPException(status_code=404, detail="Personal local-bridge channel was not found.")
+    registration = _require_accessible_gateway_registration(
+        gateway_id,
+        current_user,
+        minimum_role="member",
+    )
+    action_name = f"personal_channel.{normalized_channel_key.split('_', 1)[0]}.send"
+    approval_response = await _request_personal_channel_send_approval(
+        action=action_name,
+        registration=registration,
+        current_user=current_user,
+        gateway_id=gateway_id,
+        channel_key=normalized_channel_key,
+        capability_id=f"{normalized_channel_key}.send",
+        remote_jid=body.remote_jid,
+        text=body.text,
+        idempotency_key=body.idempotency_key,
+        reply_to_external_message_id=body.reply_to_external_message_id,
+    )
+    if approval_response is not None:
+        return approval_response
+    try:
+        result = await personal_channels_service.send_local_bridge_personal_message(
+            gateway_id=gateway_id,
+            registration=registration,
+            channel_key=normalized_channel_key,
+            provider=spec["provider"],
+            remote_jid=body.remote_jid,
+            text=body.text,
+            idempotency_key=body.idempotency_key,
+            reply_to_external_message_id=body.reply_to_external_message_id,
+        )
+        _emit_personal_channel_audit(
+            action=action_name,
+            status="success",
+            registration=registration,
+            current_user=current_user,
+            gateway_id=gateway_id,
+            channel_key=normalized_channel_key,
+            detail=f"A {spec['label']} personal test or manual message was dispatched through the paired gateway bridge.",
+            metadata={
+                "remote_jid": body.remote_jid,
+                "text_length": len(body.text),
+                "has_reply_target": bool(body.reply_to_external_message_id),
+            },
+            idempotency_key=f"{action_name}:{gateway_id}:{body.idempotency_key}",
+        )
+        return result
+    except ValueError as exc:
+        detail = str(exc)
+        _emit_personal_channel_audit(
+            action=action_name,
+            status="denied",
+            registration=registration,
+            current_user=current_user,
+            gateway_id=gateway_id,
+            channel_key=normalized_channel_key,
+            detail=detail,
+            metadata={
+                "remote_jid": body.remote_jid,
+                "text_length": len(body.text),
+                "has_reply_target": bool(body.reply_to_external_message_id),
+            },
+            idempotency_key=f"{action_name}.denied:{gateway_id}:{body.idempotency_key}",
         )
         status_code = 409 if "not currently connected" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc

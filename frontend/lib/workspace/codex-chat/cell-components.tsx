@@ -121,6 +121,36 @@ function providerLabel(cell: CodexTranscriptCell): string {
   return parts.join(' · ');
 }
 
+function isLeakedMachineResultJson(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length < 40 || !trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return false;
+    }
+    const record = parsed as Record<string, unknown>;
+    const result = record.result;
+    const resultRecord = result && typeof result === 'object' && !Array.isArray(result)
+      ? result as Record<string, unknown>
+      : null;
+
+    return (
+      typeof record.runtime_target === 'string'
+      && (
+        typeof record.gateway_id === 'string'
+        || typeof record.device_id === 'string'
+        || (resultRecord !== null && typeof resultRecord.command === 'string')
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
 function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
@@ -278,6 +308,14 @@ const SYNTHETIC_THINKING_TEXT = new Set([
   'answer ready',
 ]);
 
+const INTERNAL_THINKING_MARKERS = [
+  'state_payload',
+  'payload_exceeds',
+  'exceeds_default',
+  'default_limit',
+  'state payload exceeds',
+] as const;
+
 function normalizedThinkingContent(rawText: string): string {
   const trimmed = rawText.trim();
   if (!trimmed) {
@@ -292,6 +330,11 @@ function normalizedThinkingContent(rawText: string): string {
   return trimmed;
 }
 
+function containsInternalThinkingMarker(value: string): boolean {
+  const lowered = value.toLowerCase();
+  return INTERNAL_THINKING_MARKERS.some((marker) => lowered.includes(marker));
+}
+
 function thinkingSyntheticKey(value: string): string {
   return value.toLowerCase().replace(/[.!]+$/g, '').trim();
 }
@@ -299,6 +342,9 @@ function thinkingSyntheticKey(value: string): string {
 function visibleThinkingContent(rawText: string): string {
   const text = normalizedThinkingContent(rawText);
   if (!text) {
+    return '';
+  }
+  if (containsInternalThinkingMarker(text)) {
     return '';
   }
   return text
@@ -451,7 +497,7 @@ function traceActivityStatus(cell: TraceActivityCellRecord): 'running' | 'done' 
 function traceActivityLabel(cell: TraceActivityCellRecord): string {
   switch (cell.kind) {
     case 'exec':
-      return 'Bash';
+      return 'Command';
     case 'tool':
       return toolActivityLabel(cell.name || 'Tool');
     case 'web_search':
@@ -513,7 +559,7 @@ function traceActivityResult(cell: TraceActivityCellRecord): string | null {
 
 function traceSummaryParts(activities: TraceActivityCellRecord[]): string[] {
   const searches = activities.filter((cell) => cell.kind === 'web_search').length;
-  const bash = activities.filter((cell) => cell.kind === 'exec').length;
+  const commands = activities.filter((cell) => cell.kind === 'exec').length;
   const files = activities.filter((cell) => cell.kind === 'file_change').length;
   const screenshots = activities.filter((cell) => cell.kind === 'screenshot').length;
   const genericTools = activities.filter((cell) => cell.kind === 'tool').length;
@@ -522,8 +568,8 @@ function traceSummaryParts(activities: TraceActivityCellRecord[]): string[] {
   if (searches > 0) {
     parts.push(`Searched ${searches} ${searches === 1 ? 'query' : 'queries'}`);
   }
-  if (bash > 0) {
-    parts.push(`Ran ${bash} bash ${bash === 1 ? 'command' : 'commands'}`);
+  if (commands > 0) {
+    parts.push(`Ran ${commands} ${commands === 1 ? 'command' : 'commands'}`);
   }
   if (files > 0) {
     parts.push(`${files === 1 ? 'Checked' : 'Checked'} ${files} ${files === 1 ? 'file' : 'files'}`);
@@ -664,7 +710,7 @@ export function ExecutionTraceCell({ cell }: { cell: ExecutionTraceCellRecord })
 
   return (
     <div
-      data-chat-role="assistant"
+      data-chat-role={cell.response ? 'assistant' : 'system'}
       className={`app-agent-trace-turn${cell.isStreaming ? ' app-agent-trace-turn--streaming' : ''}${cell.dimmed ? ' app-agent-trace-turn--dimmed' : ''}`}
     >
       {hasTrace ? (
@@ -774,6 +820,10 @@ export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
   const timestamp = formatTimestamp(cell.createdAt);
   const effectiveLabel = providerLabel(cell);
   const text = cell.content.trim();
+  if ((!text && !cell.isStreaming) || isLeakedMachineResultJson(text)) {
+    return null;
+  }
+
   return (
     <article data-chat-role="assistant" className="app-chat-message">
       <div className="app-chat-message__content">
@@ -1134,7 +1184,7 @@ export function ErrorCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind:
     || lowerMessage.includes('selected provider')
     || lowerMessage.includes('selected for chat')
     || lowerMessage.includes('local-only')
-    ? 'Choose Workspace AI, add an AI model key, or connect a computer.'
+    ? 'Choose the default Sage route, connect a model account, or connect Agent Computer.'
     : cell.message;
   return (
     <article data-chat-role="system" className="app-chat-transcript-error">
@@ -1142,7 +1192,7 @@ export function ErrorCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind:
         <CircleAlert size={14} strokeWidth={1.9} />
       </span>
       <div className="app-chat-transcript-error__copy">
-        <strong>AI model attention needed</strong>
+        <strong>Sage route needs attention</strong>
         <span>{message}</span>
       </div>
       {actionHref && actionLabel ? (

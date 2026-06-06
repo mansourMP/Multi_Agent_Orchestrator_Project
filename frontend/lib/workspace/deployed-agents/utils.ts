@@ -939,9 +939,6 @@ export function normalizeRuntimePlacement(value: unknown): WizardState['runtimeP
 export function normalizeRuntimeAccessMode(value: unknown, legacyRequiresOwnerApproval?: unknown): WizardState['runtimeAccessMode'] {
   void legacyRequiresOwnerApproval;
   const token = readString(value).toLowerCase().replace(/[-\s]+/g, '_');
-  if (token === 'full_access') {
-    return 'full_access';
-  }
   if (token === 'custom') {
     return 'custom';
   }
@@ -1407,7 +1404,7 @@ export function buildDeploymentConfig(state: WizardState): Record<string, unknow
     daily_budget_usd: state.computerAutomationEnabled && automationDailyBudget ? Number(automationDailyBudget) : null,
     monthly_budget_usd: state.computerAutomationEnabled && automationMonthlyBudget ? Number(automationMonthlyBudget) : null,
     runtime_access_mode: runtimeAccessMode,
-    requires_owner_approval: runtimeAccessMode !== 'full_access',
+    requires_owner_approval: true,
   };
   return {
     runtime_placement: state.runtimePlacement,

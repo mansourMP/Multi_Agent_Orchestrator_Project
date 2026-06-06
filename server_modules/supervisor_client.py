@@ -13,6 +13,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 import hashlib
 import hmac
+import json
 import os
 from pathlib import Path
 import sys
@@ -306,13 +307,24 @@ def _execute(
         "trace_id": trace_id,
         "workspace_id": workspace_id,
         "arguments": arguments,
+        "runtime_access_mode": None,
+        "empyralis_approved": False,
+        "agent_scope": None,
+        "policy": None,
+        "signature_version": "v2",
         "nonce": nonce,
         "expires_at": expires_at,
         "signature": _sign_request(
             request_id=request_id,
             capability_id=capability_id,
             run_id=run_id,
+            trace_id=trace_id,
             workspace_id=workspace_id,
+            arguments=arguments,
+            runtime_access_mode=None,
+            empyralis_approved=False,
+            agent_scope=None,
+            policy=None,
             nonce=nonce,
             expires_at=expires_at,
         ),
@@ -414,15 +426,42 @@ def _sign_request(
     request_id: str,
     capability_id: str,
     run_id: str,
+    trace_id: str,
     workspace_id: str,
+    arguments: dict[str, Any],
+    runtime_access_mode: str | None = None,
+    empyralis_approved: bool = False,
+    agent_scope: str | None = None,
+    policy: dict[str, Any] | None = None,
     nonce: str,
     expires_at: str,
 ) -> str:
     secret = os.getenv("EMPYRALIS_SUPERVISOR_SECRET")
     if not secret:
         raise RuntimeError("EMPYRALIS_SUPERVISOR_SECRET is required for supervisor calls.")
-    sign_str = f"execute:{request_id}:{capability_id}:{run_id}:{workspace_id}:{nonce}:{expires_at}"
+    sign_str = _canonical_json(
+        {
+            "type": "execute",
+            "version": "v2",
+            "request_id": request_id,
+            "capability_id": capability_id,
+            "run_id": run_id,
+            "trace_id": trace_id,
+            "workspace_id": workspace_id,
+            "arguments": arguments or {},
+            "runtime_access_mode": str(runtime_access_mode or ""),
+            "empyralis_approved": bool(empyralis_approved),
+            "agent_scope": str(agent_scope or ""),
+            "policy": policy if isinstance(policy, dict) else None,
+            "nonce": nonce,
+            "expires_at": expires_at,
+        }
+    )
     return hmac.new(secret.encode("utf-8"), sign_str.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _sign_interrupt_request(

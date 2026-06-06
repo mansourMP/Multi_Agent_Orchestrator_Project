@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import uuid
 
 from server_modules.capability_registry import resolve_capability, workflow_tool_capability_id
+from server_modules import execution_mode_policy
 
 
 @dataclass(slots=True)
@@ -1531,6 +1532,14 @@ def build_direct_tool_config(
             config["text"] = body_text
         return config
 
+    if connector_id == "google_workspace" and action_id == "fetch_emails":
+        try:
+            limit = int(parsed_input.get("limit") or 10)
+        except Exception:
+            limit = 10
+        config["limit"] = max(1, min(limit, 10))
+        return config
+
     if connector_id == "google_workspace" and action_id == "create_calendar_event":
         payload = parsed_input.get("payload") if isinstance(parsed_input.get("payload"), dict) else None
         if payload:
@@ -1723,19 +1732,51 @@ def _raise_direct_chat_tool_execution_blocked() -> None:
 
 def _direct_tool_session_metadata(session_ctx: Dict[str, Any] | None) -> Dict[str, Any]:
     session_payload = session_ctx if isinstance(session_ctx, dict) else {}
-    agent_turn_request = session_payload.get("agent_turn_request") if isinstance(session_payload.get("agent_turn_request"), dict) else {}
+    raw_agent_turn_request = session_payload.get("agent_turn_request")
+    if isinstance(raw_agent_turn_request, dict):
+        agent_turn_request = raw_agent_turn_request
+    elif raw_agent_turn_request is not None:
+        agent_turn_request = {
+            "tenant_id": getattr(raw_agent_turn_request, "tenant_id", None),
+            "workspace_id": getattr(raw_agent_turn_request, "workspace_id", None),
+            "thread_id": getattr(raw_agent_turn_request, "thread_id", None),
+            "session_id": getattr(raw_agent_turn_request, "session_id", None),
+            "machine_target": getattr(raw_agent_turn_request, "machine_target", None),
+            "context_hints": getattr(raw_agent_turn_request, "context_hints", None),
+            "policy_context": getattr(raw_agent_turn_request, "policy_context", None),
+        }
+    else:
+        agent_turn_request = {}
+    context_hints = agent_turn_request.get("context_hints") if isinstance(agent_turn_request.get("context_hints"), dict) else {}
+    policy_context = agent_turn_request.get("policy_context") if isinstance(agent_turn_request.get("policy_context"), dict) else {}
     metadata: Dict[str, Any] = {}
+    if isinstance(context_hints.get("metadata"), dict):
+        metadata.update(context_hints.get("metadata") or {})
     if isinstance(agent_turn_request.get("metadata"), dict):
         metadata.update(agent_turn_request.get("metadata") or {})
     if isinstance(session_payload.get("metadata"), dict):
         metadata.update(session_payload.get("metadata") or {})
-    for source in (agent_turn_request, session_payload):
+    for source in (policy_context, context_hints, agent_turn_request, session_payload):
         if not isinstance(source, dict):
             continue
         for key in (
             "connection_mode",
+            "tenant_id",
+            "workspace_id",
+            "thread_id",
+            "session_id",
+            "request_id",
+            "client_request_id",
+            "trace_id",
+            "runtime_target",
+            "canonical_runtime_target",
+            "runtime_fabric_target",
+            "execution_target_runtime_target",
             "runtime_attachment_id",
             "runtime_id",
+            "gateway_id",
+            "selected_gateway_id",
+            "verified_user_device_gateway",
             "machine_target",
             "root_folder_uri",
             "folder_grants",
@@ -1746,6 +1787,10 @@ def _direct_tool_session_metadata(session_ctx: Dict[str, Any] | None) -> Dict[st
             "execution_target_matching_runtime_ids",
             "execution_target_preferred_runtime_id",
             "execution_target_preferred_runtime_label",
+            "runtime_access_mode",
+            "permission_mode",
+            "execution_mode",
+            "runtime_mode",
         ):
             value = source.get(key)
             if value is not None and metadata.get(key) is None:
@@ -1826,14 +1871,28 @@ def _runtime_target_from_direct_tool_context(
     return "cloud_default"
 
 
+def _direct_tool_targets_agent_computer(runtime_target: Any, metadata: Dict[str, Any]) -> bool:
+    token = str(runtime_target or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if token in {"local", "local_companion", "user_device", "user_device_gateway", "gateway", "empyralis_gateway"}:
+        return True
+    try:
+        from server_modules import runtime_attachment_service
+
+        return runtime_attachment_service.canonical_runtime_target_id(token) == "user_device_gateway"
+    except Exception:
+        return False
+
+
 def _runtime_access_mode_from_direct_tool_context(
     *,
     explicit_mode: Any = None,
+    explicit_target: Any = None,
+    gateway_id: Optional[str] = None,
     session_ctx: Dict[str, Any] | None = None,
 ) -> str:
     explicit = str(explicit_mode or "").strip()
     if explicit:
-        return explicit
+        return execution_mode_policy.normalize_runtime_access_mode(explicit)
     metadata = _direct_tool_session_metadata(session_ctx)
     for key in (
         "runtime_access_mode",
@@ -1843,8 +1902,17 @@ def _runtime_access_mode_from_direct_tool_context(
     ):
         value = str(metadata.get(key) or "").strip()
         if value:
-            return value
-    return "default_guarded"
+            return execution_mode_policy.normalize_runtime_access_mode(value)
+    runtime_target = _runtime_target_from_direct_tool_context(
+        explicit_target=explicit_target,
+        gateway_id=gateway_id or str(metadata.get("gateway_id") or metadata.get("selected_gateway_id") or "").strip(),
+        session_ctx=session_ctx,
+    )
+    if str(gateway_id or metadata.get("gateway_id") or metadata.get("selected_gateway_id") or "").strip():
+        return execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+    if _direct_tool_targets_agent_computer(runtime_target, metadata):
+        return execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+    return execution_mode_policy.GUARDED_RUNTIME_ACCESS_MODE
 
 
 def _agent_scope_from_direct_tool_context(session_ctx: Dict[str, Any] | None) -> str:
@@ -2263,6 +2331,8 @@ def _execute_hardware_action_tool_call(
             runtime_target=runtime_target,
             runtime_access_mode=_runtime_access_mode_from_direct_tool_context(
                 explicit_mode=payload.get("runtime_access_mode") or payload.get("execution_mode") or payload.get("permission_mode"),
+                explicit_target=runtime_target,
+                gateway_id=gateway_id,
                 session_ctx=session_ctx,
             ),
             agent_scope=_agent_scope_from_direct_tool_context(session_ctx),
@@ -2509,7 +2579,10 @@ def _execute_safe_direct_local_tool_call(
                 gateway_id=gateway_id,
                 session_ctx=session_ctx,
             ),
-            runtime_access_mode=_runtime_access_mode_from_direct_tool_context(session_ctx=session_ctx),
+            runtime_access_mode=_runtime_access_mode_from_direct_tool_context(
+                gateway_id=gateway_id,
+                session_ctx=session_ctx,
+            ),
             agent_scope=_agent_scope_from_direct_tool_context(session_ctx),
             tenant_id=tenant_id,
             thread_id=str(thread_id or "").strip(),

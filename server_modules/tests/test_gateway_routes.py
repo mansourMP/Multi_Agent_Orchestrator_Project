@@ -289,7 +289,50 @@ class GatewayRoutesTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         execute_mock.assert_awaited_once()
+        self.assertEqual(execute_mock.await_args.kwargs["agent_scope"], "sage")
         approval_mock.assert_not_awaited()
+
+    def test_legacy_full_access_registration_requires_new_sage_ack_metadata(self) -> None:
+        registration_payload = self._register_gateway_with_mode(
+            runtime_access_mode="full_access",
+            warning_ack=True,
+            gateway_id="gateway-legacy-full-access-test",
+        )
+        gateway = registration_payload["gateway"]
+        gateway_id = gateway["gateway_id"]
+        metadata = dict(gateway.get("metadata") or {})
+        metadata.pop("agent_scope", None)
+        with gateway_state_repository._connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE gateway_registrations SET metadata = ? WHERE gateway_id = ?",
+                (json.dumps(metadata), gateway_id),
+            )
+            conn.commit()
+
+        with (
+            patch.object(routes_gateway, "_enforce_gateway_service_decision", return_value={"next_action": "allow_gateway_service_operation"}),
+            patch.object(routes_gateway.gateway_execution_service, "execute_tool_via_gateway", new=AsyncMock(return_value={"status": "completed"})) as execute_mock,
+            patch.object(
+                routes_gateway.gateway_approval_service,
+                "request_gateway_tool_approval",
+                new=AsyncMock(return_value={"approval_id": "approval-legacy"}),
+            ) as approval_mock,
+        ):
+            response = self.client.post(
+                f"/api/gateway/registrations/{gateway_id}/tools/execute",
+                json={
+                    "workspace_id": "default",
+                    "capability_id": "file.write",
+                    "arguments": {"path": "/Users/mansur/Work/report.md"},
+                    "run_id": "run-legacy-full-access",
+                    "interactive_approvals": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"]["error"], "FULL_ACCESS_RECONFIRMATION_REQUIRED")
+        approval_mock.assert_not_awaited()
+        execute_mock.assert_not_awaited()
 
     def test_expired_session_token_is_rejected(self) -> None:
         from server_modules import gateway_state_repository
@@ -384,7 +427,7 @@ class GatewayRoutesTests(unittest.TestCase):
             ) as websocket:
                 self.assertEqual(websocket.accepted_subprotocol, "empyralis.gateway.v1")
 
-    def _register_gateway(self) -> dict:
+    def _register_gateway(self, *, capabilities: list[str] | None = None) -> dict:
         pairing_response = self.client.post(
             "/api/gateway/pairings/intents",
             json={"workspace_id": "default", "display_name": "Mansur Mac", "platform": "macos"},
@@ -398,7 +441,7 @@ class GatewayRoutesTests(unittest.TestCase):
                 "device_id": "device-local-1",
                 "display_name": "Mansur Mac",
                 "platform": "macos-arm64",
-                "capabilities": ["screen.read", "system.presence"],
+                "capabilities": list(capabilities or ["screen.read", "system.presence"]),
             },
         )
         self.assertEqual(registration_response.status_code, 200)
@@ -416,7 +459,7 @@ class GatewayRoutesTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Autonomous Full Access setup warning", response.json()["detail"])
+        self.assertIn("Full Access setup warning", response.json()["detail"])
 
     def test_pairing_runtime_access_mode_persists_to_gateway_registration(self) -> None:
         pairing_response = self.client.post(
@@ -448,11 +491,12 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertEqual(registration_response.status_code, 200)
         payload = registration_response.json()
         self.assertEqual(payload["gateway"]["runtime_access_mode"], "full_access")
-        self.assertEqual(payload["gateway"]["runtime_access_label"], "Autonomous Full Access")
+        self.assertEqual(payload["gateway"]["runtime_access_label"], "Full Access")
         self.assertTrue(payload["gateway"]["autonomous_agent_setup_warning_acknowledged"])
         gateway_id = payload["gateway"]["gateway_id"]
         registration = gateway_state_repository.get_gateway_registration(gateway_id)
         self.assertEqual(registration["metadata"]["runtime_access_mode"], "full_access")
+        self.assertEqual(registration["metadata"]["agent_scope"], "sage")
 
     def test_pairing_custom_runtime_access_mode_is_guarded_and_labeled(self) -> None:
         pairing_response = self.client.post(
@@ -1744,7 +1788,9 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertIn("tool.interrupt.result", event_types)
 
     def test_whatsapp_personal_channel_state_reply_reconnect_and_dedupe(self) -> None:
-        registration_payload = self._register_gateway()
+        registration_payload = self._register_gateway(
+            capabilities=["screen.read", "system.presence", "channel.whatsapp.personal"]
+        )
         gateway_id = registration_payload["gateway"]["gateway_id"]
         gateway_token = registration_payload["gateway_token"]
 
@@ -1903,48 +1949,36 @@ class GatewayRoutesTests(unittest.TestCase):
                         },
                     }
                 )
-                outbound_request = websocket.receive_json()
-                self.assertEqual(outbound_request["kind"], "request")
-                self.assertEqual(outbound_request["type"], "channel.outbound")
-                self.assertEqual(outbound_request["payload"]["remote_jid"], "user-1@s.whatsapp.net")
-                self.assertEqual(outbound_request["payload"]["text"], "Sage reply from cloud")
-
-                websocket.send_json(
-                    {
-                        "kind": "response",
-                        "id": outbound_request["id"],
-                        "ok": True,
-                        "ts": "2026-04-22T12:30:04Z",
-                        "payload": {
-                            "channel_key": "whatsapp_personal",
-                            "provider": "whatsapp_baileys",
-                            "idempotency_key": outbound_request["payload"]["idempotency_key"],
-                            "external_message_id": "wamid.outbound.1",
-                            "remote_jid": "user-1@s.whatsapp.net",
-                            "text": "Sage reply from cloud",
-                            "delivered": True,
-                        },
-                    }
+                pending_payload = None
+                for _ in range(20):
+                    pending_view = self.client.get(f"/api/personal-channels/whatsapp/gateways/{gateway_id}")
+                    self.assertEqual(pending_view.status_code, 200)
+                    candidate_payload = pending_view.json()
+                    if (
+                        candidate_payload["recent_messages"]["outbound"]
+                        and candidate_payload["recent_messages"]["outbound"][0]["status"] == "pending"
+                    ):
+                        pending_payload = candidate_payload
+                        break
+                    time.sleep(0.1)
+                self.assertIsNotNone(
+                    pending_payload,
+                    [
+                        {
+                            "type": event["message_type"],
+                            "direction": event["direction"],
+                            "payload": event.get("payload"),
+                        }
+                        for event in gateway_state_repository.list_gateway_events(gateway_id)
+                        if event["message_type"].startswith("channel.")
+                    ],
                 )
-                routes_personal_channels.personal_channels_service.sync_gateway_channel_outbound_result(
-                    gateway_id=gateway_id,
-                    payload={
-                        "channel_key": "whatsapp_personal",
-                        "provider": "whatsapp_baileys",
-                        "idempotency_key": outbound_request["payload"]["idempotency_key"],
-                        "external_message_id": "wamid.outbound.1",
-                        "remote_jid": "user-1@s.whatsapp.net",
-                        "text": "Sage reply from cloud",
-                        "delivered": True,
-                    },
-                )
-
-                delivered_view = self.client.get(f"/api/personal-channels/whatsapp/gateways/{gateway_id}")
-                self.assertEqual(delivered_view.status_code, 200)
-                delivered_payload = delivered_view.json()
-                self.assertEqual(len(delivered_payload["recent_messages"]["inbound"]), 1)
-                self.assertEqual(len(delivered_payload["recent_messages"]["outbound"]), 1)
-                self.assertEqual(delivered_payload["recent_messages"]["outbound"][0]["status"], "delivered")
+                self.assertEqual(len(pending_payload["recent_messages"]["inbound"]), 1)
+                self.assertEqual(len(pending_payload["recent_messages"]["outbound"]), 1)
+                pending_outbound = pending_payload["recent_messages"]["outbound"][0]
+                self.assertEqual(pending_outbound["remote_jid"], "user-1@s.whatsapp.net")
+                self.assertEqual(pending_outbound["text"], "Sage reply from cloud")
+                self.assertEqual(pending_outbound["status"], "pending")
 
                 websocket.send_json(
                     {
@@ -2051,11 +2085,13 @@ class GatewayRoutesTests(unittest.TestCase):
             for event in all_events
             if event["message_type"] == "channel.outbound.result" and event["direction"] == "inbound"
         ]
-        self.assertEqual(len(outbound_request_events), 1)
-        self.assertEqual(len(outbound_result_events), 1)
+        self.assertEqual(len(outbound_request_events), 0)
+        self.assertEqual(len(outbound_result_events), 0)
 
     def test_telegram_personal_channel_state_reply_reconnect_and_dedupe(self) -> None:
-        registration_payload = self._register_gateway()
+        registration_payload = self._register_gateway(
+            capabilities=["screen.read", "system.presence", "channel.telegram.personal"]
+        )
         gateway_id = registration_payload["gateway"]["gateway_id"]
         gateway_token = registration_payload["gateway_token"]
 
@@ -2182,58 +2218,36 @@ class GatewayRoutesTests(unittest.TestCase):
                         },
                     }
                 )
-                outbound_request = websocket.receive_json()
-                self.assertEqual(outbound_request["kind"], "request")
-                self.assertEqual(outbound_request["type"], "channel.outbound")
-                self.assertEqual(outbound_request["payload"]["remote_jid"], "telegram-user-1")
-                self.assertEqual(outbound_request["payload"]["text"], "Sage reply from Telegram cloud")
-
-                websocket.send_json(
-                    {
-                        "kind": "response",
-                        "id": outbound_request["id"],
-                        "ok": True,
-                        "ts": "2026-04-22T13:30:04Z",
-                        "payload": {
-                            "channel_key": "telegram_personal",
-                            "provider": "telegram_gramjs",
-                            "idempotency_key": outbound_request["payload"]["idempotency_key"],
-                            "external_message_id": "tg.outbound.1",
-                            "remote_jid": "telegram-user-1",
-                            "text": "Sage reply from Telegram cloud",
-                            "delivered": True,
-                        },
-                    }
-                )
-                routes_personal_channels.personal_channels_service.sync_gateway_channel_outbound_result(
-                    gateway_id=gateway_id,
-                    payload={
-                        "channel_key": "telegram_personal",
-                        "provider": "telegram_gramjs",
-                        "idempotency_key": outbound_request["payload"]["idempotency_key"],
-                        "external_message_id": "tg.outbound.1",
-                        "remote_jid": "telegram-user-1",
-                        "text": "Sage reply from Telegram cloud",
-                        "delivered": True,
-                    },
-                )
-
-                delivered_payload = None
+                pending_payload = None
                 for _ in range(20):
-                    delivered_view = self.client.get(f"/api/personal-channels/telegram/gateways/{gateway_id}")
-                    self.assertEqual(delivered_view.status_code, 200)
-                    candidate_payload = delivered_view.json()
+                    pending_view = self.client.get(f"/api/personal-channels/telegram/gateways/{gateway_id}")
+                    self.assertEqual(pending_view.status_code, 200)
+                    candidate_payload = pending_view.json()
                     if (
                         candidate_payload["recent_messages"]["outbound"]
-                        and candidate_payload["recent_messages"]["outbound"][0]["status"] == "delivered"
+                        and candidate_payload["recent_messages"]["outbound"][0]["status"] == "pending"
                     ):
-                        delivered_payload = candidate_payload
+                        pending_payload = candidate_payload
                         break
                     time.sleep(0.1)
-                self.assertIsNotNone(delivered_payload)
-                self.assertEqual(len(delivered_payload["recent_messages"]["inbound"]), 1)
-                self.assertEqual(len(delivered_payload["recent_messages"]["outbound"]), 1)
-                self.assertEqual(delivered_payload["recent_messages"]["outbound"][0]["status"], "delivered")
+                self.assertIsNotNone(
+                    pending_payload,
+                    [
+                        {
+                            "type": event["message_type"],
+                            "direction": event["direction"],
+                            "payload": event.get("payload"),
+                        }
+                        for event in gateway_state_repository.list_gateway_events(gateway_id)
+                        if event["message_type"].startswith("channel.")
+                    ],
+                )
+                self.assertEqual(len(pending_payload["recent_messages"]["inbound"]), 1)
+                self.assertEqual(len(pending_payload["recent_messages"]["outbound"]), 1)
+                pending_outbound = pending_payload["recent_messages"]["outbound"][0]
+                self.assertEqual(pending_outbound["remote_jid"], "telegram-user-1")
+                self.assertEqual(pending_outbound["text"], "Sage reply from Telegram cloud")
+                self.assertEqual(pending_outbound["status"], "pending")
 
                 websocket.send_json(
                     {
@@ -2342,8 +2356,8 @@ class GatewayRoutesTests(unittest.TestCase):
             if event["message_type"] == "channel.outbound.result" and event["direction"] == "inbound"
             and event["payload"].get("payload", {}).get("channel_key") == "telegram_personal"
         ]
-        self.assertEqual(len(outbound_request_events), 1)
-        self.assertEqual(len(outbound_result_events), 1)
+        self.assertEqual(len(outbound_request_events), 0)
+        self.assertEqual(len(outbound_result_events), 0)
 
 
     def test_gateway_websocket_rejects_oversized_frame(self) -> None:

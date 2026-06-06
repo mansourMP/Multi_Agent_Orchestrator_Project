@@ -9,7 +9,7 @@ GUARDED_RUNTIME_ACCESS_MODE = "default_guarded"
 FULL_RUNTIME_ACCESS_MODE = "full_access"
 CUSTOM_RUNTIME_ACCESS_MODE = "custom"
 GUARDED_RUNTIME_ACCESS_PUBLIC_LABEL = "Default Guarded"
-FULL_RUNTIME_ACCESS_PUBLIC_LABEL = "Autonomous Full Access"
+FULL_RUNTIME_ACCESS_PUBLIC_LABEL = "Full Access"
 CUSTOM_RUNTIME_ACCESS_PUBLIC_LABEL = "Custom"
 
 SUPPORTED_EXECUTION_MODES = (
@@ -80,8 +80,8 @@ MODE_DEFINITIONS: dict[str, dict[str, Any]] = {
     "full_access": {
         "label": FULL_RUNTIME_ACCESS_PUBLIC_LABEL,
         "description": (
-            "For a dedicated Agent Computer. Sage can run allowed computer actions "
-            "without Empyralis per-action approval prompts."
+            "For a dedicated Agent Computer. Sage can read, write, delete, run commands, "
+            "use browser data, and access secrets without per-action approval prompts."
         ),
         "destructive_actions_require_approval": False,
         "external_send_requires_approval": False,
@@ -91,9 +91,9 @@ MODE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "requires_explicit_selection": True,
         "requires_owner_approval": True,
         "setup_warning": (
-            "Autonomous Full Access lets Sage operate this dedicated runtime without "
-            "Empyralis asking for each allowed action. Stop, revoke, quotas, audit, "
-            "OS permissions, blocked actions, offline state, and provider limits still apply."
+            "Full Access lets Sage run commands, read, write, delete files, and access secrets, "
+            "browser data, tokens, SSH keys, and connected accounts on this Agent Computer; "
+            "dedicated Agent hardware is recommended."
         ),
     },
 }

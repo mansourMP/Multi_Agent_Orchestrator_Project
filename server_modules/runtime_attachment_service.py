@@ -1092,6 +1092,15 @@ def build_workspace_runtime_targets(
                 {**mode, "available": False}
                 for mode in execution_modes
             ]
+        supports_full_access = any(
+            bool(mode.get("available")) and str(mode.get("id") or "").strip() == "full_access"
+            for mode in execution_modes
+        )
+        default_runtime_access_mode = (
+            execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+            if target_id in {"local_companion", "self_host_runtime"} and supports_full_access
+            else execution_mode_policy.GUARDED_RUNTIME_ACCESS_MODE
+        )
         target_payload = {
             "target_id": target_id,
             "canonical_target_id": canonical_target_id,
@@ -1120,11 +1129,8 @@ def build_workspace_runtime_targets(
             "routed_through_platform": True,
             "runtime_session_required": target_id != "cloud_default",
             "approval_boundary": "platform_policy" if target_id == "cloud_default" else "runtime_session_policy",
-            "default_runtime_access_mode": execution_mode_policy.GUARDED_RUNTIME_ACCESS_MODE,
-            "supports_full_access": any(
-                bool(mode.get("available")) and str(mode.get("id") or "").strip() == "full_access"
-                for mode in execution_modes
-            ),
+            "default_runtime_access_mode": default_runtime_access_mode,
+            "supports_full_access": supports_full_access,
             "direct_mobile_connection_required": False,
             "workspace_scoped_identity": True,
             "supports_runtime_modes": supports_runtime_modes,

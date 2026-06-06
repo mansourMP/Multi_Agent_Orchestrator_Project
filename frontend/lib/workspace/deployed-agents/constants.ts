@@ -219,13 +219,8 @@ export const STUDIO_RUNTIME_ACCESS_MODE_OPTIONS: ReadonlyArray<{
 }> = [
   {
     value: 'default_guarded',
-    label: 'Default Guarded',
+    label: 'Default',
     hint: 'Runs low-risk work automatically. Risky file, terminal, browser, message, payment, install, or system actions ask first.',
-  },
-  {
-    value: 'full_access',
-    label: 'Autonomous Full Access',
-    hint: 'For a dedicated Agent Computer. Allowed computer actions skip per-action prompts; stop, revoke, quotas, audit, OS permissions, and blocked actions still apply.',
   },
   {
     value: 'custom',

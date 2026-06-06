@@ -1,18 +1,19 @@
-import type { CSSProperties, HTMLAttributes, PropsWithChildren } from 'react';
+import { forwardRef, type CSSProperties, type HTMLAttributes, type PropsWithChildren } from 'react';
 
 function joinClassNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ');
 }
 
-export function ScrollRegion({
+export const ScrollRegion = forwardRef<HTMLDivElement, PropsWithChildren<HTMLAttributes<HTMLDivElement>>>(function ScrollRegion({
   children,
   className,
   style,
   ...props
-}: PropsWithChildren<HTMLAttributes<HTMLDivElement>>) {
+}, ref) {
   return (
     <div
       {...props}
+      ref={ref}
       className={joinClassNames('app-scroll-region', className)}
       style={{
         minWidth: 0,
@@ -26,4 +27,4 @@ export function ScrollRegion({
       {children}
     </div>
   );
-}
+});

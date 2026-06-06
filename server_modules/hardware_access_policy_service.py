@@ -202,6 +202,8 @@ def hardware_action_requires_software_approval(
     require_approval: Optional[bool],
     virtual_action: Optional[str] = None,
 ) -> bool:
+    # Permission escalation must come from the stored Agent Computer mode/policy,
+    # not from natural-language text inside tool arguments.
     if normalize_runtime_access_mode(runtime_access_mode) == FULL_RUNTIME_ACCESS_MODE:
         return False
     if require_approval is not None:

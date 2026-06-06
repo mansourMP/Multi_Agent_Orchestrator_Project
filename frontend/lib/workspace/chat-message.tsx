@@ -109,6 +109,14 @@ const SYNTHETIC_THINKING_TEXT = new Set([
   'answer ready',
 ]);
 
+const INTERNAL_THINKING_MARKERS = [
+  'state_payload',
+  'payload_exceeds',
+  'exceeds_default',
+  'default_limit',
+  'state payload exceeds',
+] as const;
+
 function normalizedThinkingContent(rawText: string): string {
   const trimmed = rawText.trim();
   if (!trimmed) {
@@ -123,6 +131,11 @@ function normalizedThinkingContent(rawText: string): string {
   return trimmed;
 }
 
+function containsInternalThinkingMarker(value: string): boolean {
+  const lowered = value.toLowerCase();
+  return INTERNAL_THINKING_MARKERS.some((marker) => lowered.includes(marker));
+}
+
 function thinkingSyntheticKey(value: string): string {
   return value.toLowerCase().replace(/[.!]+$/g, '').trim();
 }
@@ -130,6 +143,9 @@ function thinkingSyntheticKey(value: string): string {
 function visibleThinkingContent(rawText: string): string {
   const text = normalizedThinkingContent(rawText);
   if (!text) {
+    return '';
+  }
+  if (containsInternalThinkingMarker(text)) {
     return '';
   }
   return text
@@ -271,7 +287,7 @@ export const ChatMessage = memo(({
     const Icon = stepIcon(stepKind);
     return (
       <article
-        data-chat-role="assistant"
+        data-chat-role="system"
         className={`app-chat-activity-row app-chat-activity-row--${stepStatus}`}
       >
         <span className="app-chat-activity-row__icon" aria-hidden="true">
@@ -288,7 +304,7 @@ export const ChatMessage = memo(({
       || lowerText.includes('selected provider')
       || lowerText.includes('selected for chat')
       || lowerText.includes('local-only')
-      ? 'Choose Workspace AI, add an AI model key, or connect a computer.'
+      ? 'Choose the default Sage route, connect a model account, or connect Agent Computer.'
       : text;
     return (
       <article
@@ -299,7 +315,7 @@ export const ChatMessage = memo(({
           <CircleAlert size={14} strokeWidth={1.9} />
         </span>
         <div className="app-chat-transcript-error__copy">
-          <strong>AI model attention needed</strong>
+          <strong>Sage route needs attention</strong>
           <span>{providerNoticeText}</span>
         </div>
         {actionHref && actionLabel ? (

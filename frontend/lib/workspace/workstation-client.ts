@@ -103,8 +103,17 @@ export type ConnectionCatalogItem = Record<string, unknown> & {
   health_check?: string | null;
   test_action?: string | null;
   connector_ids?: string[] | null;
+  connector_id?: string | null;
+  account_provider?: string | null;
+  vault_provider?: string | null;
+  runtime_provider?: string | null;
+  auth_required_fields?: string[] | null;
   setup_available?: boolean | null;
   runtime_usable?: boolean | null;
+  launchable?: boolean | null;
+  launch_blockers?: string[] | null;
+  proof_blockers?: string[] | null;
+  test_runner?: string | null;
 };
 
 export type ConnectionStatusItem = ConnectionCatalogItem & {

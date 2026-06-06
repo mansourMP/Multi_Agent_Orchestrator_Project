@@ -5,11 +5,12 @@ import hmac
 import importlib
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from starlette.requests import Request
 
+from server_modules import channel_preflight_service
 from server_modules import connectors_actions
 
 
@@ -67,6 +68,29 @@ class GithubWebhookVerificationTests(unittest.IsolatedAsyncioTestCase):
         parse_event.assert_not_called()
         append_event.assert_not_called()
 
+    def test_github_is_allowed_by_canonical_inbound_preflight(self):
+        with (
+            patch(
+                "server_modules.channel_preflight_service.safe_mode_service.resolve_machine_policy_status",
+                return_value={"kill_switch": {"active": False}},
+            ),
+            patch(
+                "server_modules.channel_preflight_service.safe_mode_service.is_channel_disabled",
+                return_value=False,
+            ),
+        ):
+            channel_key, endpoint_key, message = channel_preflight_service.assert_inbound_allowed(
+                tenant_id="tenant-default",
+                workspace_id="default",
+                channel_key="github",
+                endpoint_key="acme/api",
+                customer_message="GitHub issue opened in acme/api",
+            )
+
+        self.assertEqual(channel_key, "github")
+        self.assertEqual(endpoint_key, "acme/api")
+        self.assertEqual(message, "GitHub issue opened in acme/api")
+
     async def test_github_webhook_rejects_missing_signature_header(self):
         body = _body_bytes({"repository": {"full_name": "acme/api"}})
         request = _request_from_body(
@@ -76,7 +100,7 @@ class GithubWebhookVerificationTests(unittest.IsolatedAsyncioTestCase):
                 (b"x-github-delivery", b"delivery-123"),
             ],
         )
-        connector_row = {"id": "cred-github", "provider": "github", "workspace_id": "default", "metadata": {"username": "acme"}}
+        connector_row = {"id": "cred-github", "provider": "github", "workspace_id": "default", "tenant_id": "tenant-default", "metadata": {"username": "acme"}}
 
         with (
             patch("server_modules.connectors_actions.load_vault", return_value={"credentials": [connector_row]}),
@@ -95,7 +119,13 @@ class GithubWebhookVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_github_webhook_rejects_invalid_signature(self):
         body = _body_bytes({"repository": {"full_name": "acme/api"}})
         request = _request_from_body(body, headers=_signed_headers(body, "wrong-secret"))
-        connector_row = {"id": "cred-github", "provider": "github", "workspace_id": "default", "metadata": {"username": "acme"}}
+        connector_row = {
+            "id": "cred-github",
+            "provider": "github",
+            "workspace_id": "default",
+            "tenant_id": "tenant-default",
+            "metadata": {"username": "acme"},
+        }
 
         with (
             patch("server_modules.connectors_actions.load_vault", return_value={"credentials": [connector_row]}),
@@ -126,7 +156,7 @@ class GithubWebhookVerificationTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await connectors_actions.github_events_webhook(request)
 
-        self.assertEqual(result, {"ok": True})
+        self.assertEqual(result, {"ok": True, "handled": 0, "triggered": 0, "run_id": None})
 
     async def test_github_webhook_verified_event_appends_activity(self):
         payload = {
@@ -144,21 +174,33 @@ class GithubWebhookVerificationTests(unittest.IsolatedAsyncioTestCase):
         }
         body = _body_bytes(payload)
         request = _request_from_body(body, headers=_signed_headers(body, "secret-1", delivery_id="delivery-456"))
-        connector_row = {"id": "cred-github", "provider": "github", "workspace_id": "default", "metadata": {"username": "acme"}}
+        connector_row = {
+            "id": "cred-github",
+            "provider": "github",
+            "workspace_id": "default",
+            "tenant_id": "tenant-default",
+            "metadata": {"username": "acme"},
+        }
         appended: list[dict] = []
 
         def _append_event(**kwargs):
             appended.append(kwargs)
             return kwargs
 
+        route_message = AsyncMock(return_value={"ok": True, "run_id": "run-github-1", "reply": "Tracking it."})
+
         with (
             patch("server_modules.connectors_actions.load_vault", return_value={"credentials": [connector_row]}),
-            patch("server_modules.connectors_actions.resolve_vault_credential", return_value={"webhook_secret": "secret-1"}),
+            patch(
+                "server_modules.connectors_actions.resolve_vault_credential",
+                return_value={"webhook_secret": "secret-1", "username": "acme"},
+            ),
             patch.object(connectors_actions, "_append_channel_event", _append_event, create=True),
+            patch("server_modules.agent_channel_router.route_inbound_channel_message", new=route_message),
         ):
             result = await connectors_actions.github_events_webhook(request)
 
-        self.assertEqual(result, {"ok": True})
+        self.assertEqual(result, {"ok": True, "handled": 1, "triggered": 1, "run_id": "run-github-1"})
         self.assertEqual(len(appended), 1)
         event = appended[0]
         self.assertEqual(event["channel"], "github")
@@ -170,3 +212,10 @@ class GithubWebhookVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event["message_id"], "delivery-456")
         self.assertEqual(event["trace_id"], "github:delivery-456")
         self.assertEqual(event["metadata"]["repository"], "acme/api")
+        route_message.assert_awaited_once()
+        kwargs = route_message.await_args.kwargs
+        self.assertEqual(kwargs["workspace_id"], "default")
+        self.assertEqual(kwargs["channel_key"], "github")
+        self.assertEqual(kwargs["endpoint_key"], "acme/api")
+        self.assertIn("GitHub push in acme/api", kwargs["customer_message"])
+        self.assertFalse(kwargs["allow_master_fallback"])

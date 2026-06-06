@@ -95,6 +95,7 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
             "capabilities": ["filesystem.read"],
             "metadata": {
                 "runtime_access_mode": "full_access",
+                "agent_scope": "sage",
                 "autonomous_agent_setup_warning_acknowledged": True,
                 "capability_readiness": {"ready": ["filesystem.read"]},
             },
@@ -163,22 +164,133 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
             "capabilities": ["shell.execute"],
             "metadata": {
                 "runtime_access_mode": "full_access",
+                "agent_scope": "sage",
                 "autonomous_agent_setup_warning_acknowledged": True,
                 "capability_readiness": {"ready": ["shell.execute"]},
             },
         }
-        with patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration):
-            with self.assertRaisesRegex(PermissionError, "only to Sage"):
+        dispatch_mock = AsyncMock()
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
+        ):
+            with self.assertRaisesRegex(PermissionError, "available only to Sage"):
                 await gateway_execution_service.execute_tool_via_gateway(
                     gateway_id="gw-1",
                     capability_id="shell.execute",
-                    arguments={"command": "pwd"},
+                    arguments={"command": "cat .env"},
                     run_id="run-1",
                     trace_id="trace-1",
                     workspace_id="ws-1",
                     request_id="req-1",
-                    agent_scope="studio_agent",
+                    runtime_access_mode="full_access",
+                    empyralis_approved=True,
+                    agent_scope="external_agent",
                 )
+        dispatch_mock.assert_not_awaited()
+
+    async def test_legacy_full_access_registration_requires_new_sage_ack_metadata(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["shell.execute"],
+            "metadata": {
+                "runtime_access_mode": "full_access",
+                "autonomous_agent_setup_warning_acknowledged": True,
+                "capability_readiness": {"ready": ["shell.execute"]},
+            },
+        }
+        dispatch_mock = AsyncMock()
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
+        ):
+            with self.assertRaisesRegex(PermissionError, "warning acknowledgement"):
+                await gateway_execution_service.execute_tool_via_gateway(
+                    gateway_id="gw-1",
+                    capability_id="shell.execute",
+                    arguments={"command": "cat .env"},
+                    run_id="run-1",
+                    trace_id="trace-1",
+                    workspace_id="ws-1",
+                    request_id="req-1",
+                    runtime_access_mode="full_access",
+                    empyralis_approved=True,
+                    agent_scope="sage",
+                )
+        dispatch_mock.assert_not_awaited()
+
+    async def test_sage_full_access_dispatches_signed_policy_envelope(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["shell.execute"],
+            "metadata": {
+                "runtime_access_mode": "full_access",
+                "agent_scope": "sage",
+                "autonomous_agent_setup_warning_acknowledged": True,
+                "capability_readiness": {"ready": ["shell.execute"]},
+            },
+        }
+        dispatch_mock = AsyncMock(
+            return_value={
+                "request_id": "req-1",
+                "capability_id": "shell.execute",
+                "run_id": "run-1",
+                "result": {"stdout": "ok"},
+            }
+        )
+        activity_mock = AsyncMock(return_value={"id": "activity-1"})
+
+        def rust_side_effect(command, payload):
+            if payload.get("operation") == "quota_check":
+                return {"ok": True, "decision": "allow", "next_action": "allow_gateway_service_operation"}
+            return {"ok": True, "decision": "allow", "next_action": "dispatch_gateway_operation"}
+
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch(
+                "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "online",
+                    "heartbeat_fresh": True,
+                    "reported_health_state": "online",
+                    "capability_readiness": {"ready": ["shell.execute"]},
+                },
+            ),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live", return_value=True),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
+            patch("server_modules.gateway_execution_service.gateway_activity_service.append_gateway_activity", activity_mock),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                side_effect=rust_side_effect,
+            ),
+        ):
+            await gateway_execution_service.execute_tool_via_gateway(
+                gateway_id="gw-1",
+                capability_id="shell.execute",
+                arguments={"command": "cat .env"},
+                run_id="run-1",
+                trace_id="trace-1",
+                workspace_id="ws-1",
+                request_id="req-1",
+                runtime_access_mode="full_access",
+                empyralis_approved=True,
+                agent_scope="sage",
+            )
+
+        kwargs = dispatch_mock.await_args.kwargs
+        self.assertEqual(kwargs["agent_scope"], "sage")
+        self.assertEqual(kwargs["runtime_access_mode"], "full_access")
+        self.assertEqual(kwargs["policy"]["mode"], "full_access")
+        self.assertEqual(kwargs["policy"]["agent_scope"], "sage")
+        self.assertTrue(kwargs["policy"]["full_access_warning_acknowledged"])
 
     async def test_execute_tool_via_gateway_rust_denial_blocks_dispatch(self) -> None:
         registration = {

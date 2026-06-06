@@ -24,6 +24,7 @@ import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import {
   emitWorkstationChatNewThreadRequested,
   emitWorkstationChatThreadSelected,
+  subscribeWorkstationChatHistoryInvalidated,
 } from '@/lib/workspace/workstation-chat-thread-events';
 import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
 import type { RuntimeAttachmentSnapshot, SpecialistOverlayTabId } from '@/lib/workspace/deployed-agents/types';
@@ -38,6 +39,7 @@ import {
 } from '@/lib/workspace/deployed-agents/utils';
 import {
   activeThreadStorageKey,
+  clearPersistedActiveThread,
   persistActiveThread,
 } from '@/lib/workspace/workstation-chat-pane-model';
 import {
@@ -639,6 +641,13 @@ function MainAgentMobileHistoryList({
   const [activeThreadId, setActiveThreadId] = useState<string | null>(() => readActiveThreadId(workspaceId));
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [historyRefreshVersion, setHistoryRefreshVersion] = useState(0);
+
+  useEffect(() => subscribeWorkstationChatHistoryInvalidated((detail) => {
+    if (detail.workspaceId === workspaceId) {
+      setHistoryRefreshVersion((current) => current + 1);
+    }
+  }), [workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -664,7 +673,7 @@ function MainAgentMobileHistoryList({
     return () => {
       cancelled = true;
     };
-  }, [client, workspaceId]);
+  }, [client, workspaceId, historyRefreshVersion]);
 
   const openThread = (threadId: string) => {
     persistActiveThread(workspaceId, threadId);
@@ -675,6 +684,7 @@ function MainAgentMobileHistoryList({
   };
 
   const createThread = () => {
+    clearPersistedActiveThread(workspaceId);
     emitWorkstationChatNewThreadRequested({ workspaceId });
     setActiveThreadId(null);
     onNavigate();
@@ -743,6 +753,13 @@ function AssistantPanelContent({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [projectsOpen, setProjectsOpen] = useState(true);
+  const [historyRefreshVersion, setHistoryRefreshVersion] = useState(0);
+
+  useEffect(() => subscribeWorkstationChatHistoryInvalidated((detail) => {
+    if (detail.workspaceId === workspaceId) {
+      setHistoryRefreshVersion((current) => current + 1);
+    }
+  }), [workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -768,7 +785,7 @@ function AssistantPanelContent({
     return () => {
       cancelled = true;
     };
-  }, [client, workspaceId]);
+  }, [client, workspaceId, historyRefreshVersion]);
 
   const openThread = (threadId: string) => {
     persistActiveThread(workspaceId, threadId);
@@ -778,6 +795,7 @@ function AssistantPanelContent({
   };
 
   const createThread = () => {
+    clearPersistedActiveThread(workspaceId);
     emitWorkstationChatNewThreadRequested({ workspaceId });
     setActiveThreadId(null);
     router.push(chatHref);

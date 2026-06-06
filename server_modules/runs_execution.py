@@ -253,6 +253,20 @@ def _enforce_execution_runtime_decision(
     )
     metadata = context_payload.get("metadata") if isinstance(context_payload.get("metadata"), dict) else {}
     selected_target = selected_execution_target_from_context(context_payload)
+    requested_target = _first_non_empty_string(
+        metadata.get("execution_target_selected"),
+        metadata.get("execution_target_requested"),
+        metadata.get("execution_target"),
+        context_payload.get("execution_target_selected"),
+        context_payload.get("execution_target_requested"),
+        context_payload.get("execution_target"),
+        run_payload.get("execution_target_selected"),
+        run_payload.get("execution_target_requested"),
+        run_payload.get("execution_target"),
+    ).strip().lower()
+    target_explicitly_requested = bool(requested_target and requested_target not in {"auto", "default"})
+    if operation in {"connector_action", "usage_metering"} and not target_explicitly_requested:
+        selected_target = EXECUTION_TARGET_CLOUD
     lease_id = _first_non_empty_string(
         metadata.get("lease_id"),
         metadata.get("machine_lease_id"),
@@ -1907,8 +1921,14 @@ def _workflow_tool_text_input(config: Dict[str, Any], current_text: str) -> str:
 
 
 def _workflow_tool_workspace_id(context: Dict[str, Any]) -> Optional[str]:
-    workspace_id = str(context.get("workspace_id") or "").strip()
-    return workspace_id or None
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    workspace_id = str(
+        context.get("workspace_id")
+        or metadata.get("workspace_id")
+        or metadata.get("tenant_workspace_id")
+        or "default"
+    ).strip()
+    return workspace_id or "default"
 
 
 def _workflow_execution_source(context: Dict[str, Any]) -> str:
@@ -2188,6 +2208,31 @@ def _workflow_wait_for_child_run(
     )
 
 
+def _sanitize_recent_email_tool_results(messages: Any, *, snippet_limit: int = 1200) -> List[Dict[str, Any]]:
+    safe_limit = max(80, min(int(snippet_limit or 1200), 2000))
+    sanitized: List[Dict[str, Any]] = []
+    if not isinstance(messages, list):
+        return sanitized
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        snippet = str(item.get("snippet") or "").strip()
+        if len(snippet) > safe_limit:
+            snippet = snippet[: safe_limit - 3] + "..."
+        sanitized.append(
+            {
+                "id": str(item.get("id") or "").strip() or None,
+                "threadId": str(item.get("threadId") or "").strip() or None,
+                "subject": str(item.get("subject") or "").strip(),
+                "from": str(item.get("from") or "").strip(),
+                "to": str(item.get("to") or "").strip(),
+                "date": str(item.get("date") or "").strip(),
+                "snippet": snippet,
+            }
+        )
+    return sanitized
+
+
 def _workflow_execute_connector_action(
     run_id: str,
     node_id: str,
@@ -2197,6 +2242,9 @@ def _workflow_execute_connector_action(
     current_text: str,
 ) -> Dict[str, Any]:
     _assert_direct_chat_tool_execution_allowed(context)
+    resolved_workspace_id = _workflow_tool_workspace_id(context)
+    if resolved_workspace_id and not str(context.get("workspace_id") or "").strip():
+        context = {**context, "workspace_id": resolved_workspace_id}
     requested_connector = str(config.get("connector") or "").strip().lower()
     action_id = normalize_action_id(config.get("action_id"))
     if not action_id:
@@ -3790,6 +3838,23 @@ def _workflow_execute_connector_action(
             payload={"connector": connector_id, "action_id": action_id, "page_id": page_id, "recipient_id": recipient_id, "payload": _json_safe(payload)},
             execute=_perform_instagram_dm,
         )
+
+    if connector_id == "google_workspace" and action_id == "fetch_emails":
+        result = _sanitize_recent_email_tool_results(common.list_recent_connector_messages(
+            secret,
+            limit=int(config.get("limit") or 10),
+        ))
+        return {
+            "summary": "Connector action completed: google_workspace.fetch_emails.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "result": _json_safe(result),
+                }
+            },
+        }
 
     if connector_id in {"google_workspace", "microsoft_365"} and action_id in {"send_email", "send_message", "draft_email"}:
         to_email = str(

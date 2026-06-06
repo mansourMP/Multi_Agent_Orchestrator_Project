@@ -19,7 +19,7 @@ from server_modules.db import asyncpg
 
 
 CHANNEL_OWNERSHIP_CONFLICT_MESSAGE = "This channel already has an inbound owner."
-_INBOUND_OWNER_CHANNEL_KEYS = frozenset({"telegram", "whatsapp", "discord", "email", "phone", "web_chat"})
+_INBOUND_OWNER_CHANNEL_KEYS = frozenset({"telegram", "whatsapp", "slack", "discord", "email", "github", "phone", "web_chat"})
 _WEB_CHAT_DEFAULT_ENDPOINT_KEY = "workspace-default"
 _RUNTIME_MODES = frozenset({"hosted_secure", "local_secure", "privileged_device"})
 _LOCAL_SPECIALIST_LOCK = threading.RLock()

@@ -129,6 +129,17 @@ export function persistActiveThread(workspaceId: string, threadId: string): void
   }
 }
 
+export function clearPersistedActiveThread(workspaceId: string): void {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(activeThreadStorageKey(workspaceId));
+  } catch {
+    // Ignore storage write failures in constrained environments.
+  }
+}
+
 export function threadQueryKey(threadId: string): string {
   return `chat:canonical:thread:${threadId}`;
 }
@@ -536,6 +547,9 @@ export function isSyntheticTranscriptMessage(message: WorkstationChatMessageReco
     || displayKind === 'local_access_notice'
     || displayKind === 'provider_error'
     || displayKind === 'thinking_row'
+    || displayKind === 'command_result'
+    || displayKind === 'tool_result'
+    || displayKind === 'terminal_error'
   ) {
     return true;
   }
@@ -571,6 +585,8 @@ export function isSyntheticTranscriptMessage(message: WorkstationChatMessageReco
     || normalized === "sage couldn't complete that turn."
     || normalized === 'not found'
     || normalized === 'thread not found.'
+    || normalized === 'connect an ai provider in integrations before sending a model-backed sage message.'
+    || normalized.includes(' saved in memory yet.')
   ) {
     return true;
   }
@@ -934,6 +950,72 @@ export function normalizeTimelineItems(payload: unknown): Record<string, unknown
     : [];
 }
 
+function parseHistoryTimestamp(value: string | null): number {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function compactHistoryTitle(value: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'Conversation';
+  }
+  return normalized.length > 72 ? `${normalized.slice(0, 69).trimEnd()}...` : normalized;
+}
+
+function isPlaceholderThreadTitle(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === '' || normalized === 'new chat' || normalized === 'chat' || normalized === 'primary thread';
+}
+
+function titleFromThreadRecord(thread: Record<string, unknown>): string {
+  const explicitTitle = readString(thread.title);
+  if (explicitTitle && !isPlaceholderThreadTitle(explicitTitle)) {
+    return compactHistoryTitle(explicitTitle);
+  }
+  const turns = Array.isArray(thread.turns) ? thread.turns : [];
+  const firstUserTurn = turns.find((turn) => (
+    readString(readObject(turn).role).toLowerCase() === 'user'
+  ));
+  const firstContent = readString(readObject(firstUserTurn).content);
+  return compactHistoryTitle(firstContent || explicitTitle || 'Conversation');
+}
+
+export function normalizeRecentThreadsFromThreadList(payload: unknown): RecentThreadSummary[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+  const items = (payload as Record<string, unknown>).items;
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items
+    .map((item): RecentThreadSummary | null => {
+      if (!item || typeof item !== 'object') {
+        return null;
+      }
+      const thread = item as Record<string, unknown>;
+      const threadId = readString(thread.id);
+      if (!threadId) {
+        return null;
+      }
+      const updatedAt = readString(thread.last_turn_at)
+        || readString(thread.updated_at)
+        || readString(thread.created_at)
+        || null;
+      return {
+        threadId,
+        title: titleFromThreadRecord(thread),
+        updatedAt,
+      };
+    })
+    .filter((item): item is RecentThreadSummary => item !== null)
+    .sort((left, right) => parseHistoryTimestamp(right.updatedAt) - parseHistoryTimestamp(left.updatedAt));
+}
+
 export function deriveRecentThreads(
   timelineItems: Record<string, unknown>[],
   activeThreadId: string,
@@ -1023,15 +1105,15 @@ export function chatPermissionModeLabel(
 ): string {
   const effectiveMode = effectiveChatPermissionMode(mode, runtimeTrustZone);
   if (effectiveMode === 'auto_review') {
-    return 'Default Guarded';
+    return 'Default';
   }
   if (effectiveMode === 'autopilot') {
-    return 'Autonomous Full Access';
+    return 'Full Access';
   }
   if (effectiveMode === 'device_access') {
-    return 'Default Guarded';
+    return 'Default';
   }
-  return 'Default Guarded';
+  return 'Default';
 }
 
 export function chatPermissionModeDetail(
@@ -1413,15 +1495,15 @@ export function providerFailureMessageForProvider(provider: ProviderCatalogRecor
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs a connected computer in Connectors. Use Workspace AI, connect a computer, or connect your own AI account.`;
+    return `${providerLabel} needs Agent Computer in Connectors. Connect a computer, use the default Sage route, or connect your own model account.`;
   }
   if (credentialPlane === 'workspace_connection') {
-    return 'Your AI account needs attention. Check the connection, quota, or selected model in Connectors.';
+    return 'The selected model account needs attention. Check the connection, quota, or selected model in Connectors.';
   }
   if (credentialPlane === 'platform_runtime') {
-    return 'Workspace AI is active, but the hosted AI model is temporarily unavailable. Try again or switch model.';
+    return 'The default Sage route is active, but the hosted model is temporarily unavailable. Try again or switch model.';
   }
-  return 'The selected AI model is not available right now. Switch model or open Connectors.';
+  return 'The selected model route is not available right now. Switch model or open Connectors.';
 }
 
 export function providerFailureActionsForProvider(
@@ -1441,7 +1523,7 @@ export function providerFailureActionsForProvider(
     return [
       { label: 'Open Connectors', target: 'integrations' },
       { label: 'Choose AI Model', target: 'integrations' },
-      { label: 'Use Workspace AI', target: 'integrations' },
+      { label: 'Use Default Route', target: 'integrations' },
     ];
   }
   const creditsOrKey = normalized.includes('api key')
@@ -1452,7 +1534,7 @@ export function providerFailureActionsForProvider(
   if (creditsOrKey) {
     return [
       { label: 'View usage', target: 'integrations' },
-      { label: 'Connect AI account', target: 'integrations' },
+      { label: 'Connect model account', target: 'integrations' },
       { label: 'Choose AI Model', target: 'integrations' },
     ];
   }
@@ -1971,6 +2053,23 @@ export function createCanonicalAssistantMessage(
   if (!content) {
     return null;
   }
+  const responseMode = readString(responseRecord.mode).toLowerCase();
+  const responseKind = readString(responseRecord.kind).toLowerCase();
+  const responseError = readString(responseRecord.error).toLowerCase();
+  const terminalError = responseRecord.terminal_error === true;
+  const fallbackUsed = readObject(metadata.context_used).fallback_used === true
+    || readObject(resultMetadata.context_used).fallback_used === true;
+  const modelBacked = Boolean(effectiveProvider || effectiveModel);
+  if (
+    terminalError
+    || responseKind === 'terminal_error'
+    || responseMode === 'error'
+    || responseMode === 'connect'
+    || (fallbackUsed && !modelBacked)
+    || (responseError && !modelBacked && interventions.length > 0)
+  ) {
+    return null;
+  }
   if (isProviderRuntimeGateMessage(reply)) {
     if (typeof metadata.display_kind !== 'string') {
       metadata.display_kind = 'provider_error';
@@ -2096,7 +2195,10 @@ export function projectedAssistantLooksSynthetic(
   if (!cell) {
     return false;
   }
-  return isProviderRuntimeGateMessage(readString(cell.content));
+  const normalized = readString(cell.content).toLowerCase();
+  return isProviderRuntimeGateMessage(normalized)
+    || normalized === 'connect an ai provider in integrations before sending a model-backed sage message.'
+    || normalized.includes(' saved in memory yet.');
 }
 
 export function createActivityStepMessage(
@@ -2267,10 +2369,10 @@ export function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTa
   return {
     tone: 'success',
     title: 'Agent Computer is ready',
-    meta: `${agentComputerLabel} · ${local.sampleAttachmentLabel ?? local.label} · Default Guarded`,
+    meta: `${agentComputerLabel} · ${local.sampleAttachmentLabel ?? local.label} · Default`,
     body: local.supportsFullAccess
-      ? 'Sage still uses cloud execution for ordinary turns. Agent Computer work starts in Default Guarded mode, and dedicated hardware can be switched to Autonomous Full Access during setup.'
-      : 'Sage still uses cloud execution for ordinary turns. Agent Computer work starts in Default Guarded mode.',
+      ? 'Sage still uses cloud execution for ordinary turns. Agent Computer work starts in Default, and dedicated hardware can be switched to Full Access during setup.'
+      : 'Sage still uses cloud execution for ordinary turns. Agent Computer work starts in Default.',
     preferredPill: `${preferredLabel} · ${preferredStatus}`,
     localPill: `${agentComputerLabel} · ${local.statusLabel ?? 'Ready'}`,
   };
@@ -2320,6 +2422,26 @@ export function classifyStatusNotice(message: string): {
       actionLabel: null,
     };
   }
+  if (/^(Default|Custom|Full Access) applied to Sage Agent Computer\.$/i.test(message)) {
+    return {
+      tone: 'success',
+      title: 'Saved',
+      body: message,
+      requiresLocalAccess: false,
+      actionTarget: null,
+      actionLabel: null,
+    };
+  }
+  if (/^Agent Computer stayed on .+ was not applied\.$/i.test(message)) {
+    return {
+      tone: 'warning',
+      title: 'Permission not changed',
+      body: message,
+      requiresLocalAccess: false,
+      actionTarget: null,
+      actionLabel: null,
+    };
+  }
   if (isGatewayBrowserMessage(message)) {
     return {
       tone: 'warning',
@@ -2363,10 +2485,10 @@ export function classifyStatusNotice(message: string): {
   if (isProviderRuntimeGateMessage(message) || /provider error|api key|credential|ollama/i.test(message)) {
     return {
       tone: 'warning',
-      title: 'AI model attention needed',
+      title: 'Sage route needs attention',
       body: /api key|credential/i.test(message)
-        ? 'Check your AI model key or quota in Connectors.'
-        : 'Choose Workspace AI, add an AI model key, or connect a computer.',
+        ? 'Check the selected model key or quota in Connectors.'
+        : 'Choose the default Sage route, connect a model account, or connect Agent Computer.',
       requiresLocalAccess: false,
       actionTarget: 'integrations',
       actionLabel: 'Open Connectors',

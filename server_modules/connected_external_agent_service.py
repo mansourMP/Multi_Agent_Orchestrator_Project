@@ -1218,6 +1218,7 @@ async def _proxy_external_agent_json_request(
         runtime_access_mode="agent_computer_private_proxy",
         empyralis_approved=True,
         actor_id=_read_string(agent.get("id"), "connected_external_agent"),
+        agent_scope="external_agent",
     )
     return _json_from_gateway_proxy_result(result, label=label, max_bytes=max_bytes)
 

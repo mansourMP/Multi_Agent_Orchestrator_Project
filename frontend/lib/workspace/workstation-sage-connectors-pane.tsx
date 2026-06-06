@@ -311,6 +311,8 @@ type ExternalIntegrationCardRecord = {
   secondaryActionLabel?: string | null;
   actionTarget?: 'gateway' | 'computer' | 'ai' | 'connection' | 'close';
   connectionId?: string | null;
+  connectionProvider?: string | null;
+  connectionAuthFields?: string[];
   channel?: PersonalCommunicationChannel | null;
   locked?: boolean;
 };
@@ -490,8 +492,8 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/brand-assets/channels/discord.svg?v=3',
     connectorIds: ['discord_bot'],
     capabilityTags: ['Servers', 'DMs'],
-    summary: 'Discord is a future communication integration. Keep it planned until the personal-agent core and channel safety are hardened.',
-    setupHint: 'Prioritize Telegram, WhatsApp, and Signal first. Add Discord when there is real demand.',
+    summary: 'Discord bot deployments let Sage or Studio agents work in configured servers, channels, and DMs.',
+    setupHint: 'Connect a Discord bot when Sage or a Studio agent should work in Discord.',
     surfaceScope: 'all',
   },
   {
@@ -572,6 +574,56 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     capabilityTags: ['App action', 'Automation'],
     summary: 'App actions let Sage notify or start work in another system without a full app connection.',
     setupHint: 'Add an app action when you need lightweight automation.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'dropbox',
+    label: 'Dropbox',
+    image: '/brand-assets/generic/uploads.svg?v=3',
+    connectorIds: ['dropbox'],
+    capabilityTags: ['Files', 'Folders'],
+    summary: 'Dropbox lets Sage list folders, search files, create shared links, and run approved storage actions.',
+    setupHint: 'Connect Dropbox when Sage should work with shared files and folders.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 's3',
+    label: 'Amazon S3',
+    image: '/brand-assets/generic/api.svg?v=3',
+    connectorIds: ['s3'],
+    capabilityTags: ['Buckets', 'Objects'],
+    summary: 'Amazon S3 lets Sage inspect buckets, work with objects, and run approved storage actions.',
+    setupHint: 'Connect Amazon S3 when Sage should work with cloud storage.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'smtp',
+    label: 'SMTP / IMAP Email',
+    image: '/brand-assets/generic/api.svg?v=3',
+    connectorIds: ['smtp'],
+    capabilityTags: ['Send email', 'Fetch inbox'],
+    summary: 'SMTP / IMAP gives Sage direct mailbox send and fetch actions without turning email into a live inbound channel.',
+    setupHint: 'Connect SMTP / IMAP when you need a custom mailbox outside Google or Microsoft.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'wechat_work',
+    label: 'WeChat Work',
+    image: '/brand-assets/channels/wechat.svg?v=3',
+    connectorIds: ['wechat_work'],
+    capabilityTags: ['Webhook', 'Messages'],
+    summary: 'WeChat Work lets Sage send approved outbound workspace messages through a configured webhook.',
+    setupHint: 'Connect a WeChat Work webhook when Sage should notify a workspace channel.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'instagram_business',
+    label: 'Instagram Business',
+    image: '/brand-assets/generic/api.svg?v=3',
+    connectorIds: ['instagram_business'],
+    capabilityTags: ['Comments', 'DMs'],
+    summary: 'Instagram Business lets Sage send approved comment replies and direct messages through the Graph API.',
+    setupHint: 'Connect Instagram Business when Sage should assist with social replies.',
     surfaceScope: 'all',
   },
 ];
@@ -1314,8 +1366,8 @@ function providerStatusPresentation(
   };
 }
 
-function describeConnectorCard(record: ConnectorCardRecord): string {
-  if (record.connected) {
+function describeConnectorCard(record: ConnectorCardRecord, connected = record.connected): string {
+  if (connected) {
     return `${record.label} is ready when you ask Sage to use it.`;
   }
   return record.definition.setupHint;
@@ -1783,6 +1835,7 @@ export function WorkstationSageConnectorsPane({
   ));
   const [providerDraftKeys, setProviderDraftKeys] = useState<Record<string, string>>({});
   const [providerDraftBaseUrls, setProviderDraftBaseUrls] = useState<Record<string, string>>({});
+  const [connectorDraftCredentials, setConnectorDraftCredentials] = useState<Record<string, Record<string, string>>>({});
   const [providerPickerOpen, setProviderPickerOpen] = useState(false);
   const [computerConnectOpen, setComputerConnectOpen] = useState(false);
   const [providerPickerDraftId, setProviderPickerDraftId] = useState<string | null>(null);
@@ -1817,7 +1870,9 @@ export function WorkstationSageConnectorsPane({
           : [];
         const selectionPayload = await services.client.getSageAgentComputerSelection().catch(() => null);
         const selection = asConnectorPayload(selectionPayload?.selection);
-        const currentGatewayId = readString(selection, 'selected_gateway_id') || readString(asConnectorPayload(selectionPayload), 'selected_gateway_id');
+        const selectionRoot = asConnectorPayload(selectionPayload);
+        const currentGatewayId = readString(selection?.selected_gateway_id)
+          || readString(selectionRoot?.selected_gateway_id);
         const selectedGateway = currentGatewayId
           ? registrationItems.find((item) => readString(item.gateway_id, '') === currentGatewayId) ?? null
           : null;
@@ -2297,24 +2352,6 @@ export function WorkstationSageConnectorsPane({
     return fallback;
   }
 
-  function connectorStatusTone(record: ConnectorCardRecord): PersonalCardStatusTone {
-    return record.connected ? 'connected' : 'neutral';
-  }
-
-  const lockedConnectorIds = new Set([
-    'whatsapp_twilio',
-    'discord_bot',
-    'notion',
-    'linear',
-    'webhook',
-  ]);
-
-  const lockedPersonalBridgeIds = new Set([
-    'signal_personal',
-    'imessage_personal',
-    'wechat_personal',
-  ]);
-
   function connectorActionLabel(record: ConnectorCardRecord): string | null {
     const statusItem = connectionStatusForConnector(record);
     if (statusItem) {
@@ -2329,29 +2366,36 @@ export function WorkstationSageConnectorsPane({
 
   function connectorAsExternalCard(record: ConnectorCardRecord): ExternalIntegrationCardRecord {
     const statusItem = connectionStatusForConnector(record);
-    const locked = connectionLaunchLocked(statusItem) || lockedConnectorIds.has(record.id);
+    const locked = connectionLaunchLocked(statusItem);
     const connected = statusItem ? statusItem.connected === true : record.connected;
     const connectionId = readString(statusItem?.id) || null;
     const nextAction = readString(statusItem?.next_action).toLowerCase();
+    const connectionProvider = readString(statusItem?.vault_provider)
+      || readString(statusItem?.account_provider)
+      || readString(statusItem?.connector_id)
+      || connectionId;
+    const connectionAuthFields = readStringList(statusItem?.auth_required_fields);
     return {
       id: `connector_${record.id}`,
       label: record.label,
       image: record.image,
-      detail: locked ? readString(statusItem?.description, 'Planned · Coming soon.') : describeConnectorCard(record),
+      detail: locked ? readString(statusItem?.description, 'Planned · Coming soon.') : describeConnectorCard(record, connected),
       statusLabel: locked ? connectionLockedLabel(statusItem, 'Planned') : connected ? 'Connected' : 'Not connected',
-      statusTone: locked ? 'neutral' : connectorStatusTone(record),
+      statusTone: locked ? 'neutral' : connected ? 'connected' : 'neutral',
       summary: record.definition.summary,
       nextStep: locked ? null : connected ? null : record.definition.setupHint,
       actionLabel: locked ? null : connectorActionLabel(record),
       actionTarget: connectionId && nextAction === 'connect' ? 'connection' : 'close',
       connectionId,
+      connectionProvider,
+      connectionAuthFields,
       locked,
     };
   }
 
   function personalAsExternalCard(record: PersonalCardRecord): ExternalIntegrationCardRecord {
     const statusItem = connectionStatusForPersonal(record);
-    const locked = connectionLaunchLocked(statusItem) || lockedPersonalBridgeIds.has(record.id);
+    const locked = connectionLaunchLocked(statusItem);
     const pairLabel = record.channel
       ? record.statusTone === 'connected'
         ? `Manage ${record.label.replace(/^Your\s+/, '')}`
@@ -2381,7 +2425,9 @@ export function WorkstationSageConnectorsPane({
       || card.id === 'notion'
       || card.id === 'uploads'
       || card.id === 'websites'
-      || card.id === 'github',
+      || card.id === 'github'
+      || card.id === 'dropbox'
+      || card.id === 's3',
     ),
     [connectorCards],
   );
@@ -2400,7 +2446,12 @@ export function WorkstationSageConnectorsPane({
         || card.id === 'github'
         || card.id === 'linear'
         || card.id === 'notion'
-        || card.id === 'webhook',
+        || card.id === 'webhook'
+        || card.id === 'dropbox'
+        || card.id === 's3'
+        || card.id === 'smtp'
+        || card.id === 'wechat_work'
+        || card.id === 'instagram_business',
       )
       .map(connectorAsExternalCard),
     [connectorCards],
@@ -2448,7 +2499,7 @@ export function WorkstationSageConnectorsPane({
       id: 'apps',
       label: 'Apps',
       description: 'Apps Sage can connect to.',
-      detail: 'Gmail, Calendar, Microsoft 365, GitHub, Notion, Linear, and more.',
+      detail: 'Gmail, Calendar, GitHub, Notion, Linear, Dropbox, S3, SMTP, WeChat Work, Instagram, and more.',
       countLabel: `${appCards.length}`,
       statusTone: appCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
     });
@@ -2566,12 +2617,128 @@ export function WorkstationSageConnectorsPane({
         ? response.setup_session as Record<string, unknown> | undefined
         : undefined;
       const sessionId = readString(session?.id);
-      setStatus(sessionId ? 'Setup session started.' : 'Connection setup started.');
+      const nextAction = response && typeof response === 'object'
+        ? readString(response.next_action).toLowerCase()
+        : '';
+      if (nextAction === 'connector_vault_setup') {
+        setStatus('Enter the connection details and save credentials from this card.');
+        setExpandedCardId(record.id);
+      } else if (nextAction === 'agent_computer_local_bridge_setup') {
+        const bridgeContract = response && typeof response === 'object'
+          ? response.bridge_contract as Record<string, unknown> | undefined
+          : undefined;
+        const env = bridgeContract && typeof bridgeContract.gateway_env === 'object'
+          ? bridgeContract.gateway_env as Record<string, unknown>
+          : {};
+        const urlEnv = readString(env.url);
+        setStatus(urlEnv
+          ? `Configure ${urlEnv} on the selected Agent Computer, then refresh this card.`
+          : 'Configure this bridge on the selected Agent Computer, then refresh this card.');
+        setExpandedCardId(record.id);
+      } else {
+        setStatus(sessionId ? 'Setup session started.' : 'Connection setup started.');
+        setExpandedCardId(null);
+      }
       setError(null);
-      setExpandedCardId(null);
       await loadState().catch(() => undefined);
     } catch (connectionError) {
       setError(connectionError instanceof Error ? connectionError.message : 'Connection setup is not available yet.');
+    } finally {
+      setBusyCardId(null);
+    }
+  }
+
+  function connectorCredentialFieldLabel(field: string): string {
+    const normalized = field.replace(/_/g, ' ').trim();
+    return normalized ? normalized.replace(/\b\w/g, (match) => match.toUpperCase()) : 'Value';
+  }
+
+  function connectorCredentialInputType(field: string): string {
+    const token = field.toLowerCase();
+    return token.includes('token')
+      || token.includes('secret')
+      || token.includes('password')
+      || token.includes('private_key')
+      || token.includes('api_key')
+      ? 'password'
+      : 'text';
+  }
+
+  function connectorCredentialPlaceholder(field: string): string {
+    if (field === 'access_token') {
+      return 'OAuth access token';
+    }
+    if (field === 'bot_token') {
+      return 'Bot token';
+    }
+    if (field === 'chat_id') {
+      return 'Chat ID';
+    }
+    return connectorCredentialFieldLabel(field);
+  }
+
+  function updateConnectorDraftCredential(cardId: string, field: string, value: string) {
+    setConnectorDraftCredentials((current) => ({
+      ...current,
+      [cardId]: {
+        ...(current[cardId] ?? {}),
+        [field]: value,
+      },
+    }));
+  }
+
+  async function handleConnectorCredentialSave(record: ExternalIntegrationCardRecord): Promise<void> {
+    const provider = readString(record.connectionProvider);
+    const fields = (record.connectionAuthFields ?? []).filter(Boolean);
+    if (!provider || fields.length === 0) {
+      setError('Connection setup is not available yet.');
+      return;
+    }
+    const draft = connectorDraftCredentials[record.id] ?? {};
+    const credentials: Record<string, string | number | boolean> = {};
+    const missing: string[] = [];
+    fields.forEach((field) => {
+      const value = readString(draft[field]);
+      if (!value) {
+        missing.push(connectorCredentialFieldLabel(field));
+        return;
+      }
+      if (field === 'port') {
+        const parsed = Number(value);
+        credentials[field] = Number.isFinite(parsed) ? parsed : value;
+      } else if (field === 'use_tls') {
+        credentials[field] = ['true', '1', 'yes', 'on'].includes(value.toLowerCase());
+      } else {
+        credentials[field] = value;
+      }
+    });
+    if (missing.length > 0) {
+      setError(`${missing.join(', ')} required.`);
+      return;
+    }
+    setBusyCardId(record.id);
+    setError(null);
+    try {
+      await services.client.createStudioChannelAccount({
+        provider,
+        label: record.label,
+        credentials,
+        metadata: {
+          source: 'sage_connectors',
+          connection_id: record.connectionId,
+          card_id: record.id,
+        },
+        skipValidation: false,
+      });
+      setConnectorDraftCredentials((current) => {
+        const next = { ...current };
+        delete next[record.id];
+        return next;
+      });
+      await refreshAfterMutation(`${record.label} connected.`);
+      setExpandedCardId(null);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Connection details could not be saved.');
     } finally {
       setBusyCardId(null);
     }
@@ -3766,12 +3933,28 @@ export function WorkstationSageConnectorsPane({
           ) : (
             <AppButton
               type="button"
+              disabled={bridgeChannel && busyCardId === record.id}
               onClick={() => {
+                if (bridgeChannel) {
+                  void handleConnectionSetupStart({
+                    id: record.id,
+                    label: record.label,
+                    image: record.image,
+                    detail: record.detail,
+                    statusLabel: record.statusLabel,
+                    statusTone: record.statusTone,
+                    summary: record.summary,
+                    nextStep: record.nextStep,
+                    actionTarget: 'connection',
+                    connectionId: record.id,
+                  });
+                  return;
+                }
                 openGatewaySurface();
               }}
             >
               {bridgeChannel
-                ? 'Open computer setup'
+                ? busyCardId === record.id ? 'Checking setup...' : 'Set up bridge'
                 : record.statusLabel === 'Connect computer'
                 ? 'Connect a computer'
                 : record.id === 'browser'
@@ -3809,6 +3992,11 @@ export function WorkstationSageConnectorsPane({
     const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
     const configOpen = channel ? true : false;
     const showClose = options.showClose !== false;
+    const showConnectorCredentialForm = record.actionTarget === 'connection'
+      && !record.locked
+      && !channel
+      && readString(record.connectionProvider) !== ''
+      && (record.connectionAuthFields ?? []).length > 0;
     return (
       <MotionSlidePanel className="sage-unified-expand">
         <div className="sage-unified-expand__header">
@@ -3826,8 +4014,9 @@ export function WorkstationSageConnectorsPane({
         </div>
         <div className="sage-unified-expand__text">{record.summary}</div>
         {record.nextStep ? <div className="sage-unified-expand__text">{record.nextStep}</div> : null}
+        {showConnectorCredentialForm ? renderConnectorCredentialForm(record) : null}
         <div className="sage-unified-expand__actions">
-          {record.actionLabel && !channel ? (
+          {record.actionLabel && !channel && !showConnectorCredentialForm ? (
             <AppButton
               type="button"
               onClick={() => {
@@ -3895,6 +4084,49 @@ export function WorkstationSageConnectorsPane({
           onClick={(event) => event.stopPropagation()}
         >
           {renderExternalExpand(record)}
+        </div>
+      </div>
+    );
+  }
+
+  function renderConnectorCredentialForm(record: ExternalIntegrationCardRecord) {
+    const fields = (record.connectionAuthFields ?? []).filter(Boolean);
+    if (fields.length === 0 || !readString(record.connectionProvider)) {
+      return null;
+    }
+    const draft = connectorDraftCredentials[record.id] ?? {};
+    const busy = busyCardId === record.id;
+    return (
+      <div className="sage-unified-expand__config-disclosure">
+        <div className="sage-unified-expand__text">Connection details are validated before Sage or Studio can use this account.</div>
+        {fields.map((field) => (
+          <FormField key={`${record.id}:${field}`} label={connectorCredentialFieldLabel(field)}>
+            <FormInput
+              type={connectorCredentialInputType(field)}
+              value={draft[field] ?? ''}
+              placeholder={connectorCredentialPlaceholder(field)}
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              data-1p-ignore="true"
+              data-lpignore="true"
+              onChange={(event) => {
+                updateConnectorDraftCredential(record.id, field, event.currentTarget.value);
+              }}
+            />
+          </FormField>
+        ))}
+        <div className="sage-unified-expand__actions">
+          <AppButton
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              void handleConnectorCredentialSave(record);
+            }}
+          >
+            {busy ? 'Saving...' : 'Save connection'}
+          </AppButton>
         </div>
       </div>
     );

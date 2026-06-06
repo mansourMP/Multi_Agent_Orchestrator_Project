@@ -38,7 +38,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self._rust_runtime_session_patch = patch(
             "server_modules.runtime_runtime_api.rust_runtime_kernel_client.run_runtime_kernel_enforced",
-            return_value=self._rust_allow_decision(),
+            side_effect=self._rust_allow_side_effect,
         )
         self.mock_rust_runtime_session = self._rust_runtime_session_patch.start()
 
@@ -101,6 +101,9 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
             "approval_required": False,
             "cacheable": False,
         }
+
+    def _rust_allow_side_effect(self, _command, payload):
+        return self._rust_allow_decision(str((payload or {}).get("operation") or "runtime_api_test"))
 
     @patch("server_modules.local_queue.recover_orphaned_local_runs_on_startup")
     @patch("server_modules.outbox_service.get_outbox_delivery_status")
@@ -372,7 +375,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         with patch.object(
             runtime_runtime_api.rust_runtime_kernel_client,
             "run_runtime_kernel_enforced",
-            return_value={"ok": True, "decision": "allow", "reason": "runtime_session_api_policy_satisfied"},
+            side_effect=self._rust_allow_side_effect,
         ) as mock_rust:
             result = self._run_async(
                 handler(
@@ -412,7 +415,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         with patch.object(
             runtime_runtime_api.rust_runtime_kernel_client,
             "run_runtime_kernel_enforced",
-            return_value={"ok": True, "decision": "allow", "reason": "runtime_session_api_policy_satisfied"},
+            side_effect=self._rust_allow_side_effect,
         ) as mock_rust:
             result = self._run_async(
                 handler(
@@ -607,6 +610,64 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         mock_run_in_threadpool.assert_called_once()
         self.assertEqual(mock_bootstrap.call_args.kwargs["enrollment_token"], "tok")
 
+    @patch("server_modules.local_queue.handle_bootstrap_enrolled_local_companion_runtime")
+    @patch("server_modules.local_queue.handle_register_local_cluster_runtime")
+    def test_runtime_register_route_requires_enrollment_token_before_session_issue(self, mock_register, mock_bootstrap):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/runtimes/{runtime_id}/register")]
+
+        with self.assertRaises(HTTPException) as raised:
+            self._run_async(
+                handler(
+                    "worker-1",
+                    runtime_runtime_api.RuntimeRegisterPayload(display_name="Worker"),
+                )
+            )
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertIn("machine enrollment token", str(raised.exception.detail))
+        mock_register.assert_not_called()
+        mock_bootstrap.assert_not_called()
+
+    @patch("server_modules.runtime_runtime_api.run_in_threadpool", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+    @patch("server_modules.local_queue.handle_bootstrap_enrolled_local_companion_runtime")
+    def test_runtime_register_route_uses_enrollment_bootstrap(self, mock_bootstrap, mock_run_in_threadpool):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/runtimes/{runtime_id}/register")]
+        mock_bootstrap.return_value = {
+            "ok": True,
+            "runtime_id": "worker-1",
+            "machine_id": "worker-1",
+            "session_token": "session-1",
+            "instance_id": "instance-1",
+            "capability_digest": "abcd1234",
+            "session_issued_at": "2026-04-11T00:00:00Z",
+            "connection_mode": "platform_relay",
+            "runtime": {"runtime_id": "worker-1", "runtime_role": "specialist"},
+        }
+
+        result = self._run_async(
+            handler(
+                "worker-1",
+                runtime_runtime_api.RuntimeRegisterPayload(
+                    enrollment_token="tok",
+                    runtime_role="specialist",
+                    install_id="install-1",
+                    specialist_key="support-bot",
+                ),
+            )
+        )
+
+        self.assertEqual(result["session_token"], "session-1")
+        self.assertTrue(result["enrollment_bootstrap"])
+        self.assertEqual(mock_bootstrap.call_args.kwargs["enrollment_token"], "tok")
+        self.assertEqual(mock_bootstrap.call_args.kwargs["runtime_role"], "specialist")
+        self.assertEqual(mock_bootstrap.call_args.kwargs["install_id"], "install-1")
+        self.assertEqual(mock_bootstrap.call_args.kwargs["specialist_key"], "support-bot")
+        mock_run_in_threadpool.assert_called_once()
+
     @patch("server_modules.local_queue.handle_heartbeat_local_run")
     @patch("server_modules.local_queue._assert_runtime_session")
     def test_runtime_task_heartbeat_forwards_structured_event(self, mock_assert_session, mock_heartbeat):
@@ -701,7 +762,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         with patch.object(
             runtime_runtime_api.rust_runtime_kernel_client,
             "run_runtime_kernel_enforced",
-            return_value=self._rust_allow_decision(),
+            side_effect=self._rust_allow_side_effect,
         ) as mock_rust:
             result = self._run_async(
                 handler(
@@ -752,7 +813,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         with patch.object(
             runtime_runtime_api.rust_runtime_kernel_client,
             "run_runtime_kernel_enforced",
-            return_value=self._rust_allow_decision(),
+            side_effect=self._rust_allow_side_effect,
         ) as mock_rust, TestClient(app) as client:
             response = client.post(
                 "/runtime/tasks/claim",
@@ -813,7 +874,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         with patch.object(
             runtime_runtime_api.rust_runtime_kernel_client,
             "run_runtime_kernel_enforced",
-            return_value=self._rust_allow_decision(),
+            side_effect=self._rust_allow_side_effect,
         ) as mock_rust:
             result = self._run_async(handler("machine-1", current_user=self._current_user()))
 
@@ -840,7 +901,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         with patch.object(
             runtime_runtime_api.rust_runtime_kernel_client,
             "run_runtime_kernel_enforced",
-            return_value=self._rust_allow_decision(),
+            side_effect=self._rust_allow_side_effect,
         ) as mock_rust:
             result = self._run_async(
                 handler(
@@ -871,7 +932,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         with patch.object(
             runtime_runtime_api.rust_runtime_kernel_client,
             "run_runtime_kernel_enforced",
-            return_value=self._rust_allow_decision(),
+            side_effect=self._rust_allow_side_effect,
         ) as mock_rust:
             result = self._run_async(
                 handler(
@@ -902,7 +963,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         with patch.object(
             runtime_runtime_api.rust_runtime_kernel_client,
             "run_runtime_kernel_enforced",
-            return_value=self._rust_allow_decision(),
+            side_effect=self._rust_allow_side_effect,
         ) as mock_rust:
             result = self._run_async(
                 handler(
@@ -992,17 +1053,19 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(kwargs["since_sequence"], 4)
         self.assertTrue(kwargs["include_backlog"])
 
-    @patch("server_modules.local_queue.handle_register_local_cluster_runtime")
-    def test_register_runtime_routes_exposes_local_cluster_register(self, mock_register):
+    @patch("server_modules.runtime_runtime_api.run_in_threadpool", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+    @patch("server_modules.local_queue.handle_bootstrap_enrolled_local_companion_runtime")
+    def test_register_runtime_routes_exposes_local_cluster_register(self, mock_bootstrap, mock_run_in_threadpool):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
-        mock_register.return_value = {"ok": True, "runtime_id": "worker-1", "runtime": {"runtime_id": "worker-1", "runtime_role": "specialist"}}
+        mock_bootstrap.return_value = {"ok": True, "runtime_id": "worker-1", "runtime": {"runtime_id": "worker-1", "runtime_role": "specialist"}}
         handler = app.routes[("POST", "/runtime/local-cluster/{runtime_id}/register")]
 
         result = self._run_async(
             handler(
                 "worker-1",
                 runtime_runtime_api.RuntimeRegisterPayload(
+                    enrollment_token="tok",
                     runtime_role="specialist",
                     install_id="install-1",
                     specialist_key="support-bot",
@@ -1011,9 +1074,31 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         )
 
         self.assertEqual(result["runtime"]["runtime_id"], "worker-1")
-        self.assertEqual(mock_register.call_args.kwargs["runtime_role"], "specialist")
-        self.assertEqual(mock_register.call_args.kwargs["install_id"], "install-1")
-        self.assertEqual(mock_register.call_args.kwargs["specialist_key"], "support-bot")
+        self.assertEqual(mock_bootstrap.call_args.kwargs["enrollment_token"], "tok")
+        self.assertEqual(mock_bootstrap.call_args.kwargs["runtime_role"], "specialist")
+        self.assertEqual(mock_bootstrap.call_args.kwargs["install_id"], "install-1")
+        self.assertEqual(mock_bootstrap.call_args.kwargs["specialist_key"], "support-bot")
+        mock_run_in_threadpool.assert_called_once()
+
+    @patch("server_modules.local_queue.handle_bootstrap_enrolled_local_companion_runtime")
+    @patch("server_modules.local_queue.handle_register_local_cluster_runtime")
+    def test_local_cluster_register_requires_enrollment_token_before_session_issue(self, mock_register, mock_bootstrap):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        handler = app.routes[("POST", "/runtime/local-cluster/{runtime_id}/register")]
+
+        with self.assertRaises(HTTPException) as raised:
+            self._run_async(
+                handler(
+                    "worker-1",
+                    runtime_runtime_api.RuntimeRegisterPayload(display_name="Worker"),
+                )
+            )
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertIn("machine enrollment token", str(raised.exception.detail))
+        mock_register.assert_not_called()
+        mock_bootstrap.assert_not_called()
 
     @patch("server_modules.local_queue.handle_start_local_runtime")
     @patch("server_modules.local_queue._assert_runtime_session")

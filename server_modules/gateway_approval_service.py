@@ -348,7 +348,7 @@ async def resolve_gateway_tool_approval(
     actor: str,
     note: Optional[str] = None,
     timeout_seconds: Optional[int] = None,
-    execute_fn: Callable[..., Any] = gateway_execution_service.execute_tool_via_gateway,
+    execute_fn: Optional[Callable[..., Any]] = None,
     approval_ttl_seconds: int = 900,
 ) -> Dict[str, Any]:
     approval = gateway_state_repository.get_gateway_action_approval(approval_id)
@@ -522,6 +522,8 @@ async def resolve_gateway_tool_approval(
         )
 
     request_payload = dict(resolved.get("request_payload") or {})
+    default_execute_fn = gateway_execution_service.execute_tool_via_gateway
+    resolved_execute_fn = execute_fn or default_execute_fn
     execute_kwargs = {
         "gateway_id": gateway_id,
         "capability_id": str(request_payload.get("capability_id") or resolved.get("capability_id") or "").strip(),
@@ -532,13 +534,13 @@ async def resolve_gateway_tool_approval(
         "timeout_seconds": int(timeout_seconds or 15),
         "request_id": str(request_payload.get("request_id") or resolved.get("request_id") or "").strip() or None,
     }
-    if execute_fn is gateway_execution_service.execute_tool_via_gateway:
+    if resolved_execute_fn is default_execute_fn:
         execute_kwargs["runtime_access_mode"] = str(request_payload.get("runtime_access_mode") or "").strip() or None
         execute_kwargs["empyralis_approved"] = True
         if _is_personal_channel_send_capability(str(execute_kwargs.get("capability_id") or "")):
-            execute_fn = _execute_personal_channel_send_approval
+            resolved_execute_fn = _execute_personal_channel_send_approval
     try:
-        execution = await execute_fn(**execute_kwargs)
+        execution = await resolved_execute_fn(**execute_kwargs)
     except (asyncio.TimeoutError, TimeoutError, RuntimeError, ValueError) as exc:
         _enforce_gateway_approval_transition(
             operation="fail_gateway_tool_approval",

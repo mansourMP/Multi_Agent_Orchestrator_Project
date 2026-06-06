@@ -3,8 +3,16 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
 from server_modules import routes_gateway
+
+
+def _route_dependencies(path: str) -> list[str]:
+    for route in routes_gateway.router.routes:
+        if isinstance(route, APIRoute) and route.path == path:
+            return [getattr(dep.call, "__name__", str(dep.call)) for dep in route.dependant.dependencies]
+    raise AssertionError(f"Route {path} not found.")
 
 
 def test_gateway_service_accepts_canonical_dispatch_action():
@@ -392,6 +400,8 @@ def test_acp_turn_endpoint_wrong_rust_action_blocks_before_handle_sage_chat():
 
     async def run_test():
         with (
+            patch.object(routes_gateway, "enforce_workspace_access", return_value="ws-1"),
+            patch.object(routes_gateway, "workspace_tenant_id", return_value="tenant-1"),
             patch.object(
                 routes_gateway.rust_runtime_kernel_client,
                 "gateway_action_decision",
@@ -416,10 +426,86 @@ def test_acp_turn_endpoint_wrong_rust_action_blocks_before_handle_sage_chat():
             response = await routes_gateway.acp_turn_endpoint(
                 request=_FakeRequest(),
                 workspace_id="ws-1",
+                current_user={"user_id": "customer-1"},
             )
 
         assert response.status_code == 500
         assert b"unexpected next_action" in response.body
+        handle_mock.assert_not_awaited()
+
+    asyncio.run(run_test())
+
+
+def test_acp_turn_route_requires_api_key_dependency():
+    assert "require_api_key" in _route_dependencies("/gateway/acp/turn")
+
+
+def test_acp_turn_endpoint_enforces_workspace_access_before_handle_sage_chat():
+    class _FakeRequest:
+        async def json(self):
+            return {
+                "id": "acp-1",
+                "type": "agent.turn",
+                "payload": {"message": "hello", "workspace_id": "ws-denied"},
+            }
+
+    async def run_test():
+        with (
+            patch.object(
+                routes_gateway,
+                "enforce_workspace_access",
+                side_effect=HTTPException(status_code=403, detail="Workspace is not accessible for this user."),
+            ) as access_mock,
+            patch(
+                "server_modules.sage_agent_runtime_service.handle_sage_chat",
+                new=AsyncMock(side_effect=AssertionError("should not execute Sage turn")),
+            ) as handle_mock,
+        ):
+            with pytest.raises(HTTPException) as raised:
+                await routes_gateway.acp_turn_endpoint(
+                    request=_FakeRequest(),
+                    workspace_id="ws-denied",
+                    current_user={"user_id": "customer-1"},
+                )
+
+        assert raised.value.status_code == 403
+        access_mock.assert_called_once_with(
+            {"user_id": "customer-1"},
+            "ws-denied",
+            minimum_role="member",
+        )
+        handle_mock.assert_not_awaited()
+
+    asyncio.run(run_test())
+
+
+def test_acp_turn_endpoint_rejects_payload_workspace_mismatch_before_handle_sage_chat():
+    class _FakeRequest:
+        async def json(self):
+            return {
+                "id": "acp-1",
+                "type": "agent.turn",
+                "payload": {"message": "hello", "workspace_id": "ws-other"},
+            }
+
+    async def run_test():
+        with (
+            patch.object(routes_gateway, "enforce_workspace_access", return_value="ws-1") as access_mock,
+            patch.object(routes_gateway, "workspace_tenant_id", return_value="tenant-1"),
+            patch(
+                "server_modules.sage_agent_runtime_service.handle_sage_chat",
+                new=AsyncMock(side_effect=AssertionError("should not execute Sage turn")),
+            ) as handle_mock,
+        ):
+            response = await routes_gateway.acp_turn_endpoint(
+                request=_FakeRequest(),
+                workspace_id="ws-1",
+                current_user={"user_id": "customer-1"},
+            )
+
+        assert response.status_code == 403
+        assert b"workspace_mismatch" in response.body
+        access_mock.assert_called_once()
         handle_mock.assert_not_awaited()
 
     asyncio.run(run_test())

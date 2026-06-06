@@ -40,6 +40,7 @@ from server_modules.agent_computer_policy_service import (
     validate_agent_computer_policy as validate_agent_computer_policy_contract,
 )
 from server_modules.capability_risk_classifier_service import (
+    DECISION_ALLOW,
     DECISION_APPROVAL_REQUIRED,
     DECISION_BLOCK,
     CapabilityRiskClassifierError,
@@ -2808,6 +2809,7 @@ async def gateway_websocket(
 async def acp_turn_endpoint(
     request: Request,
     workspace_id: str = Query(..., description="Workspace ID"),
+    current_user=Depends(require_api_key),
 ):
     from server_modules.acp_bridge_service import (
         parse_acp_message,
@@ -2817,6 +2819,13 @@ async def acp_turn_endpoint(
     )
     from server_modules.sage_agent_runtime_service import handle_sage_chat
     from server_modules.sage_agent_runtime_contract import SageTurnResult
+
+    resolved_workspace_id = enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="member",
+    )
+    tenant_id = workspace_tenant_id(current_user, resolved_workspace_id)
 
     try:
         body = await request.json()
@@ -2840,16 +2849,29 @@ async def acp_turn_endpoint(
     if msg_type == "agent.turn":
         try:
             params = gw_frame.get("params", {})
+            payload_workspace_id = str(params.get("workspace_id") or "").strip()
+            if payload_workspace_id and payload_workspace_id != resolved_workspace_id:
+                return JSONResponse(
+                    content=build_acp_error(
+                        "workspace_mismatch",
+                        "ACP payload workspace_id does not match the authenticated workspace.",
+                        acp_msg.get("id", ""),
+                    ),
+                    status_code=403,
+                )
+            message = str(params.get("message", "")).strip()
             _enforce_gateway_acp_turn_decision(
-                workspace_id=str(workspace_id or params.get("workspace_id", "")).strip(),
+                workspace_id=resolved_workspace_id,
                 request_id=str(acp_msg.get("id") or "").strip(),
-                message=str(params.get("message", "")).strip(),
+                message=message,
             )
             result = await handle_sage_chat(
-                workspace_id=str(workspace_id or params.get("workspace_id", "")).strip(),
-                message=str(params.get("message", "")).strip(),
+                workspace_id=resolved_workspace_id,
+                tenant_id=tenant_id,
+                message=message,
                 surface="acp",
                 mode="owner_sage",
+                current_user=current_user,
             )
             if isinstance(result, SageTurnResult):
                 reply_data = {

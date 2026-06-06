@@ -213,7 +213,12 @@ def _is_control_plane_rate_limited_path(request_path: str) -> bool:
         return False
     if (path.startswith("/threads/") or path.startswith("/api/threads/")) and path.endswith("/turns"):
         return False
-    if path.startswith("/runtime/runtimes/") or path.startswith("/runtime/tasks/"):
+    runtime_prefixes = ("/runtime/runtimes/", "/api/runtime/runtimes/")
+    if path.startswith(runtime_prefixes):
+        if path.endswith("/heartbeat") or "/control/" in path:
+            return False
+        return True
+    if path.startswith(("/runtime/tasks/", "/api/runtime/tasks/")):
         return False
     return True
 

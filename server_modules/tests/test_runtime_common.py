@@ -88,6 +88,32 @@ class RuntimeCommonRateLimitTests(unittest.TestCase):
         self.assertIsNone(first)
         self.assertIsNone(second)
 
+    def test_runtime_register_is_not_exempt_from_control_plane_rate_limit(self) -> None:
+        with (
+            patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", 0),
+            patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_BURST", 0),
+        ):
+            first = runtime_common._control_plane_rate_limit(_request("/runtime/runtimes/worker-1/register"))
+            second = runtime_common._control_plane_rate_limit(_request("/runtime/runtimes/worker-1/register"))
+
+        self.assertIsNone(first)
+        self.assertIsNotNone(second)
+        assert second is not None
+        self.assertEqual(second.status_code, 429)
+
+    def test_runtime_heartbeat_and_tasks_remain_hot_path_exempt(self) -> None:
+        with (
+            patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", 0),
+            patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_BURST", 0),
+        ):
+            runtime_heartbeat = runtime_common._control_plane_rate_limit(
+                _request("/runtime/runtimes/worker-1/heartbeat")
+            )
+            task_claim = runtime_common._control_plane_rate_limit(_request("/runtime/tasks/claim"))
+
+        self.assertIsNone(runtime_heartbeat)
+        self.assertIsNone(task_claim)
+
     def test_other_mutations_still_rate_limited(self) -> None:
         with (
             patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", 0),

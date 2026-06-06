@@ -67,6 +67,7 @@ _RUNTIME_SESSION_API_EXPECTED_NEXT_ACTIONS: dict[str, str] = {
 
 class RuntimeRegisterPayload(BaseModel):
     runtime_type: str = "local"
+    enrollment_token: Optional[str] = None
     display_name: Optional[str] = None
     platform: Optional[str] = None
     policy_mode: str = "local_default"
@@ -268,6 +269,16 @@ def _ensure_runtime_action_operator(current_user: Dict[str, Any], workspace_id: 
     if role in {"owner", "admin"} or bool((current_user or {}).get("is_admin")):
         return
     raise HTTPException(status_code=403, detail="Workspace owner or admin role is required.")
+
+
+def _require_runtime_registration_enrollment_token(payload: RuntimeRegisterPayload) -> str:
+    token = str(getattr(payload, "enrollment_token", None) or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=403,
+            detail="Runtime registration requires a machine enrollment token.",
+        )
+    return token
 
 
 def _enforce_runtime_session_api_decision(
@@ -1204,6 +1215,7 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or RuntimeRegisterPayload()
+        enrollment_token = _require_runtime_registration_enrollment_token(body)
         _enforce_runtime_session_api_decision(
             operation="runtime_register",
             tenant_id="default",
@@ -1212,11 +1224,14 @@ def register_runtime_routes(app) -> None:
             runtime_type=body.runtime_type,
             runtime_role=body.runtime_role,
             instance_id=body.instance_id,
+            enrollment_token_present=True,
             required_capabilities=list(body.capabilities or []),
         )
-        def _register_runtime() -> tuple[Dict[str, Any], Dict[str, Any]]:
-            registration = local_queue.handle_register_local_cluster_runtime(
+
+        def _register_runtime() -> Dict[str, Any]:
+            return local_queue.handle_bootstrap_enrolled_local_companion_runtime(
                 runtime_token,
+                enrollment_token=enrollment_token,
                 runtime_type=body.runtime_type,
                 display_name=body.display_name,
                 platform=body.platform,
@@ -1235,38 +1250,23 @@ def register_runtime_routes(app) -> None:
                 artifact_channel=body.artifact_channel,
                 local_private_memory_only=body.local_private_memory_only,
                 note=body.note,
+                current_run_id=body.current_run_id,
                 summary_text=body.summary_text,
                 artifacts=body.artifacts,
                 health_state=body.health_state,
             )
-            runtime = local_queue.handle_start_local_runtime(
-                runtime_token,
-                local_queue.LocalWorkerHeartbeatPayload(
-                    current_run_id=body.current_run_id,
-                    note=body.note or "runtime_registered",
-                    permission_probe=body.permission_probe,
-                    runtime_role=body.runtime_role,
-                    install_id=body.install_id,
-                    specialist_key=body.specialist_key,
-                    summary_channel=body.summary_channel,
-                    artifact_channel=body.artifact_channel,
-                    local_private_memory_only=body.local_private_memory_only,
-                    summary_text=body.summary_text,
-                    artifacts=body.artifacts,
-                    health_state=body.health_state,
-                ),
-            )
-            return registration, runtime
 
-        registration, runtime = await run_in_threadpool(_register_runtime)
+        result = await run_in_threadpool(_register_runtime)
         return {
             "ok": True,
-            "runtime": _runtime_summary_from_worker_item(runtime.get("runtime") or {}),
-            "session_token": registration.get("session_token"),
-            "machine_id": registration.get("machine_id") or runtime_token,
-            "instance_id": registration.get("instance_id"),
-            "capability_digest": registration.get("capability_digest"),
-            "session_issued_at": registration.get("session_issued_at"),
+            "runtime": _runtime_summary_from_worker_item(result.get("runtime") or {}),
+            "session_token": result.get("session_token"),
+            "machine_id": result.get("machine_id") or runtime_token,
+            "instance_id": result.get("instance_id"),
+            "capability_digest": result.get("capability_digest"),
+            "session_issued_at": result.get("session_issued_at"),
+            "enrollment_bootstrap": True,
+            "connection_mode": result.get("connection_mode") or "platform_relay",
         }
 
     @app.post("/runtime/companions/{runtime_id}/bootstrap")
@@ -1595,6 +1595,7 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or RuntimeRegisterPayload()
+        enrollment_token = _require_runtime_registration_enrollment_token(body)
         _enforce_runtime_session_api_decision(
             operation="runtime_register",
             tenant_id="default",
@@ -1603,11 +1604,13 @@ def register_runtime_routes(app) -> None:
             runtime_type=body.runtime_type,
             runtime_role=body.runtime_role,
             instance_id=body.instance_id,
+            enrollment_token_present=True,
             required_capabilities=list(body.capabilities or []),
         )
         result = await run_in_threadpool(
-            local_queue.handle_register_local_cluster_runtime,
+            local_queue.handle_bootstrap_enrolled_local_companion_runtime,
             runtime_token,
+            enrollment_token=enrollment_token,
             runtime_type=body.runtime_type,
             display_name=body.display_name,
             platform=body.platform,
@@ -1626,6 +1629,7 @@ def register_runtime_routes(app) -> None:
             artifact_channel=body.artifact_channel,
             local_private_memory_only=body.local_private_memory_only,
             note=body.note,
+            current_run_id=body.current_run_id,
             summary_text=body.summary_text,
             artifacts=body.artifacts,
             health_state=body.health_state,

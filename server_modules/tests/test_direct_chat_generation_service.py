@@ -6,7 +6,7 @@ from server_modules import direct_chat_generation_service
 
 
 class DirectChatGenerationServiceTests(unittest.TestCase):
-    def test_extract_assistant_shell_plan_tool_call_converts_command_blocks(self) -> None:
+    def test_extract_assistant_shell_plan_tool_call_does_not_convert_command_blocks(self) -> None:
         reply = (
             "Running the commands now.\n\n"
             "```bash\n"
@@ -23,12 +23,10 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
             [{"name": "shell__exec", "parameters": {"type": "object"}}],
         )
 
-        self.assertEqual(clean_reply, "")
-        self.assertEqual(tool_calls[0]["name"], "shell__exec")
-        self.assertIn("uname -a && sw_vers", tool_calls[0]["arguments"]["command"])
-        self.assertIn("ls /Applications | head -20", tool_calls[0]["arguments"]["command"])
+        self.assertEqual(clean_reply, reply)
+        self.assertEqual(tool_calls, [])
 
-    def test_extract_assistant_shell_plan_tool_call_converts_inline_command_blocks(self) -> None:
+    def test_extract_assistant_shell_plan_tool_call_does_not_convert_inline_command_blocks(self) -> None:
         reply = (
             "Looks like the commands ran but the output didn't come through clearly. "
             "Let me re-run them and show you the results directly.\n\n"
@@ -42,14 +40,10 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
             [{"name": "shell__exec", "parameters": {"type": "object"}}],
         )
 
-        self.assertEqual(clean_reply, "")
-        self.assertEqual(tool_calls[0]["name"], "shell__exec")
-        command = tool_calls[0]["arguments"]["command"]
-        self.assertIn("uname -a", command)
-        self.assertIn("sysctl -n hw.memsize", command)
-        self.assertIn("ls /Applications", command)
+        self.assertEqual(clean_reply, reply)
+        self.assertEqual(tool_calls, [])
 
-    def test_extract_assistant_shell_plan_tool_call_normalizes_language_prefixed_inline_commands(self) -> None:
+    def test_extract_assistant_shell_plan_tool_call_does_not_normalize_language_prefixed_inline_commands(self) -> None:
         reply = (
             "Let me run them fresh and capture the output properly this time. "
             "`bash uname -a && echo \"---OS---\" && sw_vers 2>/dev/null` "
@@ -61,12 +55,8 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
             [{"name": "shell__exec", "parameters": {"type": "object"}}],
         )
 
-        self.assertEqual(clean_reply, "")
-        command = tool_calls[0]["arguments"]["command"]
-        self.assertIn("uname -a", command)
-        self.assertIn("df -h /", command)
-        self.assertNotIn("bash uname", command)
-        self.assertNotIn("bash echo", command)
+        self.assertEqual(clean_reply, reply)
+        self.assertEqual(tool_calls, [])
 
     def test_extract_assistant_shell_plan_tool_call_ignores_without_shell_tool(self) -> None:
         reply = "Running the commands now.\n\n```bash\nuname -a\n```"
@@ -194,9 +184,9 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
 
         streamed_text = "".join(str(event.get("delta") or "") for event in events if event.get("type") == "chunk")
         self.assertNotIn("uname -a", streamed_text)
-        self.assertTrue(executed)
-        self.assertIn("uname -a && sw_vers", executed[0])
-        self.assertEqual(events[-1]["payload"]["reply"], "The local command finished.")
+        self.assertEqual(executed, [])
+        self.assertIn("Looks like the commands ran", events[-1]["payload"]["reply"])
+        self.assertIn("uname -a && sw_vers", events[-1]["payload"]["reply"])
 
     def test_stream_provider_backed_direct_chat_returns_final_answer(self) -> None:
         events = list(

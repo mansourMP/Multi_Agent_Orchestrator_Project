@@ -27,6 +27,8 @@ CHANNEL_CAPABILITY_IDS = {
     "smtp",
 }
 
+PLATFORM_RUNTIME_AUTH_PROVIDERS = {"deepseek"}
+
 
 def _normalize_capability_entries(tool_capabilities: Any) -> List[Dict[str, Any]]:
     if not isinstance(tool_capabilities, list):
@@ -398,6 +400,33 @@ def direct_chat_credentials(
         ]
     first = candidates[0].get("credentials") if candidates else {}
     return dict(first) if isinstance(first, dict) else {}
+
+
+def platform_runtime_credentials(
+    workspace_id: str,
+    provider: str,
+    *,
+    tenant_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider not in PLATFORM_RUNTIME_AUTH_PROVIDERS:
+        return {}
+    env_key, _ = provider_profiles._resolve_hosted_provider_api_key(
+        provider_id=normalized_provider,
+        tenant_id=tenant_id,
+        workspace_id=normalized_workspace_id,
+        run_id=run_id,
+        purpose="platform_runtime_direct_chat",
+    )
+    if not env_key:
+        return {}
+    return {
+        "api_key": env_key,
+        "auth_mode": "platform_runtime",
+        "credential_plane": "platform_runtime",
+    }
 
 
 def provider_runtime_usable(

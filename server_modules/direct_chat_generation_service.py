@@ -165,27 +165,12 @@ def _extract_assistant_shell_plan_tool_call(
     reply: Any,
     tools: List[Dict[str, Any]],
 ) -> tuple[str, List[Dict[str, Any]]]:
+    # Safety boundary: never promote natural-language assistant text into shell
+    # execution. Shell work must arrive as a structured provider tool call or an
+    # explicit approved action payload. Parsing command-looking text caused DSML
+    # markup and conversational consent such as "go ahead" to become executable.
     text = str(reply or "").strip()
-    if not text:
-        return "", []
-    if not _has_shell_exec_tool(tools):
-        return text, []
-    normalized = " ".join(text.lower().split())
-    if not any(marker in normalized for marker in _ASSISTANT_SHELL_PLAN_MARKERS):
-        return text, []
-    command_blocks = _extract_assistant_shell_command_blocks(text)
-    command = "\n\n".join(command_blocks).strip()
-    if not command or len(command) > 5000:
-        return text, []
-    return "", [
-        {
-            "name": "shell__exec",
-            "arguments": {
-                "command": command,
-                "description": "Run the local checks Sage prepared.",
-            },
-        }
-    ]
+    return text, []
 
 
 def _trace_raw_event(envelope: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

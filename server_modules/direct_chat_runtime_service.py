@@ -52,12 +52,82 @@ class DirectChatRuntimeServices:
     capture_exception: Callable[[BaseException], None]
 
 
+def _tool_name(tool: Dict[str, Any]) -> str:
+    return str(tool.get("name") or "").strip()
+
+
 def _provider_chat_tools_for_message(message: str, tools: List[Dict[str, Any]], *, obvious_direct_tool_intent: bool) -> List[Dict[str, Any]]:
-    if not obvious_direct_tool_intent:
-        return []
     if not tools:
         return []
-    return tools
+    if obvious_direct_tool_intent:
+        return tools
+    if direct_chat_tool_catalog_service.message_has_web_lookup_intent(message):
+        web_tools = [tool for tool in tools if _tool_name(tool) in {"web__search", "web__fetch"}]
+        if web_tools:
+            return web_tools
+    return []
+
+
+def _availability_bool(payload: Dict[str, Any], key: str) -> Optional[bool]:
+    value = payload.get(key)
+    return value if isinstance(value, bool) else None
+
+
+def _agent_computer_browser_status(availability_payload: Dict[str, Any]) -> str:
+    availability = availability_payload if isinstance(availability_payload, dict) else {}
+    capability_truth = availability.get("capability_truth") if isinstance(availability.get("capability_truth"), dict) else {}
+    my_computer = capability_truth.get("my_computer") if isinstance(capability_truth.get("my_computer"), dict) else {}
+    verified_gateway = availability.get("verified_user_device_gateway") if isinstance(availability.get("verified_user_device_gateway"), dict) else {}
+    local_gateway_online = _availability_bool(availability, "local_gateway_online")
+    local_worker_online = _availability_bool(availability, "local_worker_online")
+    runtime_ok = _availability_bool(availability, "runtime_ok")
+    truth_online = my_computer.get("online") if isinstance(my_computer.get("online"), bool) else None
+    truth_runtime_ok = my_computer.get("runtime_ok") if isinstance(my_computer.get("runtime_ok"), bool) else None
+    truth_tools = my_computer.get("local_tools_available") if isinstance(my_computer.get("local_tools_available"), bool) else None
+    state = str(my_computer.get("state") or availability.get("runtime_state") or "").strip().lower()
+    selected_gateway_id = str(
+        availability.get("selected_gateway_id")
+        or availability.get("gateway_id")
+        or my_computer.get("selected_gateway_id")
+        or my_computer.get("gateway_id")
+        or verified_gateway.get("gateway_id")
+        or ""
+    ).strip()
+
+    if verified_gateway:
+        return "online"
+    if truth_tools is True or (truth_online is True and truth_runtime_ok is not False):
+        return "online"
+    if (local_gateway_online is True or local_worker_online is True) and runtime_ok is not False:
+        return "online"
+    if selected_gateway_id or state in {"connected_unhealthy", "unhealthy", "error", "disconnected"}:
+        return "offline"
+    return "not_selected"
+
+
+def _browser_automation_unavailable_payload(
+    *,
+    message: str,
+    availability_payload: Dict[str, Any],
+    proactive_suggestions: List[str],
+    base_context_used: Dict[str, Any],
+    services: DirectChatRuntimeServices,
+) -> Optional[Dict[str, Any]]:
+    if not direct_chat_tool_catalog_service.message_has_browser_automation_intent(message):
+        return None
+    status = _agent_computer_browser_status(availability_payload)
+    if status == "online":
+        return None
+    reply = "Selected Sage Agent Computer is offline." if status == "offline" else "Choose Sage Agent Computer."
+    return services.with_context_used(
+        {
+            "reply": reply,
+            "actions": [],
+            "mode": "answer",
+            "suggestions": proactive_suggestions,
+        },
+        base_context_used,
+    )
 
 
 def _turn_request_context_hints(turn_request: Any) -> Dict[str, Any]:
@@ -464,8 +534,8 @@ def _stream_explicit_provider_parity_tools(
 
     yield {
         "type": "step",
-        "label": "Using local tool",
-        "detail": "Running selected local tool",
+        "label": "Using local tools",
+        "detail": "",
         "status": "active",
         "kind": "tool",
         "id": "direct-tools:explicit",
@@ -1093,12 +1163,34 @@ def build_direct_operator_reply(
 
     obvious_direct_tool_intent = services.message_has_obvious_direct_tool_intent(normalized_message, tools)
 
-    provider, direct_chat_credentials = services.resolve_provider_for_direct_chat_message(
-        normalized_workspace_id,
-        normalized_requested_provider,
-        normalized_message,
-        tools_present=bool(tools),
+    force_platform_runtime = (
+        bool(availability_payload.get("force_platform_runtime"))
+        or (
+            str(availability_payload.get("credential_plane") or "").strip().lower() == "platform_runtime"
+            and str(availability_payload.get("billing_source") or "").strip().lower() == "empyralis_credits"
+        )
     )
+    if force_platform_runtime and normalized_requested_provider:
+        provider = normalized_requested_provider
+        direct_chat_credentials = direct_chat_provider_service.platform_runtime_credentials(
+            normalized_workspace_id,
+            provider,
+        )
+        if services.supports_direct_message_native_chat(provider, direct_chat_credentials):
+            availability_payload = {
+                **availability_payload,
+                "ai_ready": True,
+                "credential_plane": "platform_runtime",
+                "billing_source": "empyralis_credits",
+                "platform_runtime_allowed": True,
+            }
+    else:
+        provider, direct_chat_credentials = services.resolve_provider_for_direct_chat_message(
+            normalized_workspace_id,
+            normalized_requested_provider,
+            normalized_message,
+            tools_present=bool(tools),
+        )
     normalized_requested_provider_alias = "codex_cli" if normalized_requested_provider == "openai-codex" else normalized_requested_provider
     normalized_effective_provider_alias = "codex_cli" if provider == "openai-codex" else provider
     if normalized_requested_provider and normalized_effective_provider_alias != normalized_requested_provider_alias:
@@ -1118,6 +1210,16 @@ def build_direct_operator_reply(
         provider,
         direct_chat_credentials,
     )
+    browser_unavailable_payload = _browser_automation_unavailable_payload(
+        message=normalized_message,
+        availability_payload=availability_payload,
+        proactive_suggestions=proactive_suggestions,
+        base_context_used=base_context_used,
+        services=services,
+    )
+    if browser_unavailable_payload is not None:
+        yield {"type": "final", "payload": browser_unavailable_payload}
+        return
     hosted_platform_runtime = str(availability_payload.get("credential_plane") or "").strip().lower() == "platform_runtime"
     lock_selected_provider = bool(normalized_requested_provider or normalized_requested_model or hosted_platform_runtime)
     selected_model = (

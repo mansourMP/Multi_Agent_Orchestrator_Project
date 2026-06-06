@@ -933,6 +933,11 @@ def build_direct_chat_entry_bindings(
         )
 
     def direct_chat_error_reply(llm_error):
+        detail = str(llm_error or "").strip()
+        if detail.startswith("max_tool_iterations_reached:"):
+            raw_limit = detail.split(":", 1)[1]
+            limit = safe_positive_int_fn(raw_limit, chat_max_iterations_default)
+            return chat_iteration_limit_reply_fn(limit)
         return direct_chat_provider_facade_service.direct_chat_error_reply(
             llm_error,
             chat_iteration_limit_reply_fn=chat_iteration_limit_reply_fn,

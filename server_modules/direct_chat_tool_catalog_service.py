@@ -38,6 +38,83 @@ def provider_supports_direct_tool_calls(provider: str) -> bool:
     return bool(str(provider or "").strip())
 
 
+def _compact_intent_text(message: str) -> str:
+    return " ".join(str(message or "").strip().lower().split())
+
+
+def message_has_web_lookup_intent(message: str) -> bool:
+    compact = _compact_intent_text(message)
+    if not compact:
+        return False
+    if any(
+        token in compact
+        for token in (
+            "current directory",
+            "current folder",
+            "current working directory",
+            "current workspace",
+            "cwd",
+        )
+    ):
+        return False
+    if re.search(r"\b(?:web\s+search|search\s+(?:the\s+)?web|search\s+online|internet\s+search)\b", compact):
+        return True
+    if re.search(r"\b(?:look\s+up|lookup|research)\b", compact):
+        return True
+    if re.search(r"\b(?:latest|news)\b", compact):
+        return True
+    if re.search(r"\b(?:current|today'?s?)\b", compact) and any(
+        token in compact
+        for token in ("about", "news", "on ", "price", "release", "status", "update", "version", "weather")
+    ):
+        return True
+    if re.search(r"\b(?:find|check|search)\b.+\b(?:online|on\s+the\s+web|on\s+the\s+internet)\b", compact):
+        return True
+    if re.search(r"https?://", str(message or ""), flags=re.IGNORECASE) and any(
+        token in compact
+        for token in (
+            "summarize",
+            "fetch",
+            "read",
+            "what's on",
+            "whats on",
+            "look up",
+            "check",
+        )
+    ):
+        return True
+    return False
+
+
+def message_has_browser_automation_intent(message: str) -> bool:
+    compact = _compact_intent_text(message)
+    if not compact:
+        return False
+    if re.search(r"https?://", str(message or ""), flags=re.IGNORECASE) and any(
+        token in compact
+        for token in (
+            "browser",
+            "go to",
+            "open",
+            "visit",
+            "click",
+            "fill",
+            "page title",
+            "main heading",
+            "screenshot",
+            "screen shot",
+        )
+    ):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:browser|open\s+(?:a\s+)?(?:website|site|webpage|page)|click|fill\s+form|page\s+title|main\s+heading|screenshot|screen\s+shot)\b",
+            compact,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 def build_local_direct_chat_tools(availability: Dict[str, Any], *, local_worker_available: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
     return skills_service.build_local_direct_chat_tools(
         availability,
@@ -79,11 +156,27 @@ def message_requests_browser_tool(message: str, callbacks: DirectChatToolPolicyC
         return False
     if callbacks.extract_first_path_reference(message) and any(token in compact for token in ("read", "open", "show", "what's in", "whats in", "count", "how many")):
         return False
+    if message_has_browser_automation_intent(message):
+        return True
     if callbacks.extract_first_url(message) and (
         callbacks.mentions_any(compact, callbacks.browser_keywords) or any(token in compact for token in ("go to", "open", "title", "heading"))
     ):
         return True
     return callbacks.mentions_any(compact, callbacks.browser_keywords)
+
+
+def message_requests_web_lookup_tool(message: str, callbacks: DirectChatToolPolicyCallbacks) -> bool:
+    compact = callbacks.compact_text(message)
+    if not compact:
+        return False
+    if message_requests_browser_tool(message, callbacks):
+        return False
+    explicit_keywords = tuple(
+        keyword
+        for keyword in callbacks.web_lookup_keywords
+        if str(keyword or "").strip().lower() not in {"current", "today", "web", "website", "online"}
+    )
+    return message_has_web_lookup_intent(message) or callbacks.mentions_any(compact, explicit_keywords)
 
 
 def message_can_use_direct_connector_tools(message: str, *, provider: str, tools: List[Dict[str, Any]], callbacks: DirectChatToolPolicyCallbacks) -> bool:
@@ -192,6 +285,7 @@ _LOCAL_SYSTEM_INFO_TARGET_PATTERNS = (
     r"\b(?:device|machine|system)\s+(?:info|information|specs|specifications|details|profile)\b",
     r"\b(?:hardware|device|machine|system)\s+(?:info|information|specs|specifications|details|profile)\b.*\b(?:my|this|local|current)\s+(?:machine|computer|device|mac|macbook|laptop|system)\b",
     r"\b(?:cpu|ram|memory|disk|storage|os)\s+(?:info|information|specs|details|usage|size)\b",
+    r"\b(?:hardware\s+)?(?:specs|specifications)\b.*\b(?:my|this|local|current)\s+(?:machine|computer|device|mac|macbook|laptop|system)\b",
     r"\b(?:specs|specifications)\s+(?:of|for|on)\s+(?:my|this|local|current)\s+(?:machine|computer|device|mac|macbook|laptop)\b",
 )
 
@@ -338,6 +432,8 @@ def message_requests_local_shell_tool(message: str, callbacks: DirectChatToolPol
         return False
     if should_skip_local_tool_prefetch(message, compact):
         return False
+    if looks_like_local_system_info_request(compact) or looks_like_local_working_directory_request(compact):
+        return True
     if callbacks.question_like(compact):
         return False
     text = str(message or "")
@@ -347,11 +443,37 @@ def message_requests_local_shell_tool(message: str, callbacks: DirectChatToolPol
 
 
 def message_requests_local_screenshot_tool(message: str, callbacks: DirectChatToolPolicyCallbacks) -> bool:
+    compact = callbacks.compact_text(message)
+    if not compact:
+        return False
+    if should_skip_local_tool_prefetch(message, compact):
+        return False
+    if callbacks.question_like(compact):
+        return False
+    if callbacks.mentions_any(compact, callbacks.local_screenshot_keywords):
+        return starts_like_local_tool_request(compact) or bool(
+            re.search(r"\b(?:capture|take|grab|show|get)\b.*\b(?:screenshot|screen\s+shot|screen)\b", compact)
+        )
     return False
 
 
 def message_requests_local_computer_tool(message: str, callbacks: DirectChatToolPolicyCallbacks) -> bool:
-    return False
+    compact = callbacks.compact_text(message)
+    if not compact:
+        return False
+    if should_skip_local_tool_prefetch(message, compact):
+        return False
+    if callbacks.question_like(compact):
+        return False
+    if callbacks.mentions_any(compact, callbacks.local_computer_control_keywords):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:click|press|type|move|drag|ocr|read)\b.+\b(?:screen|window|button|mouse|keyboard|active\s+window)\b",
+            compact,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def message_can_use_direct_local_tools(message: str, *, provider: str, tools: List[Dict[str, Any]], callbacks: DirectChatToolPolicyCallbacks) -> bool:
@@ -378,7 +500,7 @@ def message_can_use_builtin_direct_tools(message: str, *, tools: List[Dict[str, 
         return False
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
     if {"web__search", "web__fetch"} & tool_names:
-        if callbacks.mentions_any(compact, callbacks.web_lookup_keywords) or bool(re.search(r"https?://", str(message or ""), flags=re.IGNORECASE)):
+        if message_requests_web_lookup_tool(message, callbacks):
             return True
     if "http_request" in tool_names and message_requests_http_request_tool(message, callbacks):
         return True

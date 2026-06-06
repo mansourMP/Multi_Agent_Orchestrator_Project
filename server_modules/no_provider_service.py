@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict
 
 from server_modules import direct_chat_tool_catalog_service
+from server_modules.direct_chat_intervention_service import build_intervention
 
 
 def count_python_definition_lines(source_text: str, kind: str) -> int:
@@ -52,7 +53,7 @@ def count_definitions_in_file(
         return None
     if len(counts) == 1:
         return f"{target} defines {counts[0]}."
-        return f"{target} defines {counts[0]} and {counts[1]}."
+    return f"{target} defines {counts[0]} and {counts[1]}."
 
 
 class NoProviderRustGateError(RuntimeError):
@@ -265,9 +266,15 @@ def extract_web_query(message: str) -> str:
     if not text:
         return ""
     patterns = (
+        r"search\s+(?:the\s+)?web\s+for\s+(.+)$",
+        r"web\s+search\s+for\s+(.+)$",
+        r"search\s+online\s+for\s+(.+)$",
         r"search\s+for\s+(.+)$",
         r"look\s+up\s+(.+)$",
+        r"lookup\s+(.+)$",
+        r"research\s+(.+)$",
         r"find\s+(.+?)\s+on\s+the\s+web$",
+        r"find\s+out\s+(.+?)\s+online$",
         r"what\s+is\s+(.+)$",
     )
     for pattern in patterns:
@@ -312,11 +319,21 @@ def parse_http_tool_output(output: str) -> Any:
 
 def no_provider_reasoning_required_response() -> Dict[str, Any]:
     return {
-        "reply": "Connect an AI provider in Integrations before sending a model-backed Sage message.",
+        "reply": "",
         "message": "No AI provider configured",
         "actions": [],
-        "mode": "answer",
-        "error": "",
+        "mode": "error",
+        "error": "no_provider",
+        "interventions": [
+            build_intervention(
+                "connect_required",
+                "AI provider required",
+                detail="Connect Workspace AI, your own AI account, or a local AI runtime before model-backed Sage chat can continue.",
+                severity="warning",
+                status="waiting",
+                code="no_provider",
+            )
+        ],
     }
 
 
@@ -474,6 +491,36 @@ def plan_tool_calls(
                 },
             }
         )
+    elif direct_chat_tool_catalog_service.looks_like_local_system_info_request(compact):
+        command = local_system_info_shell_command()
+        if "shell__exec" in tool_names:
+            planned.append({"name": "shell__exec", "arguments": {"command": command}})
+        elif "hardware__action" in tool_names:
+            planned.append(
+                {
+                    "name": "hardware__action",
+                    "arguments": {
+                        "runtime_target": "user_device_gateway",
+                        "action": "shell.execute",
+                        "arguments": {"command": command},
+                    },
+                }
+            )
+    elif direct_chat_tool_catalog_service.looks_like_local_working_directory_request(compact):
+        command = local_working_directory_shell_command()
+        if "shell__exec" in tool_names:
+            planned.append({"name": "shell__exec", "arguments": {"command": command}})
+        elif "hardware__action" in tool_names:
+            planned.append(
+                {
+                    "name": "hardware__action",
+                    "arguments": {
+                        "runtime_target": "user_device_gateway",
+                        "action": "shell.execute",
+                        "arguments": {"command": command},
+                    },
+                }
+            )
     web_query = extract_web_query(message)
     if web_query and "web__search" in tool_names and not url:
         planned.append({"name": "web__search", "arguments": {"query": web_query}})
@@ -524,7 +571,9 @@ def has_obvious_direct_tool_intent(
         return True
     if any(token in compact for token in ("screenshot", "screen shot", "capture screen", "take a screenshot")):
         return "screenshot__capture" in tool_names or "hardware__action" in tool_names
-    if extract_web_query(message):
+    if "web__search" in tool_names and extract_web_query(message):
+        return True
+    if {"web__search", "web__fetch"} & tool_names and direct_chat_tool_catalog_service.message_has_web_lookup_intent(message):
         return True
     url = extract_first_url(message)
     if not url:

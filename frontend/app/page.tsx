@@ -33,6 +33,7 @@ import {
 } from '@/components/orion/chat/chatSchema';
 import { WorkbenchShell } from '../components/orion/workbench/WorkbenchShell';
 import { WorkbenchActivityRail } from '../components/orion/workbench/WorkbenchActivityRail';
+import { WorkflowStudioPanel } from '../components/orion/workspace/WorkflowStudioPanel';
 import {
   WorkbenchCenterPanel,
   type HomeLiveAgentCard,
@@ -2083,31 +2084,34 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
           />
         ) : null}
         {experienceMode === 'simple' ? (
-          <ChatSurface
-            isMobile={isMobile}
-            goal={goal}
-            setGoal={setGoal}
-            primaryGoalRef={primaryGoalRef}
-            onSend={() => {
-              void sendSimpleChat();
-            }}
-            chatBusy={Boolean(pendingSimpleChat)}
-            messages={selectedChatMessages}
-            inlineStatus={inlineSimpleChatStatus}
-            inlineAction={inlineSimpleChatAction}
-            emptyStateSuggestions={[
-              'Monitor a camera',
-              'Summarize emails daily',
-              'Alert me on Telegram',
-              'Follow up with leads',
-            ]}
-            identityItems={sessionIdentityItems}
-            identityDrawerOpen={chatIdentityDrawerOpen}
-            onToggleIdentityDrawer={() => setChatIdentityDrawerOpen((current) => !current)}
-            onCloseIdentityDrawer={() => setChatIdentityDrawerOpen(false)}
-            identitySections={sessionIdentitySections}
-            identityActions={sessionIdentityActions}
-          />
+          <div className="orion-workspace-studio-layout">
+            <ChatSurface
+              isMobile={isMobile}
+              goal={goal}
+              setGoal={setGoal}
+              primaryGoalRef={primaryGoalRef}
+              onSend={() => {
+                void sendSimpleChat();
+              }}
+              chatBusy={Boolean(pendingSimpleChat)}
+              messages={selectedChatMessages}
+              inlineStatus={inlineSimpleChatStatus}
+              inlineAction={inlineSimpleChatAction}
+              emptyStateSuggestions={[
+                'Monitor a camera',
+                'Summarize emails daily',
+                'Alert me on Telegram',
+                'Follow up with leads',
+              ]}
+              identityItems={sessionIdentityItems}
+              identityDrawerOpen={chatIdentityDrawerOpen}
+              onToggleIdentityDrawer={() => setChatIdentityDrawerOpen((current) => !current)}
+              onCloseIdentityDrawer={() => setChatIdentityDrawerOpen(false)}
+              identitySections={sessionIdentitySections}
+              identityActions={sessionIdentityActions}
+            />
+            <WorkflowStudioPanel goal={goal} setupReady={setupReady} latestRunSummary={controlCenter.latestRunSummary} />
+          </div>
         ) : (
           <WorkbenchCenterPanel
             isMobile={isMobile}

@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BrainCircuit, CheckCircle2, Code2, GitBranch, Globe, Loader2, Play, Save, Search, Send, ShieldCheck, Shuffle, UploadCloud, X, Zap } from 'lucide-react';
-import { ReactFlow, Controls, Background, BackgroundVariant, MarkerType, addEdge, applyEdgeChanges, applyNodeChanges, type Connection, type Edge, type EdgeChange, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
+import { ReactFlow, Controls, Background, BackgroundVariant, addEdge, applyEdgeChanges, applyNodeChanges, type Connection, type Edge, type EdgeChange, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { useToast } from '@/components/Toast';
@@ -21,6 +21,8 @@ import HttpRequestNode from '@/components/nodes/HttpRequestNode';
 import ConditionNode from '@/components/nodes/ConditionNode';
 import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
+import RopeEdge from '@/components/nodes/RopeEdge';
+import WorkflowConnectionLine from '@/components/nodes/WorkflowConnectionLine';
 
 const ORION_API_URL =
     process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
@@ -234,6 +236,10 @@ const CANVAS_NODE_TYPES: NodeTypes = {
     condition: ConditionNode,
     transform: TransformNode,
     code: CodeNode,
+};
+
+const CANVAS_EDGE_TYPES = {
+    rope: RopeEdge,
 };
 
 const CANVAS_NODE_LIBRARY: Array<{
@@ -972,14 +978,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const renderedCanvasEdges = useMemo<Edge[]>(
         () => canvasEdges.map((edge) => ({
             ...edge,
-            type: 'smoothstep' as const,
+            type: 'rope' as const,
             animated: runStatus === 'running',
-            style: {
-                stroke: selectedEdgeId === edge.id ? '#5b21b6' : '#7c3aed',
-                strokeWidth: selectedEdgeId === edge.id ? 3 : 2,
-                opacity: selectedEdgeId === edge.id ? 1 : 0.7,
-            },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
+            selected: selectedEdgeId === edge.id,
         })),
         [canvasEdges, runStatus, selectedEdgeId],
     );
@@ -1025,7 +1026,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         setCanvasEdges((prev) => addEdge({
             ...connection,
             id: `edge-${connection.source || 'source'}-${connection.target || 'target'}-${Date.now()}`,
-            type: 'smoothstep',
+            type: 'rope',
         }, prev));
         setSelectedNodeId(null);
         setSelectedEdgeId(null);
@@ -1735,8 +1736,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 nodes={canvasNodes}
                                 edges={renderedCanvasEdges}
                                 nodeTypes={CANVAS_NODE_TYPES}
+                                edgeTypes={CANVAS_EDGE_TYPES}
+                                connectionLineComponent={WorkflowConnectionLine}
                                 fitView
-                                fitViewOptions={{ padding: 0.4 }}
+                                fitViewOptions={{ padding: 0.38 }}
                                 onInit={handleCanvasInit}
                                 onNodesChange={handleCanvasNodesChange}
                                 onEdgesChange={handleCanvasEdgesChange}
@@ -1767,18 +1770,17 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 edgesFocusable
                                 proOptions={{ hideAttribution: true }}
                                 defaultEdgeOptions={{
-                                    type: 'smoothstep',
+                                    type: 'rope',
                                     animated: runStatus === 'running',
-                                    markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
                                     selectable: true,
-                                    style: { stroke: '#7c3aed', strokeWidth: 2, opacity: 0.7 },
+                                    style: { stroke: '#7c3aed', strokeWidth: 2.8, opacity: 0.9 },
                                 }}
                             >
                                 <Background
                                     variant={BackgroundVariant.Dots}
-                                    gap={20}
-                                    size={1.5}
-                                    color="#c4c4c4"
+                                    gap={24}
+                                    size={1.6}
+                                    color="rgba(124, 58, 237, 0.14)"
                                 />
                                 <Controls position="bottom-right" showInteractive={false} showFitView />
                             </ReactFlow>

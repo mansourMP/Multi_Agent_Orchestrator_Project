@@ -224,16 +224,17 @@ const AGENT_DETAIL_NAV_ITEMS: readonly {
   label: string;
 }[] = NATIVE_SPECIALIST_OVERLAY_TABS;
 
-const PANEL_COLLAPSED_STORAGE_KEY = 'panel_collapsed';
+const PANEL_COLLAPSED_STORAGE_KEY = 'workstation_panel_collapsed_v2';
 
 function readPanelCollapsedPreference(): boolean {
   if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
-    return false;
+    return true;
   }
   try {
-    return window.localStorage.getItem(PANEL_COLLAPSED_STORAGE_KEY) === 'true';
+    const stored = window.localStorage.getItem(PANEL_COLLAPSED_STORAGE_KEY);
+    return stored === null ? true : stored === 'true';
   } catch {
-    return false;
+    return true;
   }
 }
 

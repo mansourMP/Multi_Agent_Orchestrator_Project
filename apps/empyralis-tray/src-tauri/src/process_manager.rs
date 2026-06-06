@@ -207,6 +207,15 @@ impl ProcessManager {
         match self.lock_state() {
             Ok(mut guard) => {
                 refresh_process_state(&mut guard);
+                if guard.supervisor.is_none()
+                    && guard.adopted_supervisor_pid.is_none()
+                    && supervisor_healthy()
+                {
+                    guard.adopted_supervisor_pid = listening_pid_for_port(7788);
+                }
+                if guard.gateway.is_none() && guard.adopted_gateway_pid.is_none() {
+                    guard.adopted_gateway_pid = self.live_gateway_lock_pid().ok().flatten();
+                }
                 self.status_from_guard(&guard)
             }
             Err(error) => TrayStatus {
@@ -317,6 +326,8 @@ impl ProcessManager {
             }
         } else if guard.session_verified && gateway_running {
             "active"
+        } else if gateway_running {
+            "connected"
         } else if guard.desired_connected && (gateway_running || supervisor_running) {
             "connecting"
         } else {
@@ -637,7 +648,10 @@ impl ProcessManager {
     }
 
     fn gateway_state_dir(&self) -> PathBuf {
-        self.app_support_dir().join("gateway")
+        env_value("EMPYRALIS_GATEWAY_STATE_DIR")
+            .or_else(|| self.agent_computer_env_value("EMPYRALIS_GATEWAY_STATE_DIR"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.app_support_dir().join("gateway"))
     }
 
     fn supervisor_binary(&self) -> PathBuf {
@@ -660,6 +674,15 @@ impl ProcessManager {
             .join("Library")
             .join("Application Support")
             .join("com.empyralis.tray")
+    }
+
+    fn agent_computer_env_value(&self, name: &str) -> Option<String> {
+        let path = self
+            .repo_root()
+            .join(".orion-stack/agent-computer/agent-computer.env");
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|contents| dotenv_value_from_contents(&contents, name))
     }
 
     fn launch_agent_path(&self) -> PathBuf {

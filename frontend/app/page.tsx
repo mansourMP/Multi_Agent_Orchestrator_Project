@@ -1,4 +1,5 @@
 import { Metadata } from 'next';
+import { redirect } from 'next/navigation';
 
 import { ShellRecoveryActions } from '@/app/(account)/ShellRecoveryActions';
 import {
@@ -39,13 +40,17 @@ export default async function LandingPage() {
   const platformHref = workspaceId ? `/w/${encodeURIComponent(workspaceId)}/sage` : '/workspaces/new';
   const isAuthenticated = Boolean(session);
 
+  if (isAuthenticated) {
+    redirect(platformHref);
+  }
+
   return (
     <LandingClient
-      accountHref={isAuthenticated ? platformHref : '/login'}
-      accountLabel={isAuthenticated ? 'Open platform' : 'Log in'}
-      primaryHref={isAuthenticated ? platformHref : '/signup'}
-      primaryLabel={isAuthenticated ? 'Open platform' : 'Create account'}
-      finalCtaLabel={isAuthenticated ? 'Open your main agent' : 'Start with your main agent'}
+      accountHref="/login"
+      accountLabel="Log in"
+      primaryHref="/signup"
+      primaryLabel="Create account"
+      finalCtaLabel="Start with your main agent"
     />
   );
 }

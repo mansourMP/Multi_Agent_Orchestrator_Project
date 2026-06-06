@@ -81,6 +81,12 @@ class ProviderProfilesTests(unittest.TestCase):
         self.assertAlmostEqual(models["deepseek-reasoner"]["input_cost_per_1k_usd"], 0.00014, places=8)
         self.assertAlmostEqual(models["deepseek-reasoner"]["output_cost_per_1k_usd"], 0.00028, places=8)
 
+    def test_deepseek_platform_runtime_profile_is_secretless(self) -> None:
+        self.assertTrue(provider_profiles.provider_supports_auth_mode("deepseek", "platform_runtime"))
+        self.assertFalse(provider_profiles.provider_requires_credential("deepseek", "platform_runtime"))
+        self.assertFalse(provider_profiles.provider_supports_auth_mode("openai", "platform_runtime"))
+        self.assertTrue(provider_profiles.provider_requires_credential("openai", "platform_runtime"))
+
     def test_ollama_model_catalog_marks_local_models_as_tool_capable(self) -> None:
         models = {
             item["id"]: item

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ from server_modules import (
     channel_lane_contract_service,
     gateway_state_repository,
     gateway_execution_service,
+    gateway_approval_service,
     kill_switch_gate,
     personal_channel_sage_bridge_service,
     personal_channels_repository,
@@ -490,6 +492,76 @@ for _channel_key, _channel_spec in LOCAL_BRIDGE_PERSONAL_CHANNELS.items():
     )
 
 
+async def _mark_automatic_reply_pending(
+    *,
+    action: str,
+    registration: Dict[str, Any],
+    gateway_id: str,
+    channel_key: str,
+    provider: str,
+    detail_label: str,
+    inbound: Dict[str, Any],
+    outbound: Dict[str, Any],
+    external_message_id: str,
+    remote_jid: str,
+    duplicate: bool,
+    trace_id: str,
+    idempotency_key: str,
+) -> Dict[str, Any]:
+    approval = await gateway_approval_service.request_gateway_tool_approval(
+        registration=registration,
+        capability_id=f"channel.{detail_label.lower()}.personal.send"
+        if detail_label.lower() in {"whatsapp", "telegram"}
+        else f"{str(channel_key or '').strip()}.send",
+        arguments={
+            "channel_key": channel_key,
+            "provider": provider,
+            "remote_jid": remote_jid,
+            "text": str(outbound.get("text") or "").strip(),
+            "idempotency_key": idempotency_key,
+            "reply_to_external_message_id": external_message_id,
+            "source": "automatic_personal_reply",
+            "inbound_external_message_id": external_message_id,
+        },
+        run_id=f"personal-channel-auto-{channel_key}-{idempotency_key}",
+        trace_id=str(trace_id or "").strip() or f"personal-channel-auto-{channel_key}-{idempotency_key}",
+        request_id=idempotency_key,
+    )
+    refreshed_inbound = personal_channels_repository.mark_inbound_processed(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        external_message_id=external_message_id,
+        reply_idempotency_key=idempotency_key,
+    )
+    _emit_automatic_reply_audit(
+        action=action,
+        status="approval_required",
+        registration=registration,
+        gateway_id=gateway_id,
+        channel_key=channel_key,
+        provider=provider,
+        detail=f"Sage drafted a {detail_label} personal reply and is waiting for owner approval before dispatch.",
+        metadata={
+            "remote_jid": remote_jid,
+            "inbound_external_message_id": external_message_id,
+            "reply_text_length": len(str(outbound.get("text") or "")),
+            "outbound_status": str(outbound.get("status") or "pending").strip() or "pending",
+            "approval_required": True,
+            "approval_id": approval.get("approval_id"),
+        },
+        trace_id=trace_id,
+        idempotency_key=f"{action}.approval_required:{gateway_id}:{idempotency_key}",
+    )
+    return {
+        "duplicate": duplicate,
+        "inbound": refreshed_inbound or inbound,
+        "outbound": outbound,
+        "approval_required": True,
+        "approval": approval,
+        "normalized_approval": approval.get("normalized_approval"),
+    }
+
+
 def _sender_role_from_message(message: Dict[str, Any]) -> Optional[str]:
     metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
     for candidate in (
@@ -535,8 +607,8 @@ def _emit_automatic_reply_audit(
             "action_class": "automatic_inbound_reply",
             "risk_level": "critical",
             "governance_boundary": "paired_gateway",
-            "requires_approval": False,
-            "external_side_effect": True,
+            "requires_approval": status == "approval_required",
+            "external_side_effect": status not in {"approval_required", "blocked", "ignored"},
             **dict(metadata or {}),
         },
         idempotency_key=idempotency_key,
@@ -853,6 +925,7 @@ def sync_gateway_personal_channel_state(
             connected_at=str(telegram_state.get("connected_at") or "").strip() or None,
             metadata={
                 "retryable": bool(telegram_state.get("retryable")),
+                "code_requested_at": str(telegram_state.get("code_requested_at") or "").strip() or None,
                 "last_disconnect_reason": str(telegram_state.get("last_disconnect_reason") or "").strip() or None,
                 "last_disconnect_code": telegram_state.get("last_disconnect_code"),
                 "updated_at": telegram_state.get("updated_at"),
@@ -891,6 +964,99 @@ def sync_gateway_channel_outbound_result(
     )
 
 
+def _iter_personal_channel_records(value: Any) -> list[Dict[str, Any]]:
+    if isinstance(value, dict):
+        if isinstance(value.get("items"), list):
+            candidates = value.get("items") or []
+        else:
+            candidates = []
+            for key, item in value.items():
+                if isinstance(item, dict):
+                    enriched = dict(item)
+                    enriched.setdefault("channel_key", str(key or "").strip())
+                    candidates.append(enriched)
+    elif isinstance(value, list):
+        candidates = value
+    else:
+        candidates = []
+    return [item for item in candidates if isinstance(item, dict)]
+
+
+def _record_channel_key(record: Dict[str, Any]) -> str:
+    return str(
+        record.get("channel_key")
+        or record.get("channelKey")
+        or record.get("key")
+        or record.get("id")
+        or ""
+    ).strip()
+
+
+def _record_provider(record: Dict[str, Any]) -> str:
+    return str(record.get("provider") or record.get("runtime_provider") or "").strip()
+
+
+def _registration_capabilities(registration: Dict[str, Any]) -> list[str]:
+    raw = registration.get("capabilities")
+    if isinstance(raw, list):
+        return [str(item or "").strip() for item in raw if str(item or "").strip()]
+    if isinstance(raw, str):
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    return []
+
+
+def _registration_advertises_personal_channel(
+    registration: Dict[str, Any],
+    channel_key: str,
+) -> bool:
+    normalized_channel = str(channel_key or "").strip().lower()
+    if not normalized_channel:
+        return False
+    provider_prefix = normalized_channel.removesuffix("_personal")
+    expected_fragments = {
+        normalized_channel,
+        normalized_channel.replace("_", "."),
+        f"channel.{normalized_channel}",
+        f"channel.{normalized_channel.replace('_', '.')}",
+    }
+    if provider_prefix and provider_prefix != normalized_channel:
+        expected_fragments.add(f"channel.{provider_prefix}.personal")
+    for capability in _registration_capabilities(registration):
+        normalized_capability = capability.strip().lower()
+        if normalized_capability in expected_fragments:
+            return True
+    return False
+
+
+def _assert_gateway_advertised_personal_channel(
+    *,
+    registration: Dict[str, Any],
+    channel_key: str,
+    provider: str,
+) -> None:
+    metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
+    manifests = _iter_personal_channel_records(metadata.get("personal_channel_manifests"))
+    manifest = next((item for item in manifests if _record_channel_key(item) == channel_key), None)
+    if manifest is None:
+        if not _registration_advertises_personal_channel(registration, channel_key):
+            raise ValueError(f"Gateway has not advertised personal channel support for {channel_key}.")
+    else:
+        manifest_provider = _record_provider(manifest)
+        if manifest_provider and provider and manifest_provider != provider:
+            raise ValueError(f"Gateway advertised {channel_key} with provider {manifest_provider}, not {provider}.")
+        if manifest.get("liveCapable") is False or manifest.get("live_capable") is False:
+            raise ValueError(f"Gateway personal channel {channel_key} is not live-capable.")
+        manifest_status = str(manifest.get("status") or manifest.get("stage") or "").strip().lower()
+        if manifest_status in {"unsupported", "unavailable", "disabled", "planned", "locked"}:
+            raise ValueError(f"Gateway personal channel {channel_key} is {manifest_status}.")
+    health_records = _iter_personal_channel_records(metadata.get("personal_channel_health"))
+    health = next((item for item in health_records if _record_channel_key(item) == channel_key), None)
+    if health is not None:
+        health_status = str(health.get("status") or health.get("health") or "").strip().lower()
+        if health_status in {"offline", "error", "failed", "disconnected", "unavailable", "disabled"}:
+            raise ValueError(f"Gateway personal channel {channel_key} health is {health_status}.")
+
+
 async def handle_gateway_channel_inbound(
     *,
     gateway_id: str,
@@ -899,9 +1065,15 @@ async def handle_gateway_channel_inbound(
 ) -> Dict[str, Any]:
     kill_switch_gate.assert_not_killed(gateway_id=gateway_id)
     channel_key = str(payload.get("channel_key") or "").strip()
+    provider = str(payload.get("provider") or "").strip()
     channel_lane_contract_service.assert_personal_gateway_channel(
         channel_key,
-        str(payload.get("provider") or "").strip() or None,
+        provider or None,
+    )
+    _assert_gateway_advertised_personal_channel(
+        registration=registration,
+        channel_key=channel_key,
+        provider=provider,
     )
     # Generate or preserve trace_id once at the inbound boundary
     trace_id = str(payload.get("trace_id") or "").strip() or f"channel-{channel_key}-{uuid4().hex[:16]}"
@@ -954,6 +1126,7 @@ async def _deliver_whatsapp_personal_reply(
             remote_jid=remote_jid,
             text=text,
             push_name=push_name,
+            source_event_id=external_message_id,
         )
         if not reply or not str(reply.get("text") or "").strip():
             no_reply_idempotency_key = f"{WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX}{external_message_id}"
@@ -995,6 +1168,22 @@ async def _deliver_whatsapp_personal_reply(
             reply_idempotency_key=idempotency_key,
         )
         return {"duplicate": duplicate, "inbound": inbound, "outbound": outbound}
+
+    return await _mark_automatic_reply_pending(
+        action="personal_channel.whatsapp.automatic_reply",
+        registration=registration,
+        gateway_id=gateway_id,
+        channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+        provider=WHATSAPP_PERSONAL_PROVIDER,
+        detail_label="WhatsApp",
+        inbound=inbound,
+        outbound=outbound,
+        external_message_id=external_message_id,
+        remote_jid=remote_jid,
+        duplicate=duplicate,
+        trace_id=trace_id,
+        idempotency_key=idempotency_key,
+    )
 
     from server_modules import gateway_protocol_service
 
@@ -1085,6 +1274,8 @@ async def _handle_whatsapp_gateway_channel_inbound(
     text = str(message.get("text") or "").strip()
     if not external_message_id or not remote_jid or not text:
         raise ValueError("channel.inbound requires external_message_id, remote_jid, and text.")
+    if bool(message.get("from_me")):
+        return {"ignored": True, "reason": "from_me", "channel_key": WHATSAPP_PERSONAL_CHANNEL_KEY}
     sync_gateway_personal_channel_state(
         gateway_id=gateway_id,
         registration=registration,
@@ -1159,6 +1350,8 @@ async def _handle_telegram_gateway_channel_inbound(
     text = str(message.get("text") or "").strip()
     if not external_message_id or not remote_jid or not text:
         raise ValueError("channel.inbound requires external_message_id, remote_jid, and text.")
+    if bool(message.get("from_me")):
+        return {"ignored": True, "reason": "from_me", "channel_key": TELEGRAM_PERSONAL_CHANNEL_KEY}
     sync_gateway_personal_channel_state(
         gateway_id=gateway_id,
         registration=registration,
@@ -1231,6 +1424,7 @@ async def _handle_telegram_gateway_channel_inbound(
             remote_jid=remote_jid,
             text=text,
             push_name=str(message.get("push_name") or "").strip() or None,
+            source_event_id=external_message_id,
         )
         if not reply or not str(reply.get("text") or "").strip():
             no_reply_idempotency_key = f"{TELEGRAM_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX}{external_message_id}"
@@ -1272,6 +1466,22 @@ async def _handle_telegram_gateway_channel_inbound(
             reply_idempotency_key=idempotency_key,
         )
         return {"duplicate": not created, "inbound": inbound, "outbound": outbound}
+
+    return await _mark_automatic_reply_pending(
+        action="personal_channel.telegram.automatic_reply",
+        registration=registration,
+        gateway_id=gateway_id,
+        channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
+        provider=TELEGRAM_PERSONAL_PROVIDER,
+        detail_label="Telegram",
+        inbound=inbound,
+        outbound=outbound,
+        external_message_id=external_message_id,
+        remote_jid=remote_jid,
+        duplicate=not created,
+        trace_id=trace_id,
+        idempotency_key=idempotency_key,
+    )
 
     from server_modules import gateway_protocol_service
 
@@ -1390,6 +1600,7 @@ async def _deliver_local_bridge_personal_reply(
             text=text,
             push_name=push_name,
             fallback_label=label,
+            source_event_id=external_message_id,
         )
         if not reply or not str(reply.get("text") or "").strip():
             no_reply_idempotency_key = f"{no_reply_prefix}{external_message_id}"
@@ -1431,6 +1642,22 @@ async def _deliver_local_bridge_personal_reply(
             reply_idempotency_key=idempotency_key,
         )
         return {"duplicate": duplicate, "inbound": inbound, "outbound": outbound}
+
+    return await _mark_automatic_reply_pending(
+        action=f"personal_channel.{channel_key.split('_', 1)[0]}.automatic_reply",
+        registration=registration,
+        gateway_id=gateway_id,
+        channel_key=channel_key,
+        provider=provider,
+        detail_label=label,
+        inbound=inbound,
+        outbound=outbound,
+        external_message_id=external_message_id,
+        remote_jid=remote_jid,
+        duplicate=duplicate,
+        trace_id=trace_id,
+        idempotency_key=idempotency_key,
+    )
 
     from server_modules import gateway_protocol_service
 
@@ -1505,6 +1732,8 @@ async def _handle_local_bridge_gateway_channel_inbound(
     text = str(message.get("text") or "").strip()
     if not external_message_id or not remote_jid or not text:
         raise ValueError("channel.inbound requires external_message_id, remote_jid, and text.")
+    if bool(message.get("from_me")):
+        return {"ignored": True, "reason": "from_me", "channel_key": channel_key}
     inbound, created = personal_channels_repository.record_inbound_message(
         gateway_id=str(gateway_id or "").strip(),
         channel_key=channel_key,
@@ -1717,6 +1946,84 @@ async def configure_whatsapp_personal_gateway(
     }
 
 
+async def dispatch_approved_personal_channel_outbound(
+    *,
+    gateway_id: str,
+    capability_id: str,
+    arguments: Dict[str, Any],
+    run_id: str,
+    trace_id: str,
+    workspace_id: str,
+    timeout_seconds: int,
+    request_id: Optional[str] = None,
+    runtime_access_mode: Optional[str] = None,
+    empyralis_approved: bool = False,
+) -> Dict[str, Any]:
+    channel_key = str(arguments.get("channel_key") or "").strip()
+    if not channel_key:
+        token = str(capability_id or "").strip().lower()
+        if token == "channel.whatsapp.personal.send":
+            channel_key = WHATSAPP_PERSONAL_CHANNEL_KEY
+        elif token == "channel.telegram.personal.send":
+            channel_key = TELEGRAM_PERSONAL_CHANNEL_KEY
+    provider = str(arguments.get("provider") or "").strip()
+    if channel_key == WHATSAPP_PERSONAL_CHANNEL_KEY:
+        provider = provider or WHATSAPP_PERSONAL_PROVIDER
+    elif channel_key == TELEGRAM_PERSONAL_CHANNEL_KEY:
+        provider = provider or TELEGRAM_PERSONAL_PROVIDER
+    else:
+        provider = provider or LOCAL_BRIDGE_PERSONAL_CHANNELS.get(channel_key, {}).get("provider", "")
+    channel_lane_contract_service.assert_personal_gateway_channel(channel_key, provider)
+    remote_jid = str(arguments.get("remote_jid") or "").strip()
+    text = str(arguments.get("text") or "").strip()
+    idempotency_key = str(arguments.get("idempotency_key") or request_id or "").strip()
+    reply_to_external_message_id = str(arguments.get("reply_to_external_message_id") or "").strip() or None
+    if not remote_jid or not text or not idempotency_key:
+        raise ValueError("Approved personal-channel dispatch requires remote_jid, text, and idempotency_key.")
+    outbound, _ = personal_channels_repository.create_or_get_outbound_message(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        idempotency_key=idempotency_key,
+        remote_jid=remote_jid,
+        text=text,
+        reply_to_external_message_id=reply_to_external_message_id,
+        metadata={
+            "source": str(arguments.get("source") or "approved_personal_channel_send").strip(),
+            "approval_run_id": run_id,
+            "approval_trace_id": trace_id,
+            "empyralis_approved": bool(empyralis_approved),
+        },
+    )
+    if str(outbound.get("status") or "").strip() == "delivered":
+        return {"status": "completed", "outbound": outbound, "gateway_id": str(gateway_id or "").strip(), "channel_key": channel_key}
+    from server_modules import gateway_protocol_service
+
+    dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        provider=provider,
+        remote_jid=str(outbound.get("remote_jid") or remote_jid).strip(),
+        text=str(outbound.get("text") or text).strip(),
+        idempotency_key=idempotency_key,
+        reply_to_external_message_id=str(outbound.get("reply_to_external_message_id") or "").strip() or reply_to_external_message_id,
+        timeout_seconds=timeout_seconds,
+    )
+    delivered = personal_channels_repository.mark_outbound_delivered(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=channel_key,
+        idempotency_key=idempotency_key,
+        external_message_id=str(dispatch_result.get("external_message_id") or "").strip() or None,
+        metadata={"dispatch_result": dispatch_result, "approval_run_id": run_id, "approval_trace_id": trace_id},
+    )
+    return {
+        "status": "completed",
+        "gateway_id": str(gateway_id or "").strip(),
+        "channel_key": channel_key,
+        "outbound": delivered or outbound,
+        "dispatch_result": dispatch_result,
+    }
+
+
 async def send_telegram_personal_message(
     *,
     gateway_id: str,
@@ -1787,6 +2094,28 @@ def get_telegram_gateway_view(gateway_id: str) -> Dict[str, Any]:
     }
 
 
+def _platform_telegram_api_id() -> Optional[int]:
+    for name in ("EMPYRALIS_TELEGRAM_API_ID", "TELEGRAM_API_ID"):
+        raw = str(os.getenv(name) or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed = int(raw)
+        except ValueError:
+            continue
+        if parsed > 0:
+            return parsed
+    return None
+
+
+def _platform_telegram_api_hash() -> Optional[str]:
+    for name in ("EMPYRALIS_TELEGRAM_API_HASH", "TELEGRAM_API_HASH"):
+        raw = str(os.getenv(name) or "").strip()
+        if raw:
+            return raw
+    return None
+
+
 async def configure_telegram_personal_gateway(
     *,
     gateway_id: str,
@@ -1801,11 +2130,13 @@ async def configure_telegram_personal_gateway(
         TELEGRAM_PERSONAL_CHANNEL_KEY,
         TELEGRAM_PERSONAL_PROVIDER,
     )
+    resolved_api_id = api_id if api_id is not None else _platform_telegram_api_id()
+    resolved_api_hash = str(api_hash or "").strip() or _platform_telegram_api_hash()
     arguments: Dict[str, Any] = {}
-    if api_id is not None:
-        arguments["api_id"] = int(api_id)
-    if str(api_hash or "").strip():
-        arguments["api_hash"] = str(api_hash).strip()
+    if resolved_api_id is not None:
+        arguments["api_id"] = int(resolved_api_id)
+    if str(resolved_api_hash or "").strip():
+        arguments["api_hash"] = str(resolved_api_hash).strip()
     if str(phone_number or "").strip():
         arguments["phone_number"] = str(phone_number).strip()
     if str(login_code or "").strip():

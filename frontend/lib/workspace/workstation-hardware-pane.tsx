@@ -89,6 +89,23 @@ type HardwareActivityEvent = {
   timestamp?: string | null;
 };
 
+type GatewayRegistrationRecord = Record<string, unknown> & {
+  gateway_id?: string | null;
+  display_name?: string | null;
+  device_id?: string | null;
+  platform?: string | null;
+  status?: string | null;
+  connection_status?: string | null;
+  device_trust_state?: string | null;
+  last_seen_at?: string | null;
+};
+
+type SageAgentComputerSelectionPayload = Record<string, unknown> & {
+  selected_gateway_id?: string | null;
+  selection?: Record<string, unknown> | null;
+  gateway?: GatewayRegistrationRecord | null;
+};
+
 type SshAuthMode = 'password' | 'ssh_key';
 
 const TRAY_STATUS_URL = 'http://127.0.0.1:7790/status';
@@ -581,6 +598,10 @@ export function WorkstationHardwarePane() {
   const [trayDetected, setTrayDetected] = useState<boolean | null>(null);
   const [trayChecking, setTrayChecking] = useState(false);
   const [localConnectError, setLocalConnectError] = useState<string | null>(null);
+  const [gatewayRegistrations, setGatewayRegistrations] = useState<GatewayRegistrationRecord[]>([]);
+  const [sageAgentComputerSelection, setSageAgentComputerSelection] = useState<SageAgentComputerSelectionPayload | null>(null);
+  const [selectionBusyGatewayId, setSelectionBusyGatewayId] = useState<string | null>(null);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
   const [remoteExpanded, setRemoteExpanded] = useState(false);
   const [remoteError, setRemoteError] = useState<string | null>(null);
   const [manualCommandOpen, setManualCommandOpen] = useState(false);
@@ -602,6 +623,28 @@ export function WorkstationHardwarePane() {
     } catch {
       setAttachments([]);
       setError('Hardware status is unavailable right now.');
+    }
+  }
+
+  async function refreshSageAgentComputerState(): Promise<void> {
+    try {
+      const [registrationsPayload, selectionPayload] = await Promise.all([
+        services.client.requestJson<Record<string, unknown>>({
+          path: `/api/gateway/registrations?workspace_id=${encodeURIComponent(workspaceId)}`,
+          allowStatuses: [404],
+        }),
+        services.client.getSageAgentComputerSelection() as Promise<SageAgentComputerSelectionPayload>,
+      ]);
+      const registrations = Array.isArray(registrationsPayload?.items)
+        ? registrationsPayload.items.filter((item): item is GatewayRegistrationRecord => Boolean(item) && typeof item === 'object')
+        : [];
+      setGatewayRegistrations(registrations);
+      setSageAgentComputerSelection(selectionPayload);
+      setSelectionError(null);
+    } catch (stateError) {
+      setGatewayRegistrations([]);
+      setSageAgentComputerSelection(null);
+      setSelectionError(stateError instanceof Error ? stateError.message : 'Sage Agent Computer selection is unavailable.');
     }
   }
 
@@ -640,6 +683,10 @@ export function WorkstationHardwarePane() {
       active = false;
     };
   }, [services.client]);
+
+  useEffect(() => {
+    void refreshSageAgentComputerState();
+  }, [services.client, workspaceId]);
 
   useEffect(() => {
     void detectTrayAgent();
@@ -707,6 +754,10 @@ export function WorkstationHardwarePane() {
   const serverCard = cards.find((card) => card.kind === 'self_hosted_business_node') ?? null;
   const cloudCard = cards.find((card) => card.kind === 'cloud_computer') ?? null;
   const connectedCount = cards.filter((card) => card.status === 'Connected').length;
+  const selectedSageGatewayId = readString(
+    readRecord(sageAgentComputerSelection?.selection),
+    'selected_gateway_id',
+  ) || readString(readRecord(sageAgentComputerSelection), 'selected_gateway_id');
   const visibleCards = useMemo(() => {
     if (activeTab === 'this_device') {
       return localCard ? [localCard] : [];
@@ -887,6 +938,7 @@ export function WorkstationHardwarePane() {
       }
       setConnectOpen(false);
       await refreshHardwareAttachments();
+      await refreshSageAgentComputerState();
       await refreshHardwareCapabilities();
     } catch (connectError) {
       setLocalConnectError(connectError instanceof Error ? connectError.message : 'Connection timed out');
@@ -946,6 +998,7 @@ export function WorkstationHardwarePane() {
       });
       setStatusMessage('Remote server connection started.');
       await refreshHardwareAttachments();
+      await refreshSageAgentComputerState();
     } catch (sshError) {
       setRemoteError(sshError instanceof Error ? sshError.message : 'Remote server connection failed.');
     } finally {
@@ -1005,6 +1058,27 @@ export function WorkstationHardwarePane() {
     openConnect(card.kind === 'self_hosted_business_node' ? 'ssh_server' : 'this_device');
   }
 
+  async function setAsSageAgentComputer(gatewayId: string) {
+    const cleanGatewayId = gatewayId.trim();
+    if (!cleanGatewayId) {
+      return;
+    }
+    setSelectionBusyGatewayId(cleanGatewayId);
+    setSelectionError(null);
+    try {
+      const payload = await services.client.setSageAgentComputerSelection({
+        selectedGatewayId: cleanGatewayId,
+        metadata: { source: 'hardware_page' },
+      }) as SageAgentComputerSelectionPayload;
+      setSageAgentComputerSelection(payload);
+      await refreshSageAgentComputerState();
+    } catch (selectionSetError) {
+      setSelectionError(selectionSetError instanceof Error ? selectionSetError.message : 'Could not select Sage Agent Computer.');
+    } finally {
+      setSelectionBusyGatewayId(null);
+    }
+  }
+
   const connectModalTitle = trayDetected && connectContext === 'this_device'
     ? 'Connect via Empyralis Agent'
     : connectContext === 'this_device'
@@ -1052,6 +1126,53 @@ export function WorkstationHardwarePane() {
             </button>
           ))}
         </nav>
+
+        <section className="workstation-hardware-section" aria-label="Sage Agent Computer">
+          <header className="workstation-hardware-section__header">
+            <div>
+              <h2>Sage Agent Computer</h2>
+              <p>Choose the one computer Sage uses for hardware and personal channels.</p>
+            </div>
+          </header>
+          {selectionError ? <p className="workstation-hardware-section__notice">{selectionError}</p> : null}
+          <div className="workstation-hardware-list">
+            {gatewayRegistrations.length ? gatewayRegistrations.map((gateway) => {
+              const gatewayId = readString(gateway, 'gateway_id');
+              const selected = Boolean(gatewayId && gatewayId === selectedSageGatewayId);
+              const connectionStatus = readString(gateway, 'connection_status', 'status') || 'offline';
+              const displayName = readString(gateway, 'display_name', 'device_id', 'gateway_id') || 'Agent Computer';
+              const platform = readString(gateway, 'platform') || 'Computer';
+              const busySelecting = selectionBusyGatewayId === gatewayId;
+              return (
+                <article key={gatewayId || displayName} className={joinClassNames('workstation-hardware-row', selected && 'is-selected')}>
+                  <span className="workstation-hardware-row__icon" aria-hidden="true">
+                    <Monitor size={18} strokeWidth={1.9} />
+                  </span>
+                  <div className="workstation-hardware-row__copy">
+                    <h3>{displayName}</h3>
+                    <p>{`${platform} · ${connectionStatus}${selected ? ' · Selected for Sage' : ''}`}</p>
+                  </div>
+                  <span className={joinClassNames('workstation-hardware-row__status', connectionStatus === 'online' && 'is-connected')}>
+                    <span className={joinClassNames('workstation-hardware-row__status-dot', connectionStatus === 'online' ? 'is-connected' : 'is-offline')} />
+                    <span className="workstation-hardware-row__status-text">{selected ? 'Selected' : connectionStatus}</span>
+                  </span>
+                  <AppButton
+                    tone="secondary"
+                    type="button"
+                    disabled={selected || busySelecting}
+                    onClick={() => void setAsSageAgentComputer(gatewayId)}
+                  >
+                    {selected ? 'Sage Agent Computer' : busySelecting ? 'Setting...' : 'Set as Sage Agent Computer'}
+                  </AppButton>
+                </article>
+              );
+            }) : (
+              <div className="workstation-hardware-empty">
+                <p>No Agent Computer has registered yet.</p>
+              </div>
+            )}
+          </div>
+        </section>
 
         <section className="workstation-hardware-section" aria-label="Computers Empyralis can use">
 	          <header className="workstation-hardware-section__header">

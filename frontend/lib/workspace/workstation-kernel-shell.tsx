@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { ArrowLeft, BookOpen, Bot, Brain, ChevronRight, Compass, Cpu, FolderOpen, LayoutGrid, Link2, ListTodo, Menu, MessageSquare, Monitor, Package, Plus, Wrench } from 'lucide-react';
+import { ArrowLeft, BookOpen, Bot, Brain, ChevronRight, Compass, Cpu, FolderOpen, LayoutGrid, Link2, ListTodo, Menu, MessageSquare, Monitor, Package, Plus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { logout } from '@/lib/auth/auth-client';
@@ -111,7 +111,7 @@ const SAGE_MOBILE_DRAWER_ROUTE_IDS: readonly {
   icon: LucideIcon;
 }[] = [
   { routeId: 'chat', label: 'Chat', icon: MessageSquare },
-  { routeId: 'integrations', label: 'Connections', icon: Link2 },
+  { routeId: 'integrations', label: 'Connectors', icon: Link2 },
   { routeId: 'memory', label: 'Memory', icon: Brain },
   { routeId: 'tasks', label: 'Tasks', icon: ListTodo },
   { routeId: 'artifacts', label: 'Library', icon: BookOpen },
@@ -134,8 +134,7 @@ const SAGE_SETUP_NAV_ITEMS: readonly {
   icon: LucideIcon;
 }[] = [
   { id: 'ai-runtime', label: 'AI setup', section: 'ai-runtime', icon: Cpu },
-  { id: 'connections', label: 'Connections', section: 'connections', icon: Link2 },
-  { id: 'plugins', label: 'Actions', section: 'plugins', icon: Wrench },
+  { id: 'connectors', label: 'Connectors', section: 'apps', icon: Link2 },
 ];
 
 const MARKETPLACE_TITLEBAR_FILTERS = [

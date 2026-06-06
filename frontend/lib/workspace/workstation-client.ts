@@ -87,6 +87,44 @@ export type WorkspaceAiRoutePayload = Record<string, unknown> & {
   budgets?: Record<string, unknown> | null;
 };
 
+export type ConnectionCatalogItem = Record<string, unknown> & {
+  id?: string | null;
+  display_name?: string | null;
+  lane?: string | null;
+  surface?: string[] | null;
+  setup_kind?: string | null;
+  launch_status?: string | null;
+  description?: string | null;
+  requires_gateway?: boolean | null;
+  supports_inbound?: boolean | null;
+  supports_outbound?: boolean | null;
+  media_support?: Record<string, boolean> | null;
+  approval_policy?: string | null;
+  health_check?: string | null;
+  test_action?: string | null;
+  connector_ids?: string[] | null;
+  setup_available?: boolean | null;
+  runtime_usable?: boolean | null;
+};
+
+export type ConnectionStatusItem = ConnectionCatalogItem & {
+  connected?: boolean | null;
+  configured?: boolean | null;
+  test_status?: string | null;
+  health_status?: string | null;
+  selected_gateway_id?: string | null;
+  last_error?: string | null;
+  next_action?: string | null;
+};
+
+export type ConnectionCatalogPayload = Record<string, unknown> & {
+  items?: ConnectionCatalogItem[] | null;
+};
+
+export type ConnectionStatusPayload = Record<string, unknown> & {
+  items?: ConnectionStatusItem[] | null;
+};
+
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -900,6 +938,12 @@ export type WorkstationClientPaths = {
   ) => string;
   studioAgentSurfaces: string;
   studioChannelCatalog: string;
+  connectionsCatalog: (surface?: string | null) => string;
+  connectionsStatus: (surface?: string | null, selectedGatewayId?: string | null) => string;
+  sageAgentComputerSelection: string;
+  connectionSetupStart: (connectionId: string) => string;
+  connectionTest: (connectionId: string) => string;
+  connectionDisconnect: (connectionId: string) => string;
   studioChannelAccounts: string;
   studioAgentChannelBindings: (deployedAgentId: string) => string;
   studioAgentChannelBindingAction: (deployedAgentId: string, channelKey: string, action: 'pause' | 'resume' | 'revoke' | 'test') => string;
@@ -1183,6 +1227,32 @@ export type WorkstationClient = {
   listDeployedAgents: (options?: { deploymentState?: string | null }) => Promise<Record<string, unknown>>;
   listStudioAgentSurfaces: () => Promise<StudioAgentSurfacesPayload>;
   listStudioChannelCatalog: () => Promise<ChannelCatalogPayload>;
+  listConnectionCatalog: (options?: { surface?: string | null }) => Promise<ConnectionCatalogPayload>;
+  listConnectionStatus: (options?: {
+    surface?: string | null;
+    selectedGatewayId?: string | null;
+  }) => Promise<ConnectionStatusPayload>;
+  getSageAgentComputerSelection: () => Promise<Record<string, unknown>>;
+  setSageAgentComputerSelection: (options: {
+    selectedGatewayId: string;
+    metadata?: Record<string, unknown> | null;
+  }) => Promise<Record<string, unknown> | null>;
+  startConnectionSetup: (options: {
+    connectionId: string;
+    surface?: string | null;
+    selectedGatewayId?: string | null;
+    metadata?: Record<string, unknown> | null;
+  }) => Promise<Record<string, unknown> | null>;
+  testConnection: (options: {
+    connectionId: string;
+    surface?: string | null;
+    selectedGatewayId?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  disconnectConnection: (options: {
+    connectionId: string;
+    surface?: string | null;
+    selectedGatewayId?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
   listStudioChannelAccounts: () => Promise<ChannelAccountPayload>;
   createStudioChannelAccount: (options: {
     provider: string;
@@ -1712,6 +1782,22 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/studio/agent-surfaces${buildQueryString({ workspace_id: workspaceId })}`,
     studioChannelCatalog:
       `/api/studio/channel-catalog${buildQueryString({ workspace_id: workspaceId })}`,
+    connectionsCatalog: (surface = null) =>
+      `/api/connections/catalog${buildQueryString({ workspace_id: workspaceId, surface })}`,
+    connectionsStatus: (surface = null, selectedGatewayId = null) =>
+      `/api/connections/status${buildQueryString({
+        workspace_id: workspaceId,
+        surface,
+        selected_gateway_id: selectedGatewayId,
+      })}`,
+    sageAgentComputerSelection:
+      `/api/connections/sage-agent-computer${buildQueryString({ workspace_id: workspaceId })}`,
+    connectionSetupStart: (connectionId) =>
+      `/api/connections/${encodeURIComponent(connectionId)}/setup/start`,
+    connectionTest: (connectionId) =>
+      `/api/connections/${encodeURIComponent(connectionId)}/test`,
+    connectionDisconnect: (connectionId) =>
+      `/api/connections/${encodeURIComponent(connectionId)}/disconnect`,
     studioChannelAccounts:
       `/api/studio/channel-accounts${buildQueryString({ workspace_id: workspaceId })}`,
     studioAgentChannelBindings: (deployedAgentId) =>
@@ -3321,6 +3407,78 @@ export function createWorkstationClient(
         path: paths.studioChannelCatalog,
         policy: AGENT_STUDIO_READ_REQUEST_POLICY,
       }) as Promise<ChannelCatalogPayload>,
+    listConnectionCatalog: ({ surface = null } = {}) =>
+      requestJson<ConnectionCatalogPayload>({
+        path: paths.connectionsCatalog(surface),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<ConnectionCatalogPayload>,
+    listConnectionStatus: ({ surface = null, selectedGatewayId = null } = {}) =>
+      requestJson<ConnectionStatusPayload>({
+        path: paths.connectionsStatus(surface, selectedGatewayId),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<ConnectionStatusPayload>,
+    getSageAgentComputerSelection: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageAgentComputerSelection,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    setSageAgentComputerSelection: ({ selectedGatewayId, metadata = null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageAgentComputerSelection,
+        init: {
+          method: 'PUT',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            selected_gateway_id: selectedGatewayId,
+            metadata: metadata ?? {},
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    startConnectionSetup: ({ connectionId, surface = null, selectedGatewayId = null, metadata = null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.connectionSetupStart(connectionId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            surface,
+            selected_gateway_id: selectedGatewayId,
+            metadata: metadata ?? {},
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    testConnection: ({ connectionId, surface = null, selectedGatewayId = null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.connectionTest(connectionId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            surface,
+            selected_gateway_id: selectedGatewayId,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    disconnectConnection: ({ connectionId, surface = null, selectedGatewayId = null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.connectionDisconnect(connectionId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            surface,
+            selected_gateway_id: selectedGatewayId,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
     listStudioChannelAccounts: () =>
       requestJson<ChannelAccountPayload>({
         path: paths.studioChannelAccounts,

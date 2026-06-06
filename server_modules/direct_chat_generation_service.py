@@ -269,18 +269,8 @@ def _public_generation_error_code(llm_error: str) -> str:
 
 
 def _public_generation_error_reply(services: DirectChatGenerationServices, llm_error: str) -> str:
-    reply = str(services.direct_chat_error_reply(llm_error) or "").strip()
-    lower_reply = reply.lower()
-    if (
-        reply
-        and not lower_reply.startswith("chat failed:")
-        and "incompleteread" not in lower_reply
-        and "incomplete read" not in lower_reply
-        and "connection reset" not in lower_reply
-        and "remote end closed" not in lower_reply
-    ):
-        return reply
-    return "Sage hit a temporary error while generating the response. Please try again in a moment."
+    _ = (services, llm_error)
+    return ""
 
 
 def _turn_metadata_from_session(session_ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -648,7 +638,6 @@ def stream_provider_backed_direct_chat(
         for event in services.generate_chat_reply_stream_with_provider_fallback(
             context=context,
             metadata=metadata,
-            message=current_prompt,
             user_goal=current_prompt,
             system_prompt=system_prompt,
             prior_messages=messages or None,

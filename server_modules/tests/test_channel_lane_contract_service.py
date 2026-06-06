@@ -60,14 +60,14 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         )
         self.assertEqual(
             [entry["stage"] for entry in personal_catalog],
-            ["live", "live", "live", "live", "live"],
+            ["live", "live", "partial", "planned", "planned"],
         )
         self.assertTrue(
             all(entry["runtime_lane"] == service.PERSONAL_GATEWAY_RUNTIME_LANE for entry in personal_catalog)
         )
         self.assertEqual(
             [entry["live_capable"] for entry in personal_catalog],
-            ["true", "true", "true", "true", "true"],
+            ["true", "true", "false", "false", "false"],
         )
 
         self.assertEqual(
@@ -113,7 +113,7 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         self.assertEqual(by_key["telegram_personal"]["navigation_group"], "personal_messaging")
         self.assertEqual(by_key["telegram_personal"]["ownership_boundary"], "agent_computer")
         self.assertEqual(by_key["whatsapp_personal"]["surface_support"], ["sage"])
-        self.assertEqual(by_key["signal_personal"]["status"], "agent_computer_bridge")
+        self.assertEqual(by_key["signal_personal"]["status"], "partial")
         self.assertEqual(by_key["imessage_personal"]["provider"], "bluebubbles_local_bridge")
         self.assertFalse(by_key["wechat_personal"]["launch_allowed"])
         self.assertEqual(by_key["github"]["category"], "work_system")
@@ -137,15 +137,15 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
 
             self.assertEqual(spec["runtime_lane"], service.PERSONAL_GATEWAY_RUNTIME_LANE)
             self.assertEqual(spec["memory_surface"], service.DIRECT_CHAT_MEMORY_SURFACE)
-            self.assertEqual(spec["live_capable"], "true")
+            self.assertEqual(spec["live_capable"], "false")
 
     def test_agent_computer_bridge_channels_pass_personal_preflight(self) -> None:
         for channel_key in ("signal_personal", "imessage_personal", "wechat_personal"):
             preflight = service.personal_bridge_preflight(channel_key)
 
-            self.assertEqual(preflight["status"], "pass")
-            self.assertTrue(preflight["launch_allowed"])
-            self.assertEqual(preflight["reason"], "live_personal_gateway_runtime")
+            self.assertEqual(preflight["status"], "blocked")
+            self.assertFalse(preflight["launch_allowed"])
+            self.assertEqual(preflight["reason"], "bridge_contract_not_live_enabled")
 
         telegram_preflight = service.personal_bridge_preflight("telegram_personal")
         self.assertEqual(telegram_preflight["status"], "pass")

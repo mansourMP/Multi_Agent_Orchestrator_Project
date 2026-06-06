@@ -1,0 +1,756 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any, Dict, Iterable, Optional
+
+from server_modules import (
+    channel_lane_contract_service,
+    gateway_registry_service,
+    gateway_state_repository,
+    personal_channels_repository,
+    runtime_common,
+    sage_agent_computer_selection_service,
+)
+
+
+LANE_SAGE_PERSONAL_CHANNEL = "sage_personal_channel"
+LANE_STUDIO_BUSINESS_CHANNEL = "studio_business_channel"
+LANE_WORK_APP_CONNECTOR = "work_app_connector"
+LANE_AGENT_COMPUTER = "agent_computer"
+LANE_APPLICATION = "application"
+LANE_MCP_PLUGIN = "mcp_plugin"
+LANE_AI = "ai"
+LANE_SKILL = "skill"
+
+LAUNCH_LIVE = "live"
+LAUNCH_LIVE_WHEN_CONFIGURED = "live_when_configured"
+LAUNCH_PARTIAL = "partial"
+LAUNCH_PLANNED = "planned"
+LAUNCH_LOCKED = "locked"
+
+_USABLE_LAUNCH_STATUSES = {LAUNCH_LIVE, LAUNCH_LIVE_WHEN_CONFIGURED}
+
+
+def _text(value: Any, fallback: str = "") -> str:
+    candidate = str(value or "").strip()
+    return candidate or fallback
+
+
+def _token(value: Any) -> str:
+    return _text(value).lower()
+
+
+def _media(*, text: bool = False, images: bool = False, files: bool = False, voice: bool = False) -> Dict[str, bool]:
+    return {
+        "text": bool(text),
+        "images": bool(images),
+        "files": bool(files),
+        "voice": bool(voice),
+    }
+
+
+def _item(
+    *,
+    connection_id: str,
+    display_name: str,
+    lane: str,
+    surfaces: Iterable[str],
+    setup_kind: str,
+    launch_status: str,
+    description: str,
+    requires_gateway: bool = False,
+    supports_inbound: bool = False,
+    supports_outbound: bool = False,
+    media_support: Optional[Dict[str, bool]] = None,
+    approval_policy: str = "none",
+    health_check: str = "none",
+    test_action: Optional[str] = None,
+    connector_ids: Optional[list[str]] = None,
+    provider: Optional[str] = None,
+    runtime_provider: Optional[str] = None,
+    vault_provider: Optional[str] = None,
+    connector_id: Optional[str] = None,
+    account_provider: Optional[str] = None,
+    setup_available: Optional[bool] = None,
+    runtime_usable: Optional[bool] = None,
+) -> Dict[str, Any]:
+    normalized_status = _token(launch_status) or LAUNCH_LOCKED
+    usable = normalized_status in _USABLE_LAUNCH_STATUSES if runtime_usable is None else bool(runtime_usable)
+    setup = usable if setup_available is None else bool(setup_available)
+    normalized_connector_id = connector_id or connection_id
+    normalized_account_provider = account_provider or normalized_connector_id
+    normalized_runtime_provider = runtime_provider or provider or connection_id
+    normalized_vault_provider = vault_provider or normalized_account_provider
+    return {
+        "id": connection_id,
+        "display_name": display_name,
+        "lane": lane,
+        "surface": list(dict.fromkeys(_text(surface) for surface in surfaces if _text(surface))),
+        "setup_kind": setup_kind,
+        "launch_status": normalized_status,
+        "description": description,
+        "requires_gateway": bool(requires_gateway),
+        "supports_inbound": bool(supports_inbound),
+        "supports_outbound": bool(supports_outbound),
+        "media_support": dict(media_support or _media()),
+        "approval_policy": approval_policy,
+        "health_check": health_check,
+        "test_action": test_action,
+        "connector_ids": list(connector_ids or [normalized_connector_id]),
+        "provider": normalized_runtime_provider,
+        "runtime_provider": normalized_runtime_provider,
+        "vault_provider": normalized_vault_provider,
+        "connector_id": normalized_connector_id,
+        "account_provider": normalized_account_provider,
+        "setup_available": setup,
+        "runtime_usable": usable,
+    }
+
+
+_CATALOG: tuple[Dict[str, Any], ...] = (
+    _item(
+        connection_id="agent_computer",
+        display_name="Agent Computer",
+        lane=LANE_AGENT_COMPUTER,
+        surfaces=("sage", "studio", "agent_computer"),
+        setup_kind="gateway_pairing",
+        launch_status=LAUNCH_LIVE,
+        description="Gateway, Supervisor, permissions, and local runtime for hardware-backed work.",
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True, images=True, files=True),
+        approval_policy="hardware_policy",
+        health_check="gateway_registration",
+        test_action="health_check",
+    ),
+    _item(
+        connection_id="telegram_personal",
+        display_name="Your Telegram",
+        lane=LANE_SAGE_PERSONAL_CHANNEL,
+        surfaces=("sage", "agent_computer"),
+        setup_kind="phone_code_2fa",
+        launch_status=LAUNCH_LIVE,
+        description="Personal Telegram account through the selected Agent Computer.",
+        requires_gateway=True,
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="owner_approval_required",
+        health_check="personal_channel_state",
+        test_action="send_text",
+        connector_ids=["telegram_personal", "telegram_gramjs"],
+        provider="telegram_gramjs",
+        runtime_provider="telegram_gramjs",
+        connector_id="telegram_personal",
+        account_provider="telegram_personal",
+        vault_provider="telegram_personal",
+    ),
+    _item(
+        connection_id="whatsapp_personal",
+        display_name="Your WhatsApp",
+        lane=LANE_SAGE_PERSONAL_CHANNEL,
+        surfaces=("sage", "agent_computer"),
+        setup_kind="qr_pairing",
+        launch_status=LAUNCH_LIVE,
+        description="Personal WhatsApp account through the selected Agent Computer.",
+        requires_gateway=True,
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="owner_approval_required",
+        health_check="personal_channel_state",
+        test_action="send_text",
+        connector_ids=["whatsapp_personal", "whatsapp_baileys"],
+        provider="whatsapp_baileys",
+        runtime_provider="whatsapp_baileys",
+        connector_id="whatsapp_personal",
+        account_provider="whatsapp_personal",
+        vault_provider="whatsapp_personal",
+    ),
+    _item(
+        connection_id="signal_personal",
+        display_name="Signal",
+        lane=LANE_SAGE_PERSONAL_CHANNEL,
+        surfaces=("sage", "agent_computer"),
+        setup_kind="local_bridge",
+        launch_status=LAUNCH_PARTIAL,
+        description="Requires Agent Computer bridge · Coming soon.",
+        requires_gateway=True,
+        media_support=_media(text=True),
+        approval_policy="owner_approval_required",
+        health_check="bridge_runtime",
+        provider="signal_local_bridge",
+        runtime_provider="signal_local_bridge",
+        connector_id="signal_personal",
+        account_provider="signal_personal",
+        vault_provider="signal_personal",
+        setup_available=False,
+        runtime_usable=False,
+    ),
+    _item(
+        connection_id="imessage_personal",
+        display_name="iMessage",
+        lane=LANE_SAGE_PERSONAL_CHANNEL,
+        surfaces=("sage", "agent_computer"),
+        setup_kind="mac_bridge",
+        launch_status=LAUNCH_PLANNED,
+        description="Requires Agent Computer bridge · Coming soon.",
+        requires_gateway=True,
+        media_support=_media(text=True),
+        approval_policy="owner_approval_required",
+        health_check="bridge_runtime",
+        provider="bluebubbles_local_bridge",
+        runtime_provider="bluebubbles_local_bridge",
+        connector_id="imessage_personal",
+        account_provider="imessage_personal",
+        vault_provider="imessage_personal",
+        setup_available=False,
+        runtime_usable=False,
+    ),
+    _item(
+        connection_id="wechat_personal",
+        display_name="WeChat",
+        lane=LANE_SAGE_PERSONAL_CHANNEL,
+        surfaces=("sage", "agent_computer"),
+        setup_kind="local_bridge",
+        launch_status=LAUNCH_PLANNED,
+        description="Requires Agent Computer bridge · Coming soon.",
+        requires_gateway=True,
+        media_support=_media(text=True),
+        approval_policy="owner_approval_required",
+        health_check="bridge_runtime",
+        provider="wechat_local_bridge",
+        runtime_provider="wechat_local_bridge",
+        connector_id="wechat_personal",
+        account_provider="wechat_personal",
+        vault_provider="wechat_personal",
+        setup_available=False,
+        runtime_usable=False,
+    ),
+    _item(
+        connection_id="telegram_bot",
+        display_name="Telegram Bot",
+        lane=LANE_STUDIO_BUSINESS_CHANNEL,
+        surfaces=("studio",),
+        setup_kind="bot_token",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Studio/business Telegram bot. Separate from Your Telegram.",
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="studio_channel_policy",
+        health_check="bot_token_verify",
+        test_action="send_text",
+        connector_ids=["telegram_bot"],
+        provider="telegram_bot_api",
+        runtime_provider="telegram_bot_api",
+        connector_id="telegram_bot",
+        account_provider="telegram_bot",
+        vault_provider="telegram_bot",
+    ),
+    _item(
+        connection_id="web_chat",
+        display_name="Web Chat",
+        lane=LANE_STUDIO_BUSINESS_CHANNEL,
+        surfaces=("studio",),
+        setup_kind="web_widget",
+        launch_status=LAUNCH_PLANNED,
+        description="Planned customer web chat channel.",
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="studio_channel_policy",
+        health_check="webhook_health",
+        runtime_usable=False,
+        setup_available=False,
+    ),
+    _item(
+        connection_id="email",
+        display_name="Email",
+        lane=LANE_STUDIO_BUSINESS_CHANNEL,
+        surfaces=("sage", "studio"),
+        setup_kind="oauth_mailbox",
+        launch_status=LAUNCH_PARTIAL,
+        description="Use Google Workspace or Microsoft 365 before exposing mailbox setup.",
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True, files=True),
+        approval_policy="channel_policy",
+        health_check="mailbox_credential",
+        connector_ids=["email", "smtp", "google_workspace", "microsoft_365"],
+        provider="workspace_mailbox",
+        setup_available=False,
+        runtime_usable=False,
+    ),
+    _item(
+        connection_id="slack",
+        display_name="Slack",
+        lane=LANE_STUDIO_BUSINESS_CHANNEL,
+        surfaces=("sage", "studio"),
+        setup_kind="oauth",
+        launch_status=LAUNCH_PARTIAL,
+        description="Slack setup stays locked until OAuth install, health, and safe test are complete.",
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True, files=True),
+        approval_policy="channel_policy",
+        health_check="oauth_credential",
+        provider="slack_events",
+        runtime_provider="slack_events",
+        connector_id="slack",
+        account_provider="slack",
+        vault_provider="slack",
+        setup_available=False,
+        runtime_usable=False,
+    ),
+    _item(
+        connection_id="discord_bot",
+        display_name="Discord",
+        lane=LANE_STUDIO_BUSINESS_CHANNEL,
+        surfaces=("sage", "studio"),
+        setup_kind="bot_install",
+        launch_status=LAUNCH_PLANNED,
+        description="Planned Discord bot channel.",
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="channel_policy",
+        health_check="bot_health",
+        provider="discord_webhook",
+        runtime_provider="discord_webhook",
+        connector_id="discord_bot",
+        account_provider="discord_bot",
+        vault_provider="discord_bot",
+        setup_available=False,
+        runtime_usable=False,
+    ),
+    _item(
+        connection_id="whatsapp_twilio",
+        display_name="WhatsApp Business",
+        lane=LANE_STUDIO_BUSINESS_CHANNEL,
+        surfaces=("studio",),
+        setup_kind="provider_webhook",
+        launch_status=LAUNCH_PLANNED,
+        description="Planned business WhatsApp provider channel.",
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="channel_policy",
+        health_check="webhook_health",
+        provider="twilio_whatsapp",
+        runtime_provider="twilio_whatsapp",
+        connector_id="whatsapp_twilio",
+        account_provider="whatsapp_twilio",
+        vault_provider="whatsapp_twilio",
+        setup_available=False,
+        runtime_usable=False,
+    ),
+    _item(
+        connection_id="google_workspace",
+        display_name="Google Workspace",
+        lane=LANE_WORK_APP_CONNECTOR,
+        surfaces=("sage", "studio", "apps"),
+        setup_kind="oauth",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="One Google connection for Gmail, Calendar, and Drive.",
+        supports_inbound=False,
+        supports_outbound=True,
+        media_support=_media(text=True, files=True),
+        approval_policy="workspace_app_policy",
+        health_check="oauth_credential",
+        test_action="credential_health",
+        connector_ids=["google_workspace", "gmail", "google_calendar", "google_drive"],
+        provider="google_workspace",
+        runtime_provider="google_workspace",
+        connector_id="google_workspace",
+        account_provider="google_workspace",
+        vault_provider="google_workspace",
+    ),
+    _item(
+        connection_id="microsoft_365",
+        display_name="Microsoft 365",
+        lane=LANE_WORK_APP_CONNECTOR,
+        surfaces=("sage", "studio", "apps"),
+        setup_kind="oauth",
+        launch_status=LAUNCH_PARTIAL,
+        description="Microsoft 365 setup stays locked until OAuth and mailbox/calendar tests are complete.",
+        supports_outbound=True,
+        media_support=_media(text=True, files=True),
+        approval_policy="workspace_app_policy",
+        health_check="oauth_credential",
+        provider="microsoft_365",
+        runtime_provider="microsoft_365",
+        connector_id="microsoft_365",
+        account_provider="microsoft_365",
+        vault_provider="microsoft_365",
+        setup_available=False,
+        runtime_usable=False,
+    ),
+    _item(
+        connection_id="github",
+        display_name="GitHub",
+        lane=LANE_WORK_APP_CONNECTOR,
+        surfaces=("sage", "studio", "apps"),
+        setup_kind="oauth_or_app_install",
+        launch_status=LAUNCH_PARTIAL,
+        description="GitHub stays locked until setup, health, and safe test are real.",
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="workspace_app_policy",
+        health_check="oauth_credential",
+        provider="github",
+        runtime_provider="github",
+        connector_id="github",
+        account_provider="github",
+        vault_provider="github",
+        setup_available=False,
+        runtime_usable=False,
+    ),
+    _item(
+        connection_id="notion",
+        display_name="Notion",
+        lane=LANE_WORK_APP_CONNECTOR,
+        surfaces=("sage", "studio", "apps"),
+        setup_kind="oauth",
+        launch_status=LAUNCH_PLANNED,
+        description="Planned · Coming soon.",
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="workspace_app_policy",
+        health_check="oauth_credential",
+        setup_available=False,
+        runtime_usable=False,
+        runtime_provider="notion",
+        connector_id="notion",
+        account_provider="notion",
+        vault_provider="notion",
+    ),
+    _item(
+        connection_id="linear",
+        display_name="Linear",
+        lane=LANE_WORK_APP_CONNECTOR,
+        surfaces=("sage", "studio", "apps"),
+        setup_kind="oauth",
+        launch_status=LAUNCH_PLANNED,
+        description="Planned · Coming soon.",
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="workspace_app_policy",
+        health_check="oauth_credential",
+        setup_available=False,
+        runtime_usable=False,
+        runtime_provider="linear",
+        connector_id="linear",
+        account_provider="linear",
+        vault_provider="linear",
+    ),
+    _item(
+        connection_id="webhook",
+        display_name="Webhook",
+        lane=LANE_STUDIO_BUSINESS_CHANNEL,
+        surfaces=("studio",),
+        setup_kind="webhook",
+        launch_status=LAUNCH_PLANNED,
+        description="Planned · Coming soon.",
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="channel_policy",
+        health_check="webhook_health",
+        setup_available=False,
+        runtime_usable=False,
+        runtime_provider="webhook",
+        connector_id="webhook",
+        account_provider="webhook",
+        vault_provider="webhook",
+    ),
+    _item(
+        connection_id="mcp",
+        display_name="MCP",
+        lane=LANE_MCP_PLUGIN,
+        surfaces=("sage", "studio"),
+        setup_kind="mcp_server",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="MCP servers and plugin packages.",
+        supports_outbound=True,
+        media_support=_media(text=True, files=True),
+        approval_policy="tool_policy",
+        health_check="mcp_server_health",
+        test_action="tool_discovery",
+        connector_ids=["mcp", "mcp_plugin"],
+        runtime_provider="mcp",
+        connector_id="mcp",
+        account_provider="mcp",
+        vault_provider="mcp",
+    ),
+    _item(
+        connection_id="applications",
+        display_name="Applications",
+        lane=LANE_APPLICATION,
+        surfaces=("sage", "applications"),
+        setup_kind="hosted_application",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Mini-apps hosted inside Empyralis.",
+        supports_outbound=True,
+        media_support=_media(text=True, files=True),
+        approval_policy="application_policy",
+        health_check="app_launch_health",
+        test_action="launch_health",
+        connector_ids=["applications", "mini_apps"],
+        runtime_provider="applications",
+        connector_id="applications",
+        account_provider="applications",
+        vault_provider="applications",
+    ),
+)
+
+
+def _matches_surface(item: Dict[str, Any], surface: Optional[str]) -> bool:
+    normalized = _token(surface)
+    if not normalized:
+        return True
+    surfaces = item.get("surface") if isinstance(item.get("surface"), list) else []
+    return normalized in {_token(surface_item) for surface_item in surfaces}
+
+
+def catalog_items(*, surface: Optional[str] = None) -> list[Dict[str, Any]]:
+    return [deepcopy(item) for item in _CATALOG if _matches_surface(item, surface)]
+
+
+def catalog_item(connection_id: str) -> Optional[Dict[str, Any]]:
+    normalized = _token(connection_id)
+    for item in _CATALOG:
+        if _token(item.get("id")) == normalized:
+            return deepcopy(item)
+        if normalized in {_token(alias) for alias in item.get("connector_ids", []) if _text(alias)}:
+            return deepcopy(item)
+    return None
+
+
+def _selected_gateway(
+    *,
+    workspace_id: str,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    selected_gateway_id: Optional[str] = None,
+) -> tuple[Optional[Dict[str, Any]], list[Dict[str, Any]]]:
+    try:
+        registrations = gateway_state_repository.list_workspace_gateway_registrations(
+            workspace_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            include_revoked=False,
+        )
+    except Exception:
+        return None, []
+    public_registrations = [gateway_registry_service.gateway_registration_public_payload(item) for item in registrations]
+    requested = _text(selected_gateway_id)
+    if not requested and user_id:
+        selection = sage_agent_computer_selection_service.get_selection(
+            workspace_id=workspace_id,
+            user_id=user_id,
+        )
+        requested = _text((selection or {}).get("selected_gateway_id"))
+    if requested:
+        return next((item for item in public_registrations if _text(item.get("gateway_id")) == requested), None), public_registrations
+    return None, public_registrations
+
+
+def _vault_connector_ids(workspace_id: str) -> set[str]:
+    try:
+        rows = runtime_common.list_vault_connectors(workspace_id=workspace_id)
+    except Exception:
+        return set()
+    out: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in ("connector", "provider"):
+            token = _token(row.get(key))
+            if token:
+                out.add(token)
+    return out
+
+
+def _personal_channel_state(connection_id: str, gateway_id: str) -> Optional[Dict[str, Any]]:
+    if connection_id == "telegram_personal":
+        return personal_channels_repository.get_telegram_state(gateway_id, channel_key="telegram_personal")
+    if connection_id == "whatsapp_personal":
+        return personal_channels_repository.get_whatsapp_state(gateway_id, channel_key="whatsapp_personal")
+    return None
+
+
+def _next_action(
+    item: Dict[str, Any],
+    *,
+    connected: bool,
+    configured: bool,
+    selected_gateway: Optional[Dict[str, Any]],
+    selected_gateway_online: bool,
+) -> str:
+    if _token(item.get("launch_status")) not in _USABLE_LAUNCH_STATUSES or not bool(item.get("runtime_usable")):
+        return "locked"
+    if bool(item.get("requires_gateway")) and not selected_gateway:
+        return "choose_agent_computer"
+    if bool(item.get("requires_gateway")) and not selected_gateway_online:
+        return "gateway_offline"
+    if connected:
+        return "manage"
+    if configured and item.get("test_action"):
+        return "test"
+    return "connect" if item.get("setup_available") else "locked"
+
+
+def status_items(
+    *,
+    workspace_id: str,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    surface: Optional[str] = None,
+    selected_gateway_id: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    selected_gateway, registrations = _selected_gateway(
+        workspace_id=workspace_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        selected_gateway_id=selected_gateway_id,
+    )
+    selected_gateway_id_value = _text((selected_gateway or {}).get("gateway_id")) or None
+    selected_gateway_online = _token((selected_gateway or {}).get("connection_status")) == "online"
+    vault_connector_ids = _vault_connector_ids(workspace_id)
+    out: list[Dict[str, Any]] = []
+    for item in catalog_items(surface=surface):
+        item_id = _text(item.get("id"))
+        lane = _token(item.get("lane"))
+        connected = False
+        configured = False
+        health_status = "not_configured"
+        test_status = "not_tested"
+        last_error = None
+
+        if lane == LANE_AGENT_COMPUTER:
+            configured = bool(registrations)
+            connected = bool(selected_gateway_online)
+            health_status = "healthy" if connected else "offline" if configured else "missing"
+        elif lane == LANE_SAGE_PERSONAL_CHANNEL:
+            configured = bool(selected_gateway_id_value)
+            health_status = "gateway_missing" if not selected_gateway_id_value else "not_configured"
+            if selected_gateway_id_value:
+                state = _personal_channel_state(item_id, selected_gateway_id_value)
+                state_status = _token((state or {}).get("status"))
+                connected = state_status == "connected"
+                configured = connected or state is not None
+                health_status = "healthy" if connected else state_status or health_status
+                last_error = (state or {}).get("last_error")
+        elif lane in {LANE_WORK_APP_CONNECTOR, LANE_STUDIO_BUSINESS_CHANNEL}:
+            aliases = {_token(alias) for alias in item.get("connector_ids", []) if _text(alias)}
+            aliases.add(item_id)
+            for key in ("connector_id", "account_provider", "vault_provider", "provider", "runtime_provider"):
+                token = _token(item.get(key))
+                if token:
+                    aliases.add(token)
+            connected = bool(aliases & vault_connector_ids)
+            configured = connected
+            health_status = "healthy" if connected else "not_configured"
+        elif lane == LANE_MCP_PLUGIN:
+            health_status = "available"
+        elif lane == LANE_APPLICATION:
+            health_status = "available"
+
+        next_action = _next_action(
+            item,
+            connected=connected,
+            configured=configured,
+            selected_gateway=selected_gateway,
+            selected_gateway_online=selected_gateway_online,
+        )
+        payload = deepcopy(item)
+        payload.update({
+            "connected": connected,
+            "configured": configured,
+            "test_status": test_status,
+            "health_status": health_status,
+            "selected_gateway_id": selected_gateway_id_value,
+            "gateway_count": len(registrations),
+            "last_error": last_error,
+            "next_action": next_action,
+        })
+        out.append(payload)
+    return out
+
+
+def list_catalog_payload(*, surface: Optional[str] = None) -> Dict[str, Any]:
+    items = catalog_items(surface=surface)
+    groups: Dict[str, int] = {}
+    for item in items:
+        lane = _text(item.get("lane"), "unknown")
+        groups[lane] = groups.get(lane, 0) + 1
+    return {
+        "items": items,
+        "count": len(items),
+        "groups": groups,
+    }
+
+
+def list_status_payload(
+    *,
+    workspace_id: str,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    surface: Optional[str] = None,
+    selected_gateway_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    items = status_items(
+        workspace_id=workspace_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        surface=surface,
+        selected_gateway_id=selected_gateway_id,
+    )
+    groups: Dict[str, int] = {}
+    for item in items:
+        lane = _text(item.get("lane"), "unknown")
+        groups[lane] = groups.get(lane, 0) + 1
+    return {
+        "items": items,
+        "count": len(items),
+        "groups": groups,
+    }
+
+
+def reject_if_unusable(connection_id: str) -> Dict[str, Any]:
+    item = catalog_item(connection_id)
+    if not item:
+        raise ValueError("connection_not_found")
+    if _token(item.get("launch_status")) not in _USABLE_LAUNCH_STATUSES or not bool(item.get("setup_available")):
+        raise PermissionError("connection_not_launch_ready")
+    return item
+
+
+def studio_channel_catalog_items(surface: Optional[str] = None) -> list[Dict[str, Any]]:
+    normalized_surface = _token(surface)
+    connection_by_id = {_token(item.get("id")): item for item in catalog_items()}
+    items: list[Dict[str, Any]] = []
+    for raw in channel_lane_contract_service.platform_channel_catalog(normalized_surface or None):
+        item = dict(raw)
+        candidates = [
+            _token(item.get("channel_key")),
+            _token(item.get("connector_id")),
+            _token(item.get("account_provider")),
+        ]
+        connection = next((connection_by_id[candidate] for candidate in candidates if candidate in connection_by_id), None)
+        if connection:
+            item["setup_kind"] = connection.get("setup_kind")
+            item["health_check"] = connection.get("health_check")
+            item["test_action"] = connection.get("test_action")
+            item["media_support"] = connection.get("media_support")
+            item["launch_status"] = connection.get("launch_status")
+            item["runtime_usable"] = connection.get("runtime_usable")
+            item["setup_available"] = connection.get("setup_available")
+            item["runtime_provider"] = connection.get("runtime_provider") or item.get("provider")
+            item["vault_provider"] = connection.get("vault_provider") or item.get("account_provider") or item.get("connector_id")
+        else:
+            item.setdefault("runtime_provider", item.get("provider"))
+            item.setdefault("vault_provider", item.get("account_provider") or item.get("connector_id"))
+        items.append(item)
+    return items

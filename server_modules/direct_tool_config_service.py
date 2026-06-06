@@ -199,7 +199,7 @@ def _format_local_system_info_output(output: str) -> str:
     cores = _first_non_empty(_section_from_marker_output(output, "CORES"))
     disk_lines = _section_from_marker_output(output, "DISK")
     disk = disk_lines[-1] if disk_lines else ""
-    parts = ["I checked this device."]
+    parts = ["Device information"]
     details = [
         ("OS", _format_sw_vers(os_lines)),
         ("Chip", cpu),
@@ -223,8 +223,8 @@ def _format_shell_result_for_chat(command: str, output_preview: str, summary: st
     if normalized_command == "whoami" and output:
         return f"Current user: {output}"
     if output:
-        return "\n".join(["I checked this device.", output]).strip()
-    return summary or "I checked this device."
+        return "\n".join(["Command output", output]).strip()
+    return summary or "Tool completed."
 
 
 def format_direct_local_tool_result(result: Dict[str, Any]) -> str:

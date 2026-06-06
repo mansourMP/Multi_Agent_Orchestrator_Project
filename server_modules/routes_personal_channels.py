@@ -81,6 +81,38 @@ def _channel_approval_instruction(approval: dict, channel_key: str) -> dict:
     return approval_contracts.channel_approval_instruction(normalized, channel_key=channel_key)
 
 
+
+def _coerce_current_user_id(current_user) -> str:
+    if not isinstance(current_user, dict):
+        return ""
+    return str(
+        current_user.get("user_id")
+        or current_user.get("sub")
+        or current_user.get("id")
+        or ""
+    ).strip()
+
+
+def _coerce_current_user_role(current_user) -> str:
+    if not isinstance(current_user, dict):
+        return ""
+    return str(current_user.get("role") or "").strip().lower()
+
+
+def _registration_owner_user_id(registration: dict) -> str:
+    metadata = registration.get("metadata") if isinstance(registration.get("metadata"), dict) else {}
+    return str(
+        registration.get("user_id")
+        or registration.get("owner_user_id")
+        or registration.get("paired_user_id")
+        or metadata.get("user_id")
+        or metadata.get("owner_user_id")
+        or metadata.get("paired_user_id")
+        or metadata.get("auth_user_id")
+        or ""
+    ).strip()
+
+
 def _require_accessible_gateway_registration(
     gateway_id: str,
     current_user,
@@ -98,6 +130,17 @@ def _require_accessible_gateway_registration(
     )
     if resolved_workspace_id != registration_workspace_id:
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
+    owner_user_id = _registration_owner_user_id(registration)
+    current_user_id = _coerce_current_user_id(current_user)
+    current_role = _coerce_current_user_role(current_user)
+    if owner_user_id:
+        if not current_user_id or current_user_id != owner_user_id:
+            raise HTTPException(status_code=403, detail="This personal gateway belongs to another user.")
+    elif current_role not in {"owner", "admin"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Gateway ownership is missing. Ask an owner to reconnect this Agent Computer.",
+        )
     return registration
 
 
@@ -289,16 +332,11 @@ async def get_whatsapp_personal_gateway_status(
     current_user=Depends(require_api_key),
 ):
     channel_lane_contract_service.assert_personal_route_path(str(request.url.path))
-    registration = gateway_state_repository.get_gateway_registration(gateway_id)
-    if not registration:
-        raise HTTPException(status_code=404, detail="Gateway registration was not found.")
-    resolved_workspace_id = enforce_workspace_access(
+    registration = _require_accessible_gateway_registration(
+        gateway_id,
         current_user,
-        str(registration.get("workspace_id") or "").strip() or "default",
         minimum_role="viewer",
     )
-    if resolved_workspace_id != str(registration.get("workspace_id") or "").strip():
-        raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
     return personal_channels_service.get_whatsapp_gateway_view(gateway_id)
 
 
@@ -363,16 +401,11 @@ async def send_whatsapp_personal_message(
     current_user=Depends(require_api_key),
 ):
     channel_lane_contract_service.assert_personal_route_path(str(request.url.path))
-    registration = gateway_state_repository.get_gateway_registration(gateway_id)
-    if not registration:
-        raise HTTPException(status_code=404, detail="Gateway registration was not found.")
-    resolved_workspace_id = enforce_workspace_access(
+    registration = _require_accessible_gateway_registration(
+        gateway_id,
         current_user,
-        str(registration.get("workspace_id") or "").strip() or "default",
         minimum_role="member",
     )
-    if resolved_workspace_id != str(registration.get("workspace_id") or "").strip():
-        raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
     approval_response = await _request_personal_channel_send_approval(
         action="personal_channel.whatsapp.send",
         registration=registration,
@@ -440,16 +473,11 @@ async def get_telegram_personal_gateway_status(
     current_user=Depends(require_api_key),
 ):
     channel_lane_contract_service.assert_personal_route_path(str(request.url.path))
-    registration = gateway_state_repository.get_gateway_registration(gateway_id)
-    if not registration:
-        raise HTTPException(status_code=404, detail="Gateway registration was not found.")
-    resolved_workspace_id = enforce_workspace_access(
+    registration = _require_accessible_gateway_registration(
+        gateway_id,
         current_user,
-        str(registration.get("workspace_id") or "").strip() or "default",
         minimum_role="viewer",
     )
-    if resolved_workspace_id != str(registration.get("workspace_id") or "").strip():
-        raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
     return personal_channels_service.get_telegram_gateway_view(gateway_id)
 
 
@@ -523,16 +551,11 @@ async def send_telegram_personal_message(
     current_user=Depends(require_api_key),
 ):
     channel_lane_contract_service.assert_personal_route_path(str(request.url.path))
-    registration = gateway_state_repository.get_gateway_registration(gateway_id)
-    if not registration:
-        raise HTTPException(status_code=404, detail="Gateway registration was not found.")
-    resolved_workspace_id = enforce_workspace_access(
+    registration = _require_accessible_gateway_registration(
+        gateway_id,
         current_user,
-        str(registration.get("workspace_id") or "").strip() or "default",
         minimum_role="member",
     )
-    if resolved_workspace_id != str(registration.get("workspace_id") or "").strip():
-        raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
     approval_response = await _request_personal_channel_send_approval(
         action="personal_channel.telegram.send",
         registration=registration,

@@ -6,6 +6,8 @@ from fastapi import HTTPException
 
 from server_modules import auth as auth_module
 from server_modules import connectors_core
+from server_modules import empyralis_model_tier_contract
+from server_modules import empyralis_model_tier_routing_service
 from server_modules import provider_catalog_service
 from server_modules import provider_profiles
 from server_modules import rust_runtime_kernel_client
@@ -18,7 +20,7 @@ AI_ROUTE_KINDS = {
     "local_model",
     "enterprise_gateway",
 }
-PUBLIC_MODEL_PRESETS = {"light", "pro", "max"}
+PUBLIC_MODEL_PRESETS = {"light", "pro"}
 LOCAL_PROVIDER_IDS = {"ollama"}
 LOCAL_SUBSCRIPTION_PROVIDER_IDS = {"openai-codex", "claude_code_cli"}
 ENTERPRISE_PROVIDER_IDS = {
@@ -245,7 +247,7 @@ def _runtime_target_for_kind(kind: str, provider_record: Optional[Dict[str, Any]
 
 
 def _public_tier_label(model_preset: Optional[str]) -> str:
-    token = _read_string(model_preset or "light").lower()
+    token = empyralis_model_tier_contract.normalize_model_tier(model_preset or "light", fallback="light")
     if token not in PUBLIC_MODEL_PRESETS:
         token = "light"
     return token.capitalize()
@@ -386,7 +388,10 @@ def _resolve_workspace_default(
                 status="available" if bool(catalog_payload.get("hosted_ai_enabled")) else "setup_required",
                 description="Personal AI subscriptions are not workspace AI routes. Use Empyralis credits, a provider API key, or a true local model.",
             )
-        model_preset = _read_string(metadata.get("chat_model_tier")).lower()
+        model_preset = empyralis_model_tier_contract.normalize_model_tier(
+            metadata.get("chat_model_tier"),
+            fallback="",
+        )
         if model_preset in PUBLIC_MODEL_PRESETS:
             route = _hosted_route(preset=model_preset, enabled=True, status="connected")
             route["providerId"] = provider_id or None
@@ -436,7 +441,7 @@ async def build_workspace_ai_route_payload(workspace_id: str) -> Dict[str, Any]:
             enabled=bool(catalog_payload.get("hosted_ai_enabled")),
             status="available" if bool(catalog_payload.get("hosted_ai_enabled")) else "setup_required",
         )
-        for preset in ("light", "pro", "max")
+        for preset in ("light", "pro")
     ]
     for provider_id, provider_record in sorted(providers_by_id.items()):
         if _is_personal_subscription_passthrough(provider_id, provider_record):
@@ -488,8 +493,9 @@ def _resolve_update_selection(
             next_provider = provider_profiles.normalize_provider_id(route_value)
         elif route_kind == "empyralis_managed":
             next_kind = "empyralis_managed"
-            if route_value in PUBLIC_MODEL_PRESETS:
-                next_preset = route_value
+            normalized_route_value = empyralis_model_tier_contract.normalize_model_tier(route_value, fallback="")
+            if normalized_route_value in PUBLIC_MODEL_PRESETS:
+                next_preset = normalized_route_value
         elif route_kind:
             next_kind = route_kind
 
@@ -497,8 +503,10 @@ def _resolve_update_selection(
         raise HTTPException(status_code=400, detail="Personal AI subscriptions are not workspace AI routes.")
     if next_kind and next_kind not in AI_ROUTE_KINDS:
         raise HTTPException(status_code=400, detail=f"Unsupported AI route kind '{next_kind}'.")
+    if next_preset:
+        next_preset = empyralis_model_tier_contract.normalize_model_tier(next_preset, fallback="")
     if next_preset and next_preset not in PUBLIC_MODEL_PRESETS:
-        raise HTTPException(status_code=400, detail="model_preset must be light, pro, or max.")
+        raise HTTPException(status_code=400, detail="model_preset must be light or pro.")
     if not next_kind and next_provider:
         next_kind = None
     if not next_kind:
@@ -515,6 +523,63 @@ def _existing_profile_for_provider(profiles: List[Dict[str, Any]], provider_id: 
         if provider_profiles.normalize_provider_id(profile.get("provider")) == provider_id:
             return profile
     return None
+
+
+def _existing_platform_profile_for_provider(profiles: List[Dict[str, Any]], provider_id: str) -> Optional[Dict[str, Any]]:
+    normalized_provider_id = provider_profiles.normalize_provider_id(provider_id)
+    for profile in sorted(profiles, key=_profile_sort_key):
+        if provider_profiles.normalize_provider_id(profile.get("provider")) != normalized_provider_id:
+            continue
+        metadata = _profile_metadata(profile)
+        auth_mode = _read_string(profile.get("auth_mode")).lower()
+        billing_source = _read_string(metadata.get("billing_source")).lower()
+        if auth_mode == "platform_runtime" or billing_source == "empyralis_credits":
+            return profile
+    return None
+
+
+def _update_existing_provider_profile_route_metadata(
+    profile: Dict[str, Any],
+    *,
+    workspace_id: str,
+    priority: int,
+    enabled: bool,
+    model: Optional[str],
+    metadata: Dict[str, Any],
+) -> bool:
+    profile_id = _read_string(profile.get("id"))
+    if not profile_id:
+        return False
+
+    store = getattr(connectors_core, "PROVIDER_PROFILES", None)
+    lock = getattr(connectors_core, "PROFILES_LOCK", None)
+    persist = getattr(connectors_core, "_persist_provider_profiles", None)
+    now_iso = getattr(connectors_core, "_utc_now_iso", None)
+    if store is None or lock is None or not callable(persist):
+        return False
+
+    with lock:
+        existing = store.get(profile_id)
+        if not isinstance(existing, dict):
+            return False
+        provider_id = provider_profiles.normalize_provider_id(existing.get("provider") or profile.get("provider"))
+        next_profile = dict(existing)
+        next_profile["workspace_id"] = workspace_id
+        next_profile["priority"] = int(priority)
+        next_profile["enabled"] = bool(enabled)
+        if model is not None:
+            next_profile["model"] = provider_profiles.normalize_provider_model_id(
+                provider_id,
+                model,
+                fallback_to_default=bool(model),
+            ) or None
+        next_profile["metadata"] = dict(metadata)
+        if callable(now_iso):
+            next_profile["updated_at"] = now_iso()
+        store[profile_id] = next_profile
+
+    persist()
+    return True
 
 
 async def update_workspace_default_ai_route(
@@ -537,6 +602,18 @@ async def update_workspace_default_ai_route(
     selected_kind = selection["kind"] or "empyralis_managed"
     selected_provider = selection["provider"]
     selected_model_preset = selection["model_preset"]
+    selected_model_override = _read_string(model) or None
+    target_profile: Optional[Dict[str, Any]] = None
+
+    if selected_kind == "empyralis_managed" and selected_model_preset:
+        try:
+            tier_route = empyralis_model_tier_routing_service.resolve_backend_provider_model_for_tier(
+                selected_model_preset
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        selected_provider = provider_profiles.normalize_provider_id(tier_route.get("provider"))
+        selected_model_override = _read_string(tier_route.get("model")) or selected_model_override
 
     profiles_payload = await connectors_core.list_provider_profiles(workspace_id=normalized_workspace_id)
     profiles = [
@@ -549,9 +626,26 @@ async def update_workspace_default_ai_route(
         catalog_entry = provider_profiles.provider_catalog_entry(selected_provider)
         if not catalog_entry:
             raise HTTPException(status_code=400, detail=f"Unsupported provider '{selected_provider}'.")
-        target_profile = _existing_profile_for_provider(profiles, selected_provider)
-        auth_mode = _read_string(target_profile.get("auth_mode") if target_profile else None) or _read_string(catalog_entry.get("default_auth_mode")) or None
-        credential_id = _read_string(target_profile.get("credential_id") if target_profile else None) or None
+        managed_platform_profile = selected_kind == "empyralis_managed" and bool(selected_model_preset)
+        target_profile = (
+            _existing_platform_profile_for_provider(profiles, selected_provider)
+            if managed_platform_profile
+            else _existing_profile_for_provider(profiles, selected_provider)
+        )
+        auth_mode = (
+            "platform_runtime"
+            if managed_platform_profile
+            else (
+                _read_string(target_profile.get("auth_mode") if target_profile else None)
+                or _read_string(catalog_entry.get("default_auth_mode"))
+                or None
+            )
+        )
+        credential_id = (
+            ""
+            if managed_platform_profile
+            else _read_string(target_profile.get("credential_id") if target_profile else None) or None
+        )
         if provider_profiles.provider_requires_credential(selected_provider, auth_mode) and not credential_id:
             raise HTTPException(
                 status_code=400,
@@ -566,8 +660,8 @@ async def update_workspace_default_ai_route(
                 "auth_mode": auth_mode,
                 "priority": 10,
                 "enabled": True,
-                "model": model or catalog_entry.get("default_model"),
-                "metadata": {},
+                "model": selected_model_override or catalog_entry.get("default_model"),
+                "metadata": {"billing_source": "empyralis_credits"} if managed_platform_profile else {},
             }
             profiles.append(target_profile)
 
@@ -583,30 +677,53 @@ async def update_workspace_default_ai_route(
         provider_id = provider_profiles.normalize_provider_id(profile.get("provider"))
         if not provider_id:
             continue
-        is_selected = bool(selected_provider and provider_id == selected_provider)
+        target_profile_id = _read_string(target_profile.get("id") if target_profile else None)
+        is_selected = bool(
+            selected_provider
+            and (
+                profile is target_profile
+                or (target_profile_id and _read_string(profile.get("id")) == target_profile_id)
+                or (target_profile is None and provider_id == selected_provider)
+            )
+        )
         metadata = {
             **_profile_metadata(profile),
             "chat_model_selection": "explicit" if is_selected else "default",
         }
         if is_selected and selected_model_preset:
             metadata["chat_model_tier"] = selected_model_preset
+            if selected_kind == "empyralis_managed":
+                metadata["billing_source"] = "empyralis_credits"
         elif is_selected:
             metadata.pop("chat_model_tier", None)
 
-        selected_model = _read_string(model) if is_selected and _read_string(model) else _read_string(profile.get("model")) or None
+        selected_model = selected_model_override if is_selected and selected_model_override else _read_string(profile.get("model")) or None
         if is_selected and not selected_model:
             selected_model = _read_string(provider_profiles.provider_catalog_entry(provider_id).get("default_model")) or None
+        selected_managed_profile = bool(is_selected and selected_kind == "empyralis_managed" and selected_model_preset)
+        profile_priority = int(profile.get("priority") or (10 if is_selected else 100))
+        profile_enabled = bool(profile.get("enabled", True))
+
+        if not is_selected and _update_existing_provider_profile_route_metadata(
+            profile,
+            workspace_id=normalized_workspace_id,
+            priority=profile_priority,
+            enabled=profile_enabled,
+            model=selected_model,
+            metadata=metadata,
+        ):
+            continue
 
         await connectors_core.upsert_provider_profile(
             ProviderProfileUpsertRequest(
                 id=_read_string(profile.get("id")) or None,
                 provider=provider_id,
                 label=_read_string(profile.get("label")) or provider_id,
-                credential_id=_read_string(profile.get("credential_id")) or None,
-                auth_mode=_read_string(profile.get("auth_mode")) or None,
+                credential_id=None if selected_managed_profile else _read_string(profile.get("credential_id")) or None,
+                auth_mode="platform_runtime" if selected_managed_profile else _read_string(profile.get("auth_mode")) or None,
                 workspace_id=normalized_workspace_id,
-                priority=int(profile.get("priority") or (10 if is_selected else 100)),
-                enabled=bool(profile.get("enabled", True)),
+                priority=profile_priority,
+                enabled=profile_enabled,
                 model=selected_model,
                 metadata=metadata,
             )

@@ -616,9 +616,9 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="hardware",
             action_id="action",
             description=(
-                "Request a browser, file, shell, screenshot, or app action through an Empyralis runtime target. "
-                "Use runtime_target cloud_default for cloud-only chat, user_device_gateway for a paired user computer, "
-                "empyralis_cloud_computer for hosted desktop/sandbox work, or self_hosted_node for an enrolled node."
+                "Run a browser, file, shell, screenshot, or app/window action through an Empyralis runtime target. "
+                "Use runtime_target user_device_gateway for screenshots, screen inspection, keyboard, mouse, "
+                "and app/window control on the user's paired computer. Use cloud_default only for cloud-only chat."
             ),
             requires_runtime=True,
             parameters={
@@ -2218,6 +2218,30 @@ def _execute_hardware_action_tool_call(
         gateway_id=gateway_id,
         session_ctx=session_ctx,
     )
+    normalized_action_id = action_id.strip().lower()
+    if gateway_id and (
+        normalized_action_id in {
+            "screenshot",
+            "screenshot.capture",
+            "screen.capture",
+            "screen.ocr",
+            "ocr",
+            "mouse",
+            "keyboard",
+            "mouse.click",
+            "mouse.move",
+            "keyboard.type",
+            "keyboard.press",
+            "input.click",
+            "input.type",
+            "app.focus",
+            "window.control",
+        }
+        or normalized_action_id.startswith("computer_control.")
+        or normalized_action_id.startswith("screenshot.")
+        or normalized_action_id.startswith("screen.")
+    ):
+        runtime_target = "user_device_gateway"
     result = callbacks.run_async_tool_call(
         hardware_action_broker_service.execute_hardware_action(
             tenant_id=_tenant_id_from_direct_tool_context(session_ctx),

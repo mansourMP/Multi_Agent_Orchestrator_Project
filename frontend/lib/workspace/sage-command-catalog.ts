@@ -61,11 +61,11 @@ export const SAGE_COMMAND_CATALOG: readonly SageCommandMetadata[] = [
   {
     id: 'tools',
     slash: '/tools',
-    title: 'Sage connections',
-    description: 'Open Sage app connections, personal channels, and Agent Computer setup.',
+    title: 'Sage connectors',
+    description: 'Open Sage channels, apps, skills, plugins, and AI account setup.',
     actionKind: 'open_tools',
     icon: Puzzle,
-    keywords: ['connections', 'agent computer', 'apps', 'channels'],
+    keywords: ['connectors', 'connections', 'apps', 'channels', 'skills', 'plugins'],
   },
   {
     id: 'runtime',
@@ -122,8 +122,8 @@ export const SAGE_WORKSPACE_COMMAND_CATALOG: readonly SageWorkspaceCommandMetada
   },
   {
     id: 'integrations',
-    title: 'Connections',
-    description: 'Open Sage apps, AI accounts, Agent Computer, and reviewed extensions.',
+    title: 'Connectors',
+    description: 'Open Sage channels, apps, skills, plugins, and AI accounts.',
     routeId: 'integrations',
     icon: LayoutGrid,
     keywords: ['connect', 'apps', 'providers', 'channels', 'services'],

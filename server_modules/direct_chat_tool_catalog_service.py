@@ -338,41 +338,20 @@ def message_requests_local_shell_tool(message: str, callbacks: DirectChatToolPol
         return False
     if should_skip_local_tool_prefetch(message, compact):
         return False
-    if looks_like_local_working_directory_request(compact):
-        return True
-    if looks_like_local_system_info_request(compact):
-        return True
     if callbacks.question_like(compact):
         return False
-    if callbacks.mentions_any(compact, callbacks.local_shell_keywords):
+    text = str(message or "")
+    if re.search(r"\b(?:run|execute)\s+(?:this\s+)?(?:shell\s+|terminal\s+)?command\s*[:：]", text, flags=re.IGNORECASE):
         return True
-    return bool(re.search(r"`[^`]+`", str(message or ""))) and any(token in compact for token in ("run", "exec", "execute", "shell", "terminal", "command"))
+    return bool(re.search(r"`[^`]+`", text)) and any(token in compact for token in ("run", "exec", "execute", "shell", "terminal", "command"))
 
 
 def message_requests_local_screenshot_tool(message: str, callbacks: DirectChatToolPolicyCallbacks) -> bool:
-    compact = callbacks.compact_text(message)
-    if not compact or callbacks.question_like(compact):
-        return False
-    if should_skip_local_tool_prefetch(message, compact):
-        return False
-    return callbacks.mentions_any(compact, callbacks.local_screenshot_keywords)
+    return False
 
 
 def message_requests_local_computer_tool(message: str, callbacks: DirectChatToolPolicyCallbacks) -> bool:
-    compact = callbacks.compact_text(message)
-    if not compact or callbacks.question_like(compact):
-        return False
-    if should_skip_local_tool_prefetch(message, compact):
-        return False
-    if callbacks.mentions_any(compact, callbacks.local_computer_control_keywords):
-        return True
-    has_control_action = bool(
-        re.search(r"\b(click|type|press|open|launch|close|copy|paste|capture)\b", compact, flags=re.IGNORECASE)
-    )
-    has_computer_target = bool(
-        re.search(r"\b(screen|window|button|menu|field|clipboard|finder|application|app)\b", compact, flags=re.IGNORECASE)
-    )
-    return has_control_action and has_computer_target
+    return False
 
 
 def message_can_use_direct_local_tools(message: str, *, provider: str, tools: List[Dict[str, Any]], callbacks: DirectChatToolPolicyCallbacks) -> bool:

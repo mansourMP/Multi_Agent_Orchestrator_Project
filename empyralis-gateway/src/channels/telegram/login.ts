@@ -4,6 +4,8 @@ export interface TelegramLoginConfig {
   apiId?: number;
   apiHash?: string;
   phoneNumber?: string;
+  phoneCodeHash?: string;
+  isCodeViaApp?: boolean;
   loginCode?: string;
   password?: string;
   sessionString?: string;
@@ -33,9 +35,11 @@ function maskPhoneNumber(phoneNumber: string | undefined): string | undefined {
 }
 
 export function loadTelegramLoginConfig(env: NodeJS.ProcessEnv = process.env): TelegramLoginConfig {
+  const apiId = env.EMPYRALIS_TELEGRAM_API_ID || env.TELEGRAM_API_ID;
+  const apiHash = env.EMPYRALIS_TELEGRAM_API_HASH || env.TELEGRAM_API_HASH;
   return {
-    apiId: normalizePositiveInt(env.EMPYRALIS_TELEGRAM_API_ID),
-    apiHash: String(env.EMPYRALIS_TELEGRAM_API_HASH || "").trim() || undefined,
+    apiId: normalizePositiveInt(apiId),
+    apiHash: String(apiHash || "").trim() || undefined,
     phoneNumber: String(env.EMPYRALIS_TELEGRAM_PHONE_NUMBER || "").trim() || undefined,
     loginCode: String(env.EMPYRALIS_TELEGRAM_LOGIN_CODE || "").trim() || undefined,
     password: String(env.EMPYRALIS_TELEGRAM_PASSWORD || "").trim() || undefined,
@@ -58,13 +62,6 @@ export function buildTelegramPreflightState(config: TelegramLoginConfig): Partia
       retryable: false,
     };
   }
-  if (!config.sessionString && !config.loginCode) {
-    return {
-      status: "code_required",
-      loginHint: maskPhoneNumber(config.phoneNumber) || "login_code_required",
-      retryable: false,
-    };
-  }
   return null;
 }
 
@@ -77,6 +74,7 @@ export function buildTelegramConnectedState(account: TelegramLinkedAccount): Par
     linkedPhone: String(account.phone || "").trim() || undefined,
     linkedName: String(account.name || "").trim() || undefined,
     connectedAt: new Date().toISOString(),
+    codeRequestedAt: undefined,
     retryable: true,
     lastDisconnectReason: undefined,
     lastDisconnectCode: undefined,

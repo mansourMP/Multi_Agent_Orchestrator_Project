@@ -17,6 +17,115 @@ from server_modules.conversation_memory_policy import (
 )
 
 
+_REAL_MACHINE_LOCAL_TOOL_PREFIXES = ("screenshot__", "computer__")
+_REAL_MACHINE_SCREEN_TOOL_NAMES = {"browser__screenshot"}
+_HARDWARE_ACTION_TOOL_NAME = "hardware__action"
+
+
+def _direct_tool_name(tool: Any) -> str:
+    if not isinstance(tool, dict):
+        return ""
+    function = tool.get("function")
+    if isinstance(function, dict):
+        return str(function.get("name") or "").strip()
+    return str(tool.get("name") or "").strip()
+
+
+def _with_tool_description(tool: Dict[str, Any], description: str) -> Dict[str, Any]:
+    next_tool = dict(tool)
+    function = next_tool.get("function")
+    if isinstance(function, dict):
+        next_function = dict(function)
+        next_function["description"] = description
+        next_tool["function"] = next_function
+    elif "description" in next_tool:
+        next_tool["description"] = description
+    return next_tool
+
+
+def _verified_user_device_gateway_context(workspace_id: str) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return None
+    try:
+        from server_modules import gateway_registry_service, gateway_state_repository
+    except Exception:
+        return None
+    try:
+        registrations = gateway_state_repository.list_workspace_gateway_registrations(
+            clean_workspace_id,
+            include_revoked=False,
+        )
+    except Exception:
+        return None
+    for registration in registrations:
+        if not isinstance(registration, dict):
+            continue
+        try:
+            public_payload = gateway_registry_service.gateway_registration_public_payload(registration)
+        except Exception:
+            public_payload = dict(registration)
+        status = str(public_payload.get("status") or registration.get("status") or "").strip().lower()
+        trust_state = str(
+            public_payload.get("device_trust_state") or registration.get("device_trust_state") or ""
+        ).strip().lower()
+        connection_status = str(public_payload.get("connection_status") or "").strip().lower()
+        latest_session_status = str(public_payload.get("latest_session_status") or "").strip().lower()
+        if status != "active":
+            continue
+        if trust_state != "verified":
+            continue
+        if connection_status != "online":
+            continue
+        if latest_session_status and latest_session_status not in {"active", "connected"}:
+            continue
+        if public_payload.get("heartbeat_fresh") is not True:
+            continue
+        gateway_id = str(public_payload.get("gateway_id") or registration.get("gateway_id") or "").strip()
+        if not gateway_id:
+            continue
+        return {
+            "gateway_id": gateway_id,
+            "device_name": str(public_payload.get("display_name") or registration.get("display_name") or "").strip()
+            or "Agent Computer",
+            "runtime_target": "user_device_gateway",
+            "session_verified": True,
+        }
+    return None
+
+
+def _tools_for_verified_user_device(
+    tools: List[Dict[str, Any]],
+    gateway_context: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not gateway_context:
+        return tools
+    device_name = str(gateway_context.get("device_name") or "the user's Agent Computer").strip()
+    prepared: List[Dict[str, Any]] = []
+    for tool in tools:
+        name = _direct_tool_name(tool)
+        if name in _REAL_MACHINE_SCREEN_TOOL_NAMES or any(
+            name.startswith(prefix) for prefix in _REAL_MACHINE_LOCAL_TOOL_PREFIXES
+        ):
+            continue
+        if name == _HARDWARE_ACTION_TOOL_NAME and isinstance(tool, dict):
+            prepared.append(
+                _with_tool_description(
+                    tool,
+                    (
+                        "Run a hardware action on the user's verified Agent Computer. "
+                        f"The connected device is {device_name}. Use this for screenshots, "
+                        "screen inspection, keyboard, mouse, app/window control, and other "
+                        "real-machine computer-control tasks. Use runtime_target "
+                        "user_device_gateway."
+                    ),
+                )
+            )
+            continue
+        prepared.append(tool)
+    return prepared
+
+
 @dataclass(slots=True)
 class PreparedDirectChatRequest:
     normalized_message: str
@@ -306,11 +415,28 @@ def prepare_direct_chat_request(
         normalized_requested_provider,
         availability_override or None,
     )
+    gateway_context = _verified_user_device_gateway_context(normalized_workspace_id)
+    if gateway_context and isinstance(availability_payload, dict):
+        availability_payload = {
+            **availability_payload,
+            "verified_user_device_gateway": gateway_context,
+        }
     connected_systems = connected_system_labels_fn(availability_payload)
+    if gateway_context:
+        connected_systems = list(connected_systems)
+        connected_systems.append(
+            (
+                "Agent Computer connected: "
+                f"{gateway_context.get('device_name')}. Use hardware__action with "
+                "runtime_target user_device_gateway for screenshots and computer-control "
+                "tasks on the user's real machine."
+            )
+        )
     tool_capabilities = context_tool_capabilities_fn(availability_payload)
     tools = build_direct_chat_tools_fn(tool_capabilities)
     tools.extend(build_local_direct_chat_tools_fn(availability_payload))
     tools.extend(build_builtin_direct_chat_tools_fn())
+    tools = _tools_for_verified_user_device(tools, gateway_context)
     approved_action_payload = normalize_direct_approved_action_fn(approved_action)
     base_context_used = build_context_used_fn(
         workspace_id=normalized_workspace_id,

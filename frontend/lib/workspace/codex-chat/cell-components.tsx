@@ -639,19 +639,22 @@ function ToolTraceCard({ cell }: { cell: TraceActivityCellRecord }) {
 
 export function ExecutionTraceCell({ cell }: { cell: ExecutionTraceCellRecord }) {
   const [expanded, setExpanded] = useState(false);
-  const thinkingCell = cell.activities.find(
-    (activity): activity is Extract<CodexTranscriptCell, { kind: 'reasoning_summary' }> => (
-      activity.kind === 'reasoning_summary'
-      && Boolean(visibleThinkingContent(activity.text))
-    ),
+  const reasoningCell = cell.activities.find(
+    (activity): activity is Extract<CodexTranscriptCell, { kind: 'reasoning_summary' }> => activity.kind === 'reasoning_summary',
   ) ?? null;
+  const thinkingCell = reasoningCell && visibleThinkingContent(reasoningCell.text) ? reasoningCell : null;
   const toolActivities = cell.activities.filter((activity) => activity.kind !== 'reasoning_summary');
   const summary = useMemo(
-    () => (toolActivities.length > 0 ? traceSummaryParts(toolActivities).join(' · ') : 'Thought through response'),
-    [toolActivities],
+    () => {
+      if (toolActivities.length > 0) {
+        return traceSummaryParts(toolActivities).join(' · ');
+      }
+      return cell.isStreaming ? 'Thinking' : 'Thought process';
+    },
+    [cell.isStreaming, toolActivities],
   );
-  const hasTrace = Boolean(thinkingCell) || toolActivities.length > 0;
-  const showTrace = hasTrace && expanded;
+  const hasTrace = Boolean(thinkingCell) || toolActivities.length > 0 || cell.isStreaming;
+  const showTrace = (Boolean(thinkingCell) || toolActivities.length > 0) && expanded;
 
   useEffect(() => {
     if (cell.isStreaming) {
@@ -829,7 +832,7 @@ export function ReasoningSummaryCell({
           className={`app-chat-thinking-row__chevron${expanded ? ' app-chat-thinking-row__chevron--expanded' : ''}`}
           aria-hidden="true"
         />
-        <span className="app-chat-thinking-row__label">Thought through response</span>
+        <span className="app-chat-thinking-row__label">{cell.isStreaming ? 'Thinking' : 'Thought process'}</span>
       </button>
       {expanded ? (
         <div className="app-chat-thinking-row__detail">

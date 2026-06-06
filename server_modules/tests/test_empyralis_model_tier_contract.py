@@ -5,7 +5,6 @@ def test_contract_exposes_exact_public_tiers_in_order():
     assert contract.EMPYRALIS_MODEL_TIERS == (
         "light",
         "pro",
-        "max",
         "local_ai",
         "my_api_key",
         "my_ai_account",
@@ -13,7 +12,6 @@ def test_contract_exposes_exact_public_tiers_in_order():
     assert [item["public_label"] for item in contract.ordinary_ui_model_tier_contracts()] == [
         "Light",
         "Pro",
-        "Max",
         "Local AI",
         "My API Key",
         "My AI Account",
@@ -47,7 +45,7 @@ def test_empyralis_hosted_tiers_use_deepseek_v4_with_distinct_runtime_contracts(
     }
 
     assert admin_items["light"]["internal_provider"] == "deepseek"
-    assert admin_items["light"]["internal_model"] == "deepseek-v4-flash"
+    assert admin_items["light"]["internal_model"] == "deepseek-chat"
     assert admin_items["light"]["thinking_mode"] == "off"
     assert admin_items["light"]["agent_budget_tier"] == "standard"
 
@@ -57,27 +55,18 @@ def test_empyralis_hosted_tiers_use_deepseek_v4_with_distinct_runtime_contracts(
     assert admin_items["pro"]["thinking_mode"] == "high"
     assert admin_items["pro"]["agent_budget_tier"] == "expanded"
 
-    assert admin_items["max"]["internal_provider"] == "deepseek"
-    assert admin_items["max"]["internal_model"] == "deepseek-v4-pro"
-    assert admin_items["max"]["reasoning_effort"] == "max"
-    assert admin_items["max"]["thinking_mode"] == "max"
-    assert admin_items["max"]["agent_budget_tier"] == "maximum"
     assert admin_items["light"]["credit_multiplier"] < admin_items["pro"]["credit_multiplier"]
-    assert admin_items["max"]["credit_multiplier"] > admin_items["pro"]["credit_multiplier"]
 
 
 def test_thinking_mode_is_derived_from_reasoning_effort():
     light = contract.model_tier_contract("light")
     pro = contract.model_tier_contract("pro")
-    max_tier = contract.model_tier_contract("max")
     local = contract.model_tier_contract("local_ai")
 
     assert light.reasoning_effort is None
     assert light.thinking_mode == "off"
     assert pro.reasoning_effort == "high"
     assert pro.thinking_mode == "high"
-    assert max_tier.reasoning_effort == "max"
-    assert max_tier.thinking_mode == "max"
     assert local.reasoning_effort is None
     assert local.thinking_mode is None
 
@@ -101,6 +90,7 @@ def test_user_owned_tiers_allow_provider_model_picker_in_ordinary_ui():
 def test_normalize_model_tier_is_stable_and_defaults_to_pro():
     assert contract.normalize_model_tier("local-ai") == "local_ai"
     assert contract.normalize_model_tier("MY_API_KEY") == "my_api_key"
+    assert contract.normalize_model_tier("max") == "pro"
     assert contract.normalize_model_tier("unknown") == "pro"
     assert contract.model_tier_contract("unknown").public_tier == "pro"
 

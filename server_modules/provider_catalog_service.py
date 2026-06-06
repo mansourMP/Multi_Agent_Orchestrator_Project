@@ -25,6 +25,10 @@ BYOK_FIRST_PROVIDERS = {
     "openrouter",
 }
 LOCAL_OR_SUBSCRIPTION_PROVIDERS = {"ollama", "openai-codex", "claude_code_cli"}
+PLATFORM_CREDIT_MODEL_ALLOWLIST = {
+    ("deepseek", "deepseek-chat"),
+    ("deepseek", "deepseek-v4-pro"),
+}
 
 
 def _canonical_surface(value: Any) -> str:
@@ -243,6 +247,10 @@ def assert_model_route_policy(
         if payer_token == "platform_credits":
             if provider_id in BYOK_FIRST_PROVIDERS:
                 raise ValueError(f"{provider_id} is BYOK/workspace-key only and cannot use Empyralis credits.")
+            if (provider_id, model_id) not in PLATFORM_CREDIT_MODEL_ALLOWLIST:
+                raise ValueError(
+                    "Empyralis credits only support Light (DeepSeek Chat) and Pro (DeepSeek V4 Pro)."
+                )
             if not policy.get("platform_paid_allowed"):
                 raise ValueError(f"Model '{provider_id}:{model_id}' is not approved for Empyralis credits.")
             if not policy.get("pricing_known"):

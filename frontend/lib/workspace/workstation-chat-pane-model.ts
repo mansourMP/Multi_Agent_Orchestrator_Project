@@ -646,12 +646,39 @@ export function connectorSetupNoticeFromInterventions(interventions: unknown[]):
   const title = readString(record.title);
   const detail = readString(record.detail);
   const combinedText = `${code} ${title} ${detail}`.toLowerCase();
-  let message = detail || title || 'Connect the required app before Sage can use that action.';
+  const recognizedConnectorOrHardwareNotice = (
+    code === 'local_setup_required'
+    || code.startsWith('google_workspace_')
+    || code.startsWith('smtp_')
+    || code.startsWith('email_connector_')
+    || code.startsWith('telegram_bot_')
+    || code.startsWith('slack_')
+    || code.startsWith('dropbox_')
+    || code.startsWith('s3_')
+    || combinedText.includes('google workspace')
+    || combinedText.includes('my computer')
+    || combinedText.includes('local computer')
+    || combinedText.includes('agent computer')
+    || combinedText.includes('smtp')
+    || combinedText.includes('email connector')
+    || combinedText.includes('telegram')
+    || combinedText.includes('slack')
+    || combinedText.includes('dropbox')
+    || combinedText.includes('s3')
+  );
+  if (!recognizedConnectorOrHardwareNotice) {
+    return null;
+  }
+  let message = detail || title || 'Connect the required system before Sage can use that action.';
+  let actionLabel = 'Open Connections';
+  let actionTarget: NonNullable<SendFailureNotice['actions']>[number]['target'] = 'integrations';
 
   if (code.startsWith('google_workspace_') || combinedText.includes('google workspace')) {
     message = 'Connect Google Workspace to let Sage use Gmail, Calendar, or Drive actions. You can keep chatting normally.';
   } else if (code === 'local_setup_required' || combinedText.includes('my computer') || combinedText.includes('local computer')) {
-    message = 'Connect Agent Computer in Connections before Sage uses local computer actions. You can keep chatting normally.';
+    message = 'Connect Agent Computer in Hardware before Sage uses local computer actions. You can keep chatting normally.';
+    actionLabel = 'Open Hardware';
+    actionTarget = 'gateway';
   } else if (
     code.startsWith('smtp_')
     || code.startsWith('email_connector_')
@@ -674,8 +701,8 @@ export function connectorSetupNoticeFromInterventions(interventions: unknown[]):
     retryable: false,
     actions: [
       {
-        label: 'Open Connections',
-        target: 'integrations',
+        label: actionLabel,
+        target: actionTarget,
       },
     ],
   };
@@ -1136,12 +1163,11 @@ export function isCatalogProviderRecord(provider: ProviderCatalogRecord): boolea
   return Boolean(providerId) && (kind === '' || kind === 'provider') && provider.hidden !== true;
 }
 
-export const EMPYRALIS_TIER_IDS = ['light', 'pro', 'max'] as const;
+export const EMPYRALIS_TIER_IDS = ['light', 'pro'] as const;
 export const EMPYRALIS_TIER_SET = new Set<string>(EMPYRALIS_TIER_IDS);
 export const EMPYRALIS_TIER_LABELS: Record<typeof EMPYRALIS_TIER_IDS[number], string> = {
   light: 'Light',
   pro: 'Pro',
-  max: 'Max',
 };
 export const USER_OWNED_SECTION_LABELS: Record<'local_ai' | 'my_api_key' | 'my_ai_account', string> = {
   local_ai: 'Local AI',
@@ -1151,7 +1177,6 @@ export const USER_OWNED_SECTION_LABELS: Record<'local_ai' | 'my_api_key' | 'my_a
 export const EMPYRALIS_TIER_ESTIMATED_CREDITS: Record<typeof EMPYRALIS_TIER_IDS[number], number> = {
   light: 6,
   pro: 12,
-  max: 24,
 };
 export const VIRTUAL_RUNTIME_ESTIMATED_CREDITS: Record<'virtual_browser' | 'virtual_desktop' | 'virtual_code_sandbox', number> = {
   virtual_browser: 8,
@@ -1178,7 +1203,7 @@ export type ChatRouteKind = 'empyralis' | 'local_ai' | 'my_api_key' | 'my_ai_acc
 
 export type ChatModelTierPolicyRecord = {
   hostedAiEnabled: boolean;
-  tierAllowed: Record<'light' | 'pro' | 'max', boolean>;
+  tierAllowed: Record<'light' | 'pro', boolean>;
   userOwnedAllowed: Record<'local_ai' | 'my_api_key' | 'my_ai_account', boolean>;
 };
 
@@ -1191,7 +1216,7 @@ export function normalizeChatModelTierPolicy(payload: unknown): ChatModelTierPol
     ? source.user_owned as Record<string, unknown>
     : {};
 
-  const readTierEnabled = (tier: 'light' | 'pro' | 'max', fallback: boolean): boolean => {
+  const readTierEnabled = (tier: 'light' | 'pro', fallback: boolean): boolean => {
     const record = tiers[tier];
     if (!record || typeof record !== 'object') {
       return fallback;
@@ -1214,7 +1239,6 @@ export function normalizeChatModelTierPolicy(payload: unknown): ChatModelTierPol
     tierAllowed: {
       light: hostedAiEnabled && readTierEnabled('light', true),
       pro: hostedAiEnabled && readTierEnabled('pro', true),
-      max: hostedAiEnabled && readTierEnabled('max', false),
     },
     userOwnedAllowed: {
       local_ai: readUserOwnedEnabled('local_ai', true),
@@ -1389,15 +1413,15 @@ export function providerFailureMessageForProvider(provider: ProviderCatalogRecor
   const providerId = readString(provider?.id).toLowerCase();
   const providerLabel = readString(provider?.label) || (providerId ? providerId : 'The selected provider');
   if (providerId === 'ollama' || provider?.local_only === true || credentialPlane === 'local_runtime') {
-    return `${providerLabel} needs a connected computer in Connections. Use Workspace AI, connect a computer, or connect your own AI account.`;
+    return `${providerLabel} needs a connected computer in Connectors. Use Workspace AI, connect a computer, or connect your own AI account.`;
   }
   if (credentialPlane === 'workspace_connection') {
-    return 'Your AI account needs attention. Check the connection, quota, or selected model in Connections.';
+    return 'Your AI account needs attention. Check the connection, quota, or selected model in Connectors.';
   }
   if (credentialPlane === 'platform_runtime') {
     return 'Workspace AI is active, but the hosted AI model is temporarily unavailable. Try again or switch model.';
   }
-  return 'The selected AI model is not available right now. Switch model or open Connections.';
+  return 'The selected AI model is not available right now. Switch model or open Connectors.';
 }
 
 export function providerFailureActionsForProvider(
@@ -1415,7 +1439,7 @@ export function providerFailureActionsForProvider(
     || normalized.includes('gateway offline');
   if (localOnly) {
     return [
-      { label: 'Open Connections', target: 'integrations' },
+      { label: 'Open Connectors', target: 'integrations' },
       { label: 'Choose AI Model', target: 'integrations' },
       { label: 'Use Workspace AI', target: 'integrations' },
     ];
@@ -1538,7 +1562,7 @@ export function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
   const hostedProvider = hostedProviders[0] ?? null;
   const allowedHostedTiers = EMPYRALIS_TIER_IDS.filter((tierId) => tierPolicy.tierAllowed[tierId]);
   const tierOptions: ChatModelOption[] = hostedProvider ? allowedHostedTiers.map((tierId) => {
-    const preferredModelId = tierId === 'light' ? 'deepseek-v4-flash' : 'deepseek-v4-pro';
+    const preferredModelId = tierId === 'light' ? 'deepseek-chat' : 'deepseek-v4-pro';
     const models = Array.isArray(hostedProvider.models)
       ? hostedProvider.models.filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
       : [];
@@ -1550,14 +1574,10 @@ export function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
     );
     const reasoningLevels: ChatReasoningEffort[] = tierId === 'light'
       ? ['medium']
-      : tierId === 'pro'
-        ? ['high']
-        : ['max'];
+      : ['high'];
     const defaultReasoningEffort: ChatReasoningEffort = tierId === 'light'
       ? 'medium'
-      : tierId === 'pro'
-        ? 'high'
-        : 'max';
+      : 'high';
     return {
       id: tierId,
       label: EMPYRALIS_TIER_LABELS[tierId],
@@ -1788,9 +1808,6 @@ export function buildPreRunCostEstimate({
     if (hostedCreditState.monthlyCreditsRemaining <= Math.max(totalCredits * 3, 75)) {
       warnings.push('Low balance');
     }
-  }
-  if (selectedTierId === 'max') {
-    warnings.push('Max tier cost warning');
   }
   if (
     runtimeCredits > 0
@@ -2307,10 +2324,10 @@ export function classifyStatusNotice(message: string): {
     return {
       tone: 'warning',
       title: 'Agent Computer browser needed',
-      body: 'Localhost pages, signed-in sites, and private browser sessions stay on Agent Computer. Open Connections to manage access.',
+      body: 'Localhost pages, signed-in sites, and private browser sessions stay on Agent Computer. Open Hardware to manage access.',
       requiresLocalAccess: true,
-      actionTarget: 'integrations',
-      actionLabel: 'Open Connections',
+      actionTarget: 'gateway',
+      actionLabel: 'Open Hardware',
     };
   }
   if (isLocalCompanionGateMessage(message)) {
@@ -2319,8 +2336,8 @@ export function classifyStatusNotice(message: string): {
       title: 'Agent Computer attention needed',
       body: message,
       requiresLocalAccess: true,
-      actionTarget: 'integrations',
-      actionLabel: 'Open Connections',
+      actionTarget: 'gateway',
+      actionLabel: 'Open Hardware',
     };
   }
   if (/^sage (setup check|status)/i.test(message)) {
@@ -2348,11 +2365,11 @@ export function classifyStatusNotice(message: string): {
       tone: 'warning',
       title: 'AI model attention needed',
       body: /api key|credential/i.test(message)
-        ? 'Check your AI model key or quota in Connections.'
+        ? 'Check your AI model key or quota in Connectors.'
         : 'Choose Workspace AI, add an AI model key, or connect a computer.',
       requiresLocalAccess: false,
       actionTarget: 'integrations',
-      actionLabel: 'Open Connections',
+      actionLabel: 'Open Connectors',
     };
   }
   return {

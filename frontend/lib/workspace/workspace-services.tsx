@@ -573,6 +573,7 @@ class WorkspaceTransportAdapter {
 
 class WorkspaceQueryClient {
   private readonly cache = new Map<string, unknown>();
+  private readonly cacheMeta = new Map<string, { updatedAt: number }>();
   private readonly inFlight = new Map<string, {
     controller: AbortController;
     promise: Promise<unknown>;
@@ -591,6 +592,7 @@ class WorkspaceQueryClient {
   set<T>(key: string, value: T): T {
     const scopedKey = normalizeCacheKey(this.prefix, key);
     this.cache.set(scopedKey, value);
+    this.cacheMeta.set(scopedKey, { updatedAt: Date.now() });
     return value;
   }
 
@@ -604,6 +606,7 @@ class WorkspaceQueryClient {
     const promise = executor({ signal: controller.signal, cacheKey: scopedKey })
       .then((value) => {
         this.cache.set(scopedKey, value);
+        this.cacheMeta.set(scopedKey, { updatedAt: Date.now() });
         return value;
       })
       .finally(() => {
@@ -614,13 +617,30 @@ class WorkspaceQueryClient {
     return promise;
   }
 
+  async readThrough<T>(
+    key: string,
+    executor: QueryExecutor<T>,
+    ttlMs = 10_000,
+  ): Promise<T> {
+    const scopedKey = normalizeCacheKey(this.prefix, key);
+    const cached = this.cache.get(scopedKey) as T | undefined;
+    const meta = this.cacheMeta.get(scopedKey);
+    if (cached !== undefined && meta && Date.now() - meta.updatedAt <= Math.max(ttlMs, 0)) {
+      return cached;
+    }
+    return this.run(key, executor);
+  }
+
   invalidate(key?: string): void {
     if (!key) {
       this.cache.clear();
+      this.cacheMeta.clear();
       return;
     }
 
-    this.cache.delete(normalizeCacheKey(this.prefix, key));
+    const scopedKey = normalizeCacheKey(this.prefix, key);
+    this.cache.delete(scopedKey);
+    this.cacheMeta.delete(scopedKey);
   }
 
   snapshot() {
@@ -636,6 +656,7 @@ class WorkspaceQueryClient {
     }
     this.inFlight.clear();
     this.cache.clear();
+    this.cacheMeta.clear();
   }
 }
 

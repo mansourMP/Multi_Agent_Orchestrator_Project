@@ -81,6 +81,23 @@ class ChannelConcurrencyServiceTests(unittest.IsolatedAsyncioTestCase):
         global channel_concurrency_service
 
         channel_concurrency_service = importlib.import_module("server_modules.channel_concurrency_service")
+        self._rust_decision_patch = patch(
+            "server_modules.channel_concurrency_service.rust_runtime_kernel_client.runtime_state_store_decision",
+            lambda **request: {
+                "ok": True,
+                "decision": "allow",
+                "operation": request.get("operation"),
+                "next_action": request.get("operation"),
+            },
+        )
+        self._rust_enforce_patch = patch(
+            "server_modules.channel_concurrency_service.rust_runtime_kernel_client.enforce_kernel_decision",
+            lambda _command, decision: decision,
+        )
+        self._rust_decision_patch.start()
+        self._rust_enforce_patch.start()
+        self.addCleanup(self._rust_decision_patch.stop)
+        self.addCleanup(self._rust_enforce_patch.stop)
 
     def test_resolve_channel_quota_snapshot_prefers_workspace_and_agent_metadata(self):
         workspace = {
@@ -138,7 +155,35 @@ class ChannelConcurrencyServiceTests(unittest.IsolatedAsyncioTestCase):
                     install={"metadata": {}},
                 )
 
-        self.assertEqual(error.exception.reason, "workspace_rate_limited")
+            self.assertEqual(error.exception.reason, "workspace_rate_limited")
+
+    async def test_acquire_channel_execution_lease_blocks_at_exact_workspace_turn_limit(self):
+        connection = _FakeConnection(recent_turn_count=2)
+        workspace = {"metadata": {"plan_limits": {"max_customer_turns_per_minute": 2}}}
+
+        with (
+            patch(
+                "server_modules.channel_concurrency_service.control_plane_repository._scoped_connection",
+                new=_fake_scoped_connection(connection),
+            ),
+            patch(
+                "server_modules.channel_concurrency_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=workspace),
+            ),
+        ):
+            with self.assertRaises(channel_concurrency_service.ChannelExecutionLimitError) as error:
+                await channel_concurrency_service.acquire_channel_execution_lease(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    responder_install_id="install-1",
+                    thread_id="thread-1",
+                    session_key="session-1",
+                    channel_key="telegram",
+                    endpoint_key="@partspro_bot",
+                    install={"metadata": {}},
+                )
+
+            self.assertEqual(error.exception.reason, "workspace_rate_limited")
         self.assertEqual(connection.cleanup_calls, 1)
 
     async def test_channel_execution_slot_releases_lease_after_success(self):

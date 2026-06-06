@@ -269,6 +269,12 @@ def load_replayable_chat_stream_session(
     state = get_state(db_path, key)
     if not isinstance(state, dict):
         return None
+    if (
+        str(state.get("workspace_id") or "").strip() != str(workspace_id or "").strip()
+        or str(state.get("thread_id") or "").strip() != str(thread_id or "").strip()
+        or str(state.get("request_id") or "").strip() != str(request_id or "").strip()
+    ):
+        return None
     status = str(state.get("status") or "").strip().lower()
     if status == "active":
         _mark_stream_state_retryable(

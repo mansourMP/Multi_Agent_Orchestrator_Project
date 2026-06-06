@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
+from server_modules import durable_quota_store
+
 _log = logging.getLogger(__name__)
 
 _last_restart_time: float = time.time()
@@ -91,6 +93,26 @@ def evaluate_gateway_quota(*, profile: str, gateway_id: str) -> GatewayQuotaDeci
         )
 
     key = f"{gateway_id}:{profile}"
+    if not durable_quota_store.use_in_memory_quota_mode():
+        decision = durable_quota_store.consume_window(
+            key=f"gateway:{key}",
+            limit=quota.max_requests,
+            window_seconds=quota.window_seconds,
+        )
+        if decision.allowed:
+            return GatewayQuotaDecision(
+                allowed=True,
+                profile=profile,
+                remaining=decision.remaining,
+            )
+        return GatewayQuotaDecision(
+            allowed=False,
+            profile=profile,
+            reason=f"{profile}_rate_limited",
+            remaining=0,
+            retry_after_seconds=decision.retry_after_seconds,
+        )
+
     if quota.allow(key):
         return GatewayQuotaDecision(
             allowed=True,
@@ -111,10 +133,22 @@ def get_gateway_quota_snapshot(gateway_id: str) -> dict:
     snapshot: dict = {}
     for profile, quota in _GATEWAY_QUOTA_PROFILES.items():
         key = f"{gateway_id}:{profile}"
+        if durable_quota_store.use_in_memory_quota_mode():
+            remaining = quota.remaining(key)
+            storage = "memory"
+        else:
+            decision = durable_quota_store.snapshot_window(
+                key=f"gateway:{key}",
+                limit=quota.max_requests,
+                window_seconds=quota.window_seconds,
+            )
+            remaining = decision.remaining
+            storage = decision.storage
         snapshot[profile] = {
-            "remaining": quota.remaining(key),
+            "remaining": remaining,
             "max_requests": quota.max_requests,
             "window_seconds": quota.window_seconds,
+            "storage": storage,
         }
     return snapshot
 
@@ -127,5 +161,5 @@ def get_quota_restart_info() -> dict:
         "startup_grace_seconds": _STARTUP_QUOTA_GRACE_SECONDS,
         "in_grace_period": time.time() - _last_restart_time < _STARTUP_QUOTA_GRACE_SECONDS,
         "quota_profiles": list(_GATEWAY_QUOTA_PROFILES.keys()),
-        "persistence": "in_memory_only",
+        "persistence": "in_memory_only" if durable_quota_store.use_in_memory_quota_mode() else "sqlite_window",
     }

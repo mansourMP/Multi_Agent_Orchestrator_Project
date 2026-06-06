@@ -4,6 +4,8 @@ import threading
 import time
 from typing import Dict, Optional
 
+from server_modules import durable_quota_store
+
 _MAX_BUCKETS_BEFORE_DEAD_PRUNE = 1000
 _DEAD_BUCKET_PRUNE_INTERVAL_SECONDS = 60.0
 _DEAD_BUCKET_RETENTION_SECONDS = 120.0
@@ -22,6 +24,22 @@ def evaluate_request_window(
 
     current = float(now if now is not None else time.time())
     normalized_limit = max(int(limit or 0), 1)
+    if not durable_quota_store.use_in_memory_quota_mode():
+        decision = durable_quota_store.consume_window(
+            key=key,
+            limit=normalized_limit,
+            window_seconds=60,
+            now=current,
+        )
+        return {
+            "allowed": decision.allowed,
+            "retry_after_seconds": decision.retry_after_seconds,
+            "limit": decision.limit,
+            "observed": decision.observed,
+            "remaining": decision.remaining,
+            "storage": decision.storage,
+        }
+
     with lock:
         if (
             len(buckets) > _MAX_BUCKETS_BEFORE_DEAD_PRUNE

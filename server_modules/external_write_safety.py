@@ -294,12 +294,22 @@ def execute_external_write_once(
                     "completed" if record.get("response") is not None else "pending"
                 )
                 pending_created_at = str(record.get("created_at") or "").strip() or _utc_now_iso()
+                if state == "uncertain":
+                    raise RuntimeError(
+                        "Duplicate-protected external write has an uncertain provider outcome; "
+                        "manual reconciliation is required before retry."
+                    )
                 if state == "pending":
                     created_ts = _parse_utc_ts(record.get("created_at"))
                     if created_ts is not None and (_utc_now() - created_ts).total_seconds() > _EXTERNAL_WRITE_PENDING_STALE_SECONDS:
-                        IDEMPOTENCY_RECORDS.pop(record_key, None)
-                        should_execute = False
-                        retry_reserve = True
+                        record["state"] = "uncertain"
+                        record["uncertain_at"] = _utc_now_iso()
+                        record["error"] = "stale_pending_provider_outcome_uncertain"
+                        IDEMPOTENCY_RECORDS[record_key] = record
+                        raise RuntimeError(
+                            "Duplicate-protected external write has a stale pending provider outcome; "
+                            "manual reconciliation is required before retry."
+                        )
                     else:
                         should_execute = False
                         retry_reserve = False
@@ -361,7 +371,10 @@ def execute_external_write_once(
         with IDEMPOTENCY_LOCK:
             record = IDEMPOTENCY_RECORDS.get(record_key)
             if isinstance(record, dict) and str(record.get("body_hash") or "").strip() == payload_hash:
-                IDEMPOTENCY_RECORDS.pop(record_key, None)
+                record["state"] = "uncertain"
+                record["uncertain_at"] = _utc_now_iso()
+                record["error"] = "provider_outcome_uncertain"
+                IDEMPOTENCY_RECORDS[record_key] = record
         _persist_idempotency()
         raise
 

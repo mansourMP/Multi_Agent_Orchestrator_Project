@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Header, HTTPException, Request, Response
 from server_modules import control_plane_repository
 from server_modules import entitlements_service
-from server_modules import quota_policy_service, quota_response_service
+from server_modules import client_identity_service, quota_policy_service, quota_response_service
 from server_modules import security_audit_service
 from server_modules.downstream_resilience_service import (
     CircuitBreakerPolicy,
@@ -4751,12 +4751,7 @@ def _enforce_window_limit(
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if isinstance(forwarded, str) and forwarded.strip():
-        return forwarded.split(",")[0].strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+    return client_identity_service.resolve_client_ip(request)
 
 
 def _request_path(request: Request) -> str:

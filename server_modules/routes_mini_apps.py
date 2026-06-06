@@ -25,7 +25,7 @@ from server_modules import flashcards_tracking_service
 from server_modules import mini_app_invoke_service
 from server_modules import mini_apps_service
 from server_modules import mini_app_token_exchange_service
-from server_modules import quota_policy_service, quota_response_service
+from server_modules import client_identity_service, quota_policy_service, quota_response_service
 from server_modules import usage_accounting_service
 
 
@@ -47,12 +47,7 @@ MINI_APP_ACTIVE_SESSION_TTL_SECONDS = int(
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if isinstance(forwarded, str) and forwarded.strip():
-        return forwarded.split(",")[0].strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+    return client_identity_service.resolve_client_ip(request)
 
 
 def _enforce_mini_app_request_limit(

@@ -822,6 +822,11 @@ export type WorkstationClientDependencies = {
   queryClient: {
     peek: <T>(key: string) => T | null;
     set: <T>(key: string, value: T) => T;
+    readThrough?: <T>(
+      key: string,
+      executor: (context: { signal: AbortSignal; cacheKey: string }) => Promise<T>,
+      ttlMs?: number,
+    ) => Promise<T>;
     invalidate?: (key?: string) => void;
   };
   realtime: {
@@ -2210,6 +2215,17 @@ function resolveAbsoluteUrl(baseUrl: string, path: string): string {
   return `${root}${suffix}`;
 }
 
+function requestJsonCacheKey(path: string, init: RequestInit, allowStatuses: number[]): string {
+  const method = String(init.method || 'GET').trim().toUpperCase() || 'GET';
+  const allow = allowStatuses.length > 0 ? allowStatuses.slice().sort((a, b) => a - b).join(',') : 'none';
+  return `request-json:${method}:${path}:allow:${allow}`;
+}
+
+function isCacheableRequestJson(init: RequestInit): boolean {
+  const method = String(init.method || 'GET').trim().toUpperCase() || 'GET';
+  return method === 'GET' && init.body == null;
+}
+
 function sessionCacheKey(
   scope: WorkstationClientScope,
   threadId: string,
@@ -2231,8 +2247,10 @@ export function createWorkstationClient(
     allowStatuses = [],
     policy,
   }: WorkstationClientRequestOptions): Promise<T | null> {
-    try {
-      const response = await transport.request(path, init, resolveRequestPolicy(init, policy));
+    const method = String(init.method || 'GET').trim().toUpperCase() || 'GET';
+    const execute = async (signal?: AbortSignal): Promise<T | null> => {
+      const requestInit = signal && !init.signal ? { ...init, signal } : init;
+      const response = await transport.request(path, requestInit, resolveRequestPolicy(requestInit, policy));
       const payload = await readResponsePayload(response);
 
       if (!response.ok && allowStatuses.includes(response.status)) {
@@ -2244,6 +2262,21 @@ export function createWorkstationClient(
       }
 
       return payload as T;
+    };
+
+    try {
+      if (queryClient.readThrough && isCacheableRequestJson(init)) {
+        return await queryClient.readThrough<T | null>(
+          requestJsonCacheKey(path, init, allowStatuses),
+          ({ signal }) => execute(signal),
+          10_000,
+        );
+      }
+      const payload = await execute();
+      if (method !== 'GET') {
+        queryClient.invalidate?.();
+      }
+      return payload;
     } catch (error) {
       throw normalizeTransportFailure(error);
     }

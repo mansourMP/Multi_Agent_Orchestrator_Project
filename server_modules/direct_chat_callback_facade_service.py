@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
 
-from server_modules import direct_chat_generation_service
+from server_modules import direct_chat_generation_service, direct_chat_hosted_usage_service
 from server_modules import direct_chat_runtime_facade_service
 
 
@@ -103,6 +103,8 @@ def build_direct_chat_generation_services(
         direct_chat_error_reply=inputs.direct_chat_error_reply,
         capture_exception=inputs.capture_exception,
         generate_chat_reply_stream_with_provider_fallback=inputs.generate_chat_reply_stream_with_provider_fallback,
+        reserve_direct_chat_hosted_usage_best_effort=direct_chat_hosted_usage_service.reserve_direct_chat_hosted_usage_best_effort,
+        release_direct_chat_hosted_usage_reservation_best_effort=direct_chat_hosted_usage_service.release_direct_chat_hosted_usage_reservation_best_effort,
     )
 
 

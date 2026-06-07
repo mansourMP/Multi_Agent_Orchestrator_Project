@@ -175,6 +175,35 @@ def _load_safe_skill_catalog(*, workspace_id: str) -> list[dict]:
     return safe
 
 
+def _build_mcp_tool_inventory(*, workspace_id: str) -> str:
+    """Build a system-prompt-friendly inventory of available MCP tools."""
+    all_skills = list_skill_definitions(workspace_id=workspace_id, include_disabled=False)
+    mcp_skills = [
+        s for s in all_skills
+        if _coerce_text(getattr(s, "execution_adapter", "")).lower() == "mcp_tool"
+        and getattr(s, "enabled", False)
+    ]
+    if not mcp_skills:
+        return ""
+    lines: list[str] = [
+        "\n\n## Available MCP Tools",
+        "The following MCP tools are connected to this workspace and can be invoked:",
+    ]
+    for s in mcp_skills:
+        sid = _coerce_text(getattr(s, "id", ""))
+        label = _coerce_text(getattr(s, "label", "")) or sid
+        desc = _coerce_text(getattr(s, "description", ""))
+        entry = f"- {sid}: {label}"
+        if desc:
+            entry += f" — {desc}"
+        lines.append(entry)
+    lines.append(
+        "\nTo use an MCP tool, ask me to perform its described function. "
+        "I will automatically route your request to the correct tool."
+    )
+    return "\n".join(lines)
+
+
 def _build_heartbeat_summary(snapshot: dict) -> str:
     queue = snapshot.get("queue_overview") if isinstance(snapshot.get("queue_overview"), dict) else {}
     reminders = snapshot.get("reminders") if isinstance(snapshot.get("reminders"), dict) else {}
@@ -585,6 +614,22 @@ def _matching_mcp_skill(*, workspace_id: str, message: str) -> Any | None:
             return skill
     if len(candidates) == 1 and "mcp" in compact:
         return candidates[0]
+    # Description-based matching: check if the user message contains
+    # significant keywords from any MCP skill's description.
+    _MCP_DESC_STOPWORDS = frozenset({
+        "this", "that", "with", "from", "have", "been", "were",
+        "what", "which", "their", "there", "about", "would",
+        "could", "should", "tool", "mcp", "the", "and", "for",
+        "not", "are", "can", "has", "its", "use", "used", "using",
+    })
+    for skill in candidates:
+        desc = _coerce_text(getattr(skill, "description", "")).lower()
+        desc_keywords = {
+            word for word in desc.split()
+            if len(word) > 3 and word not in _MCP_DESC_STOPWORDS
+        }
+        if desc_keywords and any(keyword in compact for keyword in desc_keywords):
+            return skill
     return None
 
 
@@ -1131,7 +1176,23 @@ async def _run_sage_action_loop_v2(
             if reply:
                 outputs.append(reply)
         except Exception as exc:
-            error = _summarize_tool_output(str(exc), max_chars=800)
+            raw_error = str(exc)
+            # Produce user-friendly controlled error messages for MCP failures
+            if isinstance(exc, PermissionError):
+                friendly = "The MCP tool could not be executed because it has not been approved yet."
+            elif "not approved" in raw_error.lower() or "not_approved" in raw_error.lower():
+                friendly = "The MCP tool could not be executed because it has not been approved yet."
+            elif "not found" in raw_error.lower() or "not_found" in raw_error.lower():
+                friendly = "The MCP tool was not found on the connected server."
+            elif "timeout" in raw_error.lower() or "timed out" in raw_error.lower():
+                friendly = "The MCP tool did not respond in time. Please try again."
+            elif "connection" in raw_error.lower() or "connect" in raw_error.lower() or "endpoint" in raw_error.lower():
+                friendly = "Could not reach the MCP server. Please check that the server is running."
+            elif "disabled" in raw_error.lower():
+                friendly = "The MCP tool is currently disabled for this workspace."
+            else:
+                friendly = f"The MCP tool returned an error: {raw_error[:200]}"
+            error = _summarize_tool_output(friendly, max_chars=800)
             blocked_tools.append({"name": skill_id, "reason": error or type(exc).__name__, "status": "blocked"})
             tool_calls.append({
                 "name": skill_id,
@@ -1264,6 +1325,12 @@ async def handle_sage_chat(
     if safe_skills:
         used_context.append("sage_skills")
 
+    # MCP tool inventory for system prompt — lets Sage know what MCP
+    # tools are available so it can use them when the user asks.
+    mcp_tool_inventory = _build_mcp_tool_inventory(workspace_id=normalized_workspace_id)
+    if mcp_tool_inventory:
+        used_context.append("mcp_tools")
+
     # --- Call provider ---
     provider, credentials = _resolve_cloud_provider(normalized_workspace_id)
 
@@ -1338,7 +1405,7 @@ async def handle_sage_chat(
     envelope = _build_prompt_envelope(
         workspace_id=normalized_workspace_id,
         message=normalized_message,
-        system_prompt=f"{instruction_bundle.system_prompt.rstrip()}{sage_surface_guardrails}{channel_context_prompt}",
+        system_prompt=f"{instruction_bundle.system_prompt.rstrip()}{sage_surface_guardrails}{channel_context_prompt}{mcp_tool_inventory}",
     )
 
     action_result = None

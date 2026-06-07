@@ -15,6 +15,7 @@ from server_modules import (
     sage_instruction_compiler_service,
     sage_heartbeat_service,
     sage_memory_service,
+    sage_proof_log_service,
     sage_profile_service,
     secret_redaction_service,
     security_audit_service,
@@ -1676,6 +1677,25 @@ async def handle_sage_chat(
             if isinstance(action_result.get("proof_log"), dict)
             else None
         )
+        proof_log_id = ""
+        if proof_log_payload:
+            try:
+                proof_record = sage_proof_log_service.append_proof_log(
+                    tenant_id=normalized_tenant_id,
+                    workspace_id=normalized_workspace_id,
+                    actor_user_id=actor_user_id,
+                    trace_id=trace_id,
+                    surface=normalized_surface,
+                    proof_log=proof_log_payload,
+                    status=_coerce_text(proof_log_payload.get("status")) or action_execution_mode,
+                    title=_coerce_text(proof_log_payload.get("title")) or "Sage proof log",
+                    source="sage_chat",
+                )
+                proof_log_id = _coerce_text(proof_record.get("proof_id"))
+                if proof_log_id:
+                    proof_log_payload = {**proof_log_payload, "proof_id": proof_log_id}
+            except Exception:
+                proof_log_id = ""
         prompt_diagnostics = {
             **prompt_diagnostics,
             "action_loop_v3": True,
@@ -1687,6 +1707,7 @@ async def handle_sage_chat(
             "approval_required_count": len(approvals_required),
             "daily_operator": daily_operator_payload,
             "proof_log": proof_log_payload,
+            "proof_log_id": proof_log_id,
         }
 
         try:
@@ -1726,6 +1747,7 @@ async def handle_sage_chat(
                     "action_execution_mode": action_execution_mode,
                     "route_decision": route_decision,
                     "proof_log": proof_log_payload,
+                    "proof_log_id": proof_log_id,
                     "prompt_diagnostics": prompt_diagnostics,
                     "channel_context": normalized_channel_context or None,
                 },
@@ -1755,6 +1777,7 @@ async def handle_sage_chat(
                     "action_execution_mode": action_execution_mode,
                     "route_decision": route_decision,
                     "proof_log": proof_log_payload,
+                    "proof_log_id": proof_log_id,
                     "channel_context": normalized_channel_context or None,
                 },
                 idempotency_key=f"sage_chat:{trace_id}",
@@ -1775,6 +1798,7 @@ async def handle_sage_chat(
                     "approvals_required": approvals_required,
                     "route_decision": route_decision,
                     "proof_log": proof_log_payload,
+                    "proof_log_id": proof_log_id,
                     "error": None,
                 },
                 surface=normalized_surface,
@@ -1814,6 +1838,7 @@ async def handle_sage_chat(
             "loop_budget": action_result.get("loop_budget") if isinstance(action_result.get("loop_budget"), dict) else {},
             "daily_operator": daily_operator_payload,
             "proof_log": proof_log_payload,
+            "proof_log_id": proof_log_id,
         }
 
     try:
@@ -1983,5 +2008,7 @@ async def handle_sage_chat(
         "trace_id": trace_id,
         "provider": effective_provider,
         "model": effective_model or None,
+        "proof_log": None,
+        "proof_log_id": "",
         "transparency_events": transparency_events,
     }

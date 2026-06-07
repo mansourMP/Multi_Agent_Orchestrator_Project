@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException
 
-from server_modules import activity_ledger_service, security_audit_service
+from server_modules import activity_ledger_service, sage_proof_log_service, security_audit_service
 from server_modules.auth import enforce_workspace_access, workspace_tenant_id
 from server_modules.sage_agent_runtime_contract import (
     SAGE_MODE,
@@ -227,6 +227,87 @@ def register_sage_chat_routes(app) -> None:
             "workspace_id": resolved_workspace_id,
             "tenant_id": tenant_id,
             **result,
+        }
+
+    @app.get("/api/sage/proof-logs", dependencies=[Depends(member_dependency)])
+    async def list_sage_proof_logs(
+        workspace_id: str,
+        status: str = "",
+        surface: str = "",
+        limit: int = sage_proof_log_service.PROOF_LOG_DEFAULT_LIMIT,
+        current_user=Depends(member_dependency),
+    ):
+        if not workspace_id or not _coerce_text(workspace_id):
+            raise HTTPException(status_code=400, detail="workspace_id is required.")
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id,
+            minimum_role="viewer",
+        )
+        tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
+        payload = sage_proof_log_service.list_proof_logs(
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+            status=status,
+            surface=surface,
+            limit=limit,
+        )
+        return {
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            **payload,
+        }
+
+    @app.get("/api/sage/proof-logs/summary", dependencies=[Depends(member_dependency)])
+    async def summarize_sage_proof_logs(
+        workspace_id: str,
+        current_user=Depends(member_dependency),
+    ):
+        if not workspace_id or not _coerce_text(workspace_id):
+            raise HTTPException(status_code=400, detail="workspace_id is required.")
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id,
+            minimum_role="viewer",
+        )
+        tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
+        payload = sage_proof_log_service.summarize_proof_logs(
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+        )
+        return {
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            **payload,
+        }
+
+    @app.get("/api/sage/proof-logs/{proof_id}", dependencies=[Depends(member_dependency)])
+    async def get_sage_proof_log(
+        proof_id: str,
+        workspace_id: str,
+        current_user=Depends(member_dependency),
+    ):
+        if not workspace_id or not _coerce_text(workspace_id):
+            raise HTTPException(status_code=400, detail="workspace_id is required.")
+        if not proof_id or not _coerce_text(proof_id):
+            raise HTTPException(status_code=400, detail="proof_id is required.")
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id,
+            minimum_role="viewer",
+        )
+        tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
+        record = sage_proof_log_service.get_proof_log(
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+            proof_id=proof_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="proof log not found.")
+        return {
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            "proof_log": record,
         }
 
     @app.post("/api/sage/approvals/approve", dependencies=[Depends(member_dependency)])

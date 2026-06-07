@@ -31,6 +31,11 @@ transparency events.
   `server_modules/sage_chat_api.py`.
 - `/api/sage/voice-task`: authenticated workspace member voice transcript task.
   Source: `server_modules/sage_chat_api.py`.
+- `/api/sage/proof-logs`, `/api/sage/proof-logs/summary`, and
+  `/api/sage/proof-logs/{proof_id}`: authenticated workspace viewer access to
+  durable Sage proof records written by `server_modules/sage_proof_log_service.py`.
+  These records are sanitized, Rust state-store authorized, and linked from
+  `/api/sage/chat` responses through `proof_log_id` when persistence succeeds.
 - `/api/sage/approvals/approve` and `/api/sage/approvals/reject`: owner/member
   approval resolution routes that currently support the minimal
   `channel_send_draft` execution path. Source: `server_modules/sage_chat_api.py`.

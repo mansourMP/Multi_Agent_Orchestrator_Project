@@ -772,6 +772,7 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             patch("server_modules.sage_agent_runtime_service.persist_interaction"),
             patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
             patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+            patch("server_modules.sage_agent_runtime_service.sage_proof_log_service.append_proof_log", return_value={"proof_id": "proof-morning"}) as mock_proof,
         ):
             result = _run(sage_agent_runtime_service.handle_sage_chat(
                 workspace_id="ws-1",
@@ -794,6 +795,9 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         ])
         self.assertEqual(result["proof_log"]["changes"], [])
         self.assertEqual(result["proof_log"]["blocked"], [])
+        self.assertEqual(result["proof_log_id"], "proof-morning")
+        self.assertEqual(result["proof_log"]["proof_id"], "proof-morning")
+        self.assertEqual(mock_proof.call_args.kwargs["source"], "sage_chat")
         self.assertIn("Proof log", result["message"])
         self.assertFalse(mock_generate.called)
         self.assertFalse(mock_stream.called)
@@ -827,6 +831,7 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             patch("server_modules.sage_agent_runtime_service.persist_interaction"),
             patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
             patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+            patch("server_modules.sage_agent_runtime_service.sage_proof_log_service.append_proof_log", return_value={"proof_id": "proof-meeting"}) as mock_proof,
         ):
             result = _run(sage_agent_runtime_service.handle_sage_chat(
                 workspace_id="ws-1",
@@ -843,6 +848,8 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         self.assertIn("google_workspace__list_calendar_events", proof_blocked_names)
         self.assertIn("google_workspace__list_drive_files", proof_blocked_names)
         self.assertEqual(result["proof_log"]["checked"], [])
+        self.assertEqual(result["proof_log_id"], "proof-meeting")
+        self.assertEqual(mock_proof.call_args.kwargs["status"], "blocked")
         self.assertFalse(mock_execute.called)
         self.assertFalse(mock_generate.called)
         self.assertFalse(mock_stream.called)
@@ -880,6 +887,7 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             patch("server_modules.sage_agent_runtime_service.persist_interaction"),
             patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
             patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+            patch("server_modules.sage_agent_runtime_service.sage_proof_log_service.append_proof_log", return_value={"proof_id": "proof-email"}) as mock_proof,
         ):
             result = _run(sage_agent_runtime_service.handle_sage_chat(
                 workspace_id="ws-1",
@@ -898,6 +906,8 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         self.assertEqual(result["proof_log"]["checked"][0]["tool"], "google_workspace__fetch_emails")
         self.assertEqual(result["proof_log"]["approvals"][0]["actions"], ["draft_email"])
         self.assertEqual(result["proof_log"]["approvals"][0]["status"], "waiting")
+        self.assertEqual(result["proof_log_id"], "proof-email")
+        self.assertEqual(mock_proof.call_args.kwargs["status"], "approval_required")
         self.assertFalse(mock_generate.called)
         self.assertFalse(mock_stream.called)
         self.assertEqual(mock_execute.call_count, 1)

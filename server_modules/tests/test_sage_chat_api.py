@@ -85,6 +85,8 @@ class SageChatApiContractTests(unittest.TestCase):
             "blocked_tools",
             "approvals_required",
             "memory_updates",
+            "proof_log",
+            "proof_log_id",
             "trace_id",
         }
         self.assertTrue(required_keys.issubset(set(result.keys())))

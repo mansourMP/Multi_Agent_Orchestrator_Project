@@ -47,6 +47,19 @@ recurring recipe scheduling return `approvals_required` metadata instead of
 dispatching immediately, and the `proof_log.changes` list remains empty until a
 write is actually approved and dispatched.
 
+Sage action results with a `proof_log` are also persisted through
+`server_modules/sage_proof_log_service.py` after Rust runtime state-store
+authorization. Proof records are idempotent by Sage trace id, sanitized before
+write, and queryable through:
+
+- `GET /api/sage/proof-logs?workspace_id=...`
+- `GET /api/sage/proof-logs/summary?workspace_id=...`
+- `GET /api/sage/proof-logs/{proof_id}?workspace_id=...`
+
+The chat response includes `proof_log_id` when persistence succeeds, so web,
+mobile, and channel surfaces can link a conversation turn to its durable proof
+record instead of scraping assistant text.
+
 ## Task Routing Contract
 
 Sage should route work in this order:

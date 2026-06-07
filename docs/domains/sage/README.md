@@ -24,6 +24,8 @@ execute built-in web/search/fetch tools, approved MCP skills, and guarded direct
 tools through the existing direct-chat execution services. Local Agent Computer
 work remains gated by selected gateway state and policy; personal-channel send
 dispatch still belongs to the approval/channel routes, not raw chat text.
+Daily Operator recipes for morning brief, email triage, and meeting prep run
+through the same Sage runtime and connected-app tool contracts.
 
 Agent Computer and personal channels are separate runtime lanes. Sage must use a
 selected Agent Computer for local hardware work and personal-channel sessions;

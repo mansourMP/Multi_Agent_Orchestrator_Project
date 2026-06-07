@@ -734,6 +734,8 @@ _CONNECTOR_ACTION_CAPABILITY_MAP: Dict[str, str] = {
 
 _READ_ONLY_CONNECTOR_ACTIONS = {
     "fetch_emails",
+    "list_calendar_events",
+    "list_drive_files",
     "list_channels",
     "get_history",
     "list_guilds",

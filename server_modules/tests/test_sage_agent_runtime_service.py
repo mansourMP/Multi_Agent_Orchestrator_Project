@@ -735,6 +735,154 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         self.assertFalse(mock_generate.called)
         self.assertTrue(mock_stream.called)
 
+    def test_main_sage_chat_runs_morning_brief_daily_operator_recipe(self):
+        capabilities = [
+            {
+                "id": "google_workspace",
+                "label": "Google Workspace",
+                "connected": True,
+                "authenticated": True,
+                "runtime_usable": True,
+                "read_actions": ["gmail_threads.read", "calendar_events.read"],
+                "write_actions": ["fetch_emails", "list_calendar_events"],
+                "approval_required_actions": [],
+            }
+        ]
+
+        def _execute(**kwargs):
+            name = kwargs["tool_call"]["name"]
+            if name == "google_workspace__fetch_emails":
+                return 'Connector action completed: google_workspace.fetch_emails.\nResult: [{"subject":"Launch","snippet":"Ready."}]'
+            if name == "google_workspace__list_calendar_events":
+                return 'Connector action completed: google_workspace.list_calendar_events.\nResult: [{"summary":"Standup","start":"2026-06-07T09:00:00Z"}]'
+            raise AssertionError(name)
+
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider", return_value=("openai", {"api_key": "test-key"})),
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=capabilities),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False}),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call", side_effect=_execute) as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_generation_service.stream_provider_backed_direct_chat") as mock_stream,
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="Create my morning brief from connected email and calendar.",
+            ))
+
+        self.assertEqual(result["action_execution_mode"], "daily_operator_executed")
+        self.assertEqual(result["action_loop_version"], "daily_operator_v1")
+        self.assertEqual(result["daily_operator"]["recipe_id"], "morning_brief")
+        self.assertEqual([call["name"] for call in result["tool_calls"]], [
+            "google_workspace__fetch_emails",
+            "google_workspace__list_calendar_events",
+        ])
+        self.assertIn("Proof log", result["message"])
+        self.assertFalse(mock_generate.called)
+        self.assertFalse(mock_stream.called)
+        self.assertEqual(mock_execute.call_count, 2)
+
+    def test_main_sage_chat_blocks_meeting_prep_when_required_daily_operator_lanes_missing(self):
+        capabilities = [
+            {
+                "id": "google_workspace",
+                "label": "Google Workspace",
+                "connected": True,
+                "authenticated": True,
+                "runtime_usable": True,
+                "read_actions": ["gmail_threads.read"],
+                "write_actions": ["fetch_emails"],
+                "approval_required_actions": [],
+            }
+        ]
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider", return_value=("openai", {"api_key": "test-key"})),
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=capabilities),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False}),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call") as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_generation_service.stream_provider_backed_direct_chat") as mock_stream,
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="Prepare me for my next meeting using calendar and Drive.",
+            ))
+
+        self.assertEqual(result["action_execution_mode"], "daily_operator_blocked")
+        self.assertEqual(result["daily_operator"]["recipe_id"], "meeting_prep")
+        blocked_names = {item["name"] for item in result["blocked_tools"]}
+        self.assertIn("google_workspace__list_calendar_events", blocked_names)
+        self.assertIn("google_workspace__list_drive_files", blocked_names)
+        self.assertFalse(mock_execute.called)
+        self.assertFalse(mock_generate.called)
+        self.assertFalse(mock_stream.called)
+
+    def test_main_sage_chat_email_triage_reads_email_then_requests_draft_approval(self):
+        capabilities = [
+            {
+                "id": "google_workspace",
+                "label": "Google Workspace",
+                "connected": True,
+                "authenticated": True,
+                "runtime_usable": True,
+                "read_actions": ["gmail_threads.read"],
+                "write_actions": ["fetch_emails", "draft_email"],
+                "approval_required_actions": ["draft_email"],
+            }
+        ]
+
+        def _execute(**kwargs):
+            self.assertEqual(kwargs["tool_call"]["name"], "google_workspace__fetch_emails")
+            return 'Connector action completed: google_workspace.fetch_emails.\nResult: [{"subject":"Customer","snippet":"Needs reply."}]'
+
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider", return_value=("openai", {"api_key": "test-key"})),
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=capabilities),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": False}),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._execute_single_direct_tool_call", side_effect=_execute) as mock_execute,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_generation_service.stream_provider_backed_direct_chat") as mock_stream,
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="Triage my important email and draft responses for approval.",
+            ))
+
+        self.assertEqual(result["action_execution_mode"], "approval_required")
+        self.assertEqual(result["daily_operator"]["recipe_id"], "email_triage")
+        self.assertEqual(result["tool_calls"][0]["name"], "google_workspace__fetch_emails")
+        self.assertEqual(result["tool_calls"][0]["status"], "completed")
+        self.assertEqual(result["tool_calls"][1]["name"], "google_workspace__draft_email")
+        self.assertEqual(result["tool_calls"][1]["status"], "approval_required")
+        self.assertEqual(result["approvals_required"][0]["actions"], ["draft_email"])
+        self.assertFalse(mock_generate.called)
+        self.assertFalse(mock_stream.called)
+        self.assertEqual(mock_execute.call_count, 1)
+
     def test_main_sage_chat_blocks_browser_when_agent_computer_offline(self):
         with (
             patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),

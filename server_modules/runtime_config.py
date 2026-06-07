@@ -142,6 +142,8 @@ from server_modules.google_workspace_cli import (
     google_workspace_local_create_calendar_event,
     google_workspace_local_create_draft,
     google_workspace_local_get_profile,
+    google_workspace_local_list_calendar_events,
+    google_workspace_local_list_drive_children,
     google_workspace_local_list_recent_messages,
     google_workspace_local_send_message,
     _gmail_message_summary,

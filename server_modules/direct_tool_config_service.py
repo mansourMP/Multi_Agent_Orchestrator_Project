@@ -105,6 +105,8 @@ def format_direct_tool_result(result: Dict[str, Any]) -> str:
     summary = str(result.get("summary") or "").strip()
     result_data = result.get("result_data") if isinstance(result.get("result_data"), dict) else {}
     connector_action = result_data.get("connector_action") if isinstance(result_data.get("connector_action"), dict) else {}
+    action_id = str(connector_action.get("action_id") or "").strip()
+    read_result_actions = {"fetch_emails", "list_calendar_events", "list_drive_files"}
     highlights: List[str] = []
     for key, label in (
         ("recipient", "Recipient"),
@@ -117,6 +119,14 @@ def format_direct_tool_result(result: Dict[str, Any]) -> str:
         value = str(connector_action.get(key) or "").strip()
         if value:
             highlights.append(f"{label}: {value}")
+    if summary and action_id in read_result_actions and "result" in connector_action:
+        try:
+            result_text = json.dumps(connector_action.get("result"), ensure_ascii=True, indent=2)
+        except Exception:
+            result_text = str(connector_action.get("result"))
+        if len(result_text) > 6000:
+            result_text = result_text[:5997].rstrip() + "..."
+        return "\n".join([summary, *highlights, f"Result: {result_text}"])
     if summary and highlights:
         return "\n".join([summary, *highlights])
     if summary:

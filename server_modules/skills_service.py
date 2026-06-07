@@ -1540,6 +1540,31 @@ def build_direct_tool_config(
         config["limit"] = max(1, min(limit, 10))
         return config
 
+    if connector_id == "google_workspace" and action_id == "list_calendar_events":
+        try:
+            top = int(parsed_input.get("top") or parsed_input.get("limit") or 10)
+        except Exception:
+            top = 10
+        config["top"] = max(1, min(top, 20))
+        for key in ("calendar_id", "time_min", "time_max"):
+            value = parsed_input.get(key)
+            if value is None:
+                continue
+            token = str(value).strip()
+            if token:
+                config[key] = token
+        return config
+
+    if connector_id == "google_workspace" and action_id == "list_drive_files":
+        try:
+            top = int(parsed_input.get("top") or parsed_input.get("limit") or 20)
+        except Exception:
+            top = 20
+        config["top"] = max(1, min(top, 50))
+        path = str(parsed_input.get("path") or parsed_input.get("folder") or "gdrive:/").strip() or "gdrive:/"
+        config["path"] = path
+        return config
+
     if connector_id == "google_workspace" and action_id == "create_calendar_event":
         payload = parsed_input.get("payload") if isinstance(parsed_input.get("payload"), dict) else None
         if payload:

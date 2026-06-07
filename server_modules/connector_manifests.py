@@ -42,6 +42,9 @@ CONNECTOR_MANIFESTS: List[Dict[str, Any]] = [
             {"id": "drive_file_changed", "label": "Drive file changed", "description": "Starts when a tracked Drive file changes."},
         ],
         actions=[
+            {"id": "fetch_emails", "label": "Fetch emails"},
+            {"id": "list_calendar_events", "label": "List calendar events"},
+            {"id": "list_drive_files", "label": "List Drive files"},
             {"id": "draft_email", "label": "Draft email"},
             {"id": "send_email", "label": "Send email"},
             {"id": "create_calendar_event", "label": "Create calendar event"},

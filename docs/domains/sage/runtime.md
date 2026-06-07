@@ -21,6 +21,29 @@ fetch, guarded direct tools, approval handoff, and compatible MCP skill
 execution. It returns real `tool_calls`, `blocked_tools`,
 `approvals_required`, `action_execution_mode`, and loop budget metadata.
 
+## Daily Operator Recipes
+
+Sage has a dedicated Daily Operator recipe path before the generic provider
+loop. Source: `server_modules/sage_daily_operator_service.py`, called from
+`server_modules/sage_agent_runtime_service.py`.
+
+Certified recipe v1 lanes:
+
+- Morning brief: uses `google_workspace__fetch_emails` and
+  `google_workspace__list_calendar_events`.
+- Email triage: uses `google_workspace__fetch_emails`; drafting/sending remains
+  approval-gated through `google_workspace__draft_email`.
+- Meeting prep: uses `google_workspace__list_calendar_events` and
+  `google_workspace__list_drive_files`; calendar writes remain approval-gated.
+
+These recipes run only when the required read tools are available. If Gmail,
+Calendar, or Drive access is missing, Sage returns `daily_operator_blocked`
+with concrete `blocked_tools`; it must not fabricate brief, email, calendar, or
+Drive context. Read tool outputs are sanitized and included in direct-tool
+result text so the operator can reason over real connector data. External writes
+and recurring recipe scheduling return `approvals_required` metadata instead of
+dispatching immediately.
+
 ## Task Routing Contract
 
 Sage should route work in this order:

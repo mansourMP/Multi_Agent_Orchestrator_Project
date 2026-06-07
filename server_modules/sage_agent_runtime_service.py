@@ -11,6 +11,7 @@ from server_modules import (
     direct_chat_tool_catalog_service,
     kill_switch_gate,
     no_provider_service,
+    sage_daily_operator_service,
     sage_instruction_compiler_service,
     sage_heartbeat_service,
     sage_memory_service,
@@ -819,6 +820,8 @@ def _message_might_need_sage_action_loop(message: str) -> bool:
     compact = " ".join(str(message or "").lower().split())
     if not compact:
         return False
+    if sage_daily_operator_service.message_might_need_daily_operator(message):
+        return True
     if _connector_requirements_for_message(message):
         return True
     if "mcp" in compact:
@@ -1123,6 +1126,27 @@ async def _run_sage_action_loop_v3(
             },
         },
     }
+    daily_operator_result = sage_daily_operator_service.run_daily_operator_recipe(
+        message=message,
+        tools=tools,
+        tool_capabilities=tool_capabilities,
+        availability=availability,
+        route_decision=route_decision,
+        execute_tool_call=lambda call, index: direct_chat_runtime_exports._execute_single_direct_tool_call(
+            tool_call=call,
+            workspace_id=workspace_id,
+            thread_id=trace_id,
+            index=index,
+            provider=provider,
+            model=model,
+            credentials=credentials,
+            reasoning_effort="",
+            session_ctx=session_ctx,
+        ),
+    )
+    if daily_operator_result is not None:
+        return daily_operator_result
+
     availability_payload = {
         **availability,
         "ai_ready": True,
@@ -1642,6 +1666,11 @@ async def handle_sage_chat(
         route_decision = dict(action_result.get("route_decision")) if isinstance(action_result.get("route_decision"), dict) else _build_sage_route_decision(message=normalized_message)
         action_execution_mode = _coerce_text(action_result.get("action_execution_mode")) or "tools_executed"
         trace_events = list(action_result.get("trace_events") or [])
+        daily_operator_payload = (
+            dict(action_result.get("daily_operator"))
+            if isinstance(action_result.get("daily_operator"), dict)
+            else None
+        )
         prompt_diagnostics = {
             **prompt_diagnostics,
             "action_loop_v3": True,
@@ -1651,6 +1680,7 @@ async def handle_sage_chat(
             "tool_call_count": len(tool_calls),
             "blocked_tool_count": len(blocked_tools),
             "approval_required_count": len(approvals_required),
+            "daily_operator": daily_operator_payload,
         }
 
         try:
@@ -1773,6 +1803,7 @@ async def handle_sage_chat(
             "transparency_events": transparency_events,
             "action_loop_version": _coerce_text(action_result.get("action_loop_version")) or _SAGE_OPERATOR_LOOP_VERSION,
             "loop_budget": action_result.get("loop_budget") if isinstance(action_result.get("loop_budget"), dict) else {},
+            "daily_operator": daily_operator_payload,
         }
 
     try:

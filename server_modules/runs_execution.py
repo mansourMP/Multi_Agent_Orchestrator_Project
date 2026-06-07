@@ -5,9 +5,10 @@ import asyncio
 import ast
 import hashlib
 import hmac
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urlencode
+from urllib.parse import quote_plus, urlencode
 
 from server_modules.builder_runtime_mapping import map_builder_permissions_to_runtime_metadata
 from server_modules.connectors.slack_connector import (
@@ -2233,6 +2234,65 @@ def _sanitize_recent_email_tool_results(messages: Any, *, snippet_limit: int = 1
     return sanitized
 
 
+def _sanitize_calendar_event_tool_results(payload: Any, *, description_limit: int = 500) -> List[Dict[str, Any]]:
+    safe_limit = max(80, min(int(description_limit or 500), 1000))
+    if isinstance(payload, dict):
+        raw_items = payload.get("events") if isinstance(payload.get("events"), list) else payload.get("items")
+    else:
+        raw_items = payload
+    if not isinstance(raw_items, list):
+        return []
+    sanitized: List[Dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        start_payload = item.get("start") if isinstance(item.get("start"), dict) else {}
+        end_payload = item.get("end") if isinstance(item.get("end"), dict) else {}
+        description = str(item.get("description") or "").strip()
+        if len(description) > safe_limit:
+            description = description[: safe_limit - 3] + "..."
+        sanitized.append(
+            {
+                "id": str(item.get("id") or "").strip() or None,
+                "summary": str(item.get("summary") or "").strip(),
+                "start": str(item.get("start") or start_payload.get("dateTime") or start_payload.get("date") or "").strip(),
+                "end": str(item.get("end") or end_payload.get("dateTime") or end_payload.get("date") or "").strip(),
+                "location": str(item.get("location") or "").strip(),
+                "description": description,
+                "attendeeCount": int(item.get("attendeeCount") or len(item.get("attendees") or []))
+                if isinstance(item.get("attendees"), list) or str(item.get("attendeeCount") or "").isdigit()
+                else 0,
+                "htmlLink": str(item.get("htmlLink") or "").strip() or None,
+            }
+        )
+    return sanitized
+
+
+def _sanitize_drive_file_tool_results(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, dict):
+        raw_items = payload.get("items") if isinstance(payload.get("items"), list) else payload.get("files")
+    else:
+        raw_items = payload
+    if not isinstance(raw_items, list):
+        return []
+    sanitized: List[Dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        sanitized.append(
+            {
+                "id": str(item.get("id") or "").strip() or None,
+                "name": str(item.get("name") or "").strip(),
+                "kind": str(item.get("kind") or "").strip() or ("folder" if str(item.get("mimeType") or "") == "application/vnd.google-apps.folder" else "file"),
+                "path": str(item.get("path") or "").strip() or None,
+                "mimeType": str(item.get("mimeType") or "").strip() or None,
+                "modifiedTime": str(item.get("modifiedTime") or "").strip() or None,
+                "webUrl": str(item.get("webUrl") or item.get("webViewLink") or "").strip() or None,
+            }
+        )
+    return sanitized
+
+
 def _workflow_execute_connector_action(
     run_id: str,
     node_id: str,
@@ -3856,6 +3916,93 @@ def _workflow_execute_connector_action(
             },
         }
 
+    if connector_id == "google_workspace" and action_id == "list_calendar_events":
+        calendar_id = str(config.get("calendar_id") or "primary").strip() or "primary"
+        now = datetime.now(timezone.utc)
+        time_min = str(config.get("time_min") or now.isoformat().replace("+00:00", "Z")).strip()
+        time_max = str(config.get("time_max") or (now + timedelta(days=1)).isoformat().replace("+00:00", "Z")).strip()
+        safe_top = max(1, min(int(config.get("top") or config.get("limit") or 10), 20))
+        if google_workspace_uses_local_cli(secret):
+            raw_result = google_workspace_local_list_calendar_events(
+                secret,
+                calendar_id=calendar_id,
+                time_min=time_min,
+                time_max=time_max,
+                top=safe_top,
+            )
+        else:
+            params = {
+                "timeMin": time_min,
+                "timeMax": time_max,
+                "maxResults": safe_top,
+                "singleEvents": "true",
+                "orderBy": "startTime",
+            }
+            response = http_json_request(
+                f"https://www.googleapis.com/calendar/v3/calendars/{quote_plus(calendar_id)}/events?{urlencode(params)}",
+                headers=_workflow_tool_connector_headers(secret),
+                payload=None,
+                timeout=20,
+            )
+            body = response.get("json") if isinstance(response.get("json"), dict) else {}
+            raw_result = {
+                "calendar_id": calendar_id,
+                "time_min": time_min,
+                "time_max": time_max,
+                "events": body.get("items") if isinstance(body.get("items"), list) else [],
+            }
+        result = _sanitize_calendar_event_tool_results(raw_result)
+        return {
+            "summary": "Connector action completed: google_workspace.list_calendar_events.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "calendar_id": calendar_id,
+                    "time_min": time_min,
+                    "time_max": time_max,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
+    if connector_id == "google_workspace" and action_id == "list_drive_files":
+        path = str(config.get("path") or "gdrive:/").strip() or "gdrive:/"
+        safe_top = max(1, min(int(config.get("top") or config.get("limit") or 20), 50))
+        if google_workspace_uses_local_cli(secret):
+            raw_result = google_workspace_local_list_drive_children(secret, path=path, top=safe_top)
+        else:
+            if path not in {"", "/", "gdrive:/", "gdrive://", "drive:/"}:
+                raise RuntimeError("Google Drive OAuth listing currently supports the root folder path only.")
+            params = {
+                "pageSize": safe_top,
+                "fields": "files(id,name,mimeType,webViewLink,modifiedTime)",
+                "q": "trashed = false and 'root' in parents",
+                "orderBy": "folder,name",
+            }
+            response = http_json_request(
+                f"https://www.googleapis.com/drive/v3/files?{urlencode(params)}",
+                headers=_workflow_tool_connector_headers(secret),
+                payload=None,
+                timeout=20,
+            )
+            body = response.get("json") if isinstance(response.get("json"), dict) else {}
+            raw_result = {"path": "gdrive:/", "items": body.get("files") if isinstance(body.get("files"), list) else []}
+        result = _sanitize_drive_file_tool_results(raw_result)
+        return {
+            "summary": "Connector action completed: google_workspace.list_drive_files.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "path": path,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
     if connector_id in {"google_workspace", "microsoft_365"} and action_id in {"send_email", "send_message", "draft_email"}:
         to_email = str(
             config.get("to_email")
@@ -3942,7 +4089,7 @@ def _workflow_execute_connector_action(
         if not payload:
             start = str(config.get("start") or "").strip()
             end = str(config.get("end") or "").strip()
-            timezone = str(config.get("timezone") or "UTC").strip() or "UTC"
+            event_timezone = str(config.get("timezone") or "UTC").strip() or "UTC"
             if not start or not end:
                 raise RuntimeError("create_calendar_event requires payload or start/end values.")
             title = str(config.get("title") or "Empyralist workflow event").strip() or "Empyralist workflow event"
@@ -3951,15 +4098,15 @@ def _workflow_execute_connector_action(
                 payload = {
                     "subject": title,
                     "body": {"contentType": "Text", "content": description},
-                    "start": {"dateTime": start, "timeZone": timezone},
-                    "end": {"dateTime": end, "timeZone": timezone},
+                    "start": {"dateTime": start, "timeZone": event_timezone},
+                    "end": {"dateTime": end, "timeZone": event_timezone},
                 }
             else:
                 payload = {
                     "summary": title,
                     "description": description,
-                    "start": {"dateTime": start, "timeZone": timezone},
-                    "end": {"dateTime": end, "timeZone": timezone},
+                    "start": {"dateTime": start, "timeZone": event_timezone},
+                    "end": {"dateTime": end, "timeZone": event_timezone},
                 }
         calendar_id = str(config.get("calendar_id") or "primary").strip() or "primary"
 

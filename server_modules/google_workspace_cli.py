@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -469,6 +470,67 @@ def google_workspace_local_create_calendar_event(
     if isinstance(result, dict):
         return result
     raise RuntimeError("Google Workspace CLI calendar insert response was invalid.")
+
+
+def google_workspace_local_list_calendar_events(
+    credentials: Dict[str, Any],
+    *,
+    calendar_id: str = "primary",
+    time_min: Optional[str] = None,
+    time_max: Optional[str] = None,
+    top: int = 10,
+) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    start = str(time_min or now.isoformat().replace("+00:00", "Z")).strip()
+    end = str(time_max or (now + timedelta(days=1)).isoformat().replace("+00:00", "Z")).strip()
+    safe_top = max(1, min(int(top or 10), 20))
+    payload = run_gws(
+        [
+            "calendar",
+            "events",
+            "list",
+            "--params",
+            json.dumps(
+                {
+                    "calendarId": calendar_id or "primary",
+                    "timeMin": start,
+                    "timeMax": end,
+                    "maxResults": safe_top,
+                    "singleEvents": True,
+                    "orderBy": "startTime",
+                },
+                separators=(",", ":"),
+            ),
+        ],
+        credentials,
+        timeout=30,
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("Google Workspace CLI calendar listing response was invalid.")
+    events: List[Dict[str, Any]] = []
+    for item in payload.get("items", []) if isinstance(payload.get("items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        start_payload = item.get("start") if isinstance(item.get("start"), dict) else {}
+        end_payload = item.get("end") if isinstance(item.get("end"), dict) else {}
+        events.append(
+            {
+                "id": item.get("id"),
+                "summary": item.get("summary"),
+                "start": start_payload.get("dateTime") or start_payload.get("date"),
+                "end": end_payload.get("dateTime") or end_payload.get("date"),
+                "location": item.get("location"),
+                "description": item.get("description"),
+                "htmlLink": item.get("htmlLink"),
+                "attendeeCount": len(item.get("attendees") or []) if isinstance(item.get("attendees"), list) else 0,
+            }
+        )
+    return {
+        "calendar_id": calendar_id or "primary",
+        "time_min": start,
+        "time_max": end,
+        "events": events,
+    }
 
 
 def _normalize_google_drive_path(path: str) -> str:

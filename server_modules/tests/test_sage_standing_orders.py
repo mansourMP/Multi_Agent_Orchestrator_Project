@@ -29,7 +29,7 @@ def _make_schedule(
     wake_mode: str = "now",
 ) -> Dict[str, Any]:
     """Build a minimal schedule dict like _build_schedule_item produces."""
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     item = {
         "id": schedule_id,
         "name": f"Test-{schedule_id}",

@@ -49,10 +49,11 @@ async def test_channel_catalog_lists_platform_surfaces(monkeypatch: pytest.Monke
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["count"] == 23
+    assert payload["count"] == 24
     assert any(item["channel_key"] == "telegram_personal" for item in payload["items"])
     assert any(item["channel_key"] == "signal_personal" for item in payload["items"])
     assert any(item["channel_key"] == "wechat_personal" for item in payload["items"])
+    assert any(item["channel_key"] == "apple_messages_business" for item in payload["items"])
     assert not any(item["channel_key"] == "imessage_personal" for item in payload["reserved"])
 
 

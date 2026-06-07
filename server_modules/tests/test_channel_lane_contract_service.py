@@ -60,25 +60,26 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         )
         self.assertEqual(
             [entry["stage"] for entry in personal_catalog],
-            ["live", "live", "live", "live", "live"],
+            ["live", "live", "planned", "planned", "planned"],
         )
         self.assertTrue(
             all(entry["runtime_lane"] == service.PERSONAL_GATEWAY_RUNTIME_LANE for entry in personal_catalog)
         )
         self.assertEqual(
             [entry["live_capable"] for entry in personal_catalog],
-            ["true", "true", "true", "true", "true"],
+            ["true", "true", "false", "false", "false"],
         )
 
         self.assertEqual(
             [entry["channel_key"] for entry in studio_catalog],
-            ["web_chat", "email", "telegram_bot", "whatsapp_twilio", "slack", "discord_bot"],
+            ["web_chat", "email", "telegram_bot", "whatsapp_twilio", "apple_messages_business", "slack", "discord_bot"],
         )
         by_key = {entry["channel_key"]: entry for entry in studio_catalog}
         self.assertEqual(by_key["web_chat"]["status"], "roadmap")
         self.assertEqual(by_key["email"]["status"], "partial")
         self.assertEqual(by_key["telegram_bot"]["status"], "working_when_configured")
         self.assertEqual(by_key["whatsapp_twilio"]["status"], "out_of_scope")
+        self.assertEqual(by_key["apple_messages_business"]["status"], "roadmap")
         self.assertEqual(by_key["slack"]["status"], "working_when_configured")
         self.assertEqual(by_key["discord_bot"]["status"], "working_when_configured")
         self.assertEqual(by_key["telegram_bot"]["launch_allowed"], "true")
@@ -103,7 +104,7 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         catalog = service.platform_channel_catalog()
         by_key = {entry["channel_key"]: entry for entry in catalog}
 
-        self.assertEqual(len(catalog), 23)
+        self.assertEqual(len(catalog), 24)
         self.assertEqual(by_key["telegram_bot"]["binding_channel_key"], "telegram")
         self.assertEqual(by_key["telegram_bot"]["runtime_lane"], service.STUDIO_CONNECTOR_RUNTIME_LANE)
         self.assertEqual(by_key["telegram_personal"]["runtime_lane"], service.PERSONAL_GATEWAY_RUNTIME_LANE)
@@ -114,11 +115,18 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         self.assertEqual(by_key["telegram_personal"]["ownership_boundary"], "agent_computer")
         self.assertEqual(by_key["whatsapp_personal"]["surface_support"], ["sage"])
         self.assertEqual(by_key["signal_personal"]["status"], "agent_computer_bridge")
-        self.assertTrue(by_key["signal_personal"]["live_capable"])
+        self.assertFalse(by_key["signal_personal"]["live_capable"])
         self.assertEqual(by_key["imessage_personal"]["provider"], "bluebubbles_local_bridge")
-        self.assertTrue(by_key["imessage_personal"]["live_capable"])
-        self.assertTrue(by_key["wechat_personal"]["live_capable"])
+        self.assertFalse(by_key["imessage_personal"]["live_capable"])
+        self.assertFalse(by_key["wechat_personal"]["live_capable"])
         self.assertFalse(by_key["wechat_personal"]["launch_allowed"])
+        self.assertEqual(by_key["apple_messages_business"]["provider"], "apple_messages_business_msp")
+        self.assertEqual(by_key["apple_messages_business"]["runtime_lane"], service.STUDIO_CONNECTOR_RUNTIME_LANE)
+        self.assertEqual(by_key["apple_messages_business"]["product_surface"], "business_channel")
+        self.assertFalse(by_key["apple_messages_business"]["requires_agent_computer"])
+        self.assertFalse(by_key["apple_messages_business"]["live_capable"])
+        self.assertFalse(by_key["apple_messages_business"]["launch_allowed"])
+        self.assertIn("human_handoff_required", by_key["apple_messages_business"]["capabilities"])
         self.assertEqual(by_key["github"]["category"], "work_system")
         self.assertEqual(by_key["github"]["status"], "working_when_configured")
         self.assertTrue(by_key["github"]["live_capable"])
@@ -157,15 +165,15 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
 
             self.assertEqual(spec["runtime_lane"], service.PERSONAL_GATEWAY_RUNTIME_LANE)
             self.assertEqual(spec["memory_surface"], service.DIRECT_CHAT_MEMORY_SURFACE)
-            self.assertEqual(spec["live_capable"], "true")
+            self.assertEqual(spec["live_capable"], "false")
 
     def test_agent_computer_bridge_channels_pass_personal_preflight(self) -> None:
         for channel_key in ("signal_personal", "imessage_personal", "wechat_personal"):
             preflight = service.personal_bridge_preflight(channel_key)
 
-            self.assertEqual(preflight["status"], "pass")
-            self.assertTrue(preflight["launch_allowed"])
-            self.assertEqual(preflight["reason"], "live_personal_gateway_runtime")
+            self.assertEqual(preflight["status"], "blocked")
+            self.assertFalse(preflight["launch_allowed"])
+            self.assertEqual(preflight["reason"], "bridge_contract_not_live_enabled")
 
         telegram_preflight = service.personal_bridge_preflight("telegram_personal")
         self.assertEqual(telegram_preflight["status"], "pass")

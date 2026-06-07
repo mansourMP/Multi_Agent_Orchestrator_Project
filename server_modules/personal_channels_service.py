@@ -808,7 +808,11 @@ def get_gateway_personal_channel_surfaces(gateway_id: str) -> Dict[str, Any]:
         health_status = str(health.get("status") or "").strip()
         manifest_status = str(manifest.get("status") or "").strip()
         status = state_status or health_status or manifest_status or str(platform.get("status") or catalog.get("stage") or "agent_computer_bridge").strip()
-        live_capable = _boolish(
+        catalog_live_capable = _boolish(
+            platform.get("live_capable", spec.get("live_capable")),
+            default=str(spec.get("live_capable") or "").strip().lower() == "true",
+        )
+        advertised_live_capable = _boolish(
             manifest.get("live_capable")
             if "live_capable" in manifest
             else manifest.get("liveCapable")
@@ -816,6 +820,7 @@ def get_gateway_personal_channel_surfaces(gateway_id: str) -> Dict[str, Any]:
             else platform.get("live_capable", spec.get("live_capable")),
             default=str(spec.get("live_capable") or "").strip().lower() == "true",
         )
+        live_capable = bool(catalog_live_capable and advertised_live_capable)
         connected = bool(state_status == "connected" or health.get("connected") is True)
         running = bool(health.get("running") is True)
         items.append(
@@ -824,7 +829,7 @@ def get_gateway_personal_channel_surfaces(gateway_id: str) -> Dict[str, Any]:
                 "label": str(manifest.get("label") or platform.get("label") or catalog.get("label") or channel_key).strip(),
                 "provider": str(manifest.get("provider") or platform.get("provider") or spec.get("provider") or "").strip(),
                 "runtime_lane": str(manifest.get("runtime_lane") or manifest.get("runtimeLane") or spec.get("runtime_lane") or "").strip(),
-                "stage": str(manifest.get("stage") or platform.get("stage") or catalog.get("stage") or "").strip(),
+                "stage": str(platform.get("stage") or catalog.get("stage") or manifest.get("stage") or "").strip(),
                 "status": status,
                 "status_label": _LOCAL_BRIDGE_PERSONAL_CHANNEL_COPY.get(channel_key, {}).get("status_label"),
                 "live_capable": live_capable,

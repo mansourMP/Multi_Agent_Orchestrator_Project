@@ -1389,7 +1389,7 @@ class GatewayRoutesTests(unittest.TestCase):
         self.assertTrue(by_key["telegram_personal"]["running"])
         self.assertEqual(by_key["telegram_personal"]["connected_identity"], "mansur")
         self.assertEqual(by_key["signal_personal"]["status"], "not_configured")
-        self.assertTrue(by_key["signal_personal"]["live_capable"])
+        self.assertFalse(by_key["signal_personal"]["live_capable"])
         self.assertEqual(by_key["signal_personal"]["manifest"]["api_token"], "[redacted]")
         self.assertEqual(by_key["imessage_personal"]["status"], "agent_computer_bridge")
         self.assertEqual(by_key["wechat_personal"]["status"], "agent_computer_bridge")

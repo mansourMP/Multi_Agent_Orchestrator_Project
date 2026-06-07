@@ -37,7 +37,7 @@ def test_channel_platform_catalog_has_launch_surfaces_and_reserved_private_runti
     payload = service.list_channel_catalog()
     keys = [item["channel_key"] for item in payload["items"]]
 
-    assert len(keys) == 23
+    assert len(keys) == 24
     assert "web_chat" in keys
     assert "telegram_bot" in keys
     assert "telegram_personal" in keys
@@ -45,6 +45,7 @@ def test_channel_platform_catalog_has_launch_surfaces_and_reserved_private_runti
     assert "signal_personal" in keys
     assert "imessage_personal" in keys
     assert "wechat_personal" in keys
+    assert "apple_messages_business" in keys
     assert "dropbox" in keys
     assert "s3" in keys
     assert "smtp" in keys
@@ -59,6 +60,10 @@ def test_channel_platform_catalog_has_launch_surfaces_and_reserved_private_runti
     assert by_key["instagram_business"]["live_capable"] is True
     assert by_key["telegram_bot"]["surface_kind"] == "messaging_channel"
     assert by_key["signal_personal"]["product_surface"] == "personal_messaging"
+    assert by_key["apple_messages_business"]["product_surface"] == "business_channel"
+    assert by_key["apple_messages_business"]["requires_agent_computer"] is False
+    assert by_key["apple_messages_business"]["live_capable"] is False
+    assert "human_handoff_required" in by_key["apple_messages_business"]["capabilities"]
     assert payload["groups"]["business_channels"] >= 1
     assert payload["groups"]["connected_apps"] >= 1
     assert payload["groups"]["personal_messaging"] >= 1

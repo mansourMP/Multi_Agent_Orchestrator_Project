@@ -263,8 +263,9 @@ def test_all_launch_statuses_are_valid() -> None:
 # ---------------------------------------------------------------------------
 
 def test_personal_local_bridges_use_agent_computer_contracts() -> None:
-    """Signal, iMessage, and WeChat personal are usable only through selected
-    Agent Computer local bridges, not as cloud/Studio channels."""
+    """Signal, iMessage, and WeChat personal stay on selected Agent Computer
+    bridge contracts, but they are not launch-ready until bridge runtimes are
+    certified."""
     by_id = _catalog_by_id()
     expected = {
         "signal_personal": ("local_bridge", "signal_local_bridge"),
@@ -273,10 +274,25 @@ def test_personal_local_bridges_use_agent_computer_contracts() -> None:
     }
     for cid, (setup_kind, runtime_provider) in expected.items():
         item = by_id[cid]
-        assert item["launch_status"] == LAUNCH_LIVE_WHEN_CONFIGURED
+        assert item["launch_status"] == LAUNCH_PLANNED
         assert item["setup_kind"] == setup_kind
         assert item["lane"] == LANE_SAGE_PERSONAL_CHANNEL
         assert item["runtime_provider"] == runtime_provider
-        assert item["setup_available"] is True
-        assert item["runtime_usable"] is True
+        assert item["setup_available"] is False
+        assert item["runtime_usable"] is False
         assert "studio" not in [surface.lower() for surface in item.get("surface", [])]
+
+
+def test_apple_messages_business_is_official_planned_business_channel() -> None:
+    by_id = _catalog_by_id()
+    item = by_id["apple_messages_business"]
+
+    assert item["lane"] == LANE_STUDIO_BUSINESS_CHANNEL
+    assert item["launch_status"] == LAUNCH_PLANNED
+    assert item["setup_available"] is False
+    assert item["runtime_usable"] is False
+    assert item["requires_gateway"] is False
+    assert item["connector_id"] == "apple_messages_business"
+    assert item["runtime_provider"] == "apple_messages_business_msp"
+    assert "official Apple Messages for Business" in item["description"]
+    assert "iMessage" in item["description"]

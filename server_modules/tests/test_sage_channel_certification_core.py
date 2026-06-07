@@ -795,32 +795,43 @@ class LocalBridgePersonalChannelsCertification(unittest.TestCase):
     """Per the 'no fake runtime' rule, only channels with a concrete runtime
     contract can be live_when_configured."""
 
-    def test_signal_marked_live_when_configured(self):
+    def test_signal_marked_planned_until_bridge_certified(self):
         item = _catalog_item("signal_personal")
-        self.assertEqual(item["launch_status"], "live_when_configured")
-        self.assertTrue(item["setup_available"])
-        self.assertTrue(item["runtime_usable"])
+        self.assertEqual(item["launch_status"], "planned")
+        self.assertFalse(item["setup_available"])
+        self.assertFalse(item["runtime_usable"])
         self.assertEqual(item["lane"], connection_catalog_service.LANE_SAGE_PERSONAL_CHANNEL)
         self.assertEqual(item["provider"], "signal_local_bridge")
         self.assertEqual(item["setup_kind"], "local_bridge")
 
-    def test_imessage_marked_live_when_configured(self):
+    def test_imessage_marked_planned_until_bridge_certified(self):
         item = _catalog_item("imessage_personal")
-        self.assertEqual(item["launch_status"], "live_when_configured")
-        self.assertTrue(item["setup_available"])
-        self.assertTrue(item["runtime_usable"])
+        self.assertEqual(item["launch_status"], "planned")
+        self.assertFalse(item["setup_available"])
+        self.assertFalse(item["runtime_usable"])
         self.assertEqual(item["lane"], connection_catalog_service.LANE_SAGE_PERSONAL_CHANNEL)
         self.assertEqual(item["provider"], "bluebubbles_local_bridge")
         self.assertEqual(item["setup_kind"], "mac_bridge")
 
-    def test_wechat_marked_live_when_configured(self):
+    def test_wechat_marked_planned_until_bridge_certified(self):
         item = _catalog_item("wechat_personal")
-        self.assertEqual(item["launch_status"], "live_when_configured")
-        self.assertTrue(item["setup_available"])
-        self.assertTrue(item["runtime_usable"])
+        self.assertEqual(item["launch_status"], "planned")
+        self.assertFalse(item["setup_available"])
+        self.assertFalse(item["runtime_usable"])
         self.assertEqual(item["lane"], connection_catalog_service.LANE_SAGE_PERSONAL_CHANNEL)
         self.assertEqual(item["provider"], "wechat_local_bridge")
         self.assertEqual(item["setup_kind"], "local_bridge")
+
+    def test_apple_messages_business_is_official_msp_roadmap_channel(self):
+        item = _catalog_item("apple_messages_business")
+        self.assertEqual(item["launch_status"], "planned")
+        self.assertFalse(item["setup_available"])
+        self.assertFalse(item["runtime_usable"])
+        self.assertEqual(item["lane"], connection_catalog_service.LANE_STUDIO_BUSINESS_CHANNEL)
+        self.assertEqual(item["provider"], "apple_messages_business_msp")
+        self.assertEqual(item["setup_kind"], "msp_business_messaging")
+        self.assertFalse(item["requires_gateway"])
+        self.assertIn("Apple Messages for Business", item["display_name"])
 
     def test_wechat_status_uses_selected_gateway_bridge_health(self):
         with patch.object(
@@ -860,7 +871,7 @@ class LocalBridgePersonalChannelsCertification(unittest.TestCase):
             self.assertTrue(wechat["connected"])
             self.assertTrue(wechat["configured"])
             self.assertEqual(wechat["health_status"], "healthy")
-            self.assertEqual(wechat["next_action"], "manage")
+            self.assertEqual(wechat["next_action"], "locked")
 
     def test_wechat_status_reports_bridge_unavailable_without_claiming_connected(self):
         with patch.object(
@@ -893,7 +904,7 @@ class LocalBridgePersonalChannelsCertification(unittest.TestCase):
             self.assertTrue(wechat["configured"])
             self.assertEqual(wechat["health_status"], "unavailable")
             self.assertEqual(wechat["last_error"], "bridge refused connection")
-            self.assertEqual(wechat["next_action"], "connect")
+            self.assertEqual(wechat["next_action"], "locked")
 
     def test_no_channel_card_claims_supported_without_runtime(self):
         """Every catalog item with a usable launch status must have a real

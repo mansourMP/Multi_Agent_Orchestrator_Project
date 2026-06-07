@@ -803,6 +803,10 @@ CONNECTOR_CATALOG = {
         "label": "WhatsApp (Twilio)",
         "auth": ["account_sid", "auth_token", "from_number", "to_number"],
     },
+    "apple_messages_business": {
+        "label": "Apple Messages for Business",
+        "auth": ["msp_provider", "business_account_id", "api_key", "webhook_secret"],
+    },
     "discord_bot": {
         "label": "Discord (Bot API)",
         "auth": ["bot_token", "channel_id", "guild_id", "application_id", "public_key", "application_public_key"],

@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Platform
-Last verified: 2026-06-06
+Last verified: 2026-06-07
 Source of truth: deployed agent channel and channel platform services
 
 ## Studio Channel Catalog
@@ -23,8 +23,27 @@ customer chat surfaces.
 
 Partial or roadmap business channels in the inspected catalog include
 `web_chat`, `gmail`, `smtp_imap`, `whatsapp_business`, `microsoft_365`, `teams`,
-and `matrix`, depending on `live_capable` and `launch_allowed` flags. Web Chat
-is explicitly not launch-ready in `docs/reports/web-chat-channel-audit.md`.
+`matrix`, and `apple_messages_business`, depending on `live_capable` and
+`launch_allowed` flags. Web Chat is explicitly not launch-ready in
+`docs/reports/web-chat-channel-audit.md`.
+
+## Apple Messages For Business
+
+`apple_messages_business` is the official Apple Messages lane. It is a planned
+business channel, not a personal iMessage API and not an Agent Computer bridge.
+It is modeled as a cloud/MSP business messaging adapter with:
+
+- user-initiated conversations
+- mandatory AI disclosure
+- mandatory human handoff
+- MSP-backed inbound/outbound transport
+- proof-log fields for transcript, approvals, handoff state, and outbound
+  message ids
+
+The adapter contract lives in
+`server_modules/business_messaging_channel_adapter_service.py`. The connection
+catalog keeps setup disabled until Apple Business identity, MSP credentials,
+privacy/support review materials, and launch testing are complete.
 
 ## Channel Accounts And Bindings
 
@@ -61,4 +80,4 @@ blocked by a `ChannelPlatformError`. Source:
 
 Not implemented in the inspected code: a live Studio Web Chat widget launch
 flow; durable Email ingress marked launch-ready; WhatsApp Business launch-ready
-binding.
+binding; Apple Messages for Business dispatch through a real MSP account.

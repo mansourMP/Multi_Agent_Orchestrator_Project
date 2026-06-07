@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Platform
-Last verified: 2026-06-06
+Last verified: 2026-06-07
 Source of truth: personal channel service and routes
 
 ## Supported Providers
@@ -15,14 +15,22 @@ Implemented personal channel keys in
 - `whatsapp_personal`: provider `whatsapp_baileys`, runtime lane
   `personal_gateway`, live capable.
 - `signal_personal`: provider `signal_local_bridge`, runtime lane
-  `personal_gateway`, live capable.
+  `personal_gateway`, planned until the local bridge runtime is certified.
 - `imessage_personal`: provider `bluebubbles_local_bridge`, runtime lane
-  `personal_gateway`, live capable.
+  `personal_gateway`, planned private Mac bridge. This is not official Apple
+  Messages for Business.
 - `wechat_personal`: provider `wechat_local_bridge`, runtime lane
-  `personal_gateway`, live capable.
+  `personal_gateway`, planned until the local bridge runtime is certified.
 
 All require Agent Computer and are `surface_support: ["sage"]` in the platform
-catalog. They are not launch-allowed Studio bindings.
+catalog. They are not launch-allowed Studio bindings. Only Telegram and
+WhatsApp are currently launch-live personal lanes. Signal, iMessage, and WeChat
+remain private bridge contracts until certified.
+
+Official Apple Messages for Business is a separate business-channel lane:
+`apple_messages_business`. It uses a cloud/MSP adapter and must satisfy Apple
+review requirements such as AI disclosure and human handoff. It must not be
+presented as personal iMessage support.
 
 ## Pairing And State
 

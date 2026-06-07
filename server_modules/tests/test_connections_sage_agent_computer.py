@@ -579,11 +579,19 @@ def test_connection_catalog_exposes_launch_contract_without_ui_side_lock_lists()
     assert "generic_connection_test_not_implemented" in google["proof_blockers"]
 
     signal = by_id["signal_personal"]
-    assert signal["launch_status"] == connection_catalog_service.LAUNCH_LIVE_WHEN_CONFIGURED
-    assert signal["setup_available"] is True
-    assert signal["runtime_usable"] is True
-    assert signal["launchable"] is True
-    assert signal["launch_blockers"] == []
+    assert signal["launch_status"] == connection_catalog_service.LAUNCH_PLANNED
+    assert signal["setup_available"] is False
+    assert signal["runtime_usable"] is False
+    assert signal["launchable"] is False
+    assert "launch_status:planned" in signal["launch_blockers"]
+
+    apple = by_id["apple_messages_business"]
+    assert apple["launch_status"] == connection_catalog_service.LAUNCH_PLANNED
+    assert apple["setup_available"] is False
+    assert apple["runtime_usable"] is False
+    assert apple["launchable"] is False
+    assert apple["requires_gateway"] is False
+    assert apple["connector_id"] == "apple_messages_business"
 
     discord = by_id["discord_bot"]
     assert discord["launch_status"] == connection_catalog_service.LAUNCH_LIVE_WHEN_CONFIGURED
@@ -667,7 +675,7 @@ async def test_launchable_notion_and_linear_setup_points_to_connector_vault(monk
 
 
 @pytest.mark.anyio
-async def test_local_bridge_connection_setup_points_to_agent_computer_contract(monkeypatch):
+async def test_local_bridge_connection_setup_is_blocked_until_certified(monkeypatch):
     _install_auth(monkeypatch)
 
     async def fail_create_setup_session(*_args, **_kwargs):
@@ -696,26 +704,24 @@ async def test_local_bridge_connection_setup_points_to_agent_computer_contract(m
         lambda registration: dict(registration),
     )
 
-    payload = await routes_connections.start_connection_setup(
-        "signal_personal",
-        body=routes_connections.ConnectionActionRequest(
-            workspace_id="ws-1",
-            surface="sage",
-            selected_gateway_id="gateway-1",
-        ),
-        request=SimpleNamespace(),
-        current_user={"user_id": "user-1", "role": "member"},
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_connections.start_connection_setup(
+            "signal_personal",
+            body=routes_connections.ConnectionActionRequest(
+                workspace_id="ws-1",
+                surface="sage",
+                selected_gateway_id="gateway-1",
+            ),
+            request=SimpleNamespace(),
+            current_user={"user_id": "user-1", "role": "member"},
+        )
 
-    assert payload["next_action"] == "agent_computer_local_bridge_setup"
-    assert payload["gateway_id"] == "gateway-1"
-    assert payload["message_endpoint"] == "/api/personal-channels/signal_personal/gateways/gateway-1/messages"
-    assert payload["bridge_contract"]["channel_key"] == "signal_personal"
-    assert payload["bridge_contract"]["gateway_env"]["url"] == "EMPYRALIS_SIGNAL_BRIDGE_URL"
+    assert exc_info.value.status_code == 409
+    assert "launch" in exc_info.value.detail
 
 
 @pytest.mark.anyio
-async def test_wechat_connection_setup_points_to_agent_computer_bridge_contract(monkeypatch):
+async def test_wechat_connection_setup_is_blocked_until_certified(monkeypatch):
     _install_auth(monkeypatch)
 
     async def fail_create_setup_session(*_args, **_kwargs):
@@ -744,23 +750,17 @@ async def test_wechat_connection_setup_points_to_agent_computer_bridge_contract(
         lambda registration: dict(registration),
     )
 
-    payload = await routes_connections.start_connection_setup(
-        "wechat_personal",
-        body=routes_connections.ConnectionActionRequest(
-            workspace_id="ws-1",
-            surface="sage",
-            selected_gateway_id="gateway-1",
-        ),
-        request=SimpleNamespace(),
-        current_user={"user_id": "user-1", "role": "member"},
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_connections.start_connection_setup(
+            "wechat_personal",
+            body=routes_connections.ConnectionActionRequest(
+                workspace_id="ws-1",
+                surface="sage",
+                selected_gateway_id="gateway-1",
+            ),
+            request=SimpleNamespace(),
+            current_user={"user_id": "user-1", "role": "member"},
+        )
 
-    assert payload["next_action"] == "agent_computer_local_bridge_setup"
-    assert payload["gateway_id"] == "gateway-1"
-    assert payload["message_endpoint"] == "/api/personal-channels/wechat_personal/gateways/gateway-1/messages"
-    assert payload["bridge_contract"]["channel_key"] == "wechat_personal"
-    assert payload["bridge_contract"]["provider"] == "wechat_local_bridge"
-    assert payload["bridge_contract"]["native_bridge"] is None
-    assert payload["bridge_contract"]["gateway_runtime"] == "empyralis-gateway/src/channels/local-bridge-runtime.ts"
-    assert payload["bridge_contract"]["gateway_env"]["url"] == "EMPYRALIS_WECHAT_BRIDGE_URL"
-    assert payload["bridge_contract"]["http_contract"]["send"] == "POST /messages"
+    assert exc_info.value.status_code == 409
+    assert "launch" in exc_info.value.detail

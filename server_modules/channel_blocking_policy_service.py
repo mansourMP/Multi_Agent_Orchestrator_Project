@@ -8,6 +8,7 @@ from server_modules import error_response_service
 from server_modules.channel_routing_models import ChannelExecutionResult, ChannelRoutingContext
 from server_modules.error_contracts import IDEMPOTENCY_CONFLICT, POLICY_BLOCK
 from server_modules.channel_turn_request_service import coerce_dict
+from server_modules import personal_channel_thread_command_service
 
 
 _CONTROL_COMMAND_RE = re.compile(r"^\s*/(?P<command>[a-z][a-z0-9_-]{0,31})(?:\s|$)", re.IGNORECASE)
@@ -53,6 +54,7 @@ def check_personal_channel_control_command(
     command = classify_channel_control_command(text)
     if not command:
         return None
+    thread_command = personal_channel_thread_command_service.parse_thread_command(text)
     normalized_role = str(sender_role or "").strip().lower()
     authorized_roles = set(command.get("authorized_roles") or [])
     allowed = bool(normalized_role and normalized_role in authorized_roles)
@@ -62,6 +64,7 @@ def check_personal_channel_control_command(
             "command": command["command"],
             "sender_role": normalized_role,
             "reason": "",
+            "thread_command": thread_command.as_dict() if thread_command else None,
         }
     return {
         "blocked": True,
@@ -69,6 +72,7 @@ def check_personal_channel_control_command(
         "sender_role": normalized_role or None,
         "reason": "owner_authorization_required",
         "reply": "That control command needs owner approval in Empyralis. I did not run it.",
+        "thread_command": thread_command.as_dict() if thread_command else None,
     }
 
 

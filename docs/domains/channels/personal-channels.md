@@ -92,6 +92,18 @@ after Rust gateway service decision checks. Sources:
 `server_modules/personal_channels_service.py` and
 `server_modules/routes_personal_channels.py`.
 
+## Messaging Thread Commands
+
+Personal messaging lanes map into canonical Sage threads. The command contract
+is defined in `server_modules/personal_channel_thread_command_service.py` and
+documented in `docs/domains/channels/messaging-thread-contract.md`.
+
+Supported commands are `/new [title]`, `/threads`, `/use <thread-id>`,
+`/status`, and `/help`. They are parsed as control-plane requests, not as
+external-write shortcuts. Parsed thread commands set `dispatch_allowed: false`
+and require owner context, so they do not bypass the pending-approval outbound
+model.
+
 ## Unsupported Media
 
 Not implemented in the inspected code: attachment, voice, image, or file

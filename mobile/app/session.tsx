@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Text, TextInput, View } from "react-native";
+import { Text, TextInput, TouchableOpacity, View } from "react-native";
 
 import { MobileScreen } from "@/src/components/MobileScreen";
 import { SectionCard } from "@/src/components/SectionCard";
@@ -41,6 +41,7 @@ export default function SessionRoute() {
   const [pairingExpiresAt, setPairingExpiresAt] = useState(session?.pairingExpiresAt || "");
   const [status, setStatus] = useState<{ tone: "neutral" | "error" | "success"; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const canSave = Boolean(normalizeUrl(runtimeUrl) && runtimeKey.trim() && workspaceId.trim() && !saving);
   const incomingPairing = useMemo(
@@ -161,10 +162,10 @@ export default function SessionRoute() {
     <MobileScreen>
       <View style={{ gap: theme.spacing.sm }}>
         <Text style={{ color: theme.colors.text, fontSize: 28, fontFamily: "Fraunces_700Bold" }}>
-          Pair & Connect
+          Connect this phone
         </Text>
         <Text style={{ color: theme.colors.textMuted, fontSize: theme.typography.body, lineHeight: 22 }}>
-          Link this phone to the same workspace runtime Sage uses on desktop.
+          Link mobile to your Sage workspace. Most users only need the pairing code and connection key.
         </Text>
       </View>
 
@@ -208,7 +209,7 @@ export default function SessionRoute() {
 
       <SectionCard
         title="Pairing code"
-        subtitle="Paste the fallback code or open an empyralis://session link from desktop."
+        subtitle="Paste the code from desktop or open an empyralis://session link."
       >
         <Field
           label="Code"
@@ -225,17 +226,35 @@ export default function SessionRoute() {
         />
       </SectionCard>
 
-      <SectionCard title="Connection" subtitle="Pairing fills these fields; manual setup can fill them directly.">
-        <Field label="Runtime URL" value={runtimeUrl} onChangeText={setRuntimeUrl} placeholder="http://192.168.1.10:8000" />
-        <Field label="Runtime key" value={runtimeKey} onChangeText={setRuntimeKey} placeholder="Paste runtime key" secureTextEntry />
-        <Field label="Workspace ID" value={workspaceId} onChangeText={setWorkspaceId} placeholder="workspace id" />
-        <Field label="Platform URL" value={platformUrl} onChangeText={setPlatformUrl} placeholder="Optional" />
+      <SectionCard title="Connection key" subtitle="This authorizes the phone for your selected workspace.">
+        <Field label="Connection key" value={runtimeKey} onChangeText={setRuntimeKey} placeholder="Paste connection key" secureTextEntry />
         {pairingId ? (
           <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing.sm }}>
             <Ionicons name="link-outline" size={16} color={theme.colors.textMuted} />
             <Text style={{ flex: 1, color: theme.colors.textMuted, fontSize: theme.typography.caption, lineHeight: 18 }}>
               {pairingLabel || pairingId}{pairingExpiresAt ? ` expires ${new Date(pairingExpiresAt).toLocaleString()}` : ""}
             </Text>
+          </View>
+        ) : null}
+        <TouchableOpacity
+          activeOpacity={0.86}
+          onPress={() => setShowAdvanced((value) => !value)}
+          style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing.xs }}
+        >
+          <Ionicons
+            name={showAdvanced ? "chevron-up-outline" : "chevron-down-outline"}
+            size={16}
+            color={theme.colors.textMuted}
+          />
+          <Text style={{ color: theme.colors.textMuted, fontSize: theme.typography.caption, fontFamily: "DMSans_700Bold" }}>
+            Advanced connection details
+          </Text>
+        </TouchableOpacity>
+        {showAdvanced ? (
+          <View style={{ gap: theme.spacing.md }}>
+            <Field label="Runtime URL" value={runtimeUrl} onChangeText={setRuntimeUrl} placeholder="https://api.example.com" />
+            <Field label="Workspace ID" value={workspaceId} onChangeText={setWorkspaceId} placeholder="workspace id" />
+            <Field label="Platform URL" value={platformUrl} onChangeText={setPlatformUrl} placeholder="Optional" />
           </View>
         ) : null}
         <ActionButton

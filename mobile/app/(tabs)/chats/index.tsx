@@ -1,5 +1,5 @@
-import ChatScreen from "@/src/screens/ChatScreen";
+import HomeScreen from "@/src/screens/HomeScreen";
 
 export default function AgentTabRoute() {
-  return <ChatScreen sessionId="" />;
+  return <HomeScreen />;
 }

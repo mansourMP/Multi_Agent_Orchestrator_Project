@@ -1,169 +1,35 @@
 import React from "react";
-import { ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { Text, TouchableOpacity, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
 import { MobileScreen } from "@/src/components/MobileScreen";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
-import { mobileApi } from "@/src/lib/api";
-import { useMobileConnectors } from "@/src/lib/mobile-data";
+import { ActionButton } from "@/src/components/system/ActionButton";
+import type { MobileConnectionStatusItem } from "@/src/lib/api";
+import { useMobileConnectionStatus } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
-type VerifiedIntegration = {
-  id: string;
-  label: string;
-  description: string;
-};
+type TabKey = "channels" | "apps" | "tools";
 
-type VerificationState = {
-  status: "idle" | "verifying" | "verified" | "failed";
-  result?: Record<string, any>;
-  message?: string;
-};
-
-function buildVerifiedIntegrations(
-  connectors: { id?: string; connector?: string; label?: string }[],
-  verification: Record<string, VerificationState>,
-): VerifiedIntegration[] {
-  const rows: VerifiedIntegration[] = [];
-  const seen = new Set<string>();
-
-  const push = (item: VerifiedIntegration) => {
-    if (seen.has(item.id)) return;
-    seen.add(item.id);
-    rows.push(item);
-  };
-
-  for (const connector of connectors) {
-    const connectorId = String(connector.connector || connector.id || "").trim().toLowerCase();
-    if (!connectorId) continue;
-    const state = verification[connectorId];
-    if (state?.status !== "verified") continue;
-    const result = state.result || {};
-
-    if (connectorId === "google_workspace") {
-      push({
-        id: "gmail",
-        label: "Gmail",
-        description: "Read inboxes, draft replies, and keep up with important email.",
-      });
-      if (result.calendar_access === true) {
-        push({
-          id: "google_calendar",
-          label: "Google Calendar",
-          description: "See what is coming up and help plan around your schedule.",
-        });
-      }
-      continue;
-    }
-
-    if (connectorId === "telegram_bot") {
-      push({
-        id: "telegram",
-        label: "Telegram",
-        description: "Bring updates and quick coordination into message-based conversations.",
-      });
-      continue;
-    }
-
-    if (connectorId === "github") {
-      push({
-        id: "github",
-        label: "GitHub",
-        description: "Track pull requests, issues, and repository context in one place.",
-      });
-      continue;
-    }
-
-    if (connectorId === "slack") {
-      push({
-        id: "slack",
-        label: "Slack",
-        description: "Keep up with team conversations and important channel updates.",
-      });
-      continue;
-    }
-
-    if (connectorId === "notion") {
-      push({
-        id: "notion",
-        label: "Notion",
-        description: "Bring notes, docs, and planning pages into the product.",
-      });
-    }
-  }
-
-  const order = new Map(
-    ["gmail", "google_calendar", "telegram", "github", "slack", "notion"].map((id, index) => [id, index]),
-  );
-
-  return rows.sort((a, b) => {
-    const orderA = order.get(a.id) ?? Number.MAX_SAFE_INTEGER;
-    const orderB = order.get(b.id) ?? Number.MAX_SAFE_INTEGER;
-    if (orderA !== orderB) return orderA - orderB;
-    return a.label.localeCompare(b.label);
-  });
-}
+const TABS: { key: TabKey; label: string }[] = [
+  { key: "channels", label: "Channels" },
+  { key: "apps", label: "Apps" },
+  { key: "tools", label: "Tools" },
+];
 
 export default function IntegrationsScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { session } = useSessionState();
-  const connectorsQuery = useMobileConnectors();
-  const [verification, setVerification] = React.useState<Record<string, VerificationState>>({});
-
-  const installedConnectors = React.useMemo(
-    () =>
-      (connectorsQuery.data ?? []).map((item) => ({
-        id: String(item.id || "").trim(),
-        connector: String(item.connector || "").trim().toLowerCase(),
-        label: String(item.label || item.connector || item.id || "").trim(),
-      })),
-    [connectorsQuery.data],
+  const [tab, setTab] = React.useState<TabKey>("channels");
+  const statusQuery = useMobileConnectionStatus("sage");
+  const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
+  const items = React.useMemo(
+    () => (statusQuery.data ?? []).filter((item) => categoryFor(item) === tab),
+    [statusQuery.data, tab],
   );
-
-  React.useEffect(() => {
-    if (!session || !installedConnectors.length) {
-      setVerification({});
-      return;
-    }
-
-    let cancelled = false;
-    setVerification(
-      Object.fromEntries(installedConnectors.map((item) => [item.connector, { status: "verifying" as const }])),
-    );
-
-    void Promise.all(
-      installedConnectors.map(async (connector) => {
-        try {
-          const result = await mobileApi.testConnector(session, connector.id);
-          return [connector.connector, { status: "verified" as const, result }] as const;
-        } catch (error) {
-          return [
-            connector.connector,
-            {
-              status: "failed" as const,
-              message: error instanceof Error ? error.message : "Verification failed.",
-            },
-          ] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (cancelled) return;
-      setVerification(Object.fromEntries(entries));
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [installedConnectors, session]);
-
-  const verifiedItems = React.useMemo(
-    () => buildVerifiedIntegrations(installedConnectors, verification),
-    [installedConnectors, verification],
-  );
-
-  const verifiedCount = verifiedItems.length;
 
   return (
     <MobileScreen>
@@ -182,108 +48,238 @@ export default function IntegrationsScreen() {
             justifyContent: "center",
           }}
         >
-          <Text style={{ color: theme.colors.text, fontSize: 20, lineHeight: 22 }}>‹</Text>
+          <Ionicons name="chevron-back" size={20} color={theme.colors.text} />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <ScreenHeader title="Integrations" subtitle="Only live verified integrations appear here." />
+          <ScreenHeader title="Connections" subtitle="Channels, apps, and tools Sage can use." />
         </View>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
-        {verifiedItems.length ? (
+      <View
+        style={{
+          borderRadius: 24,
+          borderWidth: 1,
+          borderColor: theme.colors.border,
+          backgroundColor: theme.colors.card,
+          padding: 4,
+          flexDirection: "row",
+          gap: 4,
+        }}
+      >
+        {TABS.map((item) => {
+          const active = item.key === tab;
+          return (
+            <TouchableOpacity
+              key={item.key}
+              activeOpacity={0.86}
+              onPress={() => setTab(item.key)}
+              style={{
+                flex: 1,
+                minHeight: 44,
+                borderRadius: 20,
+                backgroundColor: active ? theme.colors.surface : "transparent",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Text
+                style={{
+                  color: active ? theme.colors.text : theme.colors.textSecondary,
+                  fontSize: 13,
+                  fontFamily: "DMSans_700Bold",
+                }}
+              >
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {!connected ? (
+        <View
+          style={{
+            borderRadius: 22,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            padding: 18,
+            gap: 12,
+          }}
+        >
+          <Text style={{ color: theme.colors.text, fontSize: 17, fontFamily: "DMSans_700Bold" }}>
+            Connect this phone first
+          </Text>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: 13.5, lineHeight: 20 }}>
+            Mobile reads the same connection truth as desktop after the workspace session is linked.
+          </Text>
+          <ActionButton
+            label="Connect phone"
+            icon="phone-portrait-outline"
+            variant="primary"
+            onPress={() => router.push("/session" as never)}
+          />
+        </View>
+      ) : null}
+
+      <View style={{ gap: 10 }}>
+        {items.length ? (
+          items.map((item) => (
+            <ConnectionRow key={item.id} item={item} onChooseComputer={() => router.push("/machines" as never)} />
+          ))
+        ) : (
           <View
             style={{
-              marginTop: 12,
               borderRadius: 22,
               borderWidth: 1,
               borderColor: theme.colors.border,
               backgroundColor: theme.colors.surface,
-              overflow: "hidden",
-            }}
-          >
-            {verifiedItems.map((item, index) => (
-              <View
-                key={item.id}
-                style={{
-                  paddingHorizontal: 16,
-                  paddingVertical: 16,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 14,
-                  borderBottomWidth: index < verifiedItems.length - 1 ? 1 : 0,
-                  borderBottomColor: theme.colors.border,
-                }}
-              >
-                <View
-                  style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 22,
-                    borderWidth: 1,
-                    borderColor: theme.colors.border,
-                    backgroundColor: "#F6F7F8",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Text style={{ fontSize: 13, fontWeight: "700", color: theme.colors.text }}>
-                    {item.label.slice(0, 1)}
-                  </Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-                    {item.label}
-                  </Text>
-                  <Text style={{ marginTop: 2, fontSize: 12.5, lineHeight: 18, color: theme.colors.textSecondary }}>
-                    {item.description}
-                  </Text>
-                </View>
-                <Text style={{ fontSize: 12.5, color: "#0F8A5F" }}>Live</Text>
-              </View>
-            ))}
-          </View>
-        ) : (
-          <View
-            style={{
-              marginTop: 12,
-              borderRadius: 18,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              backgroundColor: theme.colors.surface,
-              paddingHorizontal: 16,
-              paddingVertical: 16,
+              padding: 18,
               gap: 6,
             }}
           >
-            <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-              No live integrations in this beta workspace
+            <Text style={{ color: theme.colors.text, fontSize: 16, fontFamily: "DMSans_700Bold" }}>
+              {statusQuery.isLoading ? "Loading connections..." : "No items in this lane yet"}
             </Text>
-            <Text style={{ fontSize: 12.5, lineHeight: 19, color: theme.colors.textSecondary }}>
-              Only integrations that are installed here and pass live verification stay visible.
+            <Text style={{ color: theme.colors.textSecondary, fontSize: 13.5, lineHeight: 20 }}>
+              This screen only shows backend-certified connection records. Planned lanes stay out of the happy path.
             </Text>
           </View>
         )}
-
-        <View
-          style={{
-            marginTop: 16,
-            borderRadius: 18,
-            borderWidth: 1,
-            borderColor: theme.colors.border,
-            backgroundColor: "#F6F7F8",
-            paddingHorizontal: 16,
-            paddingVertical: 14,
-            gap: 4,
-          }}
-        >
-          <Text style={{ fontSize: 14, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-            {verifiedCount} integration{verifiedCount === 1 ? "" : "s"} live
-          </Text>
-          <Text style={{ fontSize: 12.5, lineHeight: 19, color: theme.colors.textSecondary }}>
-            Uninstalled or failed integrations are hidden from the beta product.
-          </Text>
-        </View>
-      </ScrollView>
+      </View>
     </MobileScreen>
   );
+}
+
+function ConnectionRow({
+  item,
+  onChooseComputer,
+}: {
+  item: MobileConnectionStatusItem;
+  onChooseComputer: () => void;
+}) {
+  const theme = useTheme();
+  const status = statusFor(item);
+  const icon = iconFor(item);
+  const title = item.display_name || item.label || item.id;
+  const description = item.description || fallbackDescription(item);
+  const canChooseComputer = item.next_action === "choose_agent_computer";
+
+  return (
+    <View
+      style={{
+        borderRadius: 22,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface,
+        padding: 16,
+        gap: 14,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
+        <View
+          style={{
+            width: 46,
+            height: 46,
+            borderRadius: 23,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.card,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name={icon} size={21} color={theme.colors.text} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: theme.colors.text, fontSize: 16, fontFamily: "DMSans_700Bold" }}>{title}</Text>
+          <Text style={{ marginTop: 3, color: theme.colors.textSecondary, fontSize: 13, lineHeight: 19 }}>
+            {description}
+          </Text>
+        </View>
+        <View
+          style={{
+            borderRadius: 999,
+            backgroundColor: status.background,
+            paddingHorizontal: 9,
+            paddingVertical: 5,
+          }}
+        >
+          <Text style={{ color: status.color, fontSize: 11.5, fontFamily: "DMSans_700Bold" }}>
+            {status.label}
+          </Text>
+        </View>
+      </View>
+
+      {canChooseComputer ? (
+        <ActionButton
+          label="Choose Agent Computer"
+          icon="desktop-outline"
+          variant="primary"
+          onPress={onChooseComputer}
+        />
+      ) : item.setup_available && item.launch_status !== "planned" ? (
+        <ActionButton
+          label="Finish setup on desktop"
+          icon="open-outline"
+          disabled
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function categoryFor(item: MobileConnectionStatusItem): TabKey {
+  const lane = String(item.lane || "").toLowerCase();
+  const id = String(item.id || "").toLowerCase();
+  if (lane.includes("channel") || id.includes("telegram") || id.includes("whatsapp") || id.includes("message")) {
+    return "channels";
+  }
+  if (lane.includes("mcp") || lane.includes("skill") || lane.includes("computer") || id.includes("browser")) {
+    return "tools";
+  }
+  return "apps";
+}
+
+function statusFor(item: MobileConnectionStatusItem) {
+  const launch = String(item.launch_status || "").toLowerCase();
+  const next = String(item.next_action || "").toLowerCase();
+  const health = String(item.health_status || "").toLowerCase();
+  if (launch === "planned") {
+    return { label: "Planned", color: "#7C6F63", background: "rgba(124,111,99,0.10)" };
+  }
+  if (item.connected || item.runtime_usable || health === "healthy" || health === "online") {
+    return { label: "Live", color: "#16845D", background: "rgba(22,132,93,0.12)" };
+  }
+  if (next === "choose_agent_computer") {
+    return { label: "Choose computer", color: "#8A5A00", background: "rgba(138,90,0,0.12)" };
+  }
+  if (next === "blocked_offline" || health === "offline") {
+    return { label: "Offline", color: "#A03D34", background: "rgba(160,61,52,0.12)" };
+  }
+  if (item.setup_available) {
+    return { label: "Ready", color: "#5A6470", background: "rgba(90,100,112,0.12)" };
+  }
+  return { label: "Locked", color: "#7C6F63", background: "rgba(124,111,99,0.10)" };
+}
+
+function iconFor(item: MobileConnectionStatusItem): keyof typeof Ionicons.glyphMap {
+  const id = String(item.id || "").toLowerCase();
+  if (id.includes("telegram")) return "paper-plane-outline";
+  if (id.includes("whatsapp")) return "chatbubble-ellipses-outline";
+  if (id.includes("gmail") || id.includes("email") || id.includes("mail")) return "mail-outline";
+  if (id.includes("calendar")) return "calendar-clear-outline";
+  if (id.includes("github")) return "logo-github";
+  if (id.includes("notion")) return "document-text-outline";
+  if (id.includes("slack")) return "logo-slack";
+  if (id.includes("discord")) return "logo-discord";
+  if (id.includes("computer") || id.includes("browser")) return "desktop-outline";
+  if (id.includes("mcp")) return "git-network-outline";
+  return "link-outline";
+}
+
+function fallbackDescription(item: MobileConnectionStatusItem) {
+  const lane = String(item.lane || "").replace(/_/g, " ");
+  const status = String(item.status_label || item.next_action || "").replace(/_/g, " ");
+  return [lane, status].filter(Boolean).join(" · ") || "Connection state comes from the platform catalog.";
 }

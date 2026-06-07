@@ -4,10 +4,10 @@
 
 Implementation started. The cloud catalog, Agent Computer personal-channel
 runtime contract, generic personal-channel surface projection, and local-bridge
-adapter contract now exist. Signal now has a real signal-cli JSON-RPC bridge
-wrapper behind the same contract. Signal, iMessage, and WeChat are
-`live_when_configured` Sage personal channels through the selected Agent
-Computer local-bridge contract.
+adapter contract now exist. Telegram personal and WhatsApp personal are the
+current launch-live Sage personal channels. Signal, iMessage, and WeChat are
+planned/private bridge contracts until their local runtimes are certified
+end-to-end.
 
 ## Core Rule
 
@@ -20,15 +20,17 @@ but those surfaces remain separate in UI and permissions.
 ## Main Agent / Sage Channels
 
 - Live: Telegram personal and WhatsApp personal through the selected Agent Computer
-- Live when configured: Signal, iMessage, and WeChat through Agent Computer local bridges
 - Live when configured: Slack and Discord bot channels when connected as business/team channels
 - Partial: Email as an inbound channel; use Google Workspace or SMTP app actions for mailbox work until durable channel ingress is complete
+- Planned/private: Signal, iMessage, and WeChat through Agent Computer local bridges
+- Planned official business lane: Apple Messages for Business through an approved MSP/human-handoff adapter
 - Planned: Web Chat, WhatsApp Business, Webhook, Teams, Matrix, Zalo, voice
 
 ## Signal Agent Computer Bridge
 
-The Signal bridge is an Agent Computer process that wraps a local signal-cli
-JSON-RPC daemon. It exposes the same local bridge contract used by the gateway:
+Signal remains a planned Agent Computer bridge until the signal-cli wrapper is
+certified with a real account, durable inbound replay, outbound approval, and
+health reporting. The intended local bridge shape is:
 
 - `GET /health`
 - `POST /messages`
@@ -49,15 +51,15 @@ Then point the gateway at the bridge URL printed by the process:
 export EMPYRALIS_SIGNAL_BRIDGE_URL=http://127.0.0.1:8901
 ```
 
-This proves the platform-owned bridge boundary without making Signal a Studio
-business/customer channel. It remains Sage-only and Agent Computer-only.
+This is the intended platform-owned bridge boundary without making Signal a
+Studio business/customer channel. It remains Sage-only and Agent Computer-only.
 
 ## Agent Computer Doctor
 
-The gateway doctor now treats personal messaging as a first-class Agent Computer
-readiness surface. It aggregates Telegram, WhatsApp, Signal, iMessage, and
-WeChat from the live Agent Computer manifest/health payload and keeps that
-readiness separate from Studio business channels.
+The gateway doctor treats personal messaging as a first-class Agent Computer
+readiness surface. It should aggregate Telegram and WhatsApp as live personal
+lanes, while Signal, iMessage, and WeChat remain planned/private bridge
+readiness items until their runtimes are certified.
 
 This is the OpenClaw-style direction we should copy: every local channel or node
 reports a manifest, health snapshot, issues, and connected state. The platform
@@ -127,11 +129,11 @@ and a generic dispatch layer but duplicate ~2,000 lines of code across:
 
 On the Python cloud side, `personal_channels_service.py` has structurally identical
 handlers for WhatsApp and Telegram (~80 lines each, duplicated across 5 function pairs).
-The generic `/personal-channels/gateways/{gateway_id}/channels` projection now
-reports live personal-channel manifests from Agent Computer. Telegram and
-WhatsApp have native local runtimes; Signal has a signal-cli local bridge
-wrapper; iMessage and WeChat use the generic local-bridge runtime
-(`EMPYRALIS_*_BRIDGE_URL`) until bridge-specific wrappers are proven.
+The generic `/personal-channels/gateways/{gateway_id}/channels` projection
+reports personal-channel manifests from Agent Computer. Telegram and WhatsApp
+have native local runtimes. Signal, iMessage, and WeChat must stay planned until
+bridge-specific runtime certification proves inbound durability, outbound
+approval, health reporting, and account lifecycle.
 
 Adding a third channel today requires touching ~11 files and writing ~300 lines of
 near-duplicate code.

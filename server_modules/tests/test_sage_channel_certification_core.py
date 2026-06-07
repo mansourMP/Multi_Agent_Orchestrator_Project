@@ -3,8 +3,8 @@
 Verifies that every core channel catalog card is honest about its launch
 status, that setup-readiness detection works, that inbound context wiring
 is correct, that outbound sends require approval, and that idempotency is
-enforced. Also confirms that Signal, iMessage, and WeChat are live only
-through concrete selected-Agent-Computer local bridge contracts.
+enforced. Also confirms that Signal, iMessage, and WeChat remain planned until
+concrete selected-Agent-Computer local bridge certification exists.
 """
 
 import asyncio

@@ -1,7 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { mobileApi } from "./api";
-import type { MobileBillingSummaryResponse, MobileCreditUsageResponse } from "./api";
+import type {
+  MobileBillingSummaryResponse,
+  MobileConnectionStatusItem,
+  MobileCreditUsageResponse,
+} from "./api";
 import { useSessionState } from "./session-context";
 import type {
   ActivitySummary,
@@ -143,6 +147,37 @@ function normalizeConnectors(payload: any): ConnectorSummary[] {
       })
       .filter((item) => item.id || item.connector),
     (item) => item.id || item.connector,
+  );
+}
+
+function normalizeConnectionStatus(payload: any): MobileConnectionStatusItem[] {
+  const candidates = Array.isArray(payload?.items) ? payload.items : [];
+  return dedupeBy(
+    candidates
+      .filter((item: unknown) => item && typeof item === "object")
+      .map((item: any): MobileConnectionStatusItem => ({
+        id: String(item.id ?? "").trim(),
+        display_name: String(item.display_name ?? item.label ?? item.id ?? "").trim(),
+        label: String(item.label ?? item.display_name ?? item.id ?? "").trim(),
+        description: typeof item.description === "string" ? item.description : undefined,
+        lane: typeof item.lane === "string" ? item.lane : undefined,
+        surface: typeof item.surface === "string" ? item.surface : undefined,
+        launch_status: typeof item.launch_status === "string" ? item.launch_status : undefined,
+        requires_gateway: typeof item.requires_gateway === "boolean" ? item.requires_gateway : undefined,
+        connected: typeof item.connected === "boolean" ? item.connected : undefined,
+        configured: typeof item.configured === "boolean" ? item.configured : undefined,
+        runtime_usable: typeof item.runtime_usable === "boolean" ? item.runtime_usable : undefined,
+        setup_available: typeof item.setup_available === "boolean" ? item.setup_available : undefined,
+        health_status: typeof item.health_status === "string" ? item.health_status : undefined,
+        next_action: typeof item.next_action === "string" ? item.next_action : undefined,
+        status_label: typeof item.status_label === "string" ? item.status_label : undefined,
+        selected_gateway_id: typeof item.selected_gateway_id === "string" ? item.selected_gateway_id : null,
+        gateway_count: Number.isFinite(Number(item.gateway_count)) ? Number(item.gateway_count) : undefined,
+        provider: typeof item.provider === "string" ? item.provider : null,
+        metadata: item.metadata && typeof item.metadata === "object" ? item.metadata : null,
+      }))
+      .filter((item: MobileConnectionStatusItem) => item.id),
+    (item) => item.id,
   );
 }
 
@@ -439,6 +474,24 @@ export function useMobileConnectors() {
     retry: false,
     refetchInterval: enabled ? 30_000 : false,
     queryFn: async () => normalizeConnectors(await mobileApi.getVaultConnectors(session!)),
+  });
+}
+
+export function useMobileConnectionStatus(surface = "sage") {
+  const { session } = useSessionState();
+  const enabled = Boolean(session?.runtimeUrl && session?.runtimeKey && session?.workspaceId);
+  return useQuery({
+    queryKey: ["mobile", "connection-status", surface, session?.runtimeUrl, session?.workspaceId],
+    enabled,
+    retry: false,
+    refetchInterval: enabled ? 30_000 : false,
+    queryFn: async () => {
+      try {
+        return normalizeConnectionStatus(await mobileApi.getConnectionStatus(session!, surface));
+      } catch {
+        return [] as MobileConnectionStatusItem[];
+      }
+    },
   });
 }
 

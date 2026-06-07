@@ -284,6 +284,34 @@ export type MobileCreditUsageResponse = {
   } | null;
 };
 
+export type MobileConnectionStatusItem = {
+  id: string;
+  display_name?: string;
+  label?: string;
+  description?: string;
+  lane?: string;
+  surface?: string;
+  launch_status?: string;
+  requires_gateway?: boolean;
+  connected?: boolean;
+  configured?: boolean;
+  runtime_usable?: boolean;
+  setup_available?: boolean;
+  health_status?: string;
+  next_action?: string;
+  status_label?: string;
+  selected_gateway_id?: string | null;
+  gateway_count?: number;
+  provider?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+export type MobileConnectionStatusResponse = {
+  items: MobileConnectionStatusItem[];
+  count?: number;
+  groups?: Record<string, unknown>;
+};
+
 export type SageMemoryCategory =
   | "work_context"
   | "personal_context"
@@ -1357,6 +1385,20 @@ export const mobileApi = {
     return buildMobileRuntimeClient(session).listConnectors(
       session.workspaceId ? { workspace_id: session.workspaceId } : {},
     ) as Promise<ConnectorListResponse>;
+  },
+  getConnectionStatus(session: MobileSession, surface = "sage") {
+    const workspaceId = requireSessionWorkspaceId(session, "load connection status");
+    const query = new URLSearchParams({
+      workspace_id: workspaceId,
+      surface,
+    });
+    return fetchSessionJson<MobileConnectionStatusResponse>(
+      session,
+      `/api/connections/status?${query.toString()}`,
+      {
+        fallback: "Could not load connection status.",
+      },
+    );
   },
   listGatewayRegistrations(session: MobileSession) {
     const workspaceId = requireSessionWorkspaceId(session, "load paired gateways");

@@ -222,10 +222,11 @@ Implemented current-state truth:
 - `empyralis-gateway` already exists in the repo
 - the cloud-backed pairing/session/WSS path already exists
 - the supervisor already runs behind the gateway control path
-- personal WhatsApp, Telegram, Signal, iMessage, and WeChat already terminate
-  at the selected Agent Computer gateway lane
-- Signal, iMessage, and WeChat are live when configured through the local-bridge
-  contract
+- personal WhatsApp and Telegram already terminate at the selected Agent
+  Computer gateway lane
+- Signal, iMessage, and WeChat are planned/private Agent Computer bridge
+  contracts until real-account setup, durable replay, outbound approval, health
+  reporting, and account lifecycle are certified
 - gateway-governed browser runtime surfaces already exist
 - hosted mini-app and governed marketplace layers already exist elsewhere in
   the platform and should not be mistaken for missing foundation work

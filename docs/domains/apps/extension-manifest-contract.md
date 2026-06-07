@@ -78,13 +78,13 @@ separate in product UI and permission prompts.
 
 ## Current Implementation Status
 
-- Signal, iMessage, and WeChat are modeled as `live_when_configured` Sage
-  personal messaging channels through selected Agent Computer local bridges.
-- Signal has a signal-cli JSON-RPC bridge wrapper. iMessage uses the
-  BlueBubbles local bridge wrapper. WeChat uses the generic local-bridge
-  contract until a more specific bridge wrapper is added; it requires a
-  user-owned private/local bridge URL and should not be represented as native
-  WeChat automation shipped by Empyralis.
+- Signal, iMessage, and WeChat are modeled as planned/private Sage personal
+  messaging bridge contracts through the selected Agent Computer.
+- Signal, iMessage, and WeChat must remain locked until bridge certification
+  proves real-account setup, durable inbound replay, outbound approval, health
+  reporting, and account lifecycle. WeChat requires a user-owned private/local
+  bridge URL and should not be represented as native WeChat automation shipped
+  by Empyralis.
 - GitHub, Linear, Notion, Dropbox, Amazon S3, SMTP / IMAP, WeChat Work,
   Instagram Business, Gmail, Calendar, and Drive belong to Connected Apps, not
   Personal Messaging.

@@ -27,6 +27,16 @@ class ChannelBlockingPolicyServiceTests(unittest.TestCase):
             )
         )
 
+    def test_thread_commands_include_thread_contract(self) -> None:
+        result = channel_blocking_policy_service.check_personal_channel_control_command(
+            text="/new morning brief",
+            sender_role="owner",
+        )
+
+        self.assertFalse(result["blocked"])
+        self.assertEqual(result["thread_command"]["action"], "start_new_thread")
+        self.assertEqual(result["thread_command"]["title"], "morning brief")
+
 
 if __name__ == "__main__":
     unittest.main()

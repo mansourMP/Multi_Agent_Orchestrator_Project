@@ -78,8 +78,6 @@ export default function TabsLayout() {
           const iconMap: Record<string, { active: keyof typeof Ionicons.glyphMap; inactive: keyof typeof Ionicons.glyphMap }> = {
             chats: { active: "sparkles", inactive: "sparkles-outline" },
             kin: { active: "person-circle", inactive: "person-circle-outline" },
-            "apps/index": { active: "apps", inactive: "apps-outline" },
-            "discover/index": { active: "compass", inactive: "compass-outline" },
             "inbox/index": { active: "pulse", inactive: "pulse-outline" },
             "settings/index": { active: "settings", inactive: "settings-outline" },
           };
@@ -91,8 +89,8 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="chats" options={{ title: "Sage" }} />
       <Tabs.Screen name="kin" options={{ title: "Agents", href: null }} />
-      <Tabs.Screen name="apps/index" options={{ title: "Apps" }} />
-      <Tabs.Screen name="discover/index" options={{ title: "Discover" }} />
+      <Tabs.Screen name="apps/index" options={{ title: "Apps", href: null }} />
+      <Tabs.Screen name="discover/index" options={{ title: "Discover", href: null }} />
       <Tabs.Screen name="inbox/index" options={{ title: "Activity" }} />
       <Tabs.Screen name="settings/index" options={{ title: "Settings" }} />
     </Tabs>

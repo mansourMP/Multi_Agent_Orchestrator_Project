@@ -47,6 +47,7 @@ catalog but not launch-ready in the inspected code because their
 ## Files
 
 - `personal-channels.md`
+- `messaging-thread-contract.md`
 - `business-channels.md`
 - `routing.md`
 - `security.md`

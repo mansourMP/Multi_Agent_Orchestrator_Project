@@ -40,9 +40,12 @@ These recipes run only when the required read tools are available. If Gmail,
 Calendar, or Drive access is missing, Sage returns `daily_operator_blocked`
 with concrete `blocked_tools`; it must not fabricate brief, email, calendar, or
 Drive context. Read tool outputs are sanitized and included in direct-tool
-result text so the operator can reason over real connector data. External writes
-and recurring recipe scheduling return `approvals_required` metadata instead of
-dispatching immediately.
+result text so the operator can reason over real connector data. Every recipe
+result also returns a structured `proof_log` with what Sage checked, what
+changed, what could not run, and why approval is needed. External writes and
+recurring recipe scheduling return `approvals_required` metadata instead of
+dispatching immediately, and the `proof_log.changes` list remains empty until a
+write is actually approved and dispatched.
 
 ## Task Routing Contract
 

@@ -173,6 +173,86 @@ def _summarize_output(value: Any, *, max_chars: int = 1800) -> str:
     return f"{text[:max_chars].rstrip()}\n...[truncated]"
 
 
+def _proof_checked_item(*, tool_name: str, status: str, summary: str = "", reason: str = "") -> Dict[str, Any]:
+    item: Dict[str, Any] = {
+        "tool": _coerce_text(tool_name),
+        "label": _coerce_text(tool_name).replace("google_workspace__", "").replace("_", " "),
+        "status": _coerce_text(status) or "unknown",
+    }
+    if summary:
+        item["summary"] = _summarize_output(summary, max_chars=900)
+    if reason:
+        item["reason"] = _summarize_output(reason, max_chars=500)
+    return item
+
+
+def _proof_blocked_items(blocked_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in blocked_tools:
+        if not isinstance(item, dict):
+            continue
+        tool_name = _coerce_text(item.get("name") or item.get("tool"))
+        if not tool_name:
+            continue
+        blocked: Dict[str, Any] = {
+            "tool": tool_name,
+            "status": _coerce_text(item.get("status")) or "blocked",
+            "reason": _summarize_output(item.get("reason"), max_chars=500),
+        }
+        connection = _coerce_text(item.get("connection"))
+        if connection:
+            blocked["connection"] = connection
+        out.append(blocked)
+    return out
+
+
+def _proof_approval_items(approvals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in approvals:
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "status": _coerce_text(item.get("status")) or "waiting",
+                "reason": _coerce_text(item.get("prompt")),
+                "labels": [
+                    _coerce_text(label)
+                    for label in (item.get("labels") or [])
+                    if _coerce_text(label)
+                ],
+                "actions": [
+                    _coerce_text(action)
+                    for action in (item.get("actions") or [])
+                    if _coerce_text(action)
+                ],
+                "scope": _coerce_text(item.get("scope")) or "once",
+            }
+        )
+    return out
+
+
+def _build_proof_log(
+    *,
+    recipe: Dict[str, Any],
+    status: str,
+    checked: List[Dict[str, Any]],
+    blocked_tools: List[Dict[str, Any]],
+    approvals: List[Dict[str, Any]],
+    changes: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    return {
+        "version": "daily_operator_proof_v1",
+        "recipe_id": recipe.get("id"),
+        "title": recipe.get("title"),
+        "status": status,
+        "checked": checked,
+        "changes": changes or [],
+        "blocked": _proof_blocked_items(blocked_tools),
+        "approvals": _proof_approval_items(approvals),
+        "verify_hint": "Read actions are summarized here; external writes require approval before dispatch.",
+    }
+
+
 def _approval_payloads(
     message: str,
     recipe: Dict[str, Any],
@@ -302,6 +382,21 @@ def run_daily_operator_recipe(
                 }
                 for item in missing
             ],
+            "proof_log": _build_proof_log(
+                recipe=recipe,
+                status="blocked",
+                checked=[],
+                blocked_tools=[
+                    {
+                        "name": item["tool"],
+                        "reason": item["reason"],
+                        "status": "blocked",
+                        "connection": item["connection"],
+                    }
+                    for item in missing
+                ],
+                approvals=[],
+            ),
             "approvals_required": [],
             "action_execution_mode": "daily_operator_blocked",
             "available_tools": tools,
@@ -325,6 +420,7 @@ def run_daily_operator_recipe(
     tool_calls: List[Dict[str, Any]] = []
     blocked_tools: List[Dict[str, Any]] = []
     outputs: List[str] = []
+    proof_checked: List[Dict[str, Any]] = []
     for index, plan in enumerate(recipe.get("read_tool_calls") or [], start=1):
         tool_name = _coerce_text(plan.get("name"))
         arguments = dict(plan.get("arguments") or {})
@@ -354,6 +450,7 @@ def run_daily_operator_recipe(
             )
             if summary:
                 outputs.append(f"{tool_name}: {summary}")
+            proof_checked.append(_proof_checked_item(tool_name=tool_name, status="completed", summary=summary))
             trace_events.append(
                 {
                     "event_type": "daily_operator.tool_completed",
@@ -380,6 +477,7 @@ def run_daily_operator_recipe(
                     "data": {"tool_name": tool_name, "reason": reason},
                 }
             )
+            proof_checked.append(_proof_checked_item(tool_name=tool_name, status="failed", reason=reason))
 
     approvals, approval_blocked, approval_tool_calls = _approval_payloads(message, recipe, tools)
     blocked_tools.extend(approval_blocked)
@@ -417,11 +515,20 @@ def run_daily_operator_recipe(
         "required_connections": sorted(recipe.get("required_tools", {}).keys()),
         "approval_required": bool(approvals),
     }
+    recipe_status = "approval_required" if approvals else ("partial" if blocked_tools else "completed")
+    proof_log = _build_proof_log(
+        recipe=recipe,
+        status=recipe_status,
+        checked=proof_checked,
+        blocked_tools=blocked_tools,
+        approvals=approvals,
+    )
     return {
         "message": "\n".join(message_lines).strip(),
         "tool_calls": tool_calls,
         "blocked_tools": blocked_tools,
         "approvals_required": approvals,
+        "proof_log": proof_log,
         "action_execution_mode": "approval_required" if approvals else ("partial_tools_executed" if blocked_tools else "daily_operator_executed"),
         "available_tools": tools,
         "route_decision": route,
@@ -436,7 +543,8 @@ def run_daily_operator_recipe(
         "daily_operator": {
             "recipe_id": recipe.get("id"),
             "title": recipe.get("title"),
-            "status": "approval_required" if approvals else ("partial" if blocked_tools else "completed"),
+            "status": recipe_status,
+            "proof_log_status": proof_log.get("status"),
             "tool_capability_count": len(tool_capabilities or []),
             "availability_state": availability.get("runtime_state") if isinstance(availability, dict) else None,
         },

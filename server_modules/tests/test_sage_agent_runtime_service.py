@@ -785,6 +785,15 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             "google_workspace__fetch_emails",
             "google_workspace__list_calendar_events",
         ])
+        self.assertEqual(result["proof_log"]["version"], "daily_operator_proof_v1")
+        self.assertEqual(result["proof_log"]["recipe_id"], "morning_brief")
+        self.assertEqual(result["proof_log"]["status"], "completed")
+        self.assertEqual([item["tool"] for item in result["proof_log"]["checked"]], [
+            "google_workspace__fetch_emails",
+            "google_workspace__list_calendar_events",
+        ])
+        self.assertEqual(result["proof_log"]["changes"], [])
+        self.assertEqual(result["proof_log"]["blocked"], [])
         self.assertIn("Proof log", result["message"])
         self.assertFalse(mock_generate.called)
         self.assertFalse(mock_stream.called)
@@ -829,6 +838,11 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         blocked_names = {item["name"] for item in result["blocked_tools"]}
         self.assertIn("google_workspace__list_calendar_events", blocked_names)
         self.assertIn("google_workspace__list_drive_files", blocked_names)
+        self.assertEqual(result["proof_log"]["status"], "blocked")
+        proof_blocked_names = {item["tool"] for item in result["proof_log"]["blocked"]}
+        self.assertIn("google_workspace__list_calendar_events", proof_blocked_names)
+        self.assertIn("google_workspace__list_drive_files", proof_blocked_names)
+        self.assertEqual(result["proof_log"]["checked"], [])
         self.assertFalse(mock_execute.called)
         self.assertFalse(mock_generate.called)
         self.assertFalse(mock_stream.called)
@@ -879,6 +893,11 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         self.assertEqual(result["tool_calls"][1]["name"], "google_workspace__draft_email")
         self.assertEqual(result["tool_calls"][1]["status"], "approval_required")
         self.assertEqual(result["approvals_required"][0]["actions"], ["draft_email"])
+        self.assertEqual(result["proof_log"]["status"], "approval_required")
+        self.assertEqual(result["proof_log"]["changes"], [])
+        self.assertEqual(result["proof_log"]["checked"][0]["tool"], "google_workspace__fetch_emails")
+        self.assertEqual(result["proof_log"]["approvals"][0]["actions"], ["draft_email"])
+        self.assertEqual(result["proof_log"]["approvals"][0]["status"], "waiting")
         self.assertFalse(mock_generate.called)
         self.assertFalse(mock_stream.called)
         self.assertEqual(mock_execute.call_count, 1)

@@ -1671,6 +1671,11 @@ async def handle_sage_chat(
             if isinstance(action_result.get("daily_operator"), dict)
             else None
         )
+        proof_log_payload = (
+            dict(action_result.get("proof_log"))
+            if isinstance(action_result.get("proof_log"), dict)
+            else None
+        )
         prompt_diagnostics = {
             **prompt_diagnostics,
             "action_loop_v3": True,
@@ -1681,6 +1686,7 @@ async def handle_sage_chat(
             "blocked_tool_count": len(blocked_tools),
             "approval_required_count": len(approvals_required),
             "daily_operator": daily_operator_payload,
+            "proof_log": proof_log_payload,
         }
 
         try:
@@ -1719,6 +1725,7 @@ async def handle_sage_chat(
                     "blocked_action_count": len(blocked_tools),
                     "action_execution_mode": action_execution_mode,
                     "route_decision": route_decision,
+                    "proof_log": proof_log_payload,
                     "prompt_diagnostics": prompt_diagnostics,
                     "channel_context": normalized_channel_context or None,
                 },
@@ -1747,6 +1754,7 @@ async def handle_sage_chat(
                     "approval_required_count": len(approvals_required),
                     "action_execution_mode": action_execution_mode,
                     "route_decision": route_decision,
+                    "proof_log": proof_log_payload,
                     "channel_context": normalized_channel_context or None,
                 },
                 idempotency_key=f"sage_chat:{trace_id}",
@@ -1766,6 +1774,7 @@ async def handle_sage_chat(
                     "blocked_tools": blocked_tools,
                     "approvals_required": approvals_required,
                     "route_decision": route_decision,
+                    "proof_log": proof_log_payload,
                     "error": None,
                 },
                 surface=normalized_surface,
@@ -1804,6 +1813,7 @@ async def handle_sage_chat(
             "action_loop_version": _coerce_text(action_result.get("action_loop_version")) or _SAGE_OPERATOR_LOOP_VERSION,
             "loop_budget": action_result.get("loop_budget") if isinstance(action_result.get("loop_budget"), dict) else {},
             "daily_operator": daily_operator_payload,
+            "proof_log": proof_log_payload,
         }
 
     try:

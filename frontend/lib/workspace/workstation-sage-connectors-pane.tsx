@@ -147,6 +147,11 @@ type GatewayDoctorPayload = Record<string, unknown> & {
   } | null;
 };
 
+type GatewaySelectionSummary = {
+  selectedGatewayMissing: boolean;
+  repairGateway: GatewayRegistrationRecord | null;
+};
+
 type PersonalChannelStateRecord = Record<string, unknown> & {
   status?: string | null;
   qr_code?: string | null;
@@ -922,6 +927,42 @@ function formatRelativeTimestamp(value: unknown): string {
   return future ? `In ${deltaDays} day${deltaDays === 1 ? '' : 's'}` : `${deltaDays} day${deltaDays === 1 ? '' : 's'} ago`;
 }
 
+function gatewayConnectionStatus(gateway: GatewayRegistrationRecord | null): string {
+  return readString(gateway?.connection_status || gateway?.status).toLowerCase();
+}
+
+function gatewayIsOnline(gateway: GatewayRegistrationRecord | null): boolean {
+  return gatewayConnectionStatus(gateway) === 'online';
+}
+
+function gatewayDisplayName(gateway: GatewayRegistrationRecord | null): string {
+  return readString(
+    gateway?.display_name
+      || gateway?.['name']
+      || gateway?.['hostname']
+      || gateway?.['device_name']
+      || gateway?.gateway_id,
+    'Agent Computer',
+  );
+}
+
+function describeGatewaySelectionRepair(summary: GatewaySelectionSummary): string {
+  if (!summary.selectedGatewayMissing) {
+    return '';
+  }
+  if (summary.repairGateway) {
+    return `${gatewayDisplayName(summary.repairGateway)} is online, but it is not selected for Sage yet.`;
+  }
+  return 'The selected Agent Computer is not available. Choose an online computer before using personal channels.';
+}
+
+function describeAvailableGatewayChoice(summary: GatewaySelectionSummary): string {
+  if (summary.repairGateway) {
+    return `${gatewayDisplayName(summary.repairGateway)} is online. Choose it as Sage Agent Computer before using personal channels.`;
+  }
+  return 'Choose Sage Agent Computer before using personal channels.';
+}
+
 function latestPersonalChannelActivity(gateway: GatewayRegistrationRecord | null, payload: PersonalChannelViewPayload | null): string {
   const state = payload?.state && typeof payload.state === 'object' ? payload.state : null;
   const recentMessages = Array.isArray(payload?.recent_messages) ? payload.recent_messages : [];
@@ -1470,7 +1511,11 @@ function describeConnectorCard(record: ConnectorCardRecord, connected = record.c
   return record.definition.setupHint;
 }
 
-function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor: GatewayDoctorPayload | null): {
+function summarizeGatewayState(
+  gateway: GatewayRegistrationRecord | null,
+  doctor: GatewayDoctorPayload | null,
+  selectionSummary: GatewaySelectionSummary,
+): {
   statusLabel: string;
   statusTone: PersonalCardStatusTone;
   detail: string;
@@ -1478,6 +1523,27 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
   nextStep: string | null;
 } {
   if (!gateway) {
+    if (selectionSummary.selectedGatewayMissing) {
+      const repairDetail = describeGatewaySelectionRepair(selectionSummary);
+      return {
+        statusLabel: 'Selection stale',
+        statusTone: 'warning',
+        detail: repairDetail || 'Selected Agent Computer is not available.',
+        summary: 'Sage keeps one explicit Agent Computer selection. The saved selection no longer matches an online registration.',
+        nextStep: selectionSummary.repairGateway
+          ? `Use ${gatewayDisplayName(selectionSummary.repairGateway)} or choose another Agent Computer in Hardware.`
+          : 'Choose an online Agent Computer in Hardware before using personal channels.',
+      };
+    }
+    if (selectionSummary.repairGateway) {
+      return {
+        statusLabel: 'Choose computer',
+        statusTone: 'warning',
+        detail: describeAvailableGatewayChoice(selectionSummary),
+        summary: 'Sage uses one explicit Agent Computer selection for hardware, browser, and personal channels.',
+        nextStep: `Use ${gatewayDisplayName(selectionSummary.repairGateway)} or choose another Agent Computer in Hardware.`,
+      };
+    }
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
@@ -1486,7 +1552,7 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
       nextStep: 'Open computer setup and connect the selected hardware.',
     };
   }
-  const connectionStatus = readString(gateway.connection_status || gateway.status).toLowerCase();
+  const connectionStatus = gatewayConnectionStatus(gateway);
   const doctorStatus = readString(doctor?.status).toLowerCase();
   if (connectionStatus === 'online' && ['healthy', 'pass', 'connected'].includes(doctorStatus)) {
     return {
@@ -1506,7 +1572,11 @@ function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor
   };
 }
 
-function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor: GatewayDoctorPayload | null): {
+function summarizeBrowserState(
+  gateway: GatewayRegistrationRecord | null,
+  doctor: GatewayDoctorPayload | null,
+  selectionSummary: GatewaySelectionSummary,
+): {
   statusLabel: string;
   statusTone: PersonalCardStatusTone;
   detail: string;
@@ -1514,6 +1584,26 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
   nextStep: string | null;
 } {
   if (!gateway) {
+    if (selectionSummary.selectedGatewayMissing) {
+      return {
+        statusLabel: 'Selection stale',
+        statusTone: 'warning',
+        detail: describeGatewaySelectionRepair(selectionSummary) || 'Selected Agent Computer is not available.',
+        summary: 'Browser sessions stay unavailable until Sage has a valid selected Agent Computer.',
+        nextStep: selectionSummary.repairGateway
+          ? `Use ${gatewayDisplayName(selectionSummary.repairGateway)} or choose another Agent Computer in Hardware.`
+          : 'Choose an online Agent Computer in Hardware first.',
+      };
+    }
+    if (selectionSummary.repairGateway) {
+      return {
+        statusLabel: 'Choose computer',
+        statusTone: 'warning',
+        detail: describeAvailableGatewayChoice(selectionSummary),
+        summary: 'Browser sessions stay unavailable until Sage has a selected Agent Computer.',
+        nextStep: `Use ${gatewayDisplayName(selectionSummary.repairGateway)} or choose another Agent Computer in Hardware.`,
+      };
+    }
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
@@ -1522,7 +1612,7 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
       nextStep: 'Connect a computer first.',
     };
   }
-  const gatewayOnline = readString(gateway.connection_status || gateway.status).toLowerCase() === 'online';
+  const gatewayOnline = gatewayIsOnline(gateway);
   if (!gatewayOnline) {
     return {
       statusLabel: 'Needs attention',
@@ -1610,7 +1700,11 @@ function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor
   };
 }
 
-function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | null, payload: PersonalChannelViewPayload | null): {
+function summarizeWhatsappPersonalState(
+  gateway: GatewayRegistrationRecord | null,
+  payload: PersonalChannelViewPayload | null,
+  selectionSummary: GatewaySelectionSummary,
+): {
   statusLabel: string;
   statusTone: PersonalCardStatusTone;
   detail: string;
@@ -1624,6 +1718,34 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
   const ownershipSummary = 'Stays on Agent Computer. This is your personal WhatsApp, not a business account.';
   const lastActivityLabel = latestPersonalChannelActivity(gateway, payload);
   if (!gateway) {
+    if (selectionSummary.selectedGatewayMissing) {
+      return {
+        statusLabel: 'Selection stale',
+        statusTone: 'warning',
+        detail: describeGatewaySelectionRepair(selectionSummary) || 'Selected Agent Computer is not available.',
+        summary: ownershipSummary,
+        nextStep: selectionSummary.repairGateway
+          ? `Use ${gatewayDisplayName(selectionSummary.repairGateway)} before pairing WhatsApp.`
+          : 'Choose an online Agent Computer before pairing WhatsApp.',
+        connectedIdentity: null,
+        lastActivityLabel,
+        ownershipLabel: ownershipSummary,
+        channel: 'whatsapp',
+      };
+    }
+    if (selectionSummary.repairGateway) {
+      return {
+        statusLabel: 'Choose computer',
+        statusTone: 'warning',
+        detail: describeAvailableGatewayChoice(selectionSummary),
+        summary: ownershipSummary,
+        nextStep: `Use ${gatewayDisplayName(selectionSummary.repairGateway)} before pairing WhatsApp.`,
+        connectedIdentity: null,
+        lastActivityLabel,
+        ownershipLabel: ownershipSummary,
+        channel: 'whatsapp',
+      };
+    }
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
@@ -1705,7 +1827,11 @@ function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | nul
   };
 }
 
-function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | null, payload: PersonalChannelViewPayload | null): {
+function summarizeTelegramPersonalState(
+  gateway: GatewayRegistrationRecord | null,
+  payload: PersonalChannelViewPayload | null,
+  selectionSummary: GatewaySelectionSummary,
+): {
   statusLabel: string;
   statusTone: PersonalCardStatusTone;
   detail: string;
@@ -1719,6 +1845,34 @@ function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | nul
   const ownershipSummary = 'Stays on Agent Computer. This is your personal Telegram.';
   const lastActivityLabel = latestPersonalChannelActivity(gateway, payload);
   if (!gateway) {
+    if (selectionSummary.selectedGatewayMissing) {
+      return {
+        statusLabel: 'Selection stale',
+        statusTone: 'warning',
+        detail: describeGatewaySelectionRepair(selectionSummary) || 'Selected Agent Computer is not available.',
+        summary: ownershipSummary,
+        nextStep: selectionSummary.repairGateway
+          ? `Use ${gatewayDisplayName(selectionSummary.repairGateway)} before pairing Telegram.`
+          : 'Choose an online Agent Computer before pairing Telegram.',
+        connectedIdentity: null,
+        lastActivityLabel,
+        ownershipLabel: ownershipSummary,
+        channel: 'telegram',
+      };
+    }
+    if (selectionSummary.repairGateway) {
+      return {
+        statusLabel: 'Choose computer',
+        statusTone: 'warning',
+        detail: describeAvailableGatewayChoice(selectionSummary),
+        summary: ownershipSummary,
+        nextStep: `Use ${gatewayDisplayName(selectionSummary.repairGateway)} before pairing Telegram.`,
+        connectedIdentity: null,
+        lastActivityLabel,
+        ownershipLabel: ownershipSummary,
+        channel: 'telegram',
+      };
+    }
     return {
       statusLabel: 'Connect computer',
       statusTone: 'warning',
@@ -1977,7 +2131,7 @@ export function WorkstationSageConnectorsPane({
         if (!gatewayId) {
           return {
             gateways: registrationItems,
-            selectedGatewayId: null,
+            selectedGatewayId: currentGatewayId || null,
             doctor: null,
             whatsappPersonal: null,
             telegramPersonal: null,
@@ -2016,13 +2170,36 @@ export function WorkstationSageConnectorsPane({
     ]);
 
     const catalogPayload = catalogResult.status === 'fulfilled' ? catalogResult.value : null;
-    const gatewayPayload = gatewayResult.status === 'fulfilled' ? gatewayResult.value : {
+    const normalizedConnectionStatusItems = connectionStatusResult.status === 'fulfilled' && Array.isArray(connectionStatusResult.value?.items)
+      ? connectionStatusResult.value.items.filter((item): item is ConnectionStatusItem => Boolean(item) && typeof item === 'object')
+      : [];
+    const agentComputerStatusItem = normalizedConnectionStatusItems.find((item) => readString(item.id) === 'agent_computer') ?? null;
+    const statusGatewayCandidate = asConnectorPayload(agentComputerStatusItem?.online_gateway_candidate);
+    const statusFallbackGatewayId = readString(statusGatewayCandidate?.gateway_id);
+    const statusFallbackSelectedGatewayId = readString(agentComputerStatusItem?.selected_gateway_id);
+    const statusFallbackGateway = statusFallbackGatewayId
+      ? {
+          ...statusGatewayCandidate,
+          gateway_id: statusFallbackGatewayId,
+          connection_status: readString(statusGatewayCandidate?.connection_status, 'online'),
+        } as GatewayRegistrationRecord
+      : null;
+    const gatewayResultPayload = gatewayResult.status === 'fulfilled' ? gatewayResult.value : {
       gateways: [],
       selectedGatewayId: null,
       doctor: null,
       whatsappPersonal: null,
       telegramPersonal: null,
       personalChannelSurfaces: [],
+    };
+    const gatewayPayload = {
+      ...gatewayResultPayload,
+      gateways: gatewayResultPayload.gateways.length > 0
+        ? gatewayResultPayload.gateways
+        : statusFallbackGateway
+          ? [statusFallbackGateway]
+          : [],
+      selectedGatewayId: gatewayResultPayload.selectedGatewayId ?? (statusFallbackSelectedGatewayId || null),
     };
     const normalizedProviders = normalizeProviderCatalog(catalogPayload);
     const nextState: SageConnectorsPaneCache = {
@@ -2039,9 +2216,7 @@ export function WorkstationSageConnectorsPane({
       hostedSageAi: normalizeHostedSageAi(catalogPayload),
       workspaceAiRoute: routeResult.status === 'fulfilled' ? routeResult.value : null,
       mcpServers: mcpResult.status === 'fulfilled' ? normalizeMcpServers(mcpResult.value) : [],
-      connectionStatusItems: connectionStatusResult.status === 'fulfilled' && Array.isArray(connectionStatusResult.value?.items)
-        ? connectionStatusResult.value.items.filter((item): item is ConnectionStatusItem => Boolean(item) && typeof item === 'object')
-        : [],
+      connectionStatusItems: normalizedConnectionStatusItems,
     };
     sageConnectorsPaneCache.set(cacheKey, nextState);
     setProviders(nextState.providers);
@@ -2291,7 +2466,16 @@ export function WorkstationSageConnectorsPane({
     () => gateways.find((gateway) => readString(gateway.gateway_id, '') === readString(selectedGatewayId, '')) ?? null,
     [gateways, selectedGatewayId],
   );
-  const selectedGatewayOnline = selectedGateway !== null && readString(selectedGateway.connection_status || selectedGateway.status).toLowerCase() === 'online';
+  const selectedGatewayOnline = gatewayIsOnline(selectedGateway);
+  const gatewaySelectionSummary = useMemo<GatewaySelectionSummary>(() => {
+    const selectedId = readString(selectedGatewayId);
+    const selectedGatewayMissing = Boolean(selectedId) && selectedGateway === null;
+    const onlineGateways = gateways.filter((gateway) => gatewayIsOnline(gateway));
+    return {
+      selectedGatewayMissing,
+      repairGateway: selectedGateway === null && onlineGateways.length === 1 ? onlineGateways[0] : null,
+    };
+  }, [gateways, selectedGateway, selectedGatewayId]);
   const showPersonalSurface = surface === 'sage';
   const personalChannelSurfaceByKey = useMemo(() => {
     const byKey = new Map<string, PersonalChannelSurfaceRecord>();
@@ -2305,10 +2489,10 @@ export function WorkstationSageConnectorsPane({
   }, [personalChannelSurfaces]);
 
   const personalCards = useMemo<PersonalCardRecord[]>(() => {
-    const device = summarizeGatewayState(selectedGateway, doctor);
-    const browser = summarizeBrowserState(selectedGateway, doctor);
-    const telegram = summarizeTelegramPersonalState(selectedGateway, telegramPersonal);
-    const whatsapp = summarizeWhatsappPersonalState(selectedGateway, whatsappPersonal);
+    const device = summarizeGatewayState(selectedGateway, doctor, gatewaySelectionSummary);
+    const browser = summarizeBrowserState(selectedGateway, doctor, gatewaySelectionSummary);
+    const telegram = summarizeTelegramPersonalState(selectedGateway, telegramPersonal, gatewaySelectionSummary);
+    const whatsapp = summarizeWhatsappPersonalState(selectedGateway, whatsappPersonal, gatewaySelectionSummary);
     const signal = summarizePlannedSignalPersonalState(personalChannelSurfaceByKey.get('signal_personal'));
     const imessage = summarizePlannedIMessagePersonalState(personalChannelSurfaceByKey.get('imessage_personal'));
     const wechat = summarizeWeChatPersonalState(personalChannelSurfaceByKey.get('wechat_personal'));
@@ -2321,7 +2505,7 @@ export function WorkstationSageConnectorsPane({
       { id: 'imessage_personal', label: 'iMessage', image: '/brand-assets/channels/imessage.svg?v=3', ...imessage },
       { id: 'wechat_personal', label: 'WeChat', image: '/brand-assets/channels/wechat.svg?v=3', ...wechat },
     ];
-  }, [doctor, personalChannelSurfaceByKey, selectedGateway, telegramPersonal, whatsappPersonal]);
+  }, [doctor, gatewaySelectionSummary, personalChannelSurfaceByKey, selectedGateway, telegramPersonal, whatsappPersonal]);
 
   const communicationPersonalCards = useMemo(
     () => personalCards.filter((card) =>
@@ -2494,6 +2678,9 @@ export function WorkstationSageConnectorsPane({
   function personalAsExternalCard(record: PersonalCardRecord): ExternalIntegrationCardRecord {
     const statusItem = connectionStatusForPersonal(record);
     const locked = connectionLaunchLocked(statusItem);
+    const bridgePersonalChannel = record.id === 'signal_personal'
+      || record.id === 'imessage_personal'
+      || record.id === 'wechat_personal';
     const pairLabel = record.channel
       ? record.statusTone === 'connected'
         ? `Manage ${record.label.replace(/^Your\s+/, '')}`
@@ -2503,9 +2690,9 @@ export function WorkstationSageConnectorsPane({
       id: record.id,
       label: record.label,
       image: record.image,
-      detail: locked ? readString(statusItem?.description, 'Requires Agent Computer bridge · Coming soon.') : record.detail,
-      statusLabel: locked ? connectionLockedLabel(statusItem, 'Coming soon') : record.statusLabel,
-      statusTone: locked ? 'neutral' : record.statusTone,
+      detail: locked && !bridgePersonalChannel ? readString(statusItem?.description, 'Requires Agent Computer bridge · Coming soon.') : record.detail,
+      statusLabel: locked && !bridgePersonalChannel ? connectionLockedLabel(statusItem, 'Coming soon') : record.statusLabel,
+      statusTone: locked && !bridgePersonalChannel ? 'neutral' : record.statusTone,
       summary: record.summary,
       nextStep: locked ? null : record.nextStep,
       actionLabel: locked ? null : pairLabel ?? (record.statusTone === 'connected' ? 'Review connection' : 'Set up'),
@@ -4097,6 +4284,29 @@ export function WorkstationSageConnectorsPane({
     const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
     const configOpen = channel ? true : false;
     const showClose = options.showClose !== false;
+    const repairGatewayId = readString(gatewaySelectionSummary.repairGateway?.gateway_id);
+    const repairGatewayName = gatewayDisplayName(gatewaySelectionSummary.repairGateway);
+    const channelComputerIssue = channel
+      ? gatewaySelectionSummary.selectedGatewayMissing
+        ? {
+            message: describeGatewaySelectionRepair(gatewaySelectionSummary),
+            actionLabel: repairGatewayId ? `Use ${repairGatewayName}` : 'Choose Agent Computer',
+            action: repairGatewayId ? 'repair' : 'hardware',
+          }
+        : !selectedGateway
+          ? {
+              message: describeAvailableGatewayChoice(gatewaySelectionSummary),
+              actionLabel: repairGatewayId ? `Use ${repairGatewayName}` : 'Choose Agent Computer',
+              action: repairGatewayId ? 'repair' : 'hardware',
+            }
+          : !selectedGatewayOnline
+            ? {
+                message: 'Selected Sage Agent Computer is offline. Reconnect it before setting up personal channels.',
+                actionLabel: 'Open Hardware',
+                action: 'hardware',
+              }
+            : null
+      : null;
     const showConnectorCredentialForm = record.actionTarget === 'connection'
       && !record.locked
       && !channel
@@ -4119,8 +4329,26 @@ export function WorkstationSageConnectorsPane({
         </div>
         <div className="sage-unified-expand__text">{record.summary}</div>
         {record.nextStep ? <div className="sage-unified-expand__text">{record.nextStep}</div> : null}
+        {channelComputerIssue ? <AppNotice tone="warning">{channelComputerIssue.message}</AppNotice> : null}
         {showConnectorCredentialForm ? renderConnectorCredentialForm(record) : null}
         <div className="sage-unified-expand__actions">
+          {channelComputerIssue ? (
+            <AppButton
+              type="button"
+              disabled={channelComputerIssue.action === 'repair' && busyCardId === `gateway:${repairGatewayId}`}
+              onClick={() => {
+                if (channelComputerIssue.action === 'repair' && repairGatewayId) {
+                  void chooseSageAgentComputer(repairGatewayId);
+                  return;
+                }
+                openGatewaySurface();
+              }}
+            >
+              {channelComputerIssue.action === 'repair' && busyCardId === `gateway:${repairGatewayId}`
+                ? 'Switching...'
+                : channelComputerIssue.actionLabel}
+            </AppButton>
+          ) : null}
           {record.actionLabel && !channel && !showConnectorCredentialForm ? (
             <AppButton
               type="button"
@@ -4169,7 +4397,7 @@ export function WorkstationSageConnectorsPane({
             </button>
           ) : null}
         </div>
-        {channel && channelDraft && configOpen ? renderPersonalChannelConfig(channel, channelDraft, channelBusy) : null}
+        {channel && channelDraft && configOpen && !channelComputerIssue ? renderPersonalChannelConfig(channel, channelDraft, channelBusy) : null}
       </MotionSlidePanel>
     );
   }

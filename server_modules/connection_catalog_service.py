@@ -688,7 +688,14 @@ def _selected_gateway(
     tenant_id: Optional[str] = None,
     user_id: Optional[str] = None,
     selected_gateway_id: Optional[str] = None,
-) -> tuple[Optional[Dict[str, Any]], list[Dict[str, Any]]]:
+) -> tuple[Optional[Dict[str, Any]], list[Dict[str, Any]], Optional[str]]:
+    requested = _text(selected_gateway_id)
+    if not requested and user_id:
+        selection = sage_agent_computer_selection_service.get_selection(
+            workspace_id=workspace_id,
+            user_id=user_id,
+        )
+        requested = _text((selection or {}).get("selected_gateway_id"))
     try:
         registrations = gateway_state_repository.list_workspace_gateway_registrations(
             workspace_id,
@@ -697,18 +704,11 @@ def _selected_gateway(
             include_revoked=False,
         )
     except Exception:
-        return None, []
+        return None, [], requested or None
     public_registrations = [gateway_registry_service.gateway_registration_public_payload(item) for item in registrations]
-    requested = _text(selected_gateway_id)
-    if not requested and user_id:
-        selection = sage_agent_computer_selection_service.get_selection(
-            workspace_id=workspace_id,
-            user_id=user_id,
-        )
-        requested = _text((selection or {}).get("selected_gateway_id"))
     if requested:
-        return next((item for item in public_registrations if _text(item.get("gateway_id")) == requested), None), public_registrations
-    return None, public_registrations
+        return next((item for item in public_registrations if _text(item.get("gateway_id")) == requested), None), public_registrations, requested
+    return None, public_registrations, None
 
 
 def _vault_connector_ids(workspace_id: str) -> set[str]:
@@ -812,14 +812,21 @@ def status_items(
     surface: Optional[str] = None,
     selected_gateway_id: Optional[str] = None,
 ) -> list[Dict[str, Any]]:
-    selected_gateway, registrations = _selected_gateway(
+    selected_gateway, registrations, requested_gateway_id = _selected_gateway(
         workspace_id=workspace_id,
         tenant_id=tenant_id,
         user_id=user_id,
         selected_gateway_id=selected_gateway_id,
     )
-    selected_gateway_id_value = _text((selected_gateway or {}).get("gateway_id")) or None
+    selected_gateway_id_value = _text((selected_gateway or {}).get("gateway_id")) or _text(requested_gateway_id) or None
+    selected_gateway_missing = bool(selected_gateway_id_value and not selected_gateway)
     selected_gateway_online = _token((selected_gateway or {}).get("connection_status")) == "online"
+    online_gateways = [
+        registration
+        for registration in registrations
+        if _token(registration.get("connection_status")) == "online"
+    ]
+    online_gateway_candidate = online_gateways[0] if len(online_gateways) == 1 else None
     vault_connector_ids = _vault_connector_ids(workspace_id)
     out: list[Dict[str, Any]] = []
     for item in catalog_items(surface=surface):
@@ -834,11 +841,11 @@ def status_items(
         if lane == LANE_AGENT_COMPUTER:
             configured = bool(registrations)
             connected = bool(selected_gateway_online)
-            health_status = "healthy" if connected else "offline" if configured else "missing"
+            health_status = "healthy" if connected else "gateway_missing" if selected_gateway_missing else "offline" if configured else "missing"
         elif lane == LANE_SAGE_PERSONAL_CHANNEL:
             configured = bool(selected_gateway_id_value)
-            health_status = "gateway_missing" if not selected_gateway_id_value else "not_configured"
-            if selected_gateway_id_value:
+            health_status = "gateway_missing" if not selected_gateway_id_value or selected_gateway_missing else "not_configured"
+            if selected_gateway_id_value and not selected_gateway_missing:
                 state = _personal_channel_state(item_id, selected_gateway_id_value)
                 if state is None:
                     state = _selected_gateway_local_bridge_state(item_id, selected_gateway)
@@ -878,7 +885,10 @@ def status_items(
             "test_status": test_status,
             "health_status": health_status,
             "selected_gateway_id": selected_gateway_id_value,
+            "selected_gateway_missing": selected_gateway_missing,
             "gateway_count": len(registrations),
+            "online_gateway_count": len(online_gateways),
+            "online_gateway_candidate": deepcopy(online_gateway_candidate) if online_gateway_candidate else None,
             "last_error": last_error,
             "next_action": next_action,
         })

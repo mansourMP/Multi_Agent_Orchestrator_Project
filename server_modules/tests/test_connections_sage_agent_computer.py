@@ -476,6 +476,49 @@ def test_connection_status_does_not_auto_select_gateway(monkeypatch):
     assert item["gateway_count"] == 2
     assert item["selected_gateway_id"] is None
     assert item["connected"] is False
+    assert item["online_gateway_count"] == 2
+    assert item["online_gateway_candidate"] is None
+
+
+def test_connection_status_exposes_single_online_candidate_without_auto_selecting(monkeypatch):
+    registrations = [
+        {"gateway_id": "gateway-1", "workspace_id": "ws-1", "connection_status": "online", "display_name": "Mac"},
+    ]
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda workspace_id, tenant_id=None, user_id=None, include_revoked=False: registrations,
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_registry_service,
+        "gateway_registration_public_payload",
+        lambda registration: dict(registration),
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.sage_agent_computer_selection_service,
+        "get_selection",
+        lambda workspace_id, user_id: None,
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.runtime_common,
+        "list_vault_connectors",
+        lambda workspace_id: [],
+    )
+
+    payload = connection_catalog_service.list_status_payload(
+        workspace_id="ws-1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        surface="agent_computer",
+    )
+
+    item = payload["items"][0]
+    assert item["id"] == "agent_computer"
+    assert item["selected_gateway_id"] is None
+    assert item["selected_gateway_missing"] is False
+    assert item["connected"] is False
+    assert item["online_gateway_count"] == 1
+    assert item["online_gateway_candidate"]["gateway_id"] == "gateway-1"
 
 
 def test_connection_status_uses_persisted_selected_gateway(monkeypatch):
@@ -515,6 +558,47 @@ def test_connection_status_uses_persisted_selected_gateway(monkeypatch):
     assert item["id"] == "agent_computer"
     assert item["selected_gateway_id"] == "gateway-2"
     assert item["connected"] is True
+
+
+def test_connection_status_preserves_stale_selected_gateway_id(monkeypatch):
+    registrations = [
+        {"gateway_id": "gateway-live", "workspace_id": "ws-1", "connection_status": "online", "display_name": "Mac"},
+    ]
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda workspace_id, tenant_id=None, user_id=None, include_revoked=False: registrations,
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_registry_service,
+        "gateway_registration_public_payload",
+        lambda registration: dict(registration),
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.sage_agent_computer_selection_service,
+        "get_selection",
+        lambda workspace_id, user_id: {"selected_gateway_id": "gateway-stale"},
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.runtime_common,
+        "list_vault_connectors",
+        lambda workspace_id: [],
+    )
+
+    payload = connection_catalog_service.list_status_payload(
+        workspace_id="ws-1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        surface="agent_computer",
+    )
+
+    item = payload["items"][0]
+    assert item["id"] == "agent_computer"
+    assert item["selected_gateway_id"] == "gateway-stale"
+    assert item["selected_gateway_missing"] is True
+    assert item["health_status"] == "gateway_missing"
+    assert item["connected"] is False
+    assert item["online_gateway_candidate"]["gateway_id"] == "gateway-live"
 
 
 def test_personal_channel_status_does_not_advertise_dead_generic_test(monkeypatch):

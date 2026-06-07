@@ -216,7 +216,6 @@ from server_modules.routes_runs import router as runs_router
 from server_modules.routes_studio import router as studio_router
 from server_modules.routes_workspaces import router as workspaces_router
 from server_modules.routes_workflows import router as workflows_router
-from server_modules.routes_doctor import router as doctor_router
 
 
 docs_url = "/docs" if os.getenv("ENV") == "development" else None
@@ -333,7 +332,6 @@ app.include_router(discovery_router, prefix="/api")
 app.include_router(marketplace_router, prefix="/api")
 app.include_router(pilot_router, prefix="/api")
 app.include_router(studio_router, prefix="/api")
-app.include_router(doctor_router, prefix="/api")
 app.include_router(auth_router, prefix="/api/v1")
 
 

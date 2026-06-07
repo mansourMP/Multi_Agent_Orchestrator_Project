@@ -149,6 +149,7 @@ type GatewayDoctorPayload = Record<string, unknown> & {
 
 type GatewaySelectionSummary = {
   selectedGatewayMissing: boolean;
+  selectedGatewayOffline: boolean;
   repairGateway: GatewayRegistrationRecord | null;
 };
 
@@ -932,7 +933,15 @@ function gatewayConnectionStatus(gateway: GatewayRegistrationRecord | null): str
 }
 
 function gatewayIsOnline(gateway: GatewayRegistrationRecord | null): boolean {
-  return gatewayConnectionStatus(gateway) === 'online';
+  const connectionStatus = gatewayConnectionStatus(gateway);
+  if (['online', 'connected'].includes(connectionStatus)) {
+    return true;
+  }
+  const heartbeatFresh = gateway?.['heartbeat_fresh'];
+  if (heartbeatFresh === true && readString(gateway?.status).toLowerCase() === 'active') {
+    return true;
+  }
+  return false;
 }
 
 function gatewayDisplayName(gateway: GatewayRegistrationRecord | null): string {
@@ -948,6 +957,9 @@ function gatewayDisplayName(gateway: GatewayRegistrationRecord | null): string {
 
 function describeGatewaySelectionRepair(summary: GatewaySelectionSummary): string {
   if (!summary.selectedGatewayMissing) {
+    if (summary.selectedGatewayOffline && summary.repairGateway) {
+      return `Sage is selected to an offline Agent Computer, but ${gatewayDisplayName(summary.repairGateway)} is online.`;
+    }
     return '';
   }
   if (summary.repairGateway) {
@@ -2471,9 +2483,11 @@ export function WorkstationSageConnectorsPane({
     const selectedId = readString(selectedGatewayId);
     const selectedGatewayMissing = Boolean(selectedId) && selectedGateway === null;
     const onlineGateways = gateways.filter((gateway) => gatewayIsOnline(gateway));
+    const selectedGatewayOffline = Boolean(selectedGateway) && !gatewayIsOnline(selectedGateway);
     return {
       selectedGatewayMissing,
-      repairGateway: selectedGateway === null && onlineGateways.length === 1 ? onlineGateways[0] : null,
+      selectedGatewayOffline,
+      repairGateway: (selectedGateway === null || selectedGatewayOffline) && onlineGateways.length === 1 ? onlineGateways[0] : null,
     };
   }, [gateways, selectedGateway, selectedGatewayId]);
   const showPersonalSurface = surface === 'sage';
@@ -3998,12 +4012,30 @@ export function WorkstationSageConnectorsPane({
       );
     }
     if (!selectedGatewayOnline) {
+      const repairGatewayId = readString(gatewaySelectionSummary.repairGateway?.gateway_id);
+      const repairGatewayName = gatewayDisplayName(gatewaySelectionSummary.repairGateway);
       return (
         <div className="sage-unified-expand__config app-stack-3">
-          <AppNotice tone="warning">Selected Sage Agent Computer is offline. Reconnect it in Hardware before pairing personal channels.</AppNotice>
+          <AppNotice tone="warning">
+            {repairGatewayId
+              ? `Sage is selected to an offline Agent Computer. ${repairGatewayName} is online; use it before pairing personal channels.`
+              : 'Selected Sage Agent Computer is offline. Reconnect it in Hardware before pairing personal channels.'}
+          </AppNotice>
           <div className="sage-unified-expand__actions">
-            <AppButton type="button" onClick={openGatewaySurface}>
-              Open Hardware
+            <AppButton
+              type="button"
+              disabled={Boolean(repairGatewayId) && busyCardId === `gateway:${repairGatewayId}`}
+              onClick={() => {
+                if (repairGatewayId) {
+                  void chooseSageAgentComputer(repairGatewayId);
+                  return;
+                }
+                openGatewaySurface();
+              }}
+            >
+              {repairGatewayId
+                ? busyCardId === `gateway:${repairGatewayId}` ? 'Choosing...' : `Use ${repairGatewayName}`
+                : 'Open Hardware'}
             </AppButton>
           </div>
         </div>
@@ -4301,9 +4333,11 @@ export function WorkstationSageConnectorsPane({
             }
           : !selectedGatewayOnline
             ? {
-                message: 'Selected Sage Agent Computer is offline. Reconnect it before setting up personal channels.',
-                actionLabel: 'Open Hardware',
-                action: 'hardware',
+                message: repairGatewayId
+                  ? `Sage is selected to an offline Agent Computer. ${repairGatewayName} is online; use it before setting up personal channels.`
+                  : 'Selected Sage Agent Computer is offline. Reconnect it before setting up personal channels.',
+                actionLabel: repairGatewayId ? `Use ${repairGatewayName}` : 'Open Hardware',
+                action: repairGatewayId ? 'repair' : 'hardware',
               }
             : null
       : null;

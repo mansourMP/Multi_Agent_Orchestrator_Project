@@ -42,6 +42,17 @@ def _token(value: Any) -> str:
     return _text(value).lower()
 
 
+def _gateway_is_online(gateway: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(gateway, dict):
+        return False
+    connection_status = _token(gateway.get("connection_status"))
+    if connection_status in {"online", "connected"}:
+        return True
+    if bool(gateway.get("heartbeat_fresh")) and _token(gateway.get("status")) == "active":
+        return True
+    return False
+
+
 def _media(*, text: bool = False, images: bool = False, files: bool = False, voice: bool = False) -> Dict[str, bool]:
     return {
         "text": bool(text),
@@ -820,11 +831,11 @@ def status_items(
     )
     selected_gateway_id_value = _text((selected_gateway or {}).get("gateway_id")) or _text(requested_gateway_id) or None
     selected_gateway_missing = bool(selected_gateway_id_value and not selected_gateway)
-    selected_gateway_online = _token((selected_gateway or {}).get("connection_status")) == "online"
+    selected_gateway_online = _gateway_is_online(selected_gateway)
     online_gateways = [
         registration
         for registration in registrations
-        if _token(registration.get("connection_status")) == "online"
+        if _gateway_is_online(registration)
     ]
     online_gateway_candidate = online_gateways[0] if len(online_gateways) == 1 else None
     vault_connector_ids = _vault_connector_ids(workspace_id)

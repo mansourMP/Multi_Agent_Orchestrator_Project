@@ -560,6 +560,54 @@ def test_connection_status_uses_persisted_selected_gateway(monkeypatch):
     assert item["connected"] is True
 
 
+def test_connection_status_treats_fresh_active_gateway_as_online(monkeypatch):
+    registrations = [
+        {
+            "gateway_id": "gateway-live",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "connection_status": None,
+            "heartbeat_fresh": True,
+            "display_name": "Mac",
+        },
+    ]
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda workspace_id, tenant_id=None, user_id=None, include_revoked=False: registrations,
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_registry_service,
+        "gateway_registration_public_payload",
+        lambda registration: dict(registration),
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.sage_agent_computer_selection_service,
+        "get_selection",
+        lambda workspace_id, user_id: {"selected_gateway_id": "gateway-live"},
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.runtime_common,
+        "list_vault_connectors",
+        lambda workspace_id: [],
+    )
+
+    payload = connection_catalog_service.list_status_payload(
+        workspace_id="ws-1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        surface="agent_computer",
+    )
+
+    item = payload["items"][0]
+    assert item["id"] == "agent_computer"
+    assert item["selected_gateway_id"] == "gateway-live"
+    assert item["connected"] is True
+    assert item["health_status"] == "healthy"
+    assert item["online_gateway_count"] == 1
+    assert item["online_gateway_candidate"]["gateway_id"] == "gateway-live"
+
+
 def test_connection_status_preserves_stale_selected_gateway_id(monkeypatch):
     registrations = [
         {"gateway_id": "gateway-live", "workspace_id": "ws-1", "connection_status": "online", "display_name": "Mac"},

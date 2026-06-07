@@ -1,8 +1,7 @@
 # Gateway Architecture
 
-Last verified: 2026-04-22
-Phase: 0
-Status: Frozen architecture with implemented baseline runtime
+Last verified: 2026-06-07
+Status: Live architecture with implemented baseline runtime
 
 This document freezes the canonical local-gateway architecture for Empyralis.
 It exists to stop future local-runtime work from drifting back into the old
@@ -234,16 +233,14 @@ Implemented current-state truth:
 This document still matters because it freezes the product boundary the live
 implementation must continue to respect.
 
-## Phase Boundary And Non-Goals
+## Historical Phase Boundary
 
-Phase 0 does **not** do any of the following:
-- implement the gateway
-- implement personal WhatsApp or Telegram
-- redesign Studio/business connector behavior
-- redesign mini-apps or marketplace
-- change frontend UI
+The original Phase 0 version of this document did **not** implement the gateway,
+personal WhatsApp/Telegram, frontend UI, or marketplace/app changes. That is no
+longer the current repo truth.
 
-Those items were later-phase implementation goals. The live repo now contains
-baseline implementations for several of them, including selected Agent Computer
-personal channels and local-bridge personal runtimes, but this document still
-only freezes the architecture.
+The live repo now contains baseline implementations for the selected Agent
+Computer gateway, personal WhatsApp/Telegram, local-bridge personal runtimes,
+browser/governed local capability routing, and the related UI surfaces. This
+document now serves as the boundary contract those live implementations must
+continue to respect.

@@ -1,8 +1,7 @@
 # Gateway Protocol
 
-Last verified: 2026-04-22
-Phase: 0
-Status: Frozen protocol contract with implemented baseline message families
+Last verified: 2026-06-07
+Status: Live protocol contract with implemented baseline message families
 
 This document freezes the cloud `<->` local gateway control-plane protocol for
 `empyralis-gateway`.
@@ -201,7 +200,7 @@ Current repo truth:
 - inbound personal-channel delivery flows through `channel.inbound`
 - outbound personal-channel delivery flows through `channel.outbound`
 
-## Reserved Future Families
+## Reserved Extension Families
 
 These still remain reserved so later phases reuse one protocol instead of
 inventing side channels:
@@ -211,8 +210,8 @@ inventing side channels:
 - `checkpoint.update`
 - `channel.outbound.result`
 
-Phase 0 freezes the names and purpose.
-Later phases can extend payloads further without changing the transport model.
+These names remain reserved so future payload work extends the same transport
+model instead of inventing side channels.
 
 ## Session And Pairing Model
 
@@ -263,4 +262,4 @@ This protocol document does **not** define:
 - marketplace distribution messages
 - internal supervisor HTTP schema
 
-Those are later-phase contracts.
+Those are separate contracts owned by their runtime surfaces.

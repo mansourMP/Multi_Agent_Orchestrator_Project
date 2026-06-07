@@ -20,6 +20,7 @@ class AgentMemoryNotebookTests(unittest.TestCase):
         workspace_context.write_workspace_context_file(
             "MEMORY.md",
             "# Curated Memory\n\n- favorite_food: sushi\n- timezone: Asia/Shanghai\n",
+            workspace_id="default",
         )
         notes_dir = memory_service._workspace_memory_store._memory_notebook_dir("default")
         (notes_dir / "2026-04-02.md").write_text(

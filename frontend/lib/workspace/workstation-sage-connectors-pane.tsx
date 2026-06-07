@@ -317,7 +317,20 @@ type ExternalIntegrationCardRecord = {
   locked?: boolean;
 };
 
-type IntegrationWorkbenchCategoryId = 'ai_runtime' | 'channels' | 'apps' | 'skills' | 'plugins';
+type IntegrationWorkbenchCategoryId = 'ai_runtime' | 'apps' | 'recipes' | 'channels' | 'advanced';
+
+type SageRecipeRouteMode = 'chat_only' | 'connector_api' | 'cloud_browser' | 'cloud_computer' | 'gateway_required';
+
+type SageRecipeDefinition = {
+  id: string;
+  title: string;
+  summary: string;
+  requiredConnections: string[];
+  preferredRoute: SageRecipeRouteMode;
+  approvalProfile: 'read_only' | 'external_write' | 'computer_action';
+  scheduleSupported: boolean;
+  starterPrompt: string;
+};
 
 type IntegrationWorkbenchGroup = {
   id: IntegrationWorkbenchCategoryId;
@@ -346,6 +359,69 @@ type SageConnectorsPaneCache = {
 };
 
 const sageConnectorsPaneCache = new Map<string, SageConnectorsPaneCache>();
+
+const SAGE_RECIPE_DEFINITIONS: SageRecipeDefinition[] = [
+  {
+    id: 'morning_brief',
+    title: 'Morning brief',
+    summary: 'Summarize today, open loops, priority messages, calendar, and tasks.',
+    requiredConnections: ['Gmail', 'Calendar'],
+    preferredRoute: 'connector_api',
+    approvalProfile: 'read_only',
+    scheduleSupported: true,
+    starterPrompt: 'Create my morning brief from connected email, calendar, tasks, and memory. Show priorities, risks, and follow-ups.',
+  },
+  {
+    id: 'email_triage',
+    title: 'Email triage',
+    summary: 'Find important email, group by urgency, and draft next actions.',
+    requiredConnections: ['Gmail'],
+    preferredRoute: 'connector_api',
+    approvalProfile: 'external_write',
+    scheduleSupported: true,
+    starterPrompt: 'Triage my important email. Summarize what matters, identify urgent replies, and draft responses for approval.',
+  },
+  {
+    id: 'meeting_prep',
+    title: 'Meeting prep',
+    summary: 'Prepare notes, context, agenda, and questions before meetings.',
+    requiredConnections: ['Calendar', 'Drive'],
+    preferredRoute: 'connector_api',
+    approvalProfile: 'read_only',
+    scheduleSupported: true,
+    starterPrompt: 'Prepare me for my next meeting using calendar, connected files, and memory. Give me context, agenda, questions, and risks.',
+  },
+  {
+    id: 'follow_up',
+    title: 'Follow up',
+    summary: 'Track people to follow up with and draft short messages.',
+    requiredConnections: ['Gmail', 'Calendar'],
+    preferredRoute: 'connector_api',
+    approvalProfile: 'external_write',
+    scheduleSupported: true,
+    starterPrompt: 'Find people I should follow up with and draft concise messages for approval.',
+  },
+  {
+    id: 'weekly_report',
+    title: 'Weekly report',
+    summary: 'Turn recent work into a clean weekly summary with next steps.',
+    requiredConnections: ['Gmail', 'Calendar', 'Drive'],
+    preferredRoute: 'connector_api',
+    approvalProfile: 'read_only',
+    scheduleSupported: true,
+    starterPrompt: 'Create a weekly report from connected work context. Include progress, blockers, decisions, and next steps.',
+  },
+  {
+    id: 'monitor_website',
+    title: 'Monitor website',
+    summary: 'Check a public site or dashboard and summarize meaningful changes.',
+    requiredConnections: ['Website'],
+    preferredRoute: 'cloud_browser',
+    approvalProfile: 'read_only',
+    scheduleSupported: true,
+    starterPrompt: 'Monitor this website for meaningful changes and summarize what changed. Ask me for the URL if needed.',
+  },
+];
 
 const DEFAULT_HOSTED_SAGE_AI: HostedSageAiSnapshot = {
   allowed: false,
@@ -642,6 +718,12 @@ function normalizeIntegrationCategoryId(value: unknown): IntegrationWorkbenchCat
     case 'connectors':
     case 'connections':
     case 'connection':
+      return 'apps';
+    case 'recipes':
+    case 'recipe':
+    case 'workflows':
+    case 'automations':
+      return 'recipes';
     case 'channels':
     case 'personal_messaging':
     case 'apps_messaging':
@@ -653,11 +735,12 @@ function normalizeIntegrationCategoryId(value: unknown): IntegrationWorkbenchCat
     case 'skills':
     case 'knowledge':
     case 'sources':
-      return 'skills';
+      return 'advanced';
     case 'plugins':
     case 'extensions':
     case 'developer':
-      return 'plugins';
+    case 'advanced':
+      return 'advanced';
     default:
       return null;
   }
@@ -1049,11 +1132,19 @@ function providerNeedsGateway(providerId: string): boolean {
   return providerId === 'ollama' || providerId === 'openai-codex';
 }
 
+function providerIsPersonalSubscriptionTransport(record: ProviderCardRecord | null): boolean {
+  if (!record) {
+    return false;
+  }
+  const providerId = readString(record.provider.id).toLowerCase();
+  return providerId === 'openai-codex';
+}
+
 function providerIsLocalOnly(record: ProviderCardRecord | null): boolean {
   if (!record) {
     return false;
   }
-  return record.provider.localOnly === true || providerNeedsGateway(record.provider.id);
+  return record.provider.localOnly === true || record.provider.id === 'ollama';
 }
 
 function providerPickerStatusLabel(record: ProviderCardRecord, localCompanionOnline: boolean): string {
@@ -1123,8 +1214,11 @@ function providerPathLabel(record: ProviderCardRecord): string {
   if (providerId === 'ollama') {
     return 'Agent Computer';
   }
-  if (providerId === 'openai-codex' || activeSource.includes('cli') || defaultAuthMode === 'oauth_token') {
-    return 'Agent Computer';
+  if (providerId === 'openai-codex') {
+    return 'Personal subscription';
+  }
+  if (activeSource.includes('cli') || defaultAuthMode === 'local_cli' || defaultAuthMode === 'local_subscription') {
+    return 'Agent Computer session';
   }
   if (providerId === 'ollama_cloud') {
     return 'Ollama Cloud';
@@ -1294,7 +1388,10 @@ function providerRouteBadge(record: ProviderCardRecord): { label: string; tone: 
   const defaultAuthMode = readString(record.provider.defaultAuthMode).toLowerCase();
   const activeSource = readString(record.provider.activeSource).toLowerCase();
 
-  if (providerId === 'openai-codex' || defaultAuthMode === 'oauth_token' || activeSource.includes('cli')) {
+  if (providerId === 'openai-codex') {
+    return { label: 'Personal subscription', tone: 'neutral' };
+  }
+  if (defaultAuthMode === 'local_cli' || defaultAuthMode === 'local_subscription' || activeSource.includes('cli')) {
     return { label: 'The selected Agent Computer', tone: 'local' };
   }
   if (providerId === 'ollama' || record.provider.localOnly || credentialPlane === 'local_runtime') {
@@ -1831,7 +1928,7 @@ export function WorkstationSageConnectorsPane({
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => (
     normalizeIntegrationCategoryId(searchParams.get('section') ?? searchParams.get('connection'))
-    ?? (showProviders ? 'ai_runtime' : 'channels')
+    ?? (showProviders ? 'apps' : 'channels')
   ));
   const [providerDraftKeys, setProviderDraftKeys] = useState<Record<string, string>>({});
   const [providerDraftBaseUrls, setProviderDraftBaseUrls] = useState<Record<string, string>>({});
@@ -2156,7 +2253,7 @@ export function WorkstationSageConnectorsPane({
         ? `${backupProviderCard.label} stays available as ${providerPathLabel(backupProviderCard)}.`
         : 'Connect Gemini, OpenAI, or Anthropic when you want a backup hosted provider.',
       configLabel: 'Provider configuration',
-      configDetail: 'Connect another AI account or use a model on Agent Computer.',
+      configDetail: 'Connect another AI account. Computer models stay optional for local/private work.',
     };
   }, [activeProviderCard, backupProviderCard, explicitSelectedProfile, hostedProviderCard, hostedSageAi, localCompanionOnline]);
 
@@ -2164,8 +2261,9 @@ export function WorkstationSageConnectorsPane({
     const visibleProviderCards = providerCards.filter((record) =>
       record.provider.sageVisible && !record.provider.hidden,
     );
-    const byokItems = visibleProviderCards.filter((record) => !providerIsLocalOnly(record));
-    const localItems = visibleProviderCards.filter(providerIsLocalOnly);
+    const routeProviderCards = visibleProviderCards.filter((record) => !providerIsPersonalSubscriptionTransport(record));
+    const byokItems = routeProviderCards.filter((record) => !providerIsLocalOnly(record));
+    const localItems = routeProviderCards.filter(providerIsLocalOnly);
     const sections: ProviderPickerSection[] = [];
     if (hostedProviderCard || hostedSageAi.planAllowsHostedAi) {
       sections.push({
@@ -2182,7 +2280,7 @@ export function WorkstationSageConnectorsPane({
     if (localItems.length > 0) {
       sections.push({
         id: 'local',
-        label: 'Agent Computer',
+        label: 'Computer models',
         items: localItems,
       });
     }
@@ -2245,14 +2343,14 @@ export function WorkstationSageConnectorsPane({
         id: 'computer_gateway',
         label: 'Agent Computer',
         detail: device.statusTone === 'connected'
-          ? 'Connected. Hardware connection and governed local execution are online for this workspace.'
-          : 'Connect once. The selected Agent Computer becomes the hardware runtime for Empyralis.',
+          ? 'Connected. Local/private computer work is available when Sage needs it.'
+          : 'Connect only when Sage needs local files, apps, browser sessions, terminal, or private hardware.',
         summary: device.statusTone === 'connected'
-          ? 'Agent Computer is the hardware layer for Empyralis. Policy and approvals stay in the platform.'
-          : 'No capability picking here. Connect a computer and Empyralis gets the hardware runtime by default.',
+          ? 'Agent Computer is the optional edge runtime for local/private work. Cloud apps and hosted browser stay first.'
+          : 'Sage works without installation. Agent Computer adds real-machine control for local/private requests.',
         nextStep: device.statusTone === 'connected'
-          ? 'Connected. Manage or revoke it only when needed.'
-          : 'Connect the selected Agent Computer to bring hardware connection and governed local execution online.',
+          ? 'Connected. Manage or revoke it only when local/private work changes.'
+          : 'Connect the selected Agent Computer when cloud apps or hosted browser cannot do the task.',
         actionLabel: device.statusTone === 'connected' ? 'Manage computer' : 'Connect a computer',
         actionTarget: 'computer',
       });
@@ -2476,25 +2574,17 @@ export function WorkstationSageConnectorsPane({
   const includeAiRuntimeGroup = normalizeIntegrationCategoryId(searchParams.get('section') ?? searchParams.get('connection')) === 'ai_runtime';
 
   const integrationGroups = useMemo<IntegrationWorkbenchGroup[]>(() => {
-    const groups: IntegrationWorkbenchGroup[] = [];
     if (includeAiRuntimeGroup) {
-      groups.push({
-        id: 'ai_runtime',
+      return [{
+        id: 'ai_runtime' as const,
         label: 'AI setup',
         description: 'Default AI route, provider accounts, and model source.',
         detail: aiProviderSummary.activeLabel,
         countLabel: activeProviderCard ? 'Active' : 'Setup',
         statusTone: activeProviderCard ? 'connected' : 'warning',
-      });
+      }];
     }
-    groups.push({
-      id: 'channels',
-      label: 'Channels',
-      description: 'Personal and messaging channels Sage can use.',
-      detail: 'Telegram, WhatsApp, Signal, iMessage, WeChat, email, Slack, and Discord.',
-      countLabel: `${channelCards.length}`,
-      statusTone: channelCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
-    });
+    const groups: IntegrationWorkbenchGroup[] = [];
     groups.push({
       id: 'apps',
       label: 'Apps',
@@ -2504,20 +2594,28 @@ export function WorkstationSageConnectorsPane({
       statusTone: appCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
     });
     groups.push({
-      id: 'skills',
-      label: 'Skills',
-      description: 'Reusable Sage capabilities and media tools.',
-      detail: 'Files, browser, screenshot, shell, memory, Whisper, TTS, image, and video.',
-      countLabel: showTools ? 'Ready' : 'Setup',
-      statusTone: showTools ? 'connected' : 'neutral',
+      id: 'recipes',
+      label: 'Recipes',
+      description: 'Repeatable work Sage can start from connected apps.',
+      detail: 'Morning brief, Email triage, Meeting prep, Follow up, Weekly report.',
+      countLabel: `${SAGE_RECIPE_DEFINITIONS.length}`,
+      statusTone: 'neutral',
     });
     groups.push({
-      id: 'plugins',
-      label: 'MCP',
-      description: 'Technical tool servers and plugin packages.',
-      detail: 'MCP servers, plugin packages, custom APIs, and webhooks.',
-      countLabel: `${mcpServers.length}`,
-      statusTone: mcpServers.some((server) => server.enabled !== false) ? 'connected' : 'neutral',
+      id: 'channels',
+      label: 'Channels',
+      description: 'Messaging channels Sage can use.',
+      detail: 'Telegram, WhatsApp, Signal, iMessage, WeChat, email, Slack, and Discord.',
+      countLabel: `${channelCards.length}`,
+      statusTone: channelCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
+    });
+    groups.push({
+      id: 'advanced',
+      label: 'Advanced',
+      description: 'MCP, skills, AI setup, and technical controls.',
+      detail: 'MCP, skills, provider routes, custom APIs, and webhooks.',
+      countLabel: showTools || mcpServers.length > 0 ? 'Ready' : 'Setup',
+      statusTone: showTools || mcpServers.some((server) => server.enabled !== false) ? 'connected' : 'neutral',
     });
     return groups;
   }, [
@@ -3262,6 +3360,11 @@ export function WorkstationSageConnectorsPane({
     router.push(routeManifest.routeIndex.channels?.href ?? `/w/${encodeURIComponent(workspaceId)}/channels`);
   }
 
+  function openRecipeInSage(recipe: SageRecipeDefinition) {
+    const chatHref = routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`;
+    router.push(`${chatHref}?prompt=${encodeURIComponent(recipe.starterPrompt)}`);
+  }
+
   function openBillingSettings() {
     router.push(`/w/${encodeURIComponent(workspaceId)}/settings?section=billing`);
   }
@@ -3323,6 +3426,8 @@ export function WorkstationSageConnectorsPane({
         return 'Ollama Cloud API';
       case 'ollama':
         return 'Ollama on Agent Computer';
+      case 'openai-codex':
+        return 'OpenAI Codex transport';
       default:
         return `${record.label} API`;
     }
@@ -4601,13 +4706,13 @@ export function WorkstationSageConnectorsPane({
       <section className="sage-unified-section sage-agent-computer">
         <p className="sage-unified-section__label">Agent Computer</p>
         <p className="sage-unified-section__description">
-          Sage runs in Cloud by default. Connect a computer when this workspace needs Empyralis to run on selected hardware.
+          Sage runs in cloud first. Use Agent Computer only for local files, apps, browser sessions, personal channels, terminal, or private hardware.
         </p>
         <div className="sage-agent-computer__panel">
           <div className="sage-agent-computer__setting">
             <div className="sage-agent-computer__copy">
-              <strong>Computer</strong>
-              <span>This computer, a Mac mini, or a server uses the same connection setup. Keep the choice inside setup.</span>
+              <strong>Computer Assistant</strong>
+              <span>Connect this computer, a Mac mini, or a server only for local/private work Sage cannot do through connected apps.</span>
             </div>
             <span className={joinClassNames('sage-unified-card__status', statusClass)}>
               {connected ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
@@ -4620,7 +4725,7 @@ export function WorkstationSageConnectorsPane({
           <div className="sage-agent-computer__setting">
             <div className="sage-agent-computer__copy">
               <strong>Personal messaging doctor</strong>
-              <span>{readString(personalDoctor?.summary, 'Telegram, WhatsApp, Signal, iMessage, and WeChat readiness appears here after Agent Computer reports health.')}</span>
+              <span>{readString(personalDoctor?.summary, 'Telegram, WhatsApp, Signal, iMessage, and WeChat readiness appears here when those personal channels run on Agent Computer.')}</span>
             </div>
             <span className={joinClassNames('sage-unified-card__status', personalStatusClassName({ statusTone: personalDoctorTone }))}>
               {personalDoctorTone === 'connected' ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
@@ -4630,7 +4735,7 @@ export function WorkstationSageConnectorsPane({
               type="button"
               tone="secondary"
               onClick={() => {
-                setSelectedIntegrationId('plugins');
+                setSelectedIntegrationId('advanced');
                 setExpandedCardId(null);
               }}
             >
@@ -4647,8 +4752,7 @@ export function WorkstationSageConnectorsPane({
           <details className="sage-agent-computer__advanced">
             <summary>Remote and SSH options</summary>
             <p>
-              Cloud Computer and Server/VPS stay behind the computer setup flow, like Codex keeps SSH and remote device
-              details inside Connections settings.
+              Cloud Computer and Server/VPS stay behind the computer setup flow. Normal app work should use connected apps or hosted browser first.
             </p>
             <AppButton type="button" tone="ghost" onClick={() => openWorkspaceRoute('gateway')}>
               Open computer settings
@@ -4721,6 +4825,52 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function renderRecipesOverview() {
+    const routeLabel: Record<SageRecipeRouteMode, string> = {
+      chat_only: 'Basic Assistant',
+      connector_api: 'Connected Assistant',
+      cloud_browser: 'Cloud Browser',
+      cloud_computer: 'Cloud Computer',
+      gateway_required: 'Computer Assistant',
+    };
+    const approvalLabel: Record<SageRecipeDefinition['approvalProfile'], string> = {
+      read_only: 'Read only',
+      external_write: 'Approval before sending or changing',
+      computer_action: 'Computer approval',
+    };
+    return (
+      <section className="sage-unified-section">
+        <p className="sage-unified-section__label">Recipes</p>
+        <p className="sage-unified-section__description">
+          Start repeatable work from a clean prompt. Sage will use connected apps first and ask for setup when something is missing.
+        </p>
+        <div className="sage-unified-grid sage-unified-grid--3">
+          {SAGE_RECIPE_DEFINITIONS.map((recipe) => (
+            <article key={recipe.id} className="sage-integrations-detail-card">
+              <strong>{recipe.title}</strong>
+              <span>{recipe.summary}</span>
+              <div className="sage-unified-card__tags" aria-label={`${recipe.title} requirements`}>
+                <span>{routeLabel[recipe.preferredRoute]}</span>
+                <span>{approvalLabel[recipe.approvalProfile]}</span>
+                {recipe.scheduleSupported ? <span>Can be scheduled</span> : null}
+              </div>
+              <span>Needs: {recipe.requiredConnections.join(', ')}</span>
+              <AppButton
+                type="button"
+                tone="secondary"
+                onClick={() => {
+                  openRecipeInSage(recipe);
+                }}
+              >
+                Start recipe
+              </AppButton>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
   function renderSkillsOverview() {
     const readySkills = [
       { name: 'Files', detail: 'Read and write workspace files with approval.', status: 'Ready' },
@@ -4761,6 +4911,15 @@ export function WorkstationSageConnectorsPane({
 
   function renderPluginsOverview() {
     return renderDeveloperOverview();
+  }
+
+  function renderAdvancedOverview() {
+    return (
+      <>
+        {renderSkillsOverview()}
+        {renderPluginsOverview()}
+      </>
+    );
   }
 
   function renderDeveloperOverview() {
@@ -4988,11 +5147,11 @@ export function WorkstationSageConnectorsPane({
           return renderChannelsOverview();
         case 'apps':
           return renderAppsOverview();
-        case 'skills':
-          return renderSkillsOverview();
-        case 'plugins':
+        case 'recipes':
+          return renderRecipesOverview();
+        case 'advanced':
         default:
-          return renderPluginsOverview();
+          return renderAdvancedOverview();
       }
     })();
     return (
@@ -5011,7 +5170,9 @@ export function WorkstationSageConnectorsPane({
         className="sage-integrations-workbench sage-integrations-workbench--single"
         sidebar={null}
       >
-        <div className="sage-integrations-topnav">{renderIntegrationSidebar()}</div>
+        {integrationGroups.length > 1 ? (
+          <div className="sage-integrations-topnav">{renderIntegrationSidebar()}</div>
+        ) : null}
         {renderSelectedIntegrationDetail()}
       </WorkstationSplitWorkbench>
 

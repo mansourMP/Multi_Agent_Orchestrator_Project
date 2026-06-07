@@ -21,6 +21,27 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _MEMORY_DIR = _REPO_ROOT / ".orion-stack" / "memory"
 _SEMANTIC_MODEL: Any = None
 _NOTEBOOK_DIRNAME = "memory"
+_MEMORY_PROJECTION_SECTION_LIMIT = 8
+_MEMORY_PROJECTION_TOTAL_LIMIT = 40
+_FACT_KEY_RE = re.compile(r"^fact-[a-f0-9]+$", re.IGNORECASE)
+_QUOTED_TERM_RE = re.compile(r"""['"]([^'"]{2,80})['"]""")
+_NEGATIVE_PREFERENCE_RE = re.compile(
+    r"\b(dislike|dislikes|do not want|does not want|remove|removed|avoid|never|stop using)\b",
+    re.IGNORECASE,
+)
+_POSITIVE_PREFERENCE_RE = re.compile(
+    r"\b(prefer|prefers|like|likes|want|wants|use|uses|comfortable with|communicate|communicates|communication style)\b",
+    re.IGNORECASE,
+)
+_MEMORY_PROJECTION_SECTIONS = (
+    ("preferences", "Preferences"),
+    ("rules", "Operating Rules"),
+    ("project", "Project Context"),
+    ("environment", "Agent Computer & Environment"),
+    ("decisions", "Decisions & Boundaries"),
+    ("workflow", "Workflow"),
+    ("other", "Other Facts"),
+)
 
 
 def _normalize_workspace_token(workspace_id: str) -> str:
@@ -31,6 +52,139 @@ def _normalize_workspace_token(workspace_id: str) -> str:
 def _normalize_agent_token(agent_install_id: str) -> str:
     token = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(agent_install_id or "").strip()).strip("-")
     return token or "install"
+
+
+def _humanize_memory_key(key: str) -> str:
+    normalized = str(key or "").strip()
+    if not normalized:
+        return ""
+    return re.sub(r"[_-]+", " ", normalized).strip().title()
+
+
+def _normalize_projection_text(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip()).lower()
+    normalized = re.sub(r"\bfact-[a-f0-9]+\b", "", normalized)
+    return normalized.strip(" -:;,.")
+
+
+def _memory_projection_entry_text(entry: Dict[str, Any]) -> str:
+    key = str(entry.get("key") or "").strip()
+    content = re.sub(r"\s+", " ", str(entry.get("content") or "").strip())
+    if not content:
+        return ""
+    if _FACT_KEY_RE.fullmatch(key):
+        return content
+    label = _humanize_memory_key(key)
+    if label:
+        return f"{label}: {content}"
+    return content
+
+
+def _memory_projection_preference_terms(text: str) -> set[str]:
+    normalized = str(text or "")
+    if not (_NEGATIVE_PREFERENCE_RE.search(normalized) or _POSITIVE_PREFERENCE_RE.search(normalized)):
+        return set()
+    return {
+        re.sub(r"\s+", " ", term.strip().lower())
+        for term in _QUOTED_TERM_RE.findall(normalized)
+        if term and term.strip()
+    }
+
+
+def _memory_projection_section(key: str, text: str) -> str:
+    combined = f"{key} {text}".lower()
+    if any(term in combined for term in ("prefer", "dislike", "tone", "style", "language", "slang")):
+        return "preferences"
+    if any(term in combined for term in ("rule", "constraint", "avoid", "never", "approval", "boundary", "policy")):
+        return "rules"
+    if any(term in combined for term in ("project", "workspace", "repo", "platform", "launch", "empyralis", "sage", "openclaw")):
+        return "project"
+    if any(
+        term in combined
+        for term in (
+            "agent computer",
+            "computer",
+            "gateway",
+            "hardware",
+            "mac",
+            "macos",
+            "apple",
+            "homebrew",
+            "zsh",
+            "screen resolution",
+        )
+    ):
+        return "environment"
+    if any(term in combined for term in ("decision", "decided", "default", "architecture", "branch")):
+        return "decisions"
+    if any(term in combined for term in ("workflow", "procedure", "process", "test", "inspect", "check")):
+        return "workflow"
+    return "other"
+
+
+def _is_importable_memory_key(key: str) -> bool:
+    normalized = str(key or "").strip()
+    if not normalized or " " in normalized:
+        return False
+    return bool(re.fullmatch(r"[a-z0-9][a-z0-9_.:-]{1,127}", normalized))
+
+
+def _build_memory_md_projection(entries: List[Dict[str, Any]]) -> str:
+    lines = [
+        "# Curated Memory",
+        "",
+        "> Generated projection. Structured memory records are the source of truth; use memory search for raw facts and older details.",
+        "",
+    ]
+    if not entries:
+        lines.append("No structured memory facts saved yet.")
+        return "\n".join(lines).strip() + "\n"
+
+    buckets: Dict[str, List[str]] = {section_id: [] for section_id, _ in _MEMORY_PROJECTION_SECTIONS}
+    seen_texts: set[str] = set()
+    seen_preference_terms: set[str] = set()
+    included = 0
+    hidden = 0
+    suppressed = 0
+
+    for entry in entries:
+        key = str(entry.get("key") or "").strip()
+        text = _memory_projection_entry_text(entry)
+        normalized = _normalize_projection_text(text)
+        if not normalized:
+            continue
+        preference_terms = _memory_projection_preference_terms(text)
+        if normalized in seen_texts or (preference_terms and preference_terms & seen_preference_terms):
+            suppressed += 1
+            continue
+        section_id = _memory_projection_section(key, text)
+        if included >= _MEMORY_PROJECTION_TOTAL_LIMIT or len(buckets[section_id]) >= _MEMORY_PROJECTION_SECTION_LIMIT:
+            hidden += 1
+            continue
+        buckets[section_id].append(text)
+        seen_texts.add(normalized)
+        seen_preference_terms.update(preference_terms)
+        included += 1
+
+    for section_id, section_label in _MEMORY_PROJECTION_SECTIONS:
+        items = buckets.get(section_id) or []
+        if not items:
+            continue
+        lines.append(f"## {section_label}")
+        lines.append("")
+        lines.extend(f"- {item}" for item in items)
+        lines.append("")
+
+    if hidden or suppressed:
+        lines.append("## More")
+        lines.append("")
+        if hidden:
+            lines.append(f"- {hidden} additional structured facts are available through memory search.")
+        if suppressed:
+            lines.append(f"- {suppressed} duplicate or superseded facts are hidden from this projection.")
+        lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
 
 
 def _memory_db_path(workspace_id: str, agent_install_id: str | None = None) -> Path:
@@ -400,14 +554,11 @@ def _update_memory_md(workspace_id: str, content: str, agent_install_id: str | N
 
 def _export_memory_md(workspace_id: str, agent_install_id: str | None = None) -> Dict[str, Any]:
     entries = _list_memory_entries(workspace_id, agent_install_id=agent_install_id)
-    lines = ["# Curated Memory", ""]
-    for entry in entries:
-        key = str(entry.get("key") or "").strip()
-        content = str(entry.get("content") or "").strip()
-        if not key or not content:
-            continue
-        lines.append(f"- {key}: {content}")
-    return _update_memory_md(workspace_id, "\n".join(lines).strip() + "\n", agent_install_id=agent_install_id)
+    return _update_memory_md(
+        workspace_id,
+        _build_memory_md_projection(entries),
+        agent_install_id=agent_install_id,
+    )
 
 
 def _import_memory_md(workspace_id: str, agent_install_id: str | None = None) -> Dict[str, Any]:
@@ -420,7 +571,7 @@ def _import_memory_md(workspace_id: str, agent_install_id: str | None = None) ->
         key, content = line[2:].split(":", 1)
         normalized_key = str(key or "").strip()
         normalized_content = str(content or "").strip()
-        if not normalized_key or not normalized_content:
+        if not _is_importable_memory_key(normalized_key) or not normalized_content:
             continue
         _save_memory(
             workspace_id,

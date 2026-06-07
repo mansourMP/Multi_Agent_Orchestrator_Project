@@ -17,10 +17,8 @@ import {
   LockKeyhole,
   Mail,
   MessageCircle,
-  PlugZap,
   Server,
   ShieldCheck,
-  Smartphone,
   SquareTerminal,
   Workflow,
   type LucideIcon,
@@ -52,27 +50,27 @@ type FloatingNode = {
 const scenes: Scene[] = [
   {
     key: 'origin',
-    eyebrow: 'Empyralis Agent OS',
-    title: 'One command room for serious agents.',
-    body: 'Sage sits at the center while channels, external agents, memory, local computers, cloud runners, and governance move around one controlled platform.',
+    eyebrow: 'Sage starts instantly',
+    title: 'An AI operator that works from chat first.',
+    body: 'Ask Sage to reason, write, remember, upload files, and prepare work without installing anything.',
   },
   {
     key: 'channels',
-    eyebrow: 'Channels enter the room',
-    title: 'Every conversation flows into one main agent.',
-    body: 'Telegram, Discord, WhatsApp, Slack, email, web chat, and API events become one observable routing layer instead of disconnected inboxes.',
+    eyebrow: 'Connected Assistant',
+    title: 'Connect the apps where work already lives.',
+    body: 'Gmail, Calendar, Drive, GitHub, Notion, Slack, Telegram, WhatsApp, and web chat become one observable assistant surface.',
   },
   {
     key: 'agents',
-    eyebrow: 'Bring your own agents',
-    title: 'External agents plug into the same control surface.',
-    body: 'OpenClaw-style gateways, MCP servers, A2A workers, custom HTTP agents, and local automations can be governed inside Empyralis.',
+    eyebrow: 'Recipes and MCP',
+    title: 'Turn repeatable work into reliable operator recipes.',
+    body: 'Morning briefs, email triage, meeting prep, weekly reports, custom MCP tools, and webhooks share the same memory, approvals, and proof log.',
   },
   {
     key: 'execution',
-    eyebrow: 'Local + cloud execution',
-    title: 'Real computers and cloud runners become safe agent workspaces.',
-    body: 'Agents can operate browsers, files, apps, terminals, local machines, VPS runners, and cloud jobs through the same execution policy.',
+    eyebrow: 'Cloud first, computer when needed',
+    title: 'Use APIs, hosted browser, cloud computers, then real hardware.',
+    body: 'Sage routes work to connected apps first, hosted browsers for websites, cloud computers for heavier jobs, and Agent Computer only for local/private access.',
   },
   {
     key: 'memory',
@@ -82,9 +80,9 @@ const scenes: Scene[] = [
   },
   {
     key: 'governance',
-    eyebrow: 'Enterprise control',
-    title: 'Autonomy is wrapped in approvals, audit, and policy.',
-    body: 'Risk gates, sandboxed execution, brokered secrets, diagnostics export, and audit streams make the agent workforce controllable.',
+    eyebrow: 'Trust controls',
+    title: 'Autonomy stays visible and governed.',
+    body: 'Approvals, policy modes, brokered secrets, diagnostics, run history, and audit streams make powerful agents understandable.',
   },
 ];
 
@@ -98,17 +96,17 @@ const channelNodes = [
 ] as const;
 
 const agentNodes: FloatingNode[] = [
-  { label: 'OpenClaw', detail: 'gateway', icon: PlugZap },
+  { label: 'Recipes', detail: 'workflows', icon: Workflow },
   { label: 'MCP', detail: 'servers', icon: CodeXml },
-  { label: 'A2A', detail: 'workers', icon: Workflow },
-  { label: 'Custom', detail: 'agents', icon: Globe2 },
+  { label: 'APIs', detail: 'connectors', icon: Globe2 },
+  { label: 'Custom', detail: 'tools', icon: SquareTerminal },
 ];
 
 const executionNodes: FloatingNode[] = [
-  { label: 'Local Mac', detail: 'private computer', icon: Cpu },
-  { label: 'VPS', detail: 'remote runner', icon: Server },
-  { label: 'Cloud', detail: 'control plane', icon: Cloud },
-  { label: 'Terminal', detail: 'browser/files/apps', icon: SquareTerminal },
+  { label: 'Apps', detail: 'OAuth/API', icon: Cloud },
+  { label: 'Browser', detail: 'hosted', icon: Globe2 },
+  { label: 'Cloud PC', detail: 'isolated', icon: Server },
+  { label: 'My Computer', detail: 'Gateway', icon: Cpu },
 ];
 
 const memoryNodes: FloatingNode[] = [
@@ -362,8 +360,8 @@ function LandingExperience({ accountHref, accountLabel, primaryHref, primaryLabe
       </section>
 
       <section className="landing-summary">
-        <p>Investor-ready platform story</p>
-        <h2>Native agents, external agents, channels, memory, execution, and governance in one operating surface.</h2>
+        <p>Cloud-first AI operator</p>
+        <h2>Start in chat, connect apps, run recipes, and control real computers only when the task requires it.</h2>
         <Link className="landing-button landing-button--solid landing-button--large" href={primaryHref}>
           {finalCtaLabel}
         </Link>

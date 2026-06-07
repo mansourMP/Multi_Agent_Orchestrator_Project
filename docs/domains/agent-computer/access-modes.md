@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Platform
-Last verified: 2026-06-06
+Last verified: 2026-06-07
 Source of truth: Agent Computer policy code
 
 ## Implemented Modes
@@ -19,6 +19,22 @@ Source of truth: Agent Computer policy code
 Gateway dispatch normalizes runtime access mode through
 `server_modules/gateway_execution_service.py`. The policy payload sent to the
 gateway reports mode as `default`, `custom`, or `full_access`.
+
+## Product Boundary
+
+Agent Computer is not the default requirement for Sage. Normal tasks should use
+chat, connected apps, MCP, hosted browser, or cloud computer first. Agent
+Computer is selected only when Sage needs local/private computer access:
+
+- local files, folders, projects, apps, browser profiles, cookies, or desktop
+  state;
+- local terminal, local network, SSH keys, machine secrets, or hardware;
+- personal Telegram/WhatsApp/iMessage/Signal/WeChat sessions;
+- dedicated Agent Computer hardware intentionally assigned to Sage.
+
+Studio agents and external agents do not inherit Sage Full Access. External
+agents remain connector/proxy/showing surfaces unless a separate native grant is
+designed later.
 
 ## Full Access
 

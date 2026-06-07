@@ -230,6 +230,71 @@ test("local bridge personal channel runtime sends through configured bridge", as
   }
 });
 
+test("local bridge personal channel runtime suppresses duplicate inbound bridge events", async () => {
+  const signalConfig = LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.find(
+    (item) => item.channelKey === "signal_personal",
+  );
+  assert.ok(signalConfig);
+  const previousUrl = process.env.EMPYRALIS_SIGNAL_BRIDGE_URL;
+  const previousPoll = process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS;
+  const previousFetch = globalThis.fetch;
+  process.env.EMPYRALIS_SIGNAL_BRIDGE_URL = "http://127.0.0.1:9988";
+  process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS = "25";
+  let eventFetches = 0;
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    if (String(url).includes("/events")) {
+      eventFetches += 1;
+      return new Response(JSON.stringify({
+        items: [
+          {
+            external_message_id: "same-event",
+            remote_jid: "peer-1",
+            text: "same message",
+            received_at: "2026-06-07T00:00:00.000Z",
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ connected: true, status: "connected" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  const runtime = new LocalBridgePersonalChannelRuntime(signalConfig);
+  const inbound: unknown[] = [];
+  runtime.setPublisher({
+    publishStateUpdate: async () => undefined,
+    publishEvent: async (_type, payload) => {
+      inbound.push(payload);
+    },
+  });
+
+  try {
+    await runtime.start();
+    await eventually(() => {
+      assert.ok(eventFetches >= 2);
+      assert.equal(inbound.length, 1);
+    }, 300);
+  } finally {
+    await runtime.stop();
+    globalThis.fetch = previousFetch;
+    if (previousUrl === undefined) {
+      delete process.env.EMPYRALIS_SIGNAL_BRIDGE_URL;
+    } else {
+      process.env.EMPYRALIS_SIGNAL_BRIDGE_URL = previousUrl;
+    }
+    if (previousPoll === undefined) {
+      delete process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS;
+    } else {
+      process.env.EMPYRALIS_SIGNAL_BRIDGE_POLL_MS = previousPoll;
+    }
+  }
+});
+
 test("local bridge manifest list includes Signal, iMessage, and WeChat as live-capable", () => {
   const byKey = new Map(LOCAL_BRIDGE_PERSONAL_CHANNEL_MANIFESTS.map((item) => [item.channelKey, item]));
   assert.equal(byKey.get("signal_personal")?.liveCapable, true);

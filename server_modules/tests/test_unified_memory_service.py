@@ -33,10 +33,12 @@ class UnifiedMemoryServiceTests(unittest.TestCase):
         workspace_context.write_workspace_context_file(
             "USER.md",
             "# User Profile\n\n- Prefers concise daily summaries.\n- Works late nights.\n",
+            workspace_id="default",
         )
         workspace_context.write_workspace_context_file(
             "MEMORY.md",
             "# Curated Memory\n\n- timezone: Asia/Shanghai\n",
+            workspace_id="default",
         )
         knowledge_dir = workspace_context.workspace_knowledge_dir(workspace_id="default")
         (knowledge_dir / "notes.md").write_text(
@@ -144,6 +146,7 @@ class UnifiedMemoryServiceTests(unittest.TestCase):
         workspace_context.write_workspace_context_file(
             "USER.md",
             "# User Profile\n\n- Owner private profile.\n",
+            workspace_id="default",
         )
         asyncio.run(
             shared_operational_board_service.write_shared_operational_board_entry(
@@ -186,6 +189,7 @@ class UnifiedMemoryServiceTests(unittest.TestCase):
         workspace_context.write_workspace_context_file(
             "USER.md",
             "# User Profile\n\n- Owner private profile.\n",
+            workspace_id="default",
         )
         workspace_context.write_workspace_context_file(
             "USER.md",

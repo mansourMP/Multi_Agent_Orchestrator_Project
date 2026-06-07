@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { ArrowDown, Check, ChevronDown, ChevronRight, Monitor, ShieldCheck } from 'lucide-react';
 
@@ -15,7 +15,6 @@ import { ScrollRegion } from '@/lib/ui/scroll-region';
 import {
   ChatComposer,
   type ComposerCapabilityItem,
-  type ComposerCapabilitySubItem,
   type ComposerPreRunCostEstimate,
   type ComposerSlashCommand,
 } from '@/lib/workspace/chat-composer';
@@ -61,7 +60,6 @@ import {
   type ProviderCatalogModelRecord,
   type ProviderCatalogRecord,
   type ProviderProfileRecord,
-  type VaultCredentialRecord,
   type WorkstationSageMemoryRecord,
   type WorkstationSageProfileRecord,
   type WorkstationSessionActor,
@@ -192,7 +190,6 @@ import {
   withTimeout,
   hostedCreditsFallbackProvider,
   normalizeSageToolPolicy,
-  normalizeConnectorVaultRecords,
   defaultSageMemoryDraft,
   isTransientBackgroundReadError,
   shouldSuppressBackgroundRefreshNotice,
@@ -205,69 +202,12 @@ import type {
   ChatRuntimeTrustZone
 } from '@/lib/workspace/workstation-chat-pane-model';
 
-type SageComposerSkillRecord = {
-  id: string;
-  name: string;
-  status: string;
-  statusLabel: string;
-  source: string;
-  activeNow: boolean;
-};
-
-type SageConnectorMenuShortcut = {
-  id: string;
-  title: string;
-  connectorIds: readonly string[];
-  iconSrc: string;
-};
-
-const SAGE_MENU_VISIBLE_LIMIT = 5;
-
-const SAGE_CONNECTOR_MENU_SHORTCUTS: readonly SageConnectorMenuShortcut[] = [
-  {
-    id: 'gmail',
-    title: 'Gmail',
-    connectorIds: ['gmail', 'google_workspace'],
-    iconSrc: '/brand-assets/apps/gmail.svg?v=3',
-  },
-  {
-    id: 'google_calendar',
-    title: 'Google Calendar',
-    connectorIds: ['google_calendar', 'google_workspace'],
-    iconSrc: '/brand-assets/apps/google-calendar.svg?v=3',
-  },
-  {
-    id: 'google_drive',
-    title: 'Google Drive',
-    connectorIds: ['google_drive', 'google_workspace'],
-    iconSrc: '/brand-assets/apps/google-drive.svg?v=3',
-  },
-  {
-    id: 'telegram_bot',
-    title: 'Telegram Bot',
-    connectorIds: ['telegram_bot'],
-    iconSrc: '/brand-assets/channels/telegram.svg?v=3',
-  },
-  {
-    id: 'github',
-    title: 'GitHub',
-    connectorIds: ['github'],
-    iconSrc: '/brand-assets/apps/github.svg?v=3',
-  },
-  {
-    id: 'slack',
-    title: 'Slack',
-    connectorIds: ['slack'],
-    iconSrc: '/brand-assets/channels/slack.svg?v=3',
-  },
-];
-
 const SAGE_EMPTY_STATE_PROMPTS = [
-  'Summarize this workspace',
-  'Start a new plan',
-  'Show my active work',
-  'Check Agent Computer status',
-  'Help me build an app',
+  'Draft a clear plan for today',
+  'Summarize an uploaded file',
+  'Prepare for my next meeting',
+  'Triage important emails',
+  'Create a weekly report',
 ] as const;
 
 const SAGE_MODEL_PICKER_PROVIDERS = [
@@ -438,121 +378,6 @@ type SageModelPickerProviderPanel = {
   image: string | null;
   models: SageModelPickerModel[];
 };
-
-function readableMenuLabel(value: unknown): string {
-  const rawValue = readString(value);
-  if (!rawValue) {
-    return 'Untitled';
-  }
-  return rawValue
-    .replace(/[_:.-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-function normalizeSageComposerSkills(payload: unknown): SageComposerSkillRecord[] {
-  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-  const items = Array.isArray(record.items) ? record.items : [];
-  return items.flatMap((item) => {
-    const candidate = item && typeof item === 'object' ? item as Record<string, unknown> : {};
-    const id = readString(candidate.id);
-    const name = readString(candidate.name) || id || 'Skill';
-    if (!id && !name) {
-      return [];
-    }
-    const status = readString(candidate.status) || 'needs_setup';
-    const source = readString(candidate.source);
-    const activeNow = candidate.active_now === true || status === 'ready';
-    const curatedPlaceholder = candidate.curated === true && source === 'curated_pack' && !activeNow;
-    const bundledPlatformSkill = source === 'bundled';
-    if (curatedPlaceholder || bundledPlatformSkill) {
-      return [];
-    }
-    return [{
-      id: id || normalizedModelPickerToken(name),
-      name,
-      status,
-      statusLabel: readString(candidate.status_label) || (activeNow ? 'On' : 'Needs setup'),
-      source,
-      activeNow,
-    }];
-  });
-}
-
-function connectorShortcutMatchesToken(shortcut: SageConnectorMenuShortcut, token: string): boolean {
-  return shortcut.connectorIds.some((connectorId) => connectorId === token);
-}
-
-function connectorTokenFromCredential(credential: VaultCredentialRecord): string {
-  return normalizedProviderToken(credential.connector || credential.provider);
-}
-
-function buildSageConnectorMenuItems(
-  connectorCredentials: VaultCredentialRecord[],
-  onOpenConnectors: () => void,
-): ComposerCapabilitySubItem[] {
-  const connectedShortcutIds = new Set<string>();
-  const connectedItems: ComposerCapabilitySubItem[] = [];
-  const unknownConnectorItems: ComposerCapabilitySubItem[] = [];
-
-  for (const credential of connectorCredentials) {
-    const connectorToken = connectorTokenFromCredential(credential);
-    if (!connectorToken) {
-      continue;
-    }
-    const credentialId = readString(credential.id) || connectorToken;
-    const matchingShortcuts = SAGE_CONNECTOR_MENU_SHORTCUTS.filter((shortcut) =>
-      connectorShortcutMatchesToken(shortcut, connectorToken),
-    );
-    if (matchingShortcuts.length > 0) {
-      for (const shortcut of matchingShortcuts) {
-        if (connectedShortcutIds.has(shortcut.id)) {
-          continue;
-        }
-        connectedShortcutIds.add(shortcut.id);
-        connectedItems.push({
-          id: `connector:${credentialId}:${shortcut.id}`,
-          title: shortcut.title,
-          iconSrc: shortcut.iconSrc,
-          itemType: 'toggle',
-          enabled: true,
-          onSelect: onOpenConnectors,
-        });
-      }
-      continue;
-    }
-    unknownConnectorItems.push({
-      id: `connector:${credentialId}`,
-      title: readString(credential.label) || readableMenuLabel(connectorToken),
-      detail: readableMenuLabel(connectorToken),
-      itemType: 'toggle',
-      enabled: true,
-      onSelect: onOpenConnectors,
-    });
-  }
-
-  const suggestedItems = SAGE_CONNECTOR_MENU_SHORTCUTS
-    .filter((shortcut) => !connectedShortcutIds.has(shortcut.id))
-    .map((shortcut) => ({
-      id: `connector_suggestion:${shortcut.id}`,
-      title: shortcut.title,
-      status: 'Connect',
-      statusTone: 'setup' as const,
-      iconSrc: shortcut.iconSrc,
-      onSelect: onOpenConnectors,
-    }));
-  const appItems = [...connectedItems, ...unknownConnectorItems, ...suggestedItems];
-  const visibleItems = appItems.slice(0, SAGE_MENU_VISIBLE_LIMIT);
-  if (appItems.length > SAGE_MENU_VISIBLE_LIMIT) {
-    visibleItems.push({
-      id: 'see_more_connectors',
-      title: 'More apps',
-      onSelect: onOpenConnectors,
-    });
-  }
-  return visibleItems;
-}
 
 function normalizedProviderToken(value: unknown): string {
   return readString(value).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -765,6 +590,7 @@ export function WorkstationChatPane() {
   const notificationsConnectionState = useWorkstationStreamSelector((state) => state.notifications.connectionState);
   const desktop = useWorkstationDesktopBridge();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [workspaceCommandPaletteOpen, setWorkspaceCommandPaletteOpen] = useState(false);
   const [legacyTraceEventsByTraceId, setLegacyTraceEventsByTraceId] = useState<Record<string, TimelineProjectionEvent[]>>({});
   const pendingLegacyTraceIdsRef = useRef<Set<string>>(new Set());
@@ -864,8 +690,6 @@ export function WorkstationChatPane() {
     providerProfiles,
     setProviderProfiles,
     setToolPolicy,
-    connectorCredentials,
-    setConnectorCredentials,
     browserGatewayDoctor,
     setBrowserGatewayDoctor,
     reasoningEffort,
@@ -903,7 +727,6 @@ export function WorkstationChatPane() {
   } = useChatMemoryEditorState(defaultSageMemoryDraft());
   const [billingSummary, setBillingSummary] = useState<Record<string, unknown> | null>(null);
   const [workspaceAiRoute, setWorkspaceAiRoute] = useState<WorkspaceAiRoutePayload | null>(null);
-  const [sageComposerSkills, setSageComposerSkills] = useState<SageComposerSkillRecord[]>([]);
   const [sageAgentComputerSelection, setSageAgentComputerSelection] = useState<Record<string, unknown> | null>(null);
   const [agentComputerPermissionBusyMode, setAgentComputerPermissionBusyMode] = useState<AgentComputerPermissionMode | null>(null);
   const [pendingFullAccessConfirmation, setPendingFullAccessConfirmation] = useState(false);
@@ -986,15 +809,9 @@ export function WorkstationChatPane() {
 
   const refreshToolingState = useCallback(async () => {
     const payload = await services.queryClient.run('chat:tooling-state', async () => {
-      const [toolPolicyPayload, connectorsPayload, skillsPayload] = await Promise.all([
-        services.client.getSageToolPolicy().catch(() => ({ tools: [] })),
-        services.client.listConnectorsVault().catch(() => ({ items: [] })),
-        services.client.listSageSkills().catch(() => ({ items: [] })),
-      ]);
+      const toolPolicyPayload = await services.client.getSageToolPolicy().catch(() => ({ tools: [] }));
       return {
         toolPolicyPayload,
-        connectorsPayload,
-        skillsPayload,
       };
     }).catch(() => null);
 
@@ -1003,8 +820,6 @@ export function WorkstationChatPane() {
     }
 
     setToolPolicy(normalizeSageToolPolicy((payload as { toolPolicyPayload?: unknown }).toolPolicyPayload));
-    setConnectorCredentials(normalizeConnectorVaultRecords((payload as { connectorsPayload?: unknown }).connectorsPayload));
-    setSageComposerSkills(normalizeSageComposerSkills((payload as { skillsPayload?: unknown }).skillsPayload));
   }, [services.client, services.queryClient]);
 
   const refreshBrowserGatewayReadiness = useCallback(async () => {
@@ -2085,6 +1900,21 @@ export function WorkstationChatPane() {
     () => routeManifest.routeIndex.hardware?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/hardware`,
     [bootstrap.workspace.id, routeManifest.routeIndex.hardware],
   );
+  const requestedPrefillPrompt = useMemo(
+    () => readString(searchParams.get('prompt')),
+    [searchParams],
+  );
+  useEffect(() => {
+    if (!requestedPrefillPrompt || draft.trim()) {
+      return;
+    }
+    setDraft(requestedPrefillPrompt);
+    if (typeof window !== 'undefined') {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete('prompt');
+      window.history.replaceState(window.history.state, '', nextUrl.toString());
+    }
+  }, [draft, requestedPrefillPrompt, setDraft]);
   const sageSlashCommands = useMemo<ComposerSlashCommand[]>(
     () => (
       SAGE_COMMAND_CATALOG.map((command) => ({
@@ -2182,7 +2012,7 @@ export function WorkstationChatPane() {
         router.push(`${settingsHref}?section=usage`);
         return;
       case 'open_tools':
-        router.push(`${integrationsHref}?section=connections`);
+        router.push(`${integrationsHref}?section=apps`);
         return;
       case 'open_runtime':
         router.push(`${integrationsHref}?section=ai-runtime`);
@@ -2537,73 +2367,36 @@ export function WorkstationChatPane() {
     setStatusMessage(`${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'} selected. Tell Sage what to do with them.`);
   }, [seedDraftIfEmpty, setStatusMessage]);
   const sageCapabilityItems = useMemo<ComposerCapabilityItem[]>(() => {
-    const openPlugins = () => {
-      router.push(`${integrationsHref}?section=plugins`);
+    const openApps = () => {
+      router.push(`${integrationsHref}?section=apps`);
     };
-    const openConnectors = () => {
-      router.push(`${integrationsHref}?section=connections`);
+    const openRecipes = () => {
+      router.push(`${integrationsHref}?section=recipes`);
     };
-    const allSkillItems: ComposerCapabilitySubItem[] = [...sageComposerSkills]
-      .sort((first, second) => first.name.localeCompare(second.name))
-      .map((skill) => ({
-        id: `skill:${skill.id}`,
-        title: skill.name,
-        status: skill.activeNow ? 'On' : skill.statusLabel,
-        statusTone: skill.activeNow ? 'ready' as const : 'setup' as const,
-        onSelect: openPlugins,
-      }));
-    const skillItems = allSkillItems.slice(0, SAGE_MENU_VISIBLE_LIMIT);
-    if (allSkillItems.length > SAGE_MENU_VISIBLE_LIMIT) {
-      skillItems.push({
-        id: 'see_more_skills',
-        title: 'See more skills',
-        onSelect: openPlugins,
-      });
-    }
-    const connectorMenuItems = buildSageConnectorMenuItems(connectorCredentials, openConnectors);
+    const openComputer = () => {
+      router.push(hardwareHref);
+    };
     return [
       {
-        id: 'connectors',
-        title: 'Connectors',
-        submenuTitle: 'Connectors',
-        submenuItems: [
-          ...connectorMenuItems,
-          {
-            id: 'manage_connectors',
-            title: 'Manage connectors',
-            dividerBefore: true,
-            onSelect: openConnectors,
-          },
-          {
-            id: 'add_connector',
-            title: 'Add connector',
-            onSelect: openConnectors,
-          },
-        ],
-        onSelect: () => undefined,
+        id: 'connect_apps',
+        title: 'Connect apps',
+        detail: 'Gmail, Calendar, Drive, GitHub, Slack, and more',
+        onSelect: openApps,
       },
       {
-        id: 'skills',
-        title: 'Skills',
-        submenuTitle: 'Skills',
-        submenuItems: [
-          ...skillItems,
-          {
-            id: 'manage_skills',
-            title: 'Manage skills',
-            dividerBefore: skillItems.length > 0,
-            onSelect: openPlugins,
-          },
-          {
-            id: 'add_skills',
-            title: 'Add skill',
-            onSelect: openPlugins,
-          },
-        ],
-        onSelect: () => undefined,
+        id: 'use_recipe',
+        title: 'Use a recipe',
+        detail: 'Morning brief, email triage, meeting prep',
+        onSelect: openRecipes,
+      },
+      {
+        id: 'use_my_computer',
+        title: 'Use my computer',
+        detail: 'Local files, apps, browser, terminal, or personal channels',
+        onSelect: openComputer,
       },
     ];
-  }, [connectorCredentials, integrationsHref, router, sageComposerSkills]);
+  }, [hardwareHref, integrationsHref, router]);
   const defaultReasoningEffort = useMemo<ChatReasoningEffort>(
     () => (selectedModelOption.defaultReasoningEffort
       && selectedModelOption.reasoningLevels.includes(selectedModelOption.defaultReasoningEffort)
@@ -2906,7 +2699,7 @@ export function WorkstationChatPane() {
           router.push(`${settingsHref}?section=usage`);
           break;
         case 'open_tools':
-          router.push(`${integrationsHref}?section=connections`);
+          router.push(`${integrationsHref}?section=apps`);
           break;
         case 'open_runtime':
           router.push(`${integrationsHref}?section=ai-runtime`);

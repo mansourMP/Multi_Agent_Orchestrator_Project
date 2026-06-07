@@ -43,7 +43,7 @@ export function WorkstationSurfaceViewport({
 }: PropsWithChildren<{
   surface?: string;
 }>) {
-  if (surface === 'chat') {
+  if (surface === 'chat' || surface === 'memory') {
     return (
       <div
         data-workstation-surface="viewport"

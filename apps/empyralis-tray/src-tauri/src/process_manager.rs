@@ -573,6 +573,13 @@ impl ProcessManager {
     }
 
     fn supervisor_secret(&self) -> Result<String, String> {
+        if let Some(secret) = env_value("EMPYRALIS_SUPERVISOR_SECRET")
+            .or_else(|| self.agent_computer_env_value("EMPYRALIS_SUPERVISOR_SECRET"))
+        {
+            self.persist_supervisor_secret(&secret)?;
+            return Ok(secret);
+        }
+
         let path = self.app_support_dir().join("supervisor.secret");
         if path.exists() {
             let secret = fs::read_to_string(&path)
@@ -592,6 +599,25 @@ impl ProcessManager {
         fs::write(&path, &secret)
             .map_err(|error| format!("Failed to persist supervisor secret: {error}"))?;
         Ok(secret)
+    }
+
+    fn persist_supervisor_secret(&self, secret: &str) -> Result<(), String> {
+        fs::create_dir_all(self.app_support_dir()).map_err(|error| {
+            format!("Failed to create tray application support directory: {error}")
+        })?;
+        let path = self.app_support_dir().join("supervisor.secret");
+        if path.exists() {
+            let current = fs::read_to_string(&path)
+                .map_err(|error| format!("Failed to read supervisor secret: {error}"))?
+                .trim()
+                .to_string();
+            if current == secret {
+                return Ok(());
+            }
+        }
+        fs::write(&path, secret)
+            .map_err(|error| format!("Failed to persist supervisor secret: {error}"))?;
+        Ok(())
     }
 
     fn ensure_supervisor_binary(&self) -> Result<(), String> {

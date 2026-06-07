@@ -82,7 +82,9 @@ separate in product UI and permission prompts.
   personal messaging channels through selected Agent Computer local bridges.
 - Signal has a signal-cli JSON-RPC bridge wrapper. iMessage uses the
   BlueBubbles local bridge wrapper. WeChat uses the generic local-bridge
-  contract until a more specific bridge wrapper is added.
+  contract until a more specific bridge wrapper is added; it requires a
+  user-owned private/local bridge URL and should not be represented as native
+  WeChat automation shipped by Empyralis.
 - GitHub, Linear, Notion, Dropbox, Amazon S3, SMTP / IMAP, WeChat Work,
   Instagram Business, Gmail, Calendar, and Drive belong to Connected Apps, not
   Personal Messaging.

@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Code2, Download, Eye, Pencil, Plus } from 'lucide-react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { BookOpen, Clock, Code2, Download, Eye, FileText, Pencil, Pin, Plus, Shield } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
+import { PlatformNotification } from '@/lib/ui/platform-notification';
 import { AppButton, AppTextarea } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type {
@@ -17,7 +18,6 @@ import type {
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import {
-  WorkstationSurfaceNotice,
   WorkstationSurfaceRoot,
 } from '@/lib/workspace/workstation-surface-primitives';
 import { WorkstationSplitWorkbench } from '@/lib/workspace/workstation-split-workbench';
@@ -83,6 +83,12 @@ type SageMemoryDraft = {
 
 type MemorySensitivityClass = 'green' | 'yellow' | 'orange' | 'red';
 type MemoryDocumentViewMode = 'preview' | 'source';
+type MemoryDocumentNavItem = {
+  id: string;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+};
 
 const memoryPaneCache = new Map<string, SageMemorySnapshot>();
 
@@ -528,9 +534,6 @@ export function WorkstationActivityPane() {
   const [memoryDocumentViewMode, setMemoryDocumentViewMode] = useState<MemoryDocumentViewMode>('preview');
   const [editingDocumentId, setEditingDocumentId] = useState<string | null>(null);
   const [editingDocumentText, setEditingDocumentText] = useState('');
-  const [isMemoryActionMenuOpen, setIsMemoryActionMenuOpen] = useState(false);
-  const [titlebarActionsHost, setTitlebarActionsHost] = useState<HTMLElement | null>(null);
-  const memoryActionMenuRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = async (showLoading = false) => {
     if (showLoading) {
@@ -600,35 +603,16 @@ export function WorkstationActivityPane() {
   }, [services.client]);
 
   useEffect(() => {
-    if (typeof document === 'undefined') {
+    if (!statusMessage) {
       return;
     }
-    setTitlebarActionsHost(document.getElementById('workstation-titlebar-brand-actions-slot'));
-  }, []);
-
-  useEffect(() => {
-    if (!isMemoryActionMenuOpen) {
-      return;
-    }
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && memoryActionMenuRef.current?.contains(target)) {
-        return;
-      }
-      setIsMemoryActionMenuOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsMemoryActionMenuOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
+    const timeout = window.setTimeout(() => {
+      setStatusMessage(null);
+    }, 4200);
     return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
+      window.clearTimeout(timeout);
     };
-  }, [isMemoryActionMenuOpen]);
+  }, [statusMessage]);
 
   const categoryLabels = useMemo(
     () => new Map(snapshot.categories.map((category) => [readString(category.id), readString(category.label)])),
@@ -681,31 +665,36 @@ export function WorkstationActivityPane() {
     }
     return buildFallbackMemoryDocuments(profileSnapshot, displayNameHint, memoryUsed, memoryLimit);
   }, [contextDocuments, displayNameHint, memoryLimit, memoryUsed, profileSnapshot]);
-  const memoryDocumentNavItems = useMemo(() => [
+  const memoryDocumentNavItems = useMemo<MemoryDocumentNavItem[]>(() => [
     {
       id: 'overview',
       label: 'Overview',
       description: 'Profile, rules, and carry-forward context',
+      icon: BookOpen,
     },
     ...projectionDocuments.map((document) => ({
       id: `projection:${document.filename}`,
       label: formatMemoryDocumentLabel(document.filename),
       description: formatMemoryDocumentDescription(document.filename),
+      icon: FileText,
     })),
     {
       id: 'pinned',
       label: 'Pinned',
       description: `${pinnedMemoryItems.length} high-signal facts`,
+      icon: Pin,
     },
     {
       id: 'recent',
       label: 'Recent',
       description: `${recentMemoryItems.length} recent facts`,
+      icon: Clock,
     },
     {
       id: 'sensitive',
       label: 'Sensitive',
       description: `${sensitiveMemoryItems.length} private facts`,
+      icon: Shield,
     },
   ], [pinnedMemoryItems.length, projectionDocuments, recentMemoryItems.length, sensitiveMemoryItems.length]);
   const userMemoryFileCount = useMemo(
@@ -939,26 +928,6 @@ export function WorkstationActivityPane() {
     return `# What Sage carries forward\n\n## Identity\n${cleanIdentitySummary || 'No durable identity summary saved yet.'}\n\n## Communication style\n${profileSnapshot.profile.communication_style || 'No communication preference saved yet.'}\n\n## Recurring responsibility\n${profileSnapshot.profile.recurring_responsibility || 'No recurring responsibility saved yet.'}\n\n## Standing rules\n${profileSnapshot.profile.standing_rules.length === 0 ? 'No standing rules saved yet.' : profileSnapshot.profile.standing_rules.map((rule) => `- ${rule}`).join('\n')}`;
   };
 
-  const beginEditingSelectedMemoryFile = () => {
-    if (selectedMemoryDocumentId === 'overview') {
-      const overviewContent = contextDocuments['IDENTITY.md'] || buildOverviewContent();
-      setEditingDocumentId('overview');
-      setEditingDocumentText(overviewContent);
-      setMemoryDocumentViewMode('preview');
-      return;
-    }
-    if (selectedMemoryDocumentId.startsWith('projection:')) {
-      const selectedProjection = projectionDocuments.find((document) => `projection:${document.filename}` === selectedMemoryDocumentId);
-      if (selectedProjection) {
-        setEditingDocumentId(`projection:${selectedProjection.filename}`);
-        setEditingDocumentText(selectedProjection.content);
-        setMemoryDocumentViewMode('preview');
-        return;
-      }
-    }
-    setStatusMessage('Choose a memory file before editing.');
-  };
-
   const renderMemoryDocumentRows = (items: WorkstationSageMemoryRecord[], emptyLabel: string) => (
     <div className="app-memory-document-rows">
       {items.length === 0 ? (
@@ -992,52 +961,87 @@ export function WorkstationActivityPane() {
     </div>
   );
   const renderDocumentModeSwitch = () => (
-    <div className="app-inline-actions app-inline-actions--tight" aria-label="Memory document view mode">
-      <AppButton
+    <div className="app-memory-document-mode" role="tablist" aria-label="Memory document view mode">
+      <button
         type="button"
-        tone={memoryDocumentViewMode === 'preview' ? 'primary' : 'ghost'}
+        role="tab"
+        aria-selected={memoryDocumentViewMode === 'preview'}
+        className={`app-memory-document-mode__button${memoryDocumentViewMode === 'preview' ? ' app-memory-document-mode__button--active' : ''}`}
         onClick={() => {
           setMemoryDocumentViewMode('preview');
         }}
       >
         <Eye size={16} strokeWidth={2} aria-hidden="true" />
         <span>Preview</span>
-      </AppButton>
-      <AppButton
+      </button>
+      <button
         type="button"
-        tone={memoryDocumentViewMode === 'source' ? 'primary' : 'ghost'}
+        role="tab"
+        aria-selected={memoryDocumentViewMode === 'source'}
+        className={`app-memory-document-mode__button${memoryDocumentViewMode === 'source' ? ' app-memory-document-mode__button--active' : ''}`}
         onClick={() => {
           setMemoryDocumentViewMode('source');
         }}
       >
         <Code2 size={16} strokeWidth={2} aria-hidden="true" />
         <span>Source</span>
-      </AppButton>
+      </button>
     </div>
   );
-  const renderMarkdownPreview = (markdown: string) => (
-    <div className="app-memory-document-prose">
-      {markdown.split('\n').map((line, index) => {
+  const renderMarkdownPreview = (markdown: string) => {
+    const blocks: ReactNode[] = [];
+    let listItems: string[] = [];
+    const flushList = () => {
+      if (listItems.length === 0) {
+        return;
+      }
+      const listKey = `list-${blocks.length}`;
+      blocks.push(
+        <ul key={listKey}>
+          {listItems.map((item, index) => (
+            <li key={`${listKey}-${index}`}>{item}</li>
+          ))}
+        </ul>,
+      );
+      listItems = [];
+    };
+
+    markdown.split('\n').forEach((line, index) => {
         const trimmed = line.trim();
         if (!trimmed) {
-          return null;
+          flushList();
+          return;
         }
         if (trimmed.startsWith('# ')) {
-          return <h3 key={`${index}:${trimmed}`}>{trimmed.slice(2)}</h3>;
+          flushList();
+          blocks.push(<h3 key={`${index}:${trimmed}`}>{trimmed.slice(2)}</h3>);
+          return;
         }
         if (trimmed.startsWith('## ')) {
-          return <h4 key={`${index}:${trimmed}`}>{trimmed.slice(3)}</h4>;
+          flushList();
+          blocks.push(<h4 key={`${index}:${trimmed}`}>{trimmed.slice(3)}</h4>);
+          return;
         }
         if (trimmed.startsWith('### ')) {
-          return <h5 key={`${index}:${trimmed}`}>{trimmed.slice(4)}</h5>;
+          flushList();
+          blocks.push(<h5 key={`${index}:${trimmed}`}>{trimmed.slice(4)}</h5>);
+          return;
         }
         if (trimmed.startsWith('- ')) {
-          return <p key={`${index}:${trimmed}`}>• {trimmed.slice(2)}</p>;
+          listItems.push(trimmed.slice(2));
+          return;
         }
-        return <p key={`${index}:${trimmed}`}>{trimmed}</p>;
-      })}
-    </div>
-  );
+        flushList();
+        blocks.push(<p key={`${index}:${trimmed}`}>{trimmed}</p>);
+      });
+    flushList();
+
+    return (
+      <div className="app-memory-document-prose">
+        {blocks}
+      </div>
+    );
+  };
   const renderEditableDocumentBody = (documentId: string, filename: string, content: string) => {
     const isEditing = editingDocumentId === documentId;
     if (isEditing) {
@@ -1168,74 +1172,29 @@ export function WorkstationActivityPane() {
     );
   };
 
-  const memoryActionsMenu = (
-    <div ref={memoryActionMenuRef} className="app-memory-document-sidebar__toolbar" aria-label="Memory actions">
-      <button
-        type="button"
-        className="app-memory-document-sidebar__menu-trigger workstation-titlebar__action"
-        onClick={() => {
-          setIsMemoryActionMenuOpen((open) => !open);
-        }}
-        aria-expanded={isMemoryActionMenuOpen}
-        aria-haspopup="menu"
-        aria-label="Memory options"
-        title="Memory options"
-      >
-        <Pencil size={18} strokeWidth={1.9} aria-hidden="true" />
-      </button>
-      {isMemoryActionMenuOpen ? (
-        <div className="app-memory-document-sidebar__menu" role="menu" aria-label="Memory options">
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setIsMemoryActionMenuOpen(false);
-              openCreateMemoryFile();
-            }}
-            disabled={Boolean(mutatingMemory) || memoryFileLimitReached}
-          >
-            <Plus size={17} strokeWidth={1.9} aria-hidden="true" />
-            <span>New memory file</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setIsMemoryActionMenuOpen(false);
-              beginEditingSelectedMemoryFile();
-            }}
-            disabled={Boolean(mutatingMemory)}
-          >
-            <Pencil size={17} strokeWidth={1.9} aria-hidden="true" />
-            <span>Edit selected file</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setIsMemoryActionMenuOpen(false);
-              void exportMemory();
-            }}
-            disabled={Boolean(mutatingMemory) || snapshot.items.length === 0}
-          >
-            <Download size={17} strokeWidth={1.9} aria-hidden="true" />
-            <span>Export</span>
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-
   return (
     <>
-      {titlebarActionsHost ? createPortal(memoryActionsMenu, titlebarActionsHost) : null}
+      {error ? (
+        <PlatformNotification
+          tone="warning"
+          title="Memory needs attention"
+          detail={error}
+          onClose={() => {
+            setError(null);
+          }}
+        />
+      ) : statusMessage ? (
+        <PlatformNotification
+          tone="success"
+          title="Memory updated"
+          detail={statusMessage}
+          onClose={() => {
+            setStatusMessage(null);
+          }}
+        />
+      ) : null}
       <WorkstationSurfaceRoot surface="memory">
       <main className="app-memory-document-page">
-        <div className="app-memory-document-notices">
-          {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
-          {error ? <WorkstationSurfaceNotice tone="warning">{error}</WorkstationSurfaceNotice> : null}
-        </div>
-
         {isLoading || isProfileLoading ? (
           <div className="app-stack-3">
             <SkeletonBlock height="7rem" />
@@ -1249,20 +1208,46 @@ export function WorkstationActivityPane() {
               className="app-memory-split-workbench"
               sidebar={(
                 <div className="app-memory-document-nav">
-                  {memoryDocumentNavItems.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      aria-selected={item.id === selectedMemoryDocumentId}
-                      className={`settings-nav__item${item.id === selectedMemoryDocumentId ? ' settings-nav__item--active' : ''}`}
-                      onClick={() => {
-                        setSelectedMemoryDocumentId(item.id);
-                      }}
-                    >
-                      <span className="settings-nav__eyebrow">{item.description}</span>
-                      <span className="settings-nav__label">{item.label}</span>
-                    </button>
-                  ))}
+                  {memoryDocumentNavItems.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        aria-selected={item.id === selectedMemoryDocumentId}
+                        className={`app-memory-document-nav__item${item.id === selectedMemoryDocumentId ? ' app-memory-document-nav__item--active' : ''}`}
+                        title={item.description}
+                        onClick={() => {
+                          setSelectedMemoryDocumentId(item.id);
+                        }}
+                      >
+                        <Icon size={16} strokeWidth={2} aria-hidden="true" />
+                        <span>{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              sidebarFooter={(
+                <div className="app-memory-document-sidebar__footer">
+                  <button
+                    type="button"
+                    onClick={openCreateMemoryFile}
+                    disabled={Boolean(mutatingMemory) || memoryFileLimitReached}
+                  >
+                    <Plus size={14} strokeWidth={2} aria-hidden="true" />
+                    <span>New file</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void exportMemory();
+                    }}
+                    disabled={Boolean(mutatingMemory) || snapshot.items.length === 0}
+                  >
+                    <Download size={14} strokeWidth={2} aria-hidden="true" />
+                    <span>Export</span>
+                  </button>
                 </div>
               )}
             >

@@ -607,6 +607,43 @@ function gatewayConnectionStatus(gateway: GatewayRegistrationRecord): string {
   return rawStatus;
 }
 
+function localCompanionCardFromLiveStatus(
+  baseCard: HardwareCard | null,
+  trayStatus: TrayLocalStatus | null,
+  selectedGateway: GatewayRegistrationRecord | null,
+): HardwareCard | null {
+  if (!baseCard) {
+    return null;
+  }
+  const trayConnected = trayStatusConnected(trayStatus);
+  const selectedGatewayOnline = selectedGateway ? gatewayConnectionStatus(selectedGateway) === 'online' : false;
+  const localProcessRunning = trayProcessConnected(trayStatus);
+  if (!trayConnected && !selectedGatewayOnline && !localProcessRunning) {
+    return baseCard;
+  }
+  if (!trayConnected && !selectedGatewayOnline) {
+    return {
+      ...baseCard,
+      name: trayStatus?.device_name || baseCard.name,
+      description: localTrayConnectionNote(trayStatus),
+      status: 'Offline',
+      actionLabel: 'Reconnect',
+      known: true,
+    };
+  }
+  return {
+    ...baseCard,
+    name: trayStatus?.device_name || readString(selectedGateway, 'display_name', 'device_id', 'gateway_id') || baseCard.name,
+    description: trayConnected
+      ? 'Gateway and local runner are connected for this workspace.'
+      : 'Gateway is online for this workspace.',
+    status: 'Connected',
+    actionLabel: 'Manage',
+    reason: '',
+    known: true,
+  };
+}
+
 function gatewayStatusRank(gateway: GatewayRegistrationRecord): number {
   const status = gatewayConnectionStatus(gateway);
   if (status === 'online') {
@@ -900,10 +937,6 @@ export function WorkstationHardwarePane() {
     [attachments, targets, workspaceLabel],
   );
 
-  const localCard = cards.find((card) => card.kind === 'local_companion') ?? null;
-  const serverCard = cards.find((card) => card.kind === 'self_hosted_business_node') ?? null;
-  const cloudCard = cards.find((card) => card.kind === 'cloud_computer') ?? null;
-  const connectedCount = cards.filter((card) => card.status === 'Connected').length;
   const selectedSageGatewayId = readString(
     readRecord(sageAgentComputerSelection?.selection),
     'selected_gateway_id',
@@ -922,6 +955,18 @@ export function WorkstationHardwarePane() {
     const selectedGateway = readRecord(sageAgentComputerSelection?.gateway);
     return selectedGateway ? selectedGateway as GatewayRegistrationRecord : null;
   }, [gatewayRegistrations, sageAgentComputerSelection, selectedSageGatewayId]);
+  const baseLocalCard = cards.find((card) => card.kind === 'local_companion') ?? null;
+  const localCard = useMemo(
+    () => localCompanionCardFromLiveStatus(baseLocalCard, trayStatus, selectedSageGateway),
+    [baseLocalCard, selectedSageGateway, trayStatus],
+  );
+  const displayCards = useMemo(
+    () => cards.map((card) => (card.kind === 'local_companion' && localCard ? localCard : card)),
+    [cards, localCard],
+  );
+  const serverCard = displayCards.find((card) => card.kind === 'self_hosted_business_node') ?? null;
+  const cloudCard = displayCards.find((card) => card.kind === 'cloud_computer') ?? null;
+  const connectedCount = displayCards.filter((card) => card.status === 'Connected').length;
   const visibleCards = useMemo(() => {
     if (activeTab === 'this_device') {
       return localCard ? [localCard] : [];
@@ -929,13 +974,13 @@ export function WorkstationHardwarePane() {
     if (activeTab === 'ssh_server') {
       return serverCard && serverCard.known && serverCard.status !== 'Unavailable' ? [serverCard] : [];
     }
-    return cards.filter((card) => (
+    return displayCards.filter((card) => (
       card.kind !== 'local_companion'
       && card.kind !== 'self_hosted_business_node'
       && card.known
       && card.status !== 'Unavailable'
     ));
-  }, [activeTab, cards, localCard, serverCard]);
+  }, [activeTab, displayCards, localCard, serverCard]);
   const cloudEnabled = Boolean(cloudCard && cloudCard.known && cloudCard.status !== 'Unavailable');
   const command = otherSetupIntent ? pairingCommand(otherSetupIntent, workspaceId, 'other_computer') : pairingIntentState ? pairingCommand(pairingIntentState, workspaceId, selectedConnectOption) : '';
   const generatedSetupLink = otherSetupIntent ? setupLink(otherSetupIntent, workspaceId) : '';

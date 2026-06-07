@@ -238,6 +238,77 @@ pid_from_file() {
   [[ -f "${file}" ]] && cat "${file}" 2>/dev/null || true
 }
 
+runtime_process_pid() {
+  local file="$1"
+  local pattern="${2:-}"
+  local command_pattern="${3:-.*}"
+  local pid
+  pid="$(pid_from_file "${file}")"
+  if is_pid_alive "${pid}"; then
+    echo "${pid}"
+    return 0
+  fi
+  if [[ -n "${pattern}" ]]; then
+    unmanaged_process_pids "${pattern}" "${file}" "${command_pattern}" | head -n 1
+  fi
+}
+
+runtime_env_secret_hash() {
+  python3 - <<'PY'
+import hashlib
+import os
+import sys
+
+secret = str(os.environ.get("EMPYRALIS_SUPERVISOR_SECRET") or "").strip()
+if not secret:
+    sys.exit(1)
+print(hashlib.sha256(secret.encode("utf-8")).hexdigest()[:12])
+PY
+}
+
+runtime_process_secret_hash() {
+  local pid="${1:-}"
+  [[ -n "${pid}" ]] || return 1
+  python3 - "${pid}" <<'PY'
+import hashlib
+import re
+import subprocess
+import sys
+
+pid = sys.argv[1]
+try:
+    output = subprocess.check_output(
+        ["ps", "eww", "-p", pid, "-o", "command="],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+except Exception:
+    sys.exit(1)
+match = re.search(r"EMPYRALIS_SUPERVISOR_SECRET=([^\s]+)", output)
+if not match:
+    sys.exit(1)
+print(hashlib.sha256(match.group(1).encode("utf-8")).hexdigest()[:12])
+PY
+}
+
+runtime_secret_status() {
+  local env_hash supervisor_pid edge_pid supervisor_hash edge_hash
+  env_hash="$(runtime_env_secret_hash 2>/dev/null || true)"
+  supervisor_pid="$(runtime_process_pid "${SUPERVISOR_PID_FILE}" "${SUPERVISOR_BIN#${ROOT_DIR}/}" "${SUPERVISOR_BIN#${ROOT_DIR}/}$" || true)"
+  edge_pid="$(runtime_process_pid "${EDGE_PID_FILE}" "${EDGE_ENTRY#${ROOT_DIR}/}" "${EDGE_ENTRY#${ROOT_DIR}/}$" || true)"
+  supervisor_hash="$(runtime_process_secret_hash "${supervisor_pid}" 2>/dev/null || true)"
+  edge_hash="$(runtime_process_secret_hash "${edge_pid}" 2>/dev/null || true)"
+  if [[ -z "${env_hash}" || -z "${supervisor_hash}" || -z "${edge_hash}" ]]; then
+    echo "secret_check: unavailable"
+    return 0
+  fi
+  if [[ "${env_hash}" == "${supervisor_hash}" && "${env_hash}" == "${edge_hash}" ]]; then
+    echo "secret_check: ok"
+  else
+    echo "secret_check: mismatch (restart Agent Computer; gateway and supervisor must share ${ENV_FILE})"
+  fi
+}
+
 collect_descendants() {
   local parent="$1"
   local children
@@ -633,6 +704,7 @@ status_runtime() {
   else
     echo "health: local runner unavailable (${SUPERVISOR_URL})"
   fi
+  runtime_secret_status
   echo "config: ${ENV_FILE}"
   echo "logs: ${LOG_DIR}/agent-computer-supervisor.log, ${LOG_DIR}/agent-computer-edge.log"
 }

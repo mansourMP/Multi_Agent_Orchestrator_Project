@@ -1,7 +1,7 @@
 # Context
 
-Last verified: 2026-04-22
-Latest verified green commit: `b3eca81`
+Last verified: 2026-06-07
+Latest verified green commit: `efd0cab9`
 
 ## Product Identity
 
@@ -160,11 +160,11 @@ Canonical Phase 0 local-gateway references:
 - `docs/domains/agent-computer/gateway-protocol.md`
 - `docs/domains/channels/personal-vs-studio-channel-model.md`
 
-Those documents freeze the future `empyralis-gateway` boundary in front of the
-local runtime supervisor without changing the current repo into a second auth
-plane or into the Studio webhook connector stack.
+Those documents freeze the live `empyralis-gateway` boundary in front of the
+local runtime supervisor without turning the local runtime into a second auth
+plane or mixing it into the Studio webhook connector stack.
 
-Current repo truth as of 2026-04-22:
+Current repo truth as of 2026-06-07:
 - `empyralis-gateway` exists and owns paired WSS gateway sessions
 - the gateway already routes local supervisor/device actions through the cloud
   control path

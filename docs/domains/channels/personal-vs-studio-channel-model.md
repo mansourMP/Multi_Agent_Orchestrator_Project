@@ -1,8 +1,7 @@
 # Personal Vs Studio Channel Model
 
-Last verified: 2026-04-22
-Phase: 0
-Status: Frozen boundary with implemented lane split
+Last verified: 2026-06-07
+Status: Live boundary with implemented lane split
 
 This document freezes the boundary between:
 - personal channels owned by the local gateway
@@ -164,15 +163,13 @@ Current repo truth:
 Do **not** solve the absence of personal channels by adding more behavior to the
 Studio connector stack.
 
-## Frozen Rebuild Boundary
+## Historical Rebuild Boundary
 
-This Phase 0 document freezes only the channel-family boundary.
-It does not implement:
-- the gateway
-- WhatsApp personal
-- Telegram personal
-- Studio connector rewrites
+The original Phase 0 version of this document froze only the channel-family
+boundary and did not implement the gateway, personal WhatsApp, personal
+Telegram, or Studio connector rewrites.
 
-Those items were later implementation goals. The live repo now contains
-baseline gateway and personal-channel implementations, but this document still
-exists to freeze the boundary and prevent architecture drift.
+The live repo now contains baseline gateway and personal-channel
+implementations. This document remains the product boundary: personal accounts
+belong to the selected Agent Computer gateway lane, while Studio/business
+channels remain in the cloud connector lane.

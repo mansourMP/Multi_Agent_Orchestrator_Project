@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { ArrowLeft, BookOpen, Bot, Brain, ChevronRight, Compass, Cpu, FolderOpen, LayoutGrid, Link2, ListTodo, Menu, MessageSquare, Monitor, Package, Plus } from 'lucide-react';
+import { ArrowLeft, BookOpen, Brain, ChevronRight, Cpu, FolderOpen, LayoutGrid, Link2, ListTodo, Menu, MessageSquare, Monitor, Plus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { logout } from '@/lib/auth/auth-client';
@@ -53,8 +53,8 @@ import {
 } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['chat', 'activity', 'integrations', 'memory', 'tasks', 'artifacts'],
-  studio: ['studio'],
+  sage: ['chat', 'studio', 'activity', 'integrations', 'memory', 'tasks', 'artifacts'],
+  studio: [],
   gateway: [],
   marketplace: ['marketplace'],
   applications: ['applications'],
@@ -63,21 +63,6 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
 };
 
 type ShellSectionId = WorkspaceNavDestinationId;
-
-type PrimaryShellTabId = Extract<WorkspaceNavDestinationId, 'sage' | 'studio' | 'marketplace' | 'applications' | 'hardware'>;
-
-const SHELL_PRIMARY_TABS: readonly {
-  id: PrimaryShellTabId;
-  label: string;
-  routeId: WorkspaceRouteId;
-  icon: LucideIcon;
-}[] = [
-  { id: 'sage', label: 'Sage', routeId: 'chat', icon: Bot },
-  { id: 'studio', label: 'Studio', routeId: 'studio', icon: LayoutGrid },
-  { id: 'marketplace', label: 'Discover', routeId: 'marketplace', icon: Compass },
-  { id: 'applications', label: 'Apps', routeId: 'applications', icon: Package },
-  { id: 'hardware', label: 'Hardware', routeId: 'hardware', icon: Monitor },
-];
 
 type SettingsPanelSectionId = 'account' | 'appearance' | 'usage' | 'billing' | 'privacy' | 'transparency';
 
@@ -249,16 +234,14 @@ function writePanelCollapsedPreference(collapsed: boolean): void {
   }
 }
 
-const MOBILE_DESTINATION_NAV: readonly {
-  id: 'chat' | 'studio' | 'marketplace' | 'applications';
+const SAGE_FOOTER_NAV_ITEMS: readonly {
+  id: 'agents' | 'hardware';
   label: string;
-  defaultRouteId: WorkspaceRouteId;
+  routeId: WorkspaceRouteId;
   icon: LucideIcon;
 }[] = [
-  { id: 'chat', label: 'Sage', defaultRouteId: 'chat', icon: Bot },
-  { id: 'studio', label: 'Studio', defaultRouteId: 'studio', icon: LayoutGrid },
-  { id: 'marketplace', label: 'Discover', defaultRouteId: 'marketplace', icon: Compass },
-  { id: 'applications', label: 'Apps', defaultRouteId: 'applications', icon: Package },
+  { id: 'agents', label: 'Agents', routeId: 'studio', icon: LayoutGrid },
+  { id: 'hardware', label: 'Hardware', routeId: 'hardware', icon: Monitor },
 ];
 
 function readString(value: unknown, fallback = ''): string {
@@ -1101,80 +1084,6 @@ function DiscoverPanelContent({
   );
 }
 
-function RootPanelContent({
-  activeDestinationId,
-  onOpenAssistant,
-  onOpenApps,
-  onOpenStudio,
-  onOpenDiscover,
-  onOpenHardware,
-}: {
-  activeDestinationId: WorkspaceNavDestinationId;
-  onOpenAssistant: () => void;
-  onOpenApps: () => void;
-  onOpenStudio: () => void;
-  onOpenDiscover: () => void;
-  onOpenHardware: () => void;
-}) {
-  const sageActive = activeDestinationId === 'sage';
-  const studioActive = activeDestinationId === 'studio';
-  const discoverActive = activeDestinationId === 'marketplace';
-  const appsActive = activeDestinationId === 'applications';
-  const hardwareActive = activeDestinationId === 'hardware';
-
-  return (
-    <nav className="workstation-shell-panel__root-nav" aria-label="Workspace sections" data-workstation-shell-panel-content="root">
-      <button
-        type="button"
-        className={joinClassNames('workstation-shell-panel__nav-row', sageActive && 'workstation-shell-panel__nav-row--active')}
-        aria-current={sageActive ? 'page' : undefined}
-        onClick={onOpenAssistant}
-      >
-        <Bot size={15} aria-hidden="true" />
-        <span>Sage</span>
-      </button>
-      <button
-        type="button"
-        className={joinClassNames('workstation-shell-panel__nav-row', studioActive && 'workstation-shell-panel__nav-row--active')}
-        aria-current={studioActive ? 'page' : undefined}
-        onClick={onOpenStudio}
-      >
-        <LayoutGrid size={15} aria-hidden="true" />
-        <span>Studio</span>
-        <ChevronRight size={14} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className={joinClassNames('workstation-shell-panel__nav-row', discoverActive && 'workstation-shell-panel__nav-row--active')}
-        aria-current={discoverActive ? 'page' : undefined}
-        onClick={onOpenDiscover}
-      >
-        <Compass size={15} aria-hidden="true" />
-        <span>Discover</span>
-        <ChevronRight size={14} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className={joinClassNames('workstation-shell-panel__nav-row', appsActive && 'workstation-shell-panel__nav-row--active')}
-        aria-current={appsActive ? 'page' : undefined}
-        onClick={onOpenApps}
-      >
-        <Package size={15} aria-hidden="true" />
-        <span>Apps</span>
-      </button>
-      <button
-        type="button"
-        className={joinClassNames('workstation-shell-panel__nav-row', hardwareActive && 'workstation-shell-panel__nav-row--active')}
-        aria-current={hardwareActive ? 'page' : undefined}
-        onClick={onOpenHardware}
-      >
-        <Monitor size={15} aria-hidden="true" />
-        <span>Hardware</span>
-      </button>
-    </nav>
-  );
-}
-
 function buildSettingsSectionHref(settingsHref: string, sectionId: SettingsPanelSectionId): string {
   return `${settingsHref}${settingsHref.includes('?') ? '&' : '?'}section=${encodeURIComponent(sectionId)}`;
 }
@@ -1443,7 +1352,7 @@ export function WorkstationKernelShell({
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [panelPreferenceLoaded, setPanelPreferenceLoaded] = useState(false);
-  const [panelStack, setPanelStack] = useState<PanelStackLevel[]>(['root']);
+  const [panelStack, setPanelStack] = useState<PanelStackLevel[]>(['assistant']);
   const [panelTransitionDirection, setPanelTransitionDirection] = useState<PanelTransitionDirection>('forward');
   const [studioCacheRevision, setStudioCacheRevision] = useState(0);
 
@@ -1457,28 +1366,11 @@ export function WorkstationKernelShell({
     }
     return getWorkspaceNavRouteDefinition(activeRouteId).destinationId;
   }, [activeRouteId]);
-  const activeMobileDestinationId = useMemo(() => {
-    if (activeRouteId === 'activity' || activeRouteId === 'approvals' || activeRouteId === 'notifications') {
-      return 'chat';
-    }
-    if (
-      activeDestinationId === 'studio'
-      || activeDestinationId === 'gateway'
-      || activeDestinationId === 'marketplace'
-      || activeDestinationId === 'applications'
-      || activeDestinationId === 'hardware'
-    ) {
-      return activeDestinationId;
-    }
-    return 'chat';
-  }, [activeDestinationId, activeRouteId]);
   const workspaceLabel = bootstrap.workspace.label;
   const chatHref = routeManifest.routeIndex.chat?.href ?? buildWorkspaceRouteHref(workspaceId, 'chat');
   const settingsHref = routeManifest.routeIndex.settings?.href ?? buildWorkspaceRouteHref(workspaceId, 'settings');
   const hardwareHref = routeManifest.routeIndex.hardware?.href ?? buildWorkspaceRouteHref(workspaceId, 'hardware');
   const creditsHref = `${settingsHref}${settingsHref.includes('?') ? '&' : '?'}section=billing`;
-  const studioHref = routeManifest.routeIndex.studio?.href ?? buildWorkspaceRouteHref(workspaceId, 'studio');
-  const marketplaceHref = routeManifest.routeIndex.marketplace?.href ?? buildWorkspaceRouteHref(workspaceId, 'marketplace');
   const accountEmail = readString(bootstrap.account.email, 'Account');
   const accountDisplayName = readString(bootstrap.account.displayName, accountEmail);
   const accountRoleLabel = workspaceRoleLabel(bootstrap.membership.role);
@@ -1491,7 +1383,7 @@ export function WorkstationKernelShell({
   const selectedStudioAgentId = activeDestinationId === 'studio' ? readString(searchParams.get('agent')) || null : null;
   const selectedStudioExternalAgentId = activeDestinationId === 'studio' ? readString(searchParams.get('externalAgent')) || null : null;
   const selectedStudioExternalSubAgentId = activeDestinationId === 'studio' ? readString(searchParams.get('externalSubAgent')) || null : null;
-  const latestPanelLevel = panelStack[panelStack.length - 1] ?? 'root';
+  const latestPanelLevel = panelStack[panelStack.length - 1] ?? 'assistant';
   const activeStudioAgentId = selectedStudioAgentId ?? (latestPanelLevel.startsWith('agent:') ? latestPanelLevel.slice('agent:'.length) : null);
   const activeStudioExternalAgentId = selectedStudioExternalAgentId ?? (latestPanelLevel.startsWith('external-agent:') ? latestPanelLevel.slice('external-agent:'.length) : null);
   const activeStudioAgent = activeStudioAgentId
@@ -1645,12 +1537,21 @@ export function WorkstationKernelShell({
   const marketplaceFilter = normalizeMarketplaceTitlebarFilter(searchParams.get('filter') ?? searchParams.get('category'));
   const activeDiscoverFilter = marketplaceFilter;
   const activeSettingsSection = searchParams.get('section');
-  const activePanelDestinationId: WorkspaceNavDestinationId = activeDestinationId;
-  const activePrimaryTabId: PrimaryShellTabId | null = SHELL_PRIMARY_TABS.some((tab) => tab.id === activePanelDestinationId)
-    ? activePanelDestinationId as PrimaryShellTabId
-    : null;
-  const panelLevel = panelStack[panelStack.length - 1] ?? 'root';
-  const visiblePanelLevel: PanelStackLevel = activeDestinationId === 'settings' ? 'settings' : panelLevel;
+  const activePanelDestinationId: WorkspaceNavDestinationId = activeDestinationId === 'settings'
+    ? 'settings'
+    : 'sage';
+  const isFooterNavItemActive = (itemId: typeof SAGE_FOOTER_NAV_ITEMS[number]['id']): boolean => {
+    if (itemId === 'agents') {
+      return activeDestinationId === 'studio';
+    }
+    return activeDestinationId === 'gateway' || activeDestinationId === 'hardware';
+  };
+  const panelLevel = panelStack[panelStack.length - 1] ?? 'assistant';
+  const visiblePanelLevel: PanelStackLevel = activeDestinationId === 'settings'
+    ? 'settings'
+    : panelLevel === 'root'
+      ? 'assistant'
+      : panelLevel;
   const studioAgentDetailActive = activeDestinationId === 'studio' && Boolean(
     selectedStudioAgentId || selectedStudioExternalAgentId,
   );
@@ -1664,7 +1565,7 @@ export function WorkstationKernelShell({
   };
   const popPanelLevel = () => {
     setPanelTransitionDirection('back');
-    setPanelStack((current) => current.length > 1 ? current.slice(0, -1) : ['root']);
+    setPanelStack((current) => current.length > 1 ? current.slice(0, -1) : ['assistant']);
   };
   const clearStudioObjectSelection = () => {
     setPanelTransitionDirection('back');
@@ -1674,7 +1575,7 @@ export function WorkstationKernelShell({
   const handlePanelBack = () => {
     if (activeDestinationId === 'settings') {
       setPanelTransitionDirection('back');
-      setPanelStack(['root']);
+      setPanelStack(['assistant']);
       router.push(chatHref);
       return;
     }
@@ -1683,26 +1584,6 @@ export function WorkstationKernelShell({
       return;
     }
     popPanelLevel();
-  };
-  const openAssistantPanel = () => {
-    replacePanelStack(['assistant']);
-    router.push(chatHref);
-  };
-  const openStudioPanel = () => {
-    pushPanelLevel('studio');
-    router.push(studioHref);
-  };
-  const openDiscoverPanel = () => {
-    pushPanelLevel('discover');
-    router.push(marketplaceHref);
-  };
-  const openApplicationsPanel = () => {
-    replacePanelStack(['root']);
-    router.push(buildWorkspaceRouteHref(workspaceId, 'applications'));
-  };
-  const openHardwarePanel = () => {
-    replacePanelStack(['root']);
-    router.push(hardwareHref);
   };
   useEffect(() => {
     if (activeDestinationId !== 'settings') {
@@ -1757,11 +1638,11 @@ export function WorkstationKernelShell({
       data-workstation-main-layout="single-pane"
       data-workstation-route={activeRouteId ?? 'unknown'}
       data-workstation-destination={activeDestinationId}
-      data-workstation-shell-section={activePrimaryTabId ?? activePanelDestinationId}
+      data-workstation-shell-section={activePanelDestinationId}
       data-workstation-shell-sidebar="unified"
       className={joinClassNames(
         'workstation-shell',
-        activeDestinationId === 'sage' && 'workstation-shell--sage',
+        activePanelDestinationId === 'sage' && 'workstation-shell--sage',
         isSidebarOpen && 'workstation-shell--mobile-sidebar-open',
         studioAgentDetailActive && 'workstation-shell--studio-agent-detail',
         activeRouteId === 'chat' && 'workstation-shell--chat',
@@ -1781,40 +1662,6 @@ export function WorkstationKernelShell({
           >
             <Menu size={17} aria-hidden="true" />
           </button>
-          <nav className="workstation-shell-left-panel__icon-nav" aria-label="Primary sections collapsed">
-            {SHELL_PRIMARY_TABS.map((tab) => {
-              const href = routeManifest.routeIndex[tab.routeId]?.href
-                ?? buildWorkspaceRouteHref(workspaceId, tab.routeId);
-              const active = activePrimaryTabId === tab.id;
-              const Icon = tab.icon;
-              return (
-                <Link
-                  key={tab.id}
-                  href={href}
-                  prefetch
-                  aria-current={active ? 'page' : undefined}
-                  title={tab.label}
-                  onClick={() => {
-                    if (tab.id === 'sage') {
-                      replacePanelStack(['assistant']);
-                    } else if (tab.id === 'studio') {
-                      replacePanelStack(['studio']);
-                    } else if (tab.id === 'marketplace') {
-                      replacePanelStack(['discover']);
-                    } else {
-                      replacePanelStack(['root']);
-                    }
-                  }}
-                  className={joinClassNames(
-                    'workstation-shell-left-panel__icon-link',
-                    active && 'workstation-shell-left-panel__icon-link--active',
-                  )}
-                >
-                  <Icon size={17} aria-hidden="true" />
-                </Link>
-              );
-            })}
-          </nav>
         </div>
         ) : null}
 
@@ -1823,7 +1670,7 @@ export function WorkstationKernelShell({
           <ShellPanelHeader
             level={visiblePanelLevel}
             title={visiblePanelLevel === 'studio'
-              ? 'Studio'
+              ? 'Agents'
               : visiblePanelLevel === 'discover'
               ? 'Discover'
               : visiblePanelLevel === 'settings'
@@ -1840,16 +1687,7 @@ export function WorkstationKernelShell({
             className="workstation-shell-left-panel__content"
             data-panel-direction={panelTransitionDirection}
           >
-            {visiblePanelLevel === 'root' ? (
-              <RootPanelContent
-                activeDestinationId={activeDestinationId}
-                onOpenAssistant={openAssistantPanel}
-                onOpenApps={openApplicationsPanel}
-                onOpenStudio={openStudioPanel}
-                onOpenDiscover={openDiscoverPanel}
-                onOpenHardware={openHardwarePanel}
-              />
-            ) : visiblePanelLevel === 'assistant' ? (
+            {visiblePanelLevel === 'assistant' ? (
               <AssistantPanelContent
                 chatHref={chatHref}
                 client={services.client}
@@ -1913,6 +1751,32 @@ export function WorkstationKernelShell({
           </div>
 
           <div className="workstation-shell-left-panel__footer">
+            <nav className="workstation-shell-left-panel__footer-nav" aria-label="Workspace tools">
+              {SAGE_FOOTER_NAV_ITEMS.map((item) => {
+                const href = routeManifest.routeIndex[item.routeId]?.href
+                  ?? buildWorkspaceRouteHref(workspaceId, item.routeId);
+                const active = isFooterNavItemActive(item.id);
+                return (
+                  <Link
+                    key={item.id}
+                    href={href}
+                    prefetch
+                    aria-current={active ? 'page' : undefined}
+                    title={item.label}
+                    onClick={() => {
+                      replacePanelStack(item.id === 'agents' ? ['studio'] : ['assistant']);
+                    }}
+                    className={joinClassNames(
+                      'workstation-shell-panel__assistant-link',
+                      active && 'workstation-shell-panel__assistant-link--active',
+                    )}
+                  >
+                    <item.icon size={14} aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
             <ShellAccountBlock
               displayName={accountDisplayName}
               email={accountEmail}
@@ -1929,7 +1793,7 @@ export function WorkstationKernelShell({
         <div className="workstation-shell__topbar" data-workstation-main-pane="topbar">
           <WorkstationTitlebar
             surfaceLabel=""
-            surfaceControl={activeDestinationId === 'sage' ? (
+            surfaceControl={activePanelDestinationId === 'sage' ? (
               <span className="workstation-titlebar__mobile-surface-label">Sage</span>
             ) : (
               <span className="workstation-titlebar__surface-empty" aria-hidden="true" />
@@ -1981,17 +1845,17 @@ export function WorkstationKernelShell({
         <AppDrawer
           open={isSidebarOpen}
           onOpenChange={setIsSidebarOpen}
-          title={activeDestinationId === 'sage' ? 'Sage' : workspaceLabel}
+          title={activePanelDestinationId === 'sage' ? 'Sage' : workspaceLabel}
           className="workstation-mobile-sidebar"
         >
           {isSidebarOpen && (
             <div
               className={joinClassNames(
                 'workstation-mobile-sidebar__content',
-                activeDestinationId === 'sage' && 'workstation-mobile-sidebar__content--sage',
+                activePanelDestinationId === 'sage' && 'workstation-mobile-sidebar__content--sage',
               )}
             >
-              {activeDestinationId === 'sage' ? (
+              {activePanelDestinationId === 'sage' ? (
                 <>
                   <nav className="workstation-mobile-sidebar__sage-nav" aria-label="Sage navigation">
                     {sageMobileDrawerRoutes.map((route) => (
@@ -2017,9 +1881,35 @@ export function WorkstationKernelShell({
                     workspaceId={workspaceId}
                     onNavigate={() => setIsSidebarOpen(false)}
                   />
+                  <nav className="workstation-mobile-sidebar__sage-nav workstation-mobile-sidebar__sage-nav--footer" aria-label="Workspace tools">
+                    {SAGE_FOOTER_NAV_ITEMS.map((item) => {
+                      const href = routeManifest.routeIndex[item.routeId]?.href
+                        ?? buildWorkspaceRouteHref(workspaceId, item.routeId);
+                      const active = isFooterNavItemActive(item.id);
+                      return (
+                        <Link
+                          key={item.id}
+                          href={href}
+                          prefetch
+                          aria-current={active ? 'page' : undefined}
+                          className={joinClassNames(
+                            'workstation-mobile-sidebar__sage-link',
+                            active && 'workstation-mobile-sidebar__sage-link--active',
+                          )}
+                          onClick={() => {
+                            setIsSidebarOpen(false);
+                            replacePanelStack(item.id === 'agents' ? ['studio'] : ['assistant']);
+                          }}
+                        >
+                          <item.icon size={20} aria-hidden="true" />
+                          <span>{item.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </nav>
                 </>
               ) : null}
-              {activeDestinationId === 'sage' ? null : <AccountTenantSwitcher />}
+              {activePanelDestinationId === 'sage' ? null : <AccountTenantSwitcher />}
             </div>
           )}
         </AppDrawer>
@@ -2040,23 +1930,6 @@ export function WorkstationKernelShell({
           </div>
         </div>
 
-        <nav className="workstation-mobile-bottom-nav" aria-label="Main navigation">
-          {MOBILE_DESTINATION_NAV.map((destination) => (
-            <Link
-              key={destination.id}
-              href={buildWorkspaceRouteHref(workspaceId, destination.defaultRouteId)}
-              prefetch
-              aria-current={activeMobileDestinationId === destination.id ? 'page' : undefined}
-              className={joinClassNames(
-                'workstation-mobile-bottom-nav__link',
-                activeMobileDestinationId === destination.id && 'workstation-mobile-bottom-nav__link--active',
-              )}
-            >
-              <destination.icon size={20} aria-hidden="true" />
-              <span className="workstation-mobile-bottom-nav__label">{destination.label}</span>
-            </Link>
-          ))}
-        </nav>
       </div>
     </div>
   );

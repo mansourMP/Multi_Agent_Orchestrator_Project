@@ -85,6 +85,66 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertTrue(gateway_decision_calls)
 
+    async def test_execute_tool_via_gateway_can_skip_hardware_activity_events(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["shell.execute"],
+            "metadata": {"capability_readiness": {"ready": ["shell.execute"]}},
+        }
+        dispatch_mock = AsyncMock(
+            return_value={
+                "request_id": "req-1",
+                "capability_id": "shell.execute",
+                "run_id": "hardware-capability-probe-gw-1-1",
+                "result": {"stdout": "{}"},
+            }
+        )
+
+        def rust_side_effect(command, payload):
+            if payload.get("operation") == "quota_check":
+                return {"ok": True, "decision": "allow", "next_action": "allow_gateway_service_operation"}
+            return {"ok": True, "decision": "allow", "next_action": "dispatch_gateway_operation"}
+
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live", return_value=True),
+            patch(
+                "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "online",
+                    "heartbeat_fresh": True,
+                    "reported_health_state": "online",
+                    "capability_readiness": {"ready": ["shell.execute"]},
+                },
+            ),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
+            patch("server_modules.gateway_execution_service.gateway_activity_service.append_gateway_activity", AsyncMock()),
+            patch("server_modules.gateway_execution_service.hardware_activity_event_service.emit_hardware_action_event") as hardware_event_mock,
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                side_effect=rust_side_effect,
+            ),
+        ):
+            await gateway_execution_service.execute_tool_via_gateway(
+                gateway_id="gw-1",
+                capability_id="shell.execute",
+                arguments={"command": "echo ok"},
+                run_id="hardware-capability-probe-gw-1-1",
+                trace_id="hardware-capability-probe-gw-1",
+                workspace_id="ws-1",
+                request_id="hardware-capability-probe-gw-1",
+                runtime_access_mode="default_guarded",
+                empyralis_approved=True,
+                agent_scope="system",
+                emit_hardware_activity=False,
+            )
+
+        hardware_event_mock.assert_not_called()
+
     async def test_execute_tool_via_gateway_forwards_agent_scope_and_policy(self) -> None:
         registration = {
             "gateway_id": "gw-1",

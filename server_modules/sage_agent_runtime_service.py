@@ -88,8 +88,64 @@ _SAGE_ACTION_LOOP_VERSION = "v2"
 _SAGE_OPERATOR_LOOP_VERSION = "v3"
 _SAGE_ACTION_LOOP_MAX_TOOL_CALLS = 5
 _SAGE_OPERATOR_LOOP_MAX_ITERATIONS = 6
+_SAGE_TASK_ROUTE_MODES = {
+    "chat_only",
+    "connector_api",
+    "cloud_browser",
+    "cloud_computer",
+    "gateway_required",
+}
 _AGENT_COMPUTER_TOOL_PREFIXES = ("browser__", "computer__", "file__", "shell__", "screenshot__")
 _AGENT_COMPUTER_TOOL_NAMES = {"hardware__action"}
+_CONNECTOR_ROUTE_KEYWORDS = {
+    "gmail": ("gmail", "inbox"),
+    "google_calendar": ("calendar", "meeting", "schedule", "event", "availability"),
+    "google_drive": ("drive", "google drive", "doc", "docs", "sheet", "slides"),
+    "github": ("github", "pull request", "pull-request", "issue", "repo", "repository"),
+    "slack": ("slack",),
+    "discord": ("discord",),
+    "notion": ("notion",),
+    "linear": ("linear",),
+    "mcp": ("mcp",),
+}
+_GATEWAY_ROUTE_KEYWORDS = (
+    "my computer",
+    "this computer",
+    "this mac",
+    "my mac",
+    "local file",
+    "local folder",
+    "local project",
+    "local browser",
+    "signed-in browser",
+    "browser profile",
+    "desktop app",
+    "vscode",
+    "vs code",
+    "finder",
+    "terminal on my",
+    "ssh key",
+    "browser cookie",
+    "browser cookies",
+    "local network",
+    "personal telegram",
+    "personal whatsapp",
+    "imessage",
+    "signal",
+    "wechat",
+)
+_CLOUD_COMPUTER_ROUTE_KEYWORDS = (
+    "run this script",
+    "execute this script",
+    "run code",
+    "compile",
+    "build this",
+    "terminal",
+    "shell command",
+    "terminal command",
+    "run command",
+    "execute command",
+)
 
 
 def _coerce_text(value: Any) -> str:
@@ -405,6 +461,132 @@ def _tool_requires_agent_computer(tool_name: str) -> bool:
     return normalized in _AGENT_COMPUTER_TOOL_NAMES or normalized.startswith(_AGENT_COMPUTER_TOOL_PREFIXES)
 
 
+def _compact_route_text(message: str) -> str:
+    return " ".join(str(message or "").strip().lower().split())
+
+
+def _available_tool_names(tools: list[dict[str, Any]]) -> set[str]:
+    return {
+        _coerce_text(tool.get("name"))
+        for tool in tools
+        if isinstance(tool, dict) and _coerce_text(tool.get("name"))
+    }
+
+
+def _connected_capability_tokens(tool_capabilities: list[dict[str, Any]], tools: list[dict[str, Any]]) -> set[str]:
+    tokens: set[str] = set()
+    for capability in tool_capabilities:
+        if not isinstance(capability, dict):
+            continue
+        for field in ("id", "label", "connector", "provider", "capability", "name"):
+            value = _coerce_text(capability.get(field)).lower()
+            if value:
+                tokens.add(value)
+                tokens.add(value.replace(" ", "_"))
+    for name in _available_tool_names(tools):
+        prefix = name.split("__", 1)[0]
+        if prefix:
+            tokens.add(prefix)
+    return tokens
+
+
+def _connector_requirements_for_message(message: str) -> list[str]:
+    compact = _compact_route_text(message)
+    required: list[str] = []
+    for connector_id, keywords in _CONNECTOR_ROUTE_KEYWORDS.items():
+        if any(keyword in compact for keyword in keywords):
+            required.append(connector_id)
+    return required
+
+
+def _connector_requirements_satisfied(required_connections: list[str], connected_tokens: set[str]) -> bool:
+    if not required_connections:
+        return False
+    for connector_id in required_connections:
+        aliases = {
+            connector_id,
+            connector_id.replace("_", " "),
+        }
+        if connector_id in {"gmail", "google_calendar", "google_drive"}:
+            aliases.add("google_workspace")
+            aliases.add("google workspace")
+        if connector_id == "mcp":
+            aliases.add("mcp_tool")
+        if not aliases.intersection(connected_tokens):
+            return False
+    return True
+
+
+def _build_sage_route_decision(
+    *,
+    message: str,
+    tools: list[dict[str, Any]] | None = None,
+    tool_capabilities: list[dict[str, Any]] | None = None,
+    availability: dict[str, Any] | None = None,
+    blocked_agent_computer_tool: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    compact = _compact_route_text(message)
+    normalized_tools = tools or []
+    normalized_capabilities = tool_capabilities or []
+    connected_tokens = _connected_capability_tokens(normalized_capabilities, normalized_tools)
+    required_connections = _connector_requirements_for_message(message)
+    browser_status = _sage_agent_computer_browser_status(availability or {})
+    gateway_requested = any(token in compact for token in _GATEWAY_ROUTE_KEYWORDS)
+    local_path_requested = direct_chat_tool_catalog_service.looks_like_local_path_request(compact)
+    browser_requested = direct_chat_tool_catalog_service.message_has_browser_automation_intent(message)
+    web_lookup_requested = direct_chat_tool_catalog_service.message_has_web_lookup_intent(message)
+    cloud_computer_requested = any(token in compact for token in _CLOUD_COMPUTER_ROUTE_KEYWORDS)
+
+    mode = "chat_only"
+    reason = "Sage can answer this directly in chat."
+    fallback_modes: list[str] = []
+    approval_required = False
+
+    if blocked_agent_computer_tool is not None or gateway_requested or local_path_requested:
+        mode = "gateway_required"
+        reason = "This needs Agent Computer because it asks for local/private computer access."
+        fallback_modes = ["cloud_computer", "cloud_browser", "connector_api"]
+        approval_required = True
+    elif required_connections:
+        mode = "connector_api"
+        if _connector_requirements_satisfied(required_connections, connected_tokens):
+            reason = "This should use connected app or MCP tools before any computer runtime."
+        else:
+            reason = "This needs connected apps before Sage can do the requested work."
+        fallback_modes = ["cloud_browser", "cloud_computer", "gateway_required"]
+        approval_required = any(token in compact for token in ("send", "create", "update", "delete", "post", "schedule", "book"))
+    elif browser_requested:
+        mode = "cloud_browser"
+        reason = "This can use a hosted browser unless the user explicitly needs a local signed-in browser."
+        fallback_modes = ["connector_api", "cloud_computer", "gateway_required"]
+        approval_required = any(token in compact for token in ("click", "fill", "submit", "book", "buy", "pay"))
+    elif cloud_computer_requested:
+        mode = "cloud_computer"
+        reason = "This needs an isolated computer runtime, but not the user's personal machine."
+        fallback_modes = ["connector_api", "gateway_required"]
+        approval_required = True
+    elif web_lookup_requested:
+        mode = "connector_api"
+        reason = "This can use cloud web search/fetch without Agent Computer."
+        fallback_modes = ["cloud_browser"]
+
+    user_label = {
+        "chat_only": "Basic Assistant",
+        "connector_api": "Connected Assistant",
+        "cloud_browser": "Connected Assistant",
+        "cloud_computer": "Computer Assistant",
+        "gateway_required": "Computer Assistant",
+    }[mode]
+    return {
+        "mode": mode,
+        "user_label": user_label,
+        "reason": reason,
+        "required_connections": required_connections,
+        "fallback_modes": [item for item in fallback_modes if item in _SAGE_TASK_ROUTE_MODES and item != mode],
+        "approval_required": approval_required,
+    }
+
+
 def _summarize_tool_output(value: Any, *, max_chars: int = _SAGE_TOOL_RESULT_MAX_CHARS) -> str:
     text = secret_redaction_service.redact_text(str(value or "").replace("\0", "")).strip()
     if len(text) <= max_chars:
@@ -637,6 +819,8 @@ def _message_might_need_sage_action_loop(message: str) -> bool:
     compact = " ".join(str(message or "").lower().split())
     if not compact:
         return False
+    if _connector_requirements_for_message(message):
+        return True
     if "mcp" in compact:
         return True
     if direct_chat_tool_catalog_service.message_has_web_lookup_intent(message):
@@ -846,15 +1030,23 @@ async def _run_sage_action_loop_v3(
 ) -> dict[str, Any] | None:
     tools, tool_capabilities, availability = _direct_tool_bundle(workspace_id=workspace_id, provider=provider)
     blocked = _blocked_agent_computer_tool_for_message(message, availability)
+    route_decision = _build_sage_route_decision(
+        message=message,
+        tools=tools,
+        tool_capabilities=tool_capabilities,
+        availability=availability,
+        blocked_agent_computer_tool=blocked,
+    )
     mcp_skill = _matching_mcp_skill(workspace_id=workspace_id, message=message)
     if blocked is not None:
         return {
-            "message": "Sage could not run that action because the required runtime is unavailable.",
+            "message": "This needs Agent Computer because it requires local or private computer access. Connect Agent Computer and try again.",
             "tool_calls": [],
             "blocked_tools": [blocked],
             "approvals_required": [],
             "action_execution_mode": "tool_blocked",
             "available_tools": tools,
+            "route_decision": route_decision,
             "action_loop_version": _SAGE_OPERATOR_LOOP_VERSION,
             "trace_events": [],
             "loop_budget": {
@@ -883,6 +1075,7 @@ async def _run_sage_action_loop_v3(
         )
         if mcp_result is not None:
             mcp_result["action_loop_version"] = _SAGE_OPERATOR_LOOP_VERSION
+            mcp_result["route_decision"] = route_decision
             for call in list(mcp_result.get("tool_calls") or []):
                 if isinstance(call, dict):
                     call["action_loop_version"] = _SAGE_OPERATOR_LOOP_VERSION
@@ -1012,6 +1205,7 @@ async def _run_sage_action_loop_v3(
         "approvals_required": collected["approvals_required"],
         "action_execution_mode": collected["action_execution_mode"],
         "available_tools": tools,
+        "route_decision": route_decision,
         "action_loop_version": _SAGE_OPERATOR_LOOP_VERSION,
         "loop_budget": collected["loop_budget"],
         "raw_final_payload": final_payload,
@@ -1032,6 +1226,12 @@ async def _run_sage_action_loop_v2(
     normalized_channel_context: dict[str, str],
 ) -> dict[str, Any] | None:
     tools, tool_capabilities, availability = _direct_tool_bundle(workspace_id=workspace_id, provider=provider)
+    route_decision = _build_sage_route_decision(
+        message=message,
+        tools=tools,
+        tool_capabilities=tool_capabilities,
+        availability=availability,
+    )
     try:
         services = direct_chat_runtime_exports._no_provider_execution_services()
     except Exception:
@@ -1112,6 +1312,14 @@ async def _run_sage_action_loop_v2(
                 "approvals_required": approvals,
                 "action_execution_mode": "approval_required",
                 "available_tools": tools,
+                "route_decision": route_decision,
+                "action_loop_version": _SAGE_ACTION_LOOP_VERSION,
+                "loop_budget": {
+                    "max_tool_calls": _SAGE_ACTION_LOOP_MAX_TOOL_CALLS,
+                    "planned_tool_calls": len(direct_tool_calls),
+                    "executed_tool_calls": 0,
+                    "blocked_tool_calls": 0,
+                },
             }
         for index, call in enumerate(direct_tool_calls, start=1):
             tool_name = _coerce_text(call.get("name"))
@@ -1221,6 +1429,7 @@ async def _run_sage_action_loop_v2(
         "approvals_required": [],
         "action_execution_mode": mode,
         "available_tools": tools,
+        "route_decision": route_decision,
         "action_loop_version": _SAGE_ACTION_LOOP_VERSION,
         "loop_budget": {
             "max_tool_calls": _SAGE_ACTION_LOOP_MAX_TOOL_CALLS,
@@ -1430,6 +1639,7 @@ async def handle_sage_chat(
         tool_calls = list(action_result.get("tool_calls") or [])
         blocked_tools = list(action_result.get("blocked_tools") or [])
         approvals_required = list(action_result.get("approvals_required") or [])
+        route_decision = dict(action_result.get("route_decision")) if isinstance(action_result.get("route_decision"), dict) else _build_sage_route_decision(message=normalized_message)
         action_execution_mode = _coerce_text(action_result.get("action_execution_mode")) or "tools_executed"
         trace_events = list(action_result.get("trace_events") or [])
         prompt_diagnostics = {
@@ -1437,6 +1647,7 @@ async def handle_sage_chat(
             "action_loop_v3": True,
             "action_loop_version": _coerce_text(action_result.get("action_loop_version")) or _SAGE_ACTION_LOOP_VERSION,
             "loop_budget": action_result.get("loop_budget") if isinstance(action_result.get("loop_budget"), dict) else {},
+            "route_decision": route_decision,
             "tool_call_count": len(tool_calls),
             "blocked_tool_count": len(blocked_tools),
             "approval_required_count": len(approvals_required),
@@ -1477,6 +1688,7 @@ async def handle_sage_chat(
                     "surface": normalized_surface,
                     "blocked_action_count": len(blocked_tools),
                     "action_execution_mode": action_execution_mode,
+                    "route_decision": route_decision,
                     "prompt_diagnostics": prompt_diagnostics,
                     "channel_context": normalized_channel_context or None,
                 },
@@ -1504,6 +1716,7 @@ async def handle_sage_chat(
                     "blocked_tools": blocked_tools,
                     "approval_required_count": len(approvals_required),
                     "action_execution_mode": action_execution_mode,
+                    "route_decision": route_decision,
                     "channel_context": normalized_channel_context or None,
                 },
                 idempotency_key=f"sage_chat:{trace_id}",
@@ -1522,6 +1735,7 @@ async def handle_sage_chat(
                     "tool_calls": tool_calls,
                     "blocked_tools": blocked_tools,
                     "approvals_required": approvals_required,
+                    "route_decision": route_decision,
                     "error": None,
                 },
                 surface=normalized_surface,
@@ -1551,6 +1765,7 @@ async def handle_sage_chat(
             "approvals_required": approvals_required,
             "memory_updates": [],
             "action_execution_mode": action_execution_mode,
+            "route_decision": route_decision,
             "trace_id": trace_id,
             "trace_events": trace_events,
             "provider": provider,
@@ -1597,6 +1812,11 @@ async def handle_sage_chat(
     attempted = [p.strip() for p in _coerce_text(attempted_providers).split(",") if p.strip()]
     effective_provider = attempted[-1] if attempted else provider
     effective_model = _coerce_text((usage or {}).get("model")) or requested_model
+    route_decision = _build_sage_route_decision(message=normalized_message)
+    prompt_diagnostics = {
+        **prompt_diagnostics,
+        "route_decision": route_decision,
+    }
 
     # --- Persist interaction ---
     memory_subject = ConversationMemorySubject(
@@ -1636,6 +1856,7 @@ async def handle_sage_chat(
                 "surface": normalized_surface,
                 "blocked_action_count": 0,
                 "action_execution_mode": action_execution_mode,
+                "route_decision": route_decision,
                 "prompt_diagnostics": prompt_diagnostics,
                 "channel_context": normalized_channel_context or None,
             },
@@ -1662,6 +1883,7 @@ async def handle_sage_chat(
                 "surface": normalized_surface,
                 "blocked_action_count": 0,
                 "action_execution_mode": action_execution_mode,
+                "route_decision": route_decision,
                 "prompt_diagnostics": prompt_diagnostics,
                 "channel_context": normalized_channel_context or None,
             },
@@ -1684,6 +1906,7 @@ async def handle_sage_chat(
                 "tool_calls": [],
                 "blocked_tools": [],
                 "approvals_required": [],
+                "route_decision": route_decision,
                 "error": None,
             },
             surface=normalized_surface,
@@ -1715,6 +1938,7 @@ async def handle_sage_chat(
         "approvals_required": [],
         "memory_updates": [],
         "action_execution_mode": action_execution_mode,
+        "route_decision": route_decision,
         "trace_id": trace_id,
         "provider": effective_provider,
         "model": effective_model or None,

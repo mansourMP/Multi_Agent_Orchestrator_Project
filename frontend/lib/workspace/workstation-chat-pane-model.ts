@@ -2043,6 +2043,13 @@ export function createCanonicalAssistantMessage(
   const resultMetadata = readObject(metadata.result_metadata);
   const contextUsed = readObject(metadata.context_used);
   const resultContextUsed = readObject(resultMetadata.context_used);
+  const responseRouteDecision = readObject(responseRecord.route_decision);
+  const metadataRouteDecision = readObject(metadata.route_decision);
+  const routeDecision = Object.keys(responseRouteDecision).length > 0
+    ? responseRouteDecision
+    : Object.keys(metadataRouteDecision).length > 0
+      ? metadataRouteDecision
+      : null;
   if (!contextUsed && resultContextUsed) {
     metadata.context_used = resultContextUsed;
   }
@@ -2059,6 +2066,17 @@ export function createCanonicalAssistantMessage(
   }
   if (effectiveModel) {
     metadata.effective_model = effectiveModel;
+  }
+  if (routeDecision) {
+    metadata.route_decision = routeDecision;
+    const routeLabel = readString(routeDecision.user_label);
+    const routeMode = readString(routeDecision.mode);
+    if (routeLabel) {
+      metadata.route_label = routeLabel;
+    }
+    if (routeMode) {
+      metadata.route_mode = routeMode;
+    }
   }
   const content = reply;
   if (!content) {

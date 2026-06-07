@@ -35,6 +35,22 @@ export type WorkstationSessionRecord = {
   status?: string;
 };
 
+export type SageTaskRouteMode =
+  | 'chat_only'
+  | 'connector_api'
+  | 'cloud_browser'
+  | 'cloud_computer'
+  | 'gateway_required';
+
+export type SageTaskRouteDecision = {
+  mode?: SageTaskRouteMode | string;
+  user_label?: string;
+  reason?: string;
+  required_connections?: string[];
+  fallback_modes?: Array<SageTaskRouteMode | string>;
+  approval_required?: boolean;
+};
+
 export type WorkstationTurnResponse = {
   status?: string;
   reply?: string;
@@ -44,6 +60,7 @@ export type WorkstationTurnResponse = {
   session_id?: string | null;
   approvals?: Record<string, unknown>[];
   interventions?: Record<string, unknown>[];
+  route_decision?: SageTaskRouteDecision | null;
   metadata?: Record<string, unknown>;
 };
 

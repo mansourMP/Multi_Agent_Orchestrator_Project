@@ -1643,6 +1643,7 @@ async def get_gateway_hardware_capabilities(
             runtime_access_mode="default_guarded",
             empyralis_approved=True,
             agent_scope="system",
+            emit_hardware_activity=False,
         )
         result = response.get("result") if isinstance(response.get("result"), dict) else {}
         stdout = str(result.get("stdout") or "").strip()

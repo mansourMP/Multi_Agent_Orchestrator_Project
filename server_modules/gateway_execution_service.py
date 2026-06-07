@@ -470,6 +470,7 @@ async def execute_tool_via_gateway(
     gateway_session_id: Optional[str] = None,
     actor_id: Optional[str] = None,
     agent_scope: Optional[str] = None,
+    emit_hardware_activity: bool = True,
 ) -> Dict[str, Any]:
     registration = _require_active_gateway_registration(gateway_id, workspace_id=workspace_id)
     _gw = str(registration.get("gateway_id") or "").strip()
@@ -587,27 +588,29 @@ async def execute_tool_via_gateway(
             screenshot_retention=screenshot_retention,
         )
     except Exception:
+        if emit_hardware_activity:
+            hardware_activity_event_service.emit_hardware_action_event(
+                workspace_id=_ws,
+                tenant_id=str(registration.get("tenant_id") or "default").strip() or "default",
+                gateway_id=_gw,
+                capability=_cap,
+                status="failed",
+                duration_ms=int(max(0, (time.time() - dispatch_started) * 1000)),
+                run_id=str(run_id or "").strip() or None,
+                trace_id=_tid or None,
+            )
+        raise
+    if emit_hardware_activity:
         hardware_activity_event_service.emit_hardware_action_event(
             workspace_id=_ws,
             tenant_id=str(registration.get("tenant_id") or "default").strip() or "default",
             gateway_id=_gw,
             capability=_cap,
-            status="failed",
+            status="completed",
             duration_ms=int(max(0, (time.time() - dispatch_started) * 1000)),
-            run_id=str(run_id or "").strip() or None,
+            run_id=str(response.get("run_id") or run_id).strip() or None,
             trace_id=_tid or None,
         )
-        raise
-    hardware_activity_event_service.emit_hardware_action_event(
-        workspace_id=_ws,
-        tenant_id=str(registration.get("tenant_id") or "default").strip() or "default",
-        gateway_id=_gw,
-        capability=_cap,
-        status="completed",
-        duration_ms=int(max(0, (time.time() - dispatch_started) * 1000)),
-        run_id=str(response.get("run_id") or run_id).strip() or None,
-        trace_id=_tid or None,
-    )
     activity_payload = {
         "request_id": str(response.get("request_id") or request_id or "").strip() or None,
         "capability_id": _cap,

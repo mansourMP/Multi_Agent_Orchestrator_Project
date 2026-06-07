@@ -36,6 +36,17 @@ def _event_payload(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _is_diagnostic_probe_event(item: Dict[str, Any]) -> bool:
+    metadata = dict(item.get("metadata") or {}) if isinstance(item.get("metadata"), dict) else {}
+    tokens = [
+        _text(item.get("run_id")),
+        _text(item.get("trace_id")),
+        _text(metadata.get("run_id")),
+        _text(metadata.get("trace_id")),
+    ]
+    return any(token.startswith("hardware-capability-probe-") for token in tokens)
+
+
 def emit_hardware_action_event(
     *,
     workspace_id: str,
@@ -98,6 +109,8 @@ def list_hardware_action_events(*, workspace_id: str, limit: int = 20) -> List[D
         if _text(item.get("channel")).lower() != HARDWARE_ACTIVITY_CHANNEL:
             continue
         if _text(item.get("event_type")).lower() != HARDWARE_ACTION_EVENT_TYPE:
+            continue
+        if _is_diagnostic_probe_event(item):
             continue
         items.append(_event_payload(item))
         if len(items) >= safe_limit:

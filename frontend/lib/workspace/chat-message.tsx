@@ -89,6 +89,13 @@ function effectiveProviderLabel(metadata: Record<string, unknown>): string {
   return parts.join(' · ');
 }
 
+function routeLabel(metadata: Record<string, unknown>): string {
+  const routeDecision = metadata.route_decision && typeof metadata.route_decision === 'object' && !Array.isArray(metadata.route_decision)
+    ? metadata.route_decision as Record<string, unknown>
+    : {};
+  return String(metadata.route_label ?? routeDecision.user_label ?? '').trim();
+}
+
 function stepIcon(kind: string) {
   switch (kind) {
     case 'thinking':
@@ -230,6 +237,7 @@ export const ChatMessage = memo(({
   const actionHref = typeof message.metadata.action_href === 'string' ? message.metadata.action_href : '';
   const actionLabel = typeof message.metadata.action_label === 'string' ? message.metadata.action_label : '';
   const providerLabel = effectiveProviderLabel(message.metadata);
+  const taskRouteLabel = routeLabel(message.metadata);
   const isIncomplete = message.metadata.incomplete === true || message.status === 'incomplete';
 
   if (displayKind === 'thinking_row') {
@@ -335,11 +343,16 @@ export const ChatMessage = memo(({
       <div className="app-chat-message__content">
         {text}
       </div>
-      {(timestamp || providerLabel || isIncomplete) ? (
-        <div className={`app-chat-message__meta${providerLabel || isIncomplete ? ' app-chat-message__meta--visible' : ''}`}>
+      {(timestamp || providerLabel || taskRouteLabel || isIncomplete) ? (
+        <div className={`app-chat-message__meta${providerLabel || taskRouteLabel || isIncomplete ? ' app-chat-message__meta--visible' : ''}`}>
           {providerLabel ? (
             <span className="app-chat-message__provider">
               {providerLabel}
+            </span>
+          ) : null}
+          {taskRouteLabel ? (
+            <span className="app-chat-message__provider">
+              {taskRouteLabel}
             </span>
           ) : null}
           {isIncomplete ? (

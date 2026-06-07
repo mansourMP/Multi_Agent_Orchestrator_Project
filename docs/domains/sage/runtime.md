@@ -21,6 +21,27 @@ fetch, guarded direct tools, approval handoff, and compatible MCP skill
 execution. It returns real `tool_calls`, `blocked_tools`,
 `approvals_required`, `action_execution_mode`, and loop budget metadata.
 
+## Task Routing Contract
+
+Sage should route work in this order:
+
+- `chat_only`: answer directly in chat for writing, reasoning, uploaded-file
+  work, and memory-backed answers.
+- `connector_api`: use OAuth/API connectors, MCP tools, web search/fetch,
+  reminders, and recipes before any computer runtime.
+- `cloud_browser`: use a hosted browser for websites that do not need local
+  browser state.
+- `cloud_computer`: use an isolated cloud computer for heavier jobs, code, files,
+  terminal, or browser automation that does not need the user's machine.
+- `gateway_required`: use Agent Computer only for local files, local apps, local
+  browser profiles/cookies, personal Telegram/WhatsApp/iMessage/Signal/WeChat,
+  local network, SSH keys, secrets on the user's machine, desktop control, or
+  dedicated hardware.
+
+This route decision is emitted by `server_modules/sage_agent_runtime_service.py`
+as `route_decision` with the customer-facing labels `Basic Assistant`,
+`Connected Assistant`, and `Computer Assistant`.
+
 `server_modules/direct_chat_provider_service.py` separates credential planes:
 workspace BYOK credentials, platform runtime credentials, and local runtime
 credentials. Platform runtime credentials are filtered out when hosted Sage AI
@@ -28,8 +49,10 @@ is not allowed for the workspace.
 
 ## Agent Computer Requirement
 
-Agent Computer is required for local files, shell, browser automation,
-screenshot, computer-control, and personal-channel sessions. Tool intent
+Agent Computer is required for local files, local shell, local browser sessions,
+screenshot/computer-control on the user's machine, local network access, and
+personal-channel sessions. Normal website automation should use hosted browser
+first unless the user explicitly needs the local signed-in browser. Tool intent
 detection for local file/shell/screenshot/computer requests lives in
 `server_modules/direct_chat_tool_catalog_service.py`; actual gateway execution
 is guarded in `server_modules/routes_gateway.py` and personal-channel services.
@@ -48,9 +71,9 @@ reply says This Device capabilities require Agent Computer to be online. Source:
 `server_modules/direct_chat_provider_service.py` and
 `server_modules/direct_chat_tool_catalog_service.py`.
 
-Browser gateway routes may prepare cloud browser fallback only where the route
-explicitly allows it and the local gateway connection is not live. Source:
-`server_modules/routes_gateway.py`.
+Hosted browser fallback is not a downgrade path from local-private work. It is
+the default path for public or cloud-login websites that do not require the
+user's local browser profile, local cookies, or machine-local environment.
 
 ## Access Modes
 

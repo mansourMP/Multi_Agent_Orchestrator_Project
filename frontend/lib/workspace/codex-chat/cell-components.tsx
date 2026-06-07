@@ -121,6 +121,22 @@ function providerLabel(cell: CodexTranscriptCell): string {
   return parts.join(' · ');
 }
 
+function routeLabel(cell: CodexTranscriptCell): string {
+  if (cell.kind !== 'assistant') {
+    return '';
+  }
+  const metadata = cell.metadata && typeof cell.metadata === 'object' ? cell.metadata : {};
+  const routeDecision = metadata.route_decision && typeof metadata.route_decision === 'object' && !Array.isArray(metadata.route_decision)
+    ? metadata.route_decision as Record<string, unknown>
+    : {};
+  const label = typeof metadata.route_label === 'string'
+    ? metadata.route_label
+    : typeof routeDecision.user_label === 'string'
+      ? routeDecision.user_label
+      : '';
+  return label.trim();
+}
+
 function isLeakedMachineResultJson(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length < 40 || !trimmed.startsWith('{') || !trimmed.endsWith('}')) {
@@ -819,6 +835,7 @@ export function UserCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 
 export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'assistant' }> }) {
   const timestamp = formatTimestamp(cell.createdAt);
   const effectiveLabel = providerLabel(cell);
+  const taskRouteLabel = routeLabel(cell);
   const text = cell.content.trim();
   if ((!text && !cell.isStreaming) || isLeakedMachineResultJson(text)) {
     return null;
@@ -829,10 +846,13 @@ export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
       <div className="app-chat-message__content">
         <MarkdownMessage text={text} />
       </div>
-      {(timestamp || effectiveLabel || cell.isIncomplete) ? (
-        <div className={`app-chat-message__meta${effectiveLabel || cell.isIncomplete ? ' app-chat-message__meta--visible' : ''}`}>
+      {(timestamp || effectiveLabel || taskRouteLabel || cell.isIncomplete) ? (
+        <div className={`app-chat-message__meta${effectiveLabel || taskRouteLabel || cell.isIncomplete ? ' app-chat-message__meta--visible' : ''}`}>
           {effectiveLabel ? (
             <span className="app-chat-message__provider">{effectiveLabel}</span>
+          ) : null}
+          {taskRouteLabel ? (
+            <span className="app-chat-message__provider">{taskRouteLabel}</span>
           ) : null}
           {cell.isIncomplete ? (
             <span className="app-chat-message__status">Incomplete</span>

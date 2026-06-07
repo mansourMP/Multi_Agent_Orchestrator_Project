@@ -3,8 +3,8 @@
 Verifies that every core channel catalog card is honest about its launch
 status, that setup-readiness detection works, that inbound context wiring
 is correct, that outbound sends require approval, and that idempotency is
-enforced.  Also confirms that Signal, iMessage, and WeChat are NOT marked
-ready (per the "no fake runtime" rule).
+enforced. Also confirms that Signal, iMessage, and WeChat are live only
+through concrete selected-Agent-Computer local bridge contracts.
 """
 
 import asyncio
@@ -911,7 +911,7 @@ class LocalBridgePersonalChannelsCertification(unittest.TestCase):
             "webhook",
             "telegram_bot",
             "telegram_bot_api",
-            # The three planned bridges — not yet built
+            # Local bridge providers are handled by shared Agent Computer bridge infrastructure.
             "signal_local_bridge",
             "bluebubbles_local_bridge",
             "wechat_local_bridge",

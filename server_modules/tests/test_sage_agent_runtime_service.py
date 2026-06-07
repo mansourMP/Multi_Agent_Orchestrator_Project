@@ -959,5 +959,60 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
             self.assertTrue(str(failed_calls[0].kwargs.get("trace_id") or "").strip())
 
 
+class SageTaskRouteDecisionTests(unittest.TestCase):
+    def test_chat_only_route_for_plain_chat(self):
+        decision = sage_agent_runtime_service._build_sage_route_decision(
+            message="Write a short plan for tomorrow.",
+        )
+
+        self.assertEqual(decision["mode"], "chat_only")
+        self.assertEqual(decision["user_label"], "Basic Assistant")
+        self.assertEqual(decision["required_connections"], [])
+
+    def test_connector_route_for_gmail_request(self):
+        decision = sage_agent_runtime_service._build_sage_route_decision(
+            message="Summarize my Gmail inbox.",
+            tools=[{"name": "google_workspace__gmail_search"}],
+            tool_capabilities=[{"id": "google_workspace", "label": "Google Workspace"}],
+        )
+
+        self.assertEqual(decision["mode"], "connector_api")
+        self.assertEqual(decision["user_label"], "Connected Assistant")
+        self.assertIn("gmail", decision["required_connections"])
+
+    def test_connector_requests_enter_sage_action_loop(self):
+        self.assertTrue(
+            sage_agent_runtime_service._message_might_need_sage_action_loop(
+                "Check my Google Calendar and create a meeting prep note."
+            )
+        )
+
+    def test_cloud_browser_route_for_website_automation(self):
+        decision = sage_agent_runtime_service._build_sage_route_decision(
+            message="Open example.com and fill the contact form.",
+            availability={"runtime_ok": False, "local_gateway_online": False},
+        )
+
+        self.assertEqual(decision["mode"], "cloud_browser")
+        self.assertEqual(decision["user_label"], "Connected Assistant")
+
+    def test_cloud_computer_route_for_non_local_script(self):
+        decision = sage_agent_runtime_service._build_sage_route_decision(
+            message="Run this script and tell me the output.",
+        )
+
+        self.assertEqual(decision["mode"], "cloud_computer")
+        self.assertEqual(decision["user_label"], "Computer Assistant")
+
+    def test_gateway_route_for_local_private_work(self):
+        decision = sage_agent_runtime_service._build_sage_route_decision(
+            message="Open my local VS Code project and inspect the files.",
+        )
+
+        self.assertEqual(decision["mode"], "gateway_required")
+        self.assertEqual(decision["user_label"], "Computer Assistant")
+        self.assertTrue(decision["approval_required"])
+
+
 if __name__ == "__main__":
     unittest.main()

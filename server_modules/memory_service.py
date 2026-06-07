@@ -1967,8 +1967,16 @@ def handle_no_provider_memory_request(workspace_id: str, message: str) -> str | 
     if memory_write is not None:
         save_memory(workspace_id, memory_write["key"], memory_write["value"])
         return None
-    if parse_no_provider_memory_read(message) is not None:
-        return None
+    memory_read = parse_no_provider_memory_read(message)
+    if memory_read is not None:
+        entry = find_workspace_memory_entry(workspace_id, memory_read)
+        if entry is None:
+            return None
+        key = str(entry.get("key") or "").strip()
+        content = str(entry.get("content") or "").strip()
+        if not key or not content:
+            return None
+        return f"{key} = {content}"
     return None
 
 

@@ -40,6 +40,46 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertIn("- preferred_editor: Neovim", snapshot.text)
         self.assertEqual(snapshot.as_payload()["workspace_id"], "default")
 
+    def test_memory_md_projection_is_categorized_and_hides_raw_fact_ids(self) -> None:
+        memory_service.save_memory(
+            "default",
+            "fact-111aaa",
+            "User prefers casual friendly communication style (e.g. 'my dude', 'my nigga').",
+        )
+        memory_service.save_memory(
+            "default",
+            "fact-111bbb",
+            "User communicates in casual, friendly style ('my dude', 'my nigga').",
+        )
+        memory_service.save_memory(
+            "default",
+            "fact-222bbb",
+            "User dislikes the slang terms 'my dude' and 'my nigga' and wants them removed from memory.",
+        )
+        memory_service.save_memory("default", "timezone", "Asia/Shanghai")
+        memory_service.save_memory("default", "project_context", "User has a project workspace named Empyralis.")
+
+        content = workspace_context.read_workspace_context_file("MEMORY.md", workspace_id="default")
+
+        self.assertIn("# Curated Memory", content)
+        self.assertIn("## Preferences", content)
+        self.assertIn("## Project Context", content)
+        self.assertIn("User dislikes the slang terms", content)
+        self.assertIn("Timezone: Asia/Shanghai", content)
+        self.assertNotIn("fact-111aaa", content)
+        self.assertNotIn("fact-222bbb", content)
+        self.assertNotIn("prefers casual friendly", content)
+        self.assertNotIn("communicates in casual, friendly style", content)
+
+    def test_memory_md_projection_caps_large_structured_fact_sets(self) -> None:
+        for index in range(50):
+            memory_service.save_memory("default", f"fact-{index:06x}", f"User project fact {index}.")
+
+        content = workspace_context.read_workspace_context_file("MEMORY.md", workspace_id="default")
+
+        self.assertIn("additional structured facts are available through memory search", content)
+        self.assertLess(content.count("- User project fact"), 50)
+
     def test_publish_hybrid_summary_bridge_payload_persists_and_reports_last_safe_status(self) -> None:
         record = memory_service.publish_hybrid_summary_bridge_payload(
             "default",
@@ -648,7 +688,7 @@ class MemoryServiceTests(unittest.TestCase):
         emit_log_mock.assert_called_once()
 
     def test_direct_chat_workspace_context_text_reads_install_namespace_when_requested(self) -> None:
-        workspace_context.write_workspace_context_file("USER.md", "Shared user profile.\n")
+        workspace_context.write_workspace_context_file("USER.md", "Shared user profile.\n", workspace_id="default")
         workspace_context.write_workspace_context_file(
             "USER.md",
             "Specialist user profile.\n",
@@ -674,7 +714,7 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertNotIn("Shared log entry.", text)
 
     def test_direct_chat_workspace_context_text_collects_context_logs_and_memory(self) -> None:
-        workspace_context.write_workspace_context_file("USER.md", "Owner prefers async updates.\n")
+        workspace_context.write_workspace_context_file("USER.md", "Owner prefers async updates.\n", workspace_id="default")
         memory_service.save_memory("default", "timezone", "Asia/Shanghai")
         memory_service.save_daily_log("default", "Reviewed the canonical architecture document.")
 

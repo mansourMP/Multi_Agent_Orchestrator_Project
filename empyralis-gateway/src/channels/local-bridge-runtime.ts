@@ -146,6 +146,8 @@ export class LocalBridgePersonalChannelRuntime implements PersonalChannelRuntime
   private pollTimer: NodeJS.Timeout | null = null;
   private lastEventAt?: string;
   private lastError?: string;
+  private readonly seenInboundEventIds: string[] = [];
+  private readonly seenInboundEventSet = new Set<string>();
 
   constructor(private readonly config: LocalBridgeRuntimeConfig) {
     this.manifest = buildLocalBridgeManifest(config);
@@ -342,6 +344,10 @@ export class LocalBridgePersonalChannelRuntime implements PersonalChannelRuntime
         }
         const event = this.mapInboundEvent(item as Record<string, unknown>);
         if (event) {
+          const eventKey = this.inboundEventKey(event);
+          if (!this.rememberInboundEvent(eventKey)) {
+            continue;
+          }
           await this.publisher.publishEvent("channel.inbound", event);
           this.lastEventAt = event.message.received_at;
         }
@@ -372,6 +378,30 @@ export class LocalBridgePersonalChannelRuntime implements PersonalChannelRuntime
         from_me: item.from_me === true,
       },
     };
+  }
+
+  private inboundEventKey(event: GatewayChannelInboundPayload): string {
+    const message = event.message;
+    return [
+      this.config.channelKey,
+      message.remote_jid,
+      message.external_message_id,
+    ].join(":");
+  }
+
+  private rememberInboundEvent(eventKey: string): boolean {
+    if (this.seenInboundEventSet.has(eventKey)) {
+      return false;
+    }
+    this.seenInboundEventSet.add(eventKey);
+    this.seenInboundEventIds.push(eventKey);
+    while (this.seenInboundEventIds.length > 1000) {
+      const oldest = this.seenInboundEventIds.shift();
+      if (oldest) {
+        this.seenInboundEventSet.delete(oldest);
+      }
+    }
+    return true;
   }
 
   private async fetchJson(

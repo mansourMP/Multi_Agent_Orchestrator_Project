@@ -64,7 +64,7 @@ class SageDoctorService:
     """
 
     @staticmethod
-    def check_all(workspace_id: str, tenant_id: str) -> Dict[str, Any]:
+    def check_all(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, Any]:
         """Run the full suite of checks and return structured results."""
         checks: List[Dict[str, str]] = []
 
@@ -75,7 +75,7 @@ class SageDoctorService:
                 checks.append(_skip_spec(spec, "No handler registered for this check."))
                 continue
             try:
-                checks.append(handler(workspace_id, tenant_id))
+                checks.append(handler(workspace_id, tenant_id, user_id))
             except Exception as exc:
                 checks.append(
                     _result(
@@ -109,11 +109,11 @@ class SageDoctorService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _check_agent_computer_selection(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_agent_computer_selection(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         import server_modules.sage_agent_computer_selection_service as sel
 
         spec = _spec_by_id("agent_computer_selection")
-        selection = sel.get_selection(workspace_id=workspace_id, user_id=tenant_id)
+        selection = sel.get_selection(workspace_id=workspace_id, user_id=user_id)
         if selection is None:
             return _fail_spec(
                 spec,
@@ -124,7 +124,7 @@ class SageDoctorService:
         return _pass_spec(spec, detail=f"Agent Computer selected: {gw_id}")
 
     @staticmethod
-    def _check_gateway_connection(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_gateway_connection(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         import server_modules.gateway_registry_service as gw_registry
 
         spec = _spec_by_id("gateway_connection")
@@ -151,7 +151,7 @@ class SageDoctorService:
         )
 
     @staticmethod
-    def _check_browser_runtime(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_browser_runtime(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         import server_modules.gateway_registry_service as gw_registry
 
         spec = _spec_by_id("browser_runtime")
@@ -176,12 +176,12 @@ class SageDoctorService:
         )
 
     @staticmethod
-    def _check_telegram_personal_state(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_telegram_personal_state(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         import server_modules.personal_channels_repository as pcr
         import server_modules.personal_channels_service as pcs
 
         spec = _spec_by_id("telegram_personal_state")
-        gateway_id = SageDoctorService._resolve_gateway_id(workspace_id)
+        gateway_id = SageDoctorService._resolve_gateway_id(workspace_id, user_id)
         if not gateway_id:
             return _skip_spec(spec, "No Agent Computer selected; cannot check personal channels.")
 
@@ -198,12 +198,12 @@ class SageDoctorService:
         return _pass_spec(spec, detail="Telegram personal channel connected.")
 
     @staticmethod
-    def _check_whatsapp_personal_state(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_whatsapp_personal_state(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         import server_modules.personal_channels_repository as pcr
         import server_modules.personal_channels_service as pcs
 
         spec = _spec_by_id("whatsapp_personal_state")
-        gateway_id = SageDoctorService._resolve_gateway_id(workspace_id)
+        gateway_id = SageDoctorService._resolve_gateway_id(workspace_id, user_id)
         if not gateway_id:
             return _skip_spec(spec, "No Agent Computer selected; cannot check personal channels.")
 
@@ -220,7 +220,7 @@ class SageDoctorService:
         return _pass_spec(spec, detail="WhatsApp personal channel connected.")
 
     @staticmethod
-    def _check_slack_credentials(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_slack_credentials(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         spec = _spec_by_id("slack_credentials")
         connectors = SageDoctorService._list_vault_connectors(workspace_id)
         has_slack = any(
@@ -236,7 +236,7 @@ class SageDoctorService:
         )
 
     @staticmethod
-    def _check_discord_credentials(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_discord_credentials(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         spec = _spec_by_id("discord_credentials")
         connectors = SageDoctorService._list_vault_connectors(workspace_id)
         has_discord = any(
@@ -252,7 +252,7 @@ class SageDoctorService:
         )
 
     @staticmethod
-    def _check_google_workspace_credentials(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_google_workspace_credentials(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         spec = _spec_by_id("google_workspace_credentials")
         connectors = SageDoctorService._list_vault_connectors(workspace_id)
         has_gws = any(
@@ -268,7 +268,7 @@ class SageDoctorService:
         )
 
     @staticmethod
-    def _check_mcp_registry(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_mcp_registry(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         import server_modules.mcp_registry_service as mcp
 
         spec = _spec_by_id("mcp_registry")
@@ -285,35 +285,22 @@ class SageDoctorService:
         )
 
     @staticmethod
-    def _check_model_provider_credentials(workspace_id: str, tenant_id: str) -> Dict[str, str]:
-        import server_modules.provider_profiles as pp
+    def _check_model_provider_credentials(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
+        import server_modules.sage_agent_runtime_service as sage_runtime
 
         spec = _spec_by_id("model_provider_credentials")
-        missing: List[str] = []
-        for provider in ("openai", "anthropic", "gemini"):
-            candidates = pp._build_provider_credential_candidates(
-                {"workspace_id": workspace_id},
-                {"source": "chat_direct", "workspace_only": True},
-                provider,
+        try:
+            provider, _credentials = sage_runtime._resolve_cloud_provider(workspace_id)
+            return _pass_spec(spec, detail=f"Sage model provider available: {provider}.")
+        except Exception as exc:
+            return _fail_spec(
+                spec,
+                f"No usable Sage model provider is configured: {exc}",
+                "Configure at least one usable Sage model provider in Provider Settings.",
             )
-            if not candidates:
-                missing.append(provider)
-
-        if not missing:
-            return _pass_spec(spec, detail="All model providers (OpenAI, Anthropic, Gemini) have credentials configured.")
-
-        label = ", ".join(missing)
-        next_action = (
-            "Configure API keys for the missing provider(s) in Provider Settings."
-        )
-        return _fail_spec(
-            spec,
-            f"No credentials configured for: {label}.",
-            next_action,
-        )
 
     @staticmethod
-    def _check_quota_store(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_quota_store(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         spec = _spec_by_id("quota_store")
         try:
             import server_modules.durable_quota_store as dqs
@@ -328,7 +315,7 @@ class SageDoctorService:
             )
 
     @staticmethod
-    def _check_outbox_replay_queue(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_outbox_replay_queue(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         import server_modules.outbox_service as outbox
 
         spec = _spec_by_id("outbox_replay_queue")
@@ -354,7 +341,7 @@ class SageDoctorService:
             )
 
     @staticmethod
-    def _check_approval_policy_state(workspace_id: str, tenant_id: str) -> Dict[str, str]:
+    def _check_approval_policy_state(workspace_id: str, tenant_id: str, user_id: str = "") -> Dict[str, str]:
         import server_modules.policy_service as policy
 
         spec = _spec_by_id("approval_policy_state")
@@ -379,13 +366,11 @@ class SageDoctorService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _resolve_gateway_id(workspace_id: str) -> str:
+    def _resolve_gateway_id(workspace_id: str, user_id: str = "") -> str:
         """Return the selected gateway_id for this workspace, or empty string."""
         import server_modules.sage_agent_computer_selection_service as sel
 
-        selection = sel.get_selection(workspace_id=workspace_id, user_id="default")
-        if selection is None:
-            selection = sel.get_selection(workspace_id=workspace_id, user_id="")
+        selection = sel.get_selection(workspace_id=workspace_id, user_id=user_id)
         if selection is not None:
             return str(selection.get("selected_gateway_id") or "")
         return ""

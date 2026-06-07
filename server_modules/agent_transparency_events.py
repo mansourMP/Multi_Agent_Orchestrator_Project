@@ -47,6 +47,7 @@ TransparencyEventType = Literal[
     "unsafe_url_blocked",
     "final_response_started",
     "final_response_sent",
+    "skill_executed",
 ]
 
 # ── Forbidden fields (raw chain-of-thought / LLM internals) ─────────
@@ -90,6 +91,7 @@ _EVENT_MINIMUM_VISIBILITY: dict[TransparencyEventType, VisibilityLevel] = {
     "unsafe_url_blocked": "standard",
     "final_response_started": "minimal",
     "final_response_sent": "minimal",
+    "skill_executed": "standard",
 }
 
 

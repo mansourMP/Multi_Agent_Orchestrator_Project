@@ -222,7 +222,52 @@ def emit_sage_turn_transparency_events(
         else:
             continue
 
-    # ── 5. approvals_required ───────────────────────────────────
+    # ── 5. skill_executed (MCP/skill tool calls) ───────────────
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        tc_name = _safe_label(tc.get("name") or tc.get("tool_name"))
+        if not tc_name:
+            continue
+        # Only emit skill_executed for MCP tools or tools whose
+        # name starts with an MCP prefix, but NOT built-in tools
+        # like browser__* or web__*
+        is_mcp_tool = tc_name.startswith("mcp:") or tc_name.startswith("skill:")
+        if not is_mcp_tool:
+            continue
+        tc_status = _safe_label(tc.get("status") or "completed")
+        tc_output = _safe_label(tc.get("output") or "")
+        tc_error = _safe_label(tc.get("error") or "")
+        evt_metadata: dict[str, Any] = {
+            "execution_adapter": "mcp_tool",
+            "skill_id": tc_name,
+            "status": tc_status,
+        }
+        if tc_output:
+            evt_metadata["output_preview"] = tc_output[:200]
+        if tc_error:
+            evt_metadata["error"] = tc_error[:200]
+        events.append(
+            AgentTransparencyEvent(
+                event_id=f"stevt-{uuid4().hex[:12]}",
+                trace_id=trace_id,
+                workspace_id=workspace_id,
+                agent_id=agent_id,
+                actor_type="sage",
+                surface="chat",
+                audience=audience,
+                visibility_level=visibility_level,
+                event_type="skill_executed",
+                title=f"MCP tool executed: {tc_name}",
+                summary=tc_output[:200] if tc_output else f"MCP tool {tc_name} executed.",
+                status=tc_status,
+                timestamp=_now(),
+                tool_name=tc_name,
+                metadata=evt_metadata,
+            )
+        )
+
+    # ── 6. approvals_required ───────────────────────────────────
     approvals_required = _safe_list(sage_result.get("approvals_required"))
     if approvals_required:
         events.append(
@@ -244,7 +289,7 @@ def emit_sage_turn_transparency_events(
             )
         )
 
-    # ── 6. error / llm failure ──────────────────────────────────
+    # ── 7. error / llm failure ──────────────────────────────────
     sage_error = _safe_label(sage_result.get("error"))
     if sage_error:
         events.append(
@@ -266,7 +311,7 @@ def emit_sage_turn_transparency_events(
             )
         )
 
-    # ── 7. final_response_sent ──────────────────────────────────
+    # ── 8. final_response_sent ──────────────────────────────────
     reply_text = _safe_label(sage_result.get("message"))
     if reply_text:
         events.append(

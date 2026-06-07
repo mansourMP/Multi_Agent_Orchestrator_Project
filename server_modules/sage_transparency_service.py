@@ -222,6 +222,51 @@ def emit_sage_turn_transparency_events(
         else:
             continue
 
+    # ── 4b. browser_action (browser__ tool calls) ─────────────────
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        tc_name = _safe_label(tc.get("name") or tc.get("tool_name"))
+        if not tc_name.startswith("browser__"):
+            continue
+        tc_status = _safe_label(tc.get("status") or "completed")
+        tc_output = _safe_label(tc.get("output") or tc.get("error") or "")
+        tc_args = tc.get("arguments") or {}
+        url = _safe_label(tc_args.get("url") or tc_args.get("target") or tc_args.get("input") or "")
+        summary_parts = [f"Action: {tc_name}"]
+        if url:
+            summary_parts.append(f"URL: {url[:200]}")
+        if tc_status in ("completed", "success", "done"):
+            summary_parts.append("Status: completed")
+        elif tc_status in ("failed", "error"):
+            summary_parts.append(f"Status: failed — {tc_output[:100]}" if tc_output else "Status: failed")
+        else:
+            summary_parts.append(f"Status: {tc_status}")
+
+        events.append(
+            AgentTransparencyEvent(
+                event_id=f"stevt-{uuid4().hex[:12]}",
+                trace_id=trace_id,
+                workspace_id=workspace_id,
+                agent_id=agent_id,
+                actor_type="sage",
+                surface="chat",
+                audience=audience,
+                visibility_level=visibility_level,
+                event_type="browser_action",
+                title=f"Browser: {tc_name.replace('browser__', '')}",
+                summary=" | ".join(summary_parts),
+                status="completed" if tc_status in ("completed", "success", "done") else "failed" if tc_status in ("failed", "error") else "running",
+                timestamp=_now(),
+                tool_name=tc_name,
+                metadata={
+                    "url": url,
+                    "action": tc_name,
+                    "status": tc_status,
+                },
+            )
+        )
+
     # ── 5. approvals_required ───────────────────────────────────
     approvals_required = _safe_list(sage_result.get("approvals_required"))
     if approvals_required:

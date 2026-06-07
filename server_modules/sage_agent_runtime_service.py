@@ -425,6 +425,43 @@ def _budget_sage_tool_calls(tool_calls: list[dict[str, Any]]) -> tuple[list[dict
     return allowed, blocked
 
 
+def _sage_agent_computer_browser_status(availability_payload: dict[str, Any]) -> str:
+    """Determine browser online/offline/not_selected status using the same
+    logic as direct_chat_runtime_service._agent_computer_browser_status."""
+    availability = availability_payload if isinstance(availability_payload, dict) else {}
+    capability_truth = availability.get("capability_truth") if isinstance(availability.get("capability_truth"), dict) else {}
+    my_computer = capability_truth.get("my_computer") if isinstance(capability_truth.get("my_computer"), dict) else {}
+    verified_gateway = availability.get("verified_user_device_gateway") if isinstance(availability.get("verified_user_device_gateway"), dict) else {}
+
+    local_gateway_online = availability.get("local_gateway_online") if isinstance(availability.get("local_gateway_online"), bool) else None
+    local_worker_online = availability.get("local_worker_online") if isinstance(availability.get("local_worker_online"), bool) else None
+    runtime_ok = availability.get("runtime_ok") if isinstance(availability.get("runtime_ok"), bool) else None
+
+    truth_online = my_computer.get("online") if isinstance(my_computer.get("online"), bool) else None
+    truth_runtime_ok = my_computer.get("runtime_ok") if isinstance(my_computer.get("runtime_ok"), bool) else None
+    truth_tools = my_computer.get("local_tools_available") if isinstance(my_computer.get("local_tools_available"), bool) else None
+
+    state = str(my_computer.get("state") or availability.get("runtime_state") or "").strip().lower()
+    selected_gateway_id = str(
+        availability.get("selected_gateway_id")
+        or availability.get("gateway_id")
+        or my_computer.get("selected_gateway_id")
+        or my_computer.get("gateway_id")
+        or verified_gateway.get("gateway_id")
+        or ""
+    ).strip()
+
+    if verified_gateway:
+        return "online"
+    if truth_tools is True or (truth_online is True and truth_runtime_ok is not False):
+        return "online"
+    if (local_gateway_online is True or local_worker_online is True) and runtime_ok is not False:
+        return "online"
+    if selected_gateway_id or state in {"connected_unhealthy", "unhealthy", "error", "disconnected"}:
+        return "offline"
+    return "not_selected"
+
+
 def _direct_tool_bundle(*, workspace_id: str, provider: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     try:
         tool_capabilities = direct_chat_runtime_exports.resolve_workspace_tool_capabilities(workspace_id)
@@ -452,12 +489,8 @@ def _direct_tool_bundle(*, workspace_id: str, provider: str) -> tuple[list[dict[
     except Exception:
         pass
 
-    runtime_ready = bool(
-        availability.get("runtime_ok")
-        or availability.get("local_gateway_online")
-        or availability.get("local_worker_online")
-    )
-    if not runtime_ready:
+    browser_status = _sage_agent_computer_browser_status(availability)
+    if browser_status != "online":
         tools = [tool for tool in tools if not _tool_requires_agent_computer(_coerce_text(tool.get("name")))]
     return _dedupe_tools(tools), tool_capabilities, availability
 
@@ -505,7 +538,7 @@ def _plan_sage_direct_tool_calls(
 
 
 def _blocked_agent_computer_tool_for_message(message: str, availability: dict[str, Any]) -> dict[str, Any] | None:
-    if availability.get("runtime_ok") or availability.get("local_gateway_online") or availability.get("local_worker_online"):
+    if _sage_agent_computer_browser_status(availability) == "online":
         return None
     compact = " ".join(str(message or "").lower().split())
     if direct_chat_tool_catalog_service.message_has_browser_automation_intent(message):
@@ -778,6 +811,7 @@ async def _run_sage_action_loop_v3(
             "action_execution_mode": "tool_blocked",
             "available_tools": tools,
             "action_loop_version": _SAGE_OPERATOR_LOOP_VERSION,
+            "trace_events": [],
             "loop_budget": {
                 "max_iterations": _SAGE_OPERATOR_LOOP_MAX_ITERATIONS,
                 "observed_events": 0,
@@ -1330,6 +1364,7 @@ async def handle_sage_chat(
         blocked_tools = list(action_result.get("blocked_tools") or [])
         approvals_required = list(action_result.get("approvals_required") or [])
         action_execution_mode = _coerce_text(action_result.get("action_execution_mode")) or "tools_executed"
+        trace_events = list(action_result.get("trace_events") or [])
         prompt_diagnostics = {
             **prompt_diagnostics,
             "action_loop_v3": True,
@@ -1450,6 +1485,7 @@ async def handle_sage_chat(
             "memory_updates": [],
             "action_execution_mode": action_execution_mode,
             "trace_id": trace_id,
+            "trace_events": trace_events,
             "provider": provider,
             "model": requested_model or None,
             "transparency_events": transparency_events,

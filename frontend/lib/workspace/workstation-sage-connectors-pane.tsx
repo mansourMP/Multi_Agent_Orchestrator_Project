@@ -4091,17 +4091,12 @@ export function WorkstationSageConnectorsPane({
       <button
         key={record.id}
         type="button"
-        disabled={record.locked ? true : undefined}
         className={joinClassNames(
           'sage-unified-card',
           isExpanded && 'sage-unified-card--selected',
           record.locked && 'sage-unified-card--disabled',
         )}
-        aria-disabled={record.locked ? true : undefined}
         onClick={() => {
-          if (record.locked) {
-            return;
-          }
           if (record.actionTarget === 'computer') {
             openComputerConnectSheet();
             return;

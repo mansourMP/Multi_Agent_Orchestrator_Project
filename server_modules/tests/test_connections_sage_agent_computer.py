@@ -712,3 +712,55 @@ async def test_local_bridge_connection_setup_points_to_agent_computer_contract(m
     assert payload["message_endpoint"] == "/api/personal-channels/signal_personal/gateways/gateway-1/messages"
     assert payload["bridge_contract"]["channel_key"] == "signal_personal"
     assert payload["bridge_contract"]["gateway_env"]["url"] == "EMPYRALIS_SIGNAL_BRIDGE_URL"
+
+
+@pytest.mark.anyio
+async def test_wechat_connection_setup_points_to_agent_computer_bridge_contract(monkeypatch):
+    _install_auth(monkeypatch)
+
+    async def fail_create_setup_session(*_args, **_kwargs):
+        raise AssertionError("generic setup session should not be used for WeChat local bridge personal channels")
+
+    monkeypatch.setattr(routes_connections.setup_sessions, "handle_create_setup_session", fail_create_setup_session)
+    monkeypatch.setattr(
+        routes_connections.sage_agent_computer_selection_service,
+        "get_selection",
+        lambda workspace_id, user_id: {"selected_gateway_id": "gateway-1"},
+    )
+    monkeypatch.setattr(
+        routes_connections.gateway_state_repository,
+        "get_gateway_registration",
+        lambda gateway_id: {
+            "gateway_id": gateway_id,
+            "workspace_id": "ws-1",
+            "user_id": "user-1",
+            "device_trust_state": "verified",
+            "connection_status": "online",
+        },
+    )
+    monkeypatch.setattr(
+        routes_connections.gateway_registry_service,
+        "gateway_registration_public_payload",
+        lambda registration: dict(registration),
+    )
+
+    payload = await routes_connections.start_connection_setup(
+        "wechat_personal",
+        body=routes_connections.ConnectionActionRequest(
+            workspace_id="ws-1",
+            surface="sage",
+            selected_gateway_id="gateway-1",
+        ),
+        request=SimpleNamespace(),
+        current_user={"user_id": "user-1", "role": "member"},
+    )
+
+    assert payload["next_action"] == "agent_computer_local_bridge_setup"
+    assert payload["gateway_id"] == "gateway-1"
+    assert payload["message_endpoint"] == "/api/personal-channels/wechat_personal/gateways/gateway-1/messages"
+    assert payload["bridge_contract"]["channel_key"] == "wechat_personal"
+    assert payload["bridge_contract"]["provider"] == "wechat_local_bridge"
+    assert payload["bridge_contract"]["native_bridge"] is None
+    assert payload["bridge_contract"]["gateway_runtime"] == "empyralis-gateway/src/channels/local-bridge-runtime.ts"
+    assert payload["bridge_contract"]["gateway_env"]["url"] == "EMPYRALIS_WECHAT_BRIDGE_URL"
+    assert payload["bridge_contract"]["http_contract"]["send"] == "POST /messages"

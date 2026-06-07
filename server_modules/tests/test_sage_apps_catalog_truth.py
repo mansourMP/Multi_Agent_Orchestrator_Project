@@ -24,9 +24,6 @@ _VALID_LAUNCH_STATUSES = frozenset({
 
 _LOCKED_OR_PLANNED_STATUSES = frozenset({LAUNCH_PLANNED, LAUNCH_PARTIAL, LAUNCH_LOCKED})
 
-_FAKE_CHANNEL_IDS = frozenset({"signal_personal", "imessage_personal", "wechat_personal"})
-
-
 def _catalog_by_id() -> Dict[str, Dict[str, Any]]:
     items = service.catalog_items()
     by_id: Dict[str, Dict[str, Any]] = {}
@@ -262,22 +259,24 @@ def test_all_launch_statuses_are_valid() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. Signal, iMessage, WeChat not marked ready
+# 9. Personal local bridges stay on the Agent Computer lane
 # ---------------------------------------------------------------------------
 
-def test_signal_imessage_wechat_not_marked_ready() -> None:
-    """Signal, iMessage, and WeChat must have launch_status='planned' and
-    setup_available=False."""
+def test_personal_local_bridges_use_agent_computer_contracts() -> None:
+    """Signal, iMessage, and WeChat personal are usable only through selected
+    Agent Computer local bridges, not as cloud/Studio channels."""
     by_id = _catalog_by_id()
-    for cid in sorted(_FAKE_CHANNEL_IDS):
-        item = by_id.get(cid)
-        assert item is not None, f"{cid} missing from catalog"
-        assert item["launch_status"] == LAUNCH_PLANNED, (
-            f"{cid}: expected launch_status='planned', got {item['launch_status']!r}"
-        )
-        assert item["setup_available"] is False, (
-            f"{cid}: expected setup_available=False, got True"
-        )
-        assert item["runtime_usable"] is False, (
-            f"{cid}: expected runtime_usable=False, got True"
-        )
+    expected = {
+        "signal_personal": ("local_bridge", "signal_local_bridge"),
+        "imessage_personal": ("mac_bridge", "bluebubbles_local_bridge"),
+        "wechat_personal": ("local_bridge", "wechat_local_bridge"),
+    }
+    for cid, (setup_kind, runtime_provider) in expected.items():
+        item = by_id[cid]
+        assert item["launch_status"] == LAUNCH_LIVE_WHEN_CONFIGURED
+        assert item["setup_kind"] == setup_kind
+        assert item["lane"] == LANE_SAGE_PERSONAL_CHANNEL
+        assert item["runtime_provider"] == runtime_provider
+        assert item["setup_available"] is True
+        assert item["runtime_usable"] is True
+        assert "studio" not in [surface.lower() for surface in item.get("surface", [])]

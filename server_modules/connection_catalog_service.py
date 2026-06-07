@@ -204,8 +204,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_SAGE_PERSONAL_CHANNEL,
         surfaces=("sage", "agent_computer"),
         setup_kind="local_bridge",
-        launch_status=LAUNCH_PLANNED,
-        description="Planned - Personal Signal through the selected Agent Computer Signal bridge; bridge contract not yet live.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Personal Signal through the selected Agent Computer Signal bridge implementing the Empyralis local-bridge contract.",
         requires_gateway=True,
         supports_inbound=True,
         supports_outbound=True,
@@ -217,8 +217,6 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connector_id="signal_personal",
         account_provider="signal_personal",
         vault_provider="signal_personal",
-        setup_available=False,
-        runtime_usable=False,
     ),
     _item(
         connection_id="imessage_personal",
@@ -226,8 +224,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_SAGE_PERSONAL_CHANNEL,
         surfaces=("sage", "agent_computer"),
         setup_kind="mac_bridge",
-        launch_status=LAUNCH_PLANNED,
-        description="Planned - Personal iMessage through a selected Mac Agent Computer BlueBubbles bridge; bridge contract not yet live.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Personal iMessage through a selected Mac Agent Computer BlueBubbles bridge implementing the Empyralis local-bridge contract.",
         requires_gateway=True,
         supports_inbound=True,
         supports_outbound=True,
@@ -239,8 +237,6 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connector_id="imessage_personal",
         account_provider="imessage_personal",
         vault_provider="imessage_personal",
-        setup_available=False,
-        runtime_usable=False,
     ),
     _item(
         connection_id="wechat_personal",
@@ -248,8 +244,8 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         lane=LANE_SAGE_PERSONAL_CHANNEL,
         surfaces=("sage", "agent_computer"),
         setup_kind="local_bridge",
-        launch_status=LAUNCH_PLANNED,
-        description="Planned - Personal WeChat through a selected Agent Computer bridge implementing the Empyralis local-bridge contract; bridge contract not yet live.",
+        launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
+        description="Personal WeChat through a selected Agent Computer bridge implementing the Empyralis local-bridge contract.",
         requires_gateway=True,
         supports_inbound=True,
         supports_outbound=True,
@@ -261,8 +257,6 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connector_id="wechat_personal",
         account_provider="wechat_personal",
         vault_provider="wechat_personal",
-        setup_available=False,
-        runtime_usable=False,
     ),
     _item(
         connection_id="telegram_bot",
@@ -714,6 +708,51 @@ def _personal_channel_state(connection_id: str, gateway_id: str) -> Optional[Dic
     return None
 
 
+def _records_by_channel(value: Any) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    if isinstance(value, dict):
+        iterable = value.values()
+    elif isinstance(value, list):
+        iterable = value
+    else:
+        iterable = []
+    for item in iterable:
+        if not isinstance(item, dict):
+            continue
+        channel_key = _token(item.get("channel_key") or item.get("channelKey"))
+        if channel_key:
+            out[channel_key] = dict(item)
+    return out
+
+
+def _selected_gateway_local_bridge_state(connection_id: str, selected_gateway: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if connection_id not in {"signal_personal", "imessage_personal", "wechat_personal"}:
+        return None
+    metadata = selected_gateway.get("metadata") if isinstance(selected_gateway, dict) else {}
+    if not isinstance(metadata, dict):
+        return None
+    manifests_by_key = _records_by_channel(metadata.get("personal_channel_manifests"))
+    health_by_key = _records_by_channel(metadata.get("personal_channel_health"))
+    manifest = manifests_by_key.get(connection_id, {})
+    health = health_by_key.get(connection_id, {})
+    if not manifest and not health:
+        return None
+
+    status = _token(health.get("status") or health.get("health") or manifest.get("status") or "not_configured")
+    connected = bool(health.get("connected") is True or status == "connected")
+    configured = connected or status not in {"", "not_configured", "missing", "unsupported", "planned", "locked"}
+    return {
+        "status": "connected" if connected else status or "not_configured",
+        "connected": connected,
+        "configured": configured,
+        "last_error": health.get("last_error") or health.get("lastError"),
+        "metadata": {
+            "manifest": manifest,
+            "health": health,
+        },
+    }
+
+
 def _next_action(
     item: Dict[str, Any],
     *,
@@ -774,9 +813,13 @@ def status_items(
             health_status = "gateway_missing" if not selected_gateway_id_value else "not_configured"
             if selected_gateway_id_value:
                 state = _personal_channel_state(item_id, selected_gateway_id_value)
+                if state is None:
+                    state = _selected_gateway_local_bridge_state(item_id, selected_gateway)
                 state_status = _token((state or {}).get("status"))
-                connected = state_status == "connected"
-                configured = connected or state is not None
+                connected = state_status == "connected" or bool((state or {}).get("connected") is True)
+                configured = connected or bool((state or {}).get("configured")) or (
+                    state is not None and state_status not in {"", "not_configured", "missing"}
+                )
                 health_status = "healthy" if connected else state_status or health_status
                 last_error = (state or {}).get("last_error")
         elif lane in {LANE_WORK_APP_CONNECTOR, LANE_STUDIO_BUSINESS_CHANNEL}:

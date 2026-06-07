@@ -788,32 +788,112 @@ class SmtpCertification(unittest.TestCase):
 
 
 # ===================================================================
-# Signal / iMessage / WeChat — NOT marked ready
+# Signal / iMessage / WeChat local-bridge truth
 # ===================================================================
 
-class FakeChannelsNotReady(unittest.TestCase):
-    """Per the 'no fake runtime' rule: Signal, iMessage, WeChat are planned."""
+class LocalBridgePersonalChannelsCertification(unittest.TestCase):
+    """Per the 'no fake runtime' rule, only channels with a concrete runtime
+    contract can be live_when_configured."""
 
-    def test_signal_not_marked_ready(self):
+    def test_signal_marked_live_when_configured(self):
         item = _catalog_item("signal_personal")
-        self.assertNotEqual(item["launch_status"], "live")
-        self.assertNotEqual(item["launch_status"], "live_when_configured")
-        self.assertFalse(item["setup_available"])
-        self.assertFalse(item["runtime_usable"])
+        self.assertEqual(item["launch_status"], "live_when_configured")
+        self.assertTrue(item["setup_available"])
+        self.assertTrue(item["runtime_usable"])
+        self.assertEqual(item["lane"], connection_catalog_service.LANE_SAGE_PERSONAL_CHANNEL)
+        self.assertEqual(item["provider"], "signal_local_bridge")
+        self.assertEqual(item["setup_kind"], "local_bridge")
 
-    def test_imessage_not_marked_ready(self):
+    def test_imessage_marked_live_when_configured(self):
         item = _catalog_item("imessage_personal")
-        self.assertNotEqual(item["launch_status"], "live")
-        self.assertNotEqual(item["launch_status"], "live_when_configured")
-        self.assertFalse(item["setup_available"])
-        self.assertFalse(item["runtime_usable"])
+        self.assertEqual(item["launch_status"], "live_when_configured")
+        self.assertTrue(item["setup_available"])
+        self.assertTrue(item["runtime_usable"])
+        self.assertEqual(item["lane"], connection_catalog_service.LANE_SAGE_PERSONAL_CHANNEL)
+        self.assertEqual(item["provider"], "bluebubbles_local_bridge")
+        self.assertEqual(item["setup_kind"], "mac_bridge")
 
-    def test_wechat_not_marked_ready(self):
+    def test_wechat_marked_live_when_configured(self):
         item = _catalog_item("wechat_personal")
-        self.assertNotEqual(item["launch_status"], "live")
-        self.assertNotEqual(item["launch_status"], "live_when_configured")
-        self.assertFalse(item["setup_available"])
-        self.assertFalse(item["runtime_usable"])
+        self.assertEqual(item["launch_status"], "live_when_configured")
+        self.assertTrue(item["setup_available"])
+        self.assertTrue(item["runtime_usable"])
+        self.assertEqual(item["lane"], connection_catalog_service.LANE_SAGE_PERSONAL_CHANNEL)
+        self.assertEqual(item["provider"], "wechat_local_bridge")
+        self.assertEqual(item["setup_kind"], "local_bridge")
+
+    def test_wechat_status_uses_selected_gateway_bridge_health(self):
+        with patch.object(
+            connection_catalog_service,
+            "_selected_gateway",
+            return_value=(
+                {
+                    "gateway_id": "gw-1",
+                    "connection_status": "online",
+                    "metadata": {
+                        "personal_channel_manifests": [
+                            {
+                                "channel_key": "wechat_personal",
+                                "provider": "wechat_local_bridge",
+                                "status": "not_configured",
+                                "live_capable": True,
+                            }
+                        ],
+                        "personal_channel_health": [
+                            {
+                                "channel_key": "wechat_personal",
+                                "provider": "wechat_local_bridge",
+                                "status": "connected",
+                                "connected": True,
+                                "running": True,
+                            }
+                        ],
+                    },
+                },
+                [],
+            ),
+        ):
+            items = connection_catalog_service.status_items(
+                workspace_id="w-1", user_id="u-1", surface="sage"
+            )
+            wechat = next(i for i in items if i["id"] == "wechat_personal")
+            self.assertTrue(wechat["connected"])
+            self.assertTrue(wechat["configured"])
+            self.assertEqual(wechat["health_status"], "healthy")
+            self.assertEqual(wechat["next_action"], "manage")
+
+    def test_wechat_status_reports_bridge_unavailable_without_claiming_connected(self):
+        with patch.object(
+            connection_catalog_service,
+            "_selected_gateway",
+            return_value=(
+                {
+                    "gateway_id": "gw-1",
+                    "connection_status": "online",
+                    "metadata": {
+                        "personal_channel_health": [
+                            {
+                                "channel_key": "wechat_personal",
+                                "provider": "wechat_local_bridge",
+                                "status": "unavailable",
+                                "connected": False,
+                                "last_error": "bridge refused connection",
+                            }
+                        ],
+                    },
+                },
+                [],
+            ),
+        ):
+            items = connection_catalog_service.status_items(
+                workspace_id="w-1", user_id="u-1", surface="sage"
+            )
+            wechat = next(i for i in items if i["id"] == "wechat_personal")
+            self.assertFalse(wechat["connected"])
+            self.assertTrue(wechat["configured"])
+            self.assertEqual(wechat["health_status"], "unavailable")
+            self.assertEqual(wechat["last_error"], "bridge refused connection")
+            self.assertEqual(wechat["next_action"], "connect")
 
     def test_no_channel_card_claims_supported_without_runtime(self):
         """Every catalog item with a usable launch status must have a real

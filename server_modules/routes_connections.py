@@ -53,6 +53,7 @@ LOCAL_BRIDGE_SETUP_CONTRACTS: Dict[str, Dict[str, Any]] = {
         "bridge_label": "WeChat Agent Computer bridge",
         "env_prefix": "EMPYRALIS_WECHAT_BRIDGE",
         "native_bridge": None,
+        "gateway_runtime": "empyralis-gateway/src/channels/local-bridge-runtime.ts",
         "required_upstream": ["EMPYRALIS_WECHAT_BRIDGE_URL"],
         "optional_upstream": ["EMPYRALIS_WECHAT_BRIDGE_TOKEN"],
     },

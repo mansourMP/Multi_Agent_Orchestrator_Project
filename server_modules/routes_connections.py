@@ -120,6 +120,14 @@ def _require_selectable_gateway(*, gateway_id: str, workspace_id: str, current_u
     return registration
 
 
+def _gateway_public_payload_online(gateway: Dict[str, Any]) -> bool:
+    connection_status = str(gateway.get("connection_status") or "").strip().lower()
+    if connection_status in {"online", "connected"}:
+        return True
+    status = str(gateway.get("status") or "").strip().lower()
+    return bool(gateway.get("heartbeat_fresh")) and status == "active"
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -301,7 +309,7 @@ async def start_connection_setup(
             current_user=current_user,
         )
         public_registration = gateway_registry_service.gateway_registration_public_payload(registration)
-        if str(public_registration.get("connection_status") or "").strip().lower() != "online":
+        if not _gateway_public_payload_online(public_registration):
             raise HTTPException(status_code=409, detail="Selected Sage Agent Computer is offline.")
         if item.get("id") in {"telegram_personal", "whatsapp_personal"}:
             channel = "telegram" if item.get("id") == "telegram_personal" else "whatsapp"

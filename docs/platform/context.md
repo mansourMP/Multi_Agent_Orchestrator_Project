@@ -27,11 +27,11 @@ Shell classes are explicit:
   - web
   - desktop
 - `channel_shell`
-  - Live personal Agent Computer channels: Telegram, WhatsApp, Signal, iMessage, WeChat
-  - Live when configured business/team channels: Telegram Bot, Slack, Discord
+  - Live personal Agent Computer channels: Telegram, WhatsApp
+  - Planned personal Agent Computer bridge channels: Signal, iMessage, WeChat
+  - Live when configured cloud/business channels: Telegram Bot, Slack, Discord
   - Live when configured connected apps: GitHub, Notion, Linear, Dropbox, Amazon S3, SMTP / IMAP, WeChat Work, Instagram Business, Google Workspace
-  - Partial: Email channel, Microsoft 365
-  - Planned: Web Chat, WhatsApp Business, Webhook, Teams, Matrix, phone
+  - Partial/planned: Microsoft 365, Webhook, Web Chat, WhatsApp Business, Teams, Matrix, phone
 
 Shell truth:
 - every shell shares the same captain identity
@@ -168,8 +168,10 @@ Current repo truth as of 2026-06-07:
 - `empyralis-gateway` exists and owns paired WSS gateway sessions
 - the gateway already routes local supervisor/device actions through the cloud
   control path
-- personal WhatsApp, Telegram, Signal, iMessage, and WeChat terminate at the
-  selected Agent Computer gateway lane
+- personal WhatsApp and Telegram terminate at the selected Agent Computer
+  gateway lane
+- Signal, iMessage, and WeChat remain planned private bridge lanes until their
+  local runtimes are certified end to end
 - gateway-governed browser execution, approvals, doctor, checkpoint, and
   fallback surfaces already exist in the live backend
 - Studio/business webhook connectors remain a separate cloud-first lane
@@ -277,7 +279,8 @@ Connector class rules:
 
 Channel shells stay separate from deep application connectors:
 - Telegram, WhatsApp, Signal, iMessage, WeChat, Slack, Discord, email, phone,
-  and web chat are shell surfaces
+  and web chat are shell surfaces; Signal, iMessage, WeChat, phone, and web
+  chat are not launch-live channel shells yet
 - channel shells are not connector-management or provider-management surfaces
 - channel shells do not become separate policy engines
 

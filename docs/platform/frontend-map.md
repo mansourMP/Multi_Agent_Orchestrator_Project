@@ -1,6 +1,6 @@
 # Frontend Map
 
-Last verified: 2026-04-14
+Last verified: 2026-06-08
 
 This is a strict dumb-UI strategy.
 
@@ -17,10 +17,11 @@ Internal `/apps/...` routes are hidden tool/runtime routes, not a visible mobile
 
 ### Channel Shells
 
-- Live personal Agent Computer channels: Telegram, WhatsApp, Signal, iMessage, WeChat
-- Live when configured business/team channels: Telegram Bot, Slack, Discord
-- Partial channels: Email
-- Planned channels: Web Chat, WhatsApp Business, Webhook, Teams, Matrix
+- Live personal Agent Computer channels: Telegram, WhatsApp
+- Planned personal Agent Computer bridge channels: Signal, iMessage, WeChat
+- Live when configured cloud/business channels: Telegram Bot, Slack, Discord
+- Email setup: Gmail through Google Workspace, or custom SMTP / IMAP
+- Planned/partial channels: Web Chat, WhatsApp Business, Webhook, Teams, Matrix
 
 They may do:
 - lightweight approvals where supported

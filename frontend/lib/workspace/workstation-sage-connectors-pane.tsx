@@ -191,6 +191,7 @@ type PersonalChannelSurfacesPayload = Record<string, unknown> & {
 
 type PersonalCardStatusTone = 'neutral' | 'connected' | 'warning' | 'danger';
 type PersonalCommunicationChannel = 'telegram' | 'whatsapp';
+type EmailChannelMode = 'gmail' | 'smtp';
 
 type PersonalCardRecord = {
   id:
@@ -543,10 +544,10 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     label: 'Telegram Bot',
     image: '/brand-assets/channels/telegram.svg?v=3',
     connectorIds: ['telegram_bot'],
-    capabilityTags: ['Customer chat', 'Bot replies'],
-    summary: 'Telegram bot deployments live in the Studio/business lane. They are separate from your personal Telegram on Agent Computer.',
-    setupHint: 'Connect a Telegram bot in Studio when deployed specialists need a cloud-managed channel.',
-    surfaceScope: 'studio_only',
+    capabilityTags: ['Cloud channel', 'Bot replies'],
+    summary: 'Telegram Bot is the cloud-first Telegram path for Sage and Studio. It does not need Agent Computer.',
+    setupHint: 'Connect a Telegram bot token when Sage should be reachable in Telegram without using your personal account.',
+    surfaceScope: 'all',
   },
   {
     id: 'whatsapp_twilio',
@@ -709,6 +710,26 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     surfaceScope: 'all',
   },
 ];
+
+const CONNECTOR_AUTH_FIELD_FALLBACKS: Record<string, string[]> = {
+  google_workspace: ['access_token'],
+  gmail: ['access_token'],
+  google_calendar: ['access_token'],
+  github: ['personal_access_token'],
+  notion: ['integration_token'],
+  linear: ['api_key'],
+  dropbox: ['access_token'],
+  s3: ['aws_access_key_id', 'aws_secret_access_key', 'region'],
+  smtp: ['host', 'port', 'username', 'password', 'use_tls'],
+  telegram_bot: ['bot_token', 'chat_id'],
+  slack: ['bot_token', 'user_token', 'team_id', 'team_name'],
+  discord_bot: ['bot_token', 'channel_id', 'guild_id', 'application_id', 'public_key', 'application_public_key'],
+  whatsapp_twilio: ['account_sid', 'auth_token', 'from_number', 'to_number'],
+  wechat_work: ['webhook_url'],
+  instagram_business: ['access_token', 'instagram_account_id', 'page_id'],
+};
+
+const CONNECTOR_STATIC_LOCKED_IDS = new Set(['microsoft_365', 'webhook']);
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -2092,6 +2113,8 @@ export function WorkstationSageConnectorsPane({
   const [personalChannelError, setPersonalChannelError] = useState<string | null>(null);
   const [, setStatus] = useState<string | null>(null);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
+  const [telegramChannelMode, setTelegramChannelMode] = useState<'bot' | 'personal'>('bot');
+  const [emailChannelMode, setEmailChannelMode] = useState<EmailChannelMode>('gmail');
   const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => (
     normalizeIntegrationCategoryId(searchParams.get('section') ?? searchParams.get('connection'))
     ?? (showProviders ? 'apps' : 'channels')
@@ -2662,15 +2685,25 @@ export function WorkstationSageConnectorsPane({
 
   function connectorAsExternalCard(record: ConnectorCardRecord): ExternalIntegrationCardRecord {
     const statusItem = connectionStatusForConnector(record);
-    const locked = connectionLaunchLocked(statusItem);
     const connected = statusItem ? statusItem.connected === true : record.connected;
-    const connectionId = readString(statusItem?.id) || null;
+    const fallbackConnectionId = readString(record.definition.connectorIds?.[0]) || record.id;
+    const connectionId = readString(statusItem?.id) || fallbackConnectionId || null;
+    const locked = connectionLaunchLocked(statusItem)
+      || CONNECTOR_STATIC_LOCKED_IDS.has(record.id)
+      || CONNECTOR_STATIC_LOCKED_IDS.has(fallbackConnectionId);
     const nextAction = readString(statusItem?.next_action).toLowerCase();
     const connectionProvider = readString(statusItem?.vault_provider)
       || readString(statusItem?.account_provider)
       || readString(statusItem?.connector_id)
-      || connectionId;
+      || fallbackConnectionId
+      || readString(connectionId);
     const connectionAuthFields = readStringList(statusItem?.auth_required_fields);
+    const fallbackAuthFields = CONNECTOR_AUTH_FIELD_FALLBACKS[connectionProvider]
+      ?? CONNECTOR_AUTH_FIELD_FALLBACKS[fallbackConnectionId]
+      ?? [];
+    const effectiveAuthFields = fallbackAuthFields.length > 0 ? fallbackAuthFields : connectionAuthFields;
+    const canCredentialSetup = !locked && readString(connectionProvider) !== '' && effectiveAuthFields.length > 0;
+    const actionLabel = connectorActionLabel(record) ?? (canCredentialSetup ? 'Connect' : null);
     return {
       id: `connector_${record.id}`,
       label: record.label,
@@ -2680,11 +2713,11 @@ export function WorkstationSageConnectorsPane({
       statusTone: locked ? 'neutral' : connected ? 'connected' : 'neutral',
       summary: record.definition.summary,
       nextStep: locked ? null : connected ? null : record.definition.setupHint,
-      actionLabel: locked ? null : connectorActionLabel(record),
-      actionTarget: connectionId && nextAction === 'connect' ? 'connection' : 'close',
+      actionLabel: locked ? null : actionLabel,
+      actionTarget: canCredentialSetup || (connectionId && nextAction === 'connect') ? 'connection' : 'close',
       connectionId,
       connectionProvider,
-      connectionAuthFields,
+      connectionAuthFields: effectiveAuthFields,
       locked,
     };
   }
@@ -2695,6 +2728,7 @@ export function WorkstationSageConnectorsPane({
     const bridgePersonalChannel = record.id === 'signal_personal'
       || record.id === 'imessage_personal'
       || record.id === 'wechat_personal';
+    const bridgeLocked = bridgePersonalChannel || locked;
     const pairLabel = record.channel
       ? record.statusTone === 'connected'
         ? `Manage ${record.label.replace(/^Your\s+/, '')}`
@@ -2708,13 +2742,13 @@ export function WorkstationSageConnectorsPane({
       statusLabel: locked && !bridgePersonalChannel ? connectionLockedLabel(statusItem, 'Coming soon') : record.statusLabel,
       statusTone: locked && !bridgePersonalChannel ? 'neutral' : record.statusTone,
       summary: record.summary,
-      nextStep: locked ? null : record.nextStep,
-      actionLabel: locked ? null : pairLabel ?? (record.statusTone === 'connected' ? 'Review connection' : 'Set up'),
-      secondaryActionLabel: locked ? null : record.channel ? 'Agent Computer settings' : null,
-      actionTarget: locked ? 'close' : 'gateway',
+      nextStep: bridgeLocked ? null : record.nextStep,
+      actionLabel: bridgeLocked ? null : pairLabel ?? (record.statusTone === 'connected' ? 'Review connection' : 'Set up'),
+      secondaryActionLabel: bridgeLocked ? null : record.channel ? 'Agent Computer settings' : null,
+      actionTarget: bridgeLocked ? 'close' : 'gateway',
       connectionId: readString(statusItem?.id) || null,
       channel: record.channel ?? null,
-      locked,
+      locked: bridgeLocked,
     };
   }
 
@@ -2757,19 +2791,67 @@ export function WorkstationSageConnectorsPane({
   );
 
   const channelCards = useMemo<ExternalIntegrationCardRecord[]>(
-    () => [
-      ...communicationPersonalCards.map(personalAsExternalCard),
-      ...connectorCards
-        .filter((card) =>
-          card.id === 'email'
-          || card.id === 'slack'
-          || card.id === 'discord_bot'
-          || card.id === 'telegram_bot'
-          || card.id === 'whatsapp_twilio',
-        )
-        .map(connectorAsExternalCard),
-    ],
-    [communicationPersonalCards, connectorCards],
+    () => {
+      const telegramBotRecord = connectorCards.find((card) => card.id === 'telegram_bot') ?? null;
+      const telegramPersonalRecord = communicationPersonalCards.find((card) => card.id === 'telegram_personal') ?? null;
+      const telegramBot = telegramBotRecord ? connectorAsExternalCard(telegramBotRecord) : null;
+      const telegramPersonal = telegramPersonalRecord ? personalAsExternalCard(telegramPersonalRecord) : null;
+      const telegramConnected = telegramBot?.statusTone === 'connected' || telegramPersonal?.statusTone === 'connected';
+      const telegramCard: ExternalIntegrationCardRecord | null = telegramBot || telegramPersonal
+        ? {
+            id: 'telegram',
+            label: 'Telegram',
+            image: telegramBot?.image ?? telegramPersonal?.image ?? '',
+            detail: 'Use a cloud bot or your personal Telegram account.',
+            statusLabel: telegramBot?.statusTone === 'connected'
+              ? 'Bot connected'
+              : telegramPersonal?.statusTone === 'connected'
+                ? 'Personal connected'
+                : 'Choose setup',
+            statusTone: telegramConnected ? 'connected' : 'neutral',
+            summary: 'Choose Telegram Bot for cloud setup, or Personal Telegram when Sage must use your logged-in account through Agent Computer.',
+            nextStep: null,
+            actionTarget: 'close',
+          }
+        : null;
+      const gmailRecord = connectorCards.find((card) => card.id === 'gmail') ?? null;
+      const smtpRecord = connectorCards.find((card) => card.id === 'smtp') ?? null;
+      const gmail = gmailRecord ? connectorAsExternalCard(gmailRecord) : null;
+      const smtp = smtpRecord ? connectorAsExternalCard(smtpRecord) : null;
+      const emailConnected = gmail?.statusTone === 'connected' || smtp?.statusTone === 'connected';
+      const emailCard: ExternalIntegrationCardRecord | null = gmail || smtp
+        ? {
+            id: 'email_channel',
+            label: 'Email',
+            image: gmail?.image ?? smtp?.image ?? '/brand-assets/generic/api.svg?v=3',
+            detail: 'Use Gmail or a custom SMTP mailbox.',
+            statusLabel: gmail?.statusTone === 'connected'
+              ? 'Gmail connected'
+              : smtp?.statusTone === 'connected'
+                ? 'SMTP connected'
+                : 'Choose setup',
+            statusTone: emailConnected ? 'connected' : 'neutral',
+            summary: 'Choose Gmail for Google Workspace mail, or SMTP for a custom mailbox.',
+            nextStep: null,
+            actionTarget: 'close',
+          }
+        : null;
+      const cloudChannelOrder = ['slack', 'discord_bot', 'whatsapp_twilio'];
+      const cloudCards = cloudChannelOrder
+        .map((id) => connectorCards.find((card) => card.id === id) ?? null)
+        .filter((card): card is ConnectorCardRecord => Boolean(card))
+        .map(connectorAsExternalCard);
+      const personalCards = communicationPersonalCards
+        .filter((card) => card.id !== 'telegram_personal')
+        .map(personalAsExternalCard);
+      return [
+        ...(telegramCard ? [telegramCard] : []),
+        ...(emailCard ? [emailCard] : []),
+        ...cloudCards,
+        ...(showPersonalSurface ? personalCards : []),
+      ];
+    },
+    [communicationPersonalCards, connectorCards, showPersonalSurface],
   );
 
   const includeAiRuntimeGroup = normalizeIntegrationCategoryId(searchParams.get('section') ?? searchParams.get('connection')) === 'ai_runtime';
@@ -2948,6 +3030,102 @@ export function WorkstationSageConnectorsPane({
   }
 
   function connectorCredentialFieldLabel(field: string): string {
+    if (field === 'access_token') {
+      return 'Access token';
+    }
+    if (field === 'personal_access_token') {
+      return 'Personal access token';
+    }
+    if (field === 'integration_token') {
+      return 'Integration token';
+    }
+    if (field === 'api_key') {
+      return 'API key';
+    }
+    if (field === 'webhook_url') {
+      return 'Webhook URL';
+    }
+    if (field === 'aws_access_key_id') {
+      return 'AWS access key ID';
+    }
+    if (field === 'aws_secret_access_key') {
+      return 'AWS secret access key';
+    }
+    if (field === 'region') {
+      return 'Region';
+    }
+    if (field === 'instagram_account_id') {
+      return 'Instagram account ID';
+    }
+    if (field === 'page_id') {
+      return 'Page ID';
+    }
+    if (field === 'app_id') {
+      return 'App ID';
+    }
+    if (field === 'installation_id') {
+      return 'Installation ID';
+    }
+    if (field === 'private_key_pem') {
+      return 'Private key';
+    }
+    if (field === 'bot_token') {
+      return 'Bot token';
+    }
+    if (field === 'chat_id') {
+      return 'Target chat ID';
+    }
+    if (field === 'user_token') {
+      return 'User token';
+    }
+    if (field === 'team_id') {
+      return 'Team ID';
+    }
+    if (field === 'team_name') {
+      return 'Team name';
+    }
+    if (field === 'channel_id') {
+      return 'Channel ID';
+    }
+    if (field === 'guild_id') {
+      return 'Guild ID';
+    }
+    if (field === 'application_id') {
+      return 'Application ID';
+    }
+    if (field === 'public_key') {
+      return 'Public key';
+    }
+    if (field === 'application_public_key') {
+      return 'Application public key';
+    }
+    if (field === 'account_sid') {
+      return 'Account SID';
+    }
+    if (field === 'auth_token') {
+      return 'Auth token';
+    }
+    if (field === 'from_number') {
+      return 'From number';
+    }
+    if (field === 'to_number') {
+      return 'To number';
+    }
+    if (field === 'host') {
+      return 'SMTP host';
+    }
+    if (field === 'port') {
+      return 'Port';
+    }
+    if (field === 'username') {
+      return 'Username';
+    }
+    if (field === 'password') {
+      return 'Password';
+    }
+    if (field === 'use_tls') {
+      return 'Use TLS';
+    }
     const normalized = field.replace(/_/g, ' ').trim();
     return normalized ? normalized.replace(/\b\w/g, (match) => match.toUpperCase()) : 'Value';
   }
@@ -2967,13 +3145,131 @@ export function WorkstationSageConnectorsPane({
     if (field === 'access_token') {
       return 'OAuth access token';
     }
+    if (field === 'personal_access_token') {
+      return 'ghp_...';
+    }
+    if (field === 'integration_token') {
+      return 'Integration token';
+    }
+    if (field === 'api_key') {
+      return 'API key';
+    }
+    if (field === 'webhook_url') {
+      return 'https://...';
+    }
+    if (field === 'aws_access_key_id') {
+      return 'AKIA...';
+    }
+    if (field === 'aws_secret_access_key') {
+      return 'AWS secret access key';
+    }
+    if (field === 'region') {
+      return 'us-east-1';
+    }
+    if (field === 'instagram_account_id') {
+      return 'Instagram business account ID';
+    }
+    if (field === 'page_id') {
+      return 'Facebook page ID (optional)';
+    }
+    if (field === 'app_id') {
+      return 'App ID';
+    }
+    if (field === 'installation_id') {
+      return 'Installation ID';
+    }
+    if (field === 'private_key_pem') {
+      return '-----BEGIN PRIVATE KEY-----';
+    }
     if (field === 'bot_token') {
-      return 'Bot token';
+      return '123456789:AA...';
     }
     if (field === 'chat_id') {
-      return 'Chat ID';
+      return 'Chat ID or @channel username';
+    }
+    if (field === 'user_token') {
+      return 'xoxp-...';
+    }
+    if (field === 'team_id') {
+      return 'T0123456789';
+    }
+    if (field === 'team_name') {
+      return 'Workspace name';
+    }
+    if (field === 'channel_id') {
+      return 'Channel ID';
+    }
+    if (field === 'guild_id') {
+      return 'Guild ID';
+    }
+    if (field === 'application_id') {
+      return 'Application ID';
+    }
+    if (field === 'public_key' || field === 'application_public_key') {
+      return 'Discord application public key';
+    }
+    if (field === 'host') {
+      return 'smtp.example.com';
+    }
+    if (field === 'port') {
+      return '587';
+    }
+    if (field === 'username') {
+      return 'user@example.com';
+    }
+    if (field === 'password') {
+      return 'App password';
+    }
+    if (field === 'use_tls') {
+      return 'true';
     }
     return connectorCredentialFieldLabel(field);
+  }
+
+  function connectorCredentialFieldLabelForRecord(record: ExternalIntegrationCardRecord, field: string): string {
+    const provider = readString(record.connectionProvider).toLowerCase();
+    if ((provider === 'google_workspace' || provider === 'gmail' || provider === 'google_calendar') && field === 'access_token') {
+      return 'Google Workspace access token';
+    }
+    if (provider === 'github' && field === 'personal_access_token') {
+      return 'GitHub personal access token';
+    }
+    if (provider === 'notion' && field === 'integration_token') {
+      return 'Notion integration token';
+    }
+    if (provider === 'linear' && field === 'api_key') {
+      return 'Linear API key';
+    }
+    if (provider === 'dropbox' && field === 'access_token') {
+      return 'Dropbox access token';
+    }
+    if (provider === 'wechat_work' && field === 'webhook_url') {
+      return 'WeChat Work webhook URL';
+    }
+    if (provider === 'instagram_business' && field === 'access_token') {
+      return 'Instagram access token';
+    }
+    if (provider === 'telegram_bot' && field === 'bot_token') {
+      return 'Telegram bot token';
+    }
+    if (provider === 'discord_bot' && field === 'bot_token') {
+      return 'Discord bot token';
+    }
+    if (provider === 'slack' && field === 'bot_token') {
+      return 'Slack bot token';
+    }
+    return connectorCredentialFieldLabel(field);
+  }
+
+  function connectorCredentialSaveLabel(record: ExternalIntegrationCardRecord): string {
+    const provider = readString(record.connectionProvider).toLowerCase();
+    if (provider === 'telegram_bot') {
+      return 'Save connection';
+    }
+    if (provider === 'discord_bot' || provider === 'slack' || provider === 'whatsapp_twilio') {
+      return 'Connect channel';
+    }
+    return 'Connect account';
   }
 
   function updateConnectorDraftCredential(cardId: string, field: string, value: string) {
@@ -2996,10 +3292,17 @@ export function WorkstationSageConnectorsPane({
     const draft = connectorDraftCredentials[record.id] ?? {};
     const credentials: Record<string, string | number | boolean> = {};
     const missing: string[] = [];
+    const optionalFields = new Set(['port', 'use_tls', 'region', 'page_id', 'application_id', 'public_key', 'application_public_key']);
     fields.forEach((field) => {
       const value = readString(draft[field]);
       if (!value) {
-        missing.push(connectorCredentialFieldLabel(field));
+        if (field === 'use_tls') {
+          credentials[field] = true;
+        } else if (field === 'region') {
+          credentials[field] = 'us-east-1';
+        } else if (!optionalFields.has(field)) {
+          missing.push(connectorCredentialFieldLabelForRecord(record, field));
+        }
         return;
       }
       if (field === 'port') {
@@ -3788,7 +4091,12 @@ export function WorkstationSageConnectorsPane({
       <button
         key={record.id}
         type="button"
-        className={joinClassNames('sage-unified-card', isExpanded && 'sage-unified-card--selected')}
+        disabled={record.locked ? true : undefined}
+        className={joinClassNames(
+          'sage-unified-card',
+          isExpanded && 'sage-unified-card--selected',
+          record.locked && 'sage-unified-card--disabled',
+        )}
         aria-disabled={record.locked ? true : undefined}
         onClick={() => {
           if (record.locked) {
@@ -3802,6 +4110,12 @@ export function WorkstationSageConnectorsPane({
             setProviderPickerOpen(true);
             setProviderPickerDraftId(null);
             return;
+          }
+          if (record.id === 'telegram' && !isExpanded) {
+            setTelegramChannelMode('bot');
+          }
+          if (record.id === 'email_channel' && !isExpanded) {
+            setEmailChannelMode('gmail');
           }
           setExpandedCardId(isExpanded ? null : record.id);
         }}
@@ -4310,7 +4624,307 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function renderTelegramChannelExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
+    const showClose = options.showClose !== false;
+    const telegramBotRecord = connectorCards.find((card) => card.id === 'telegram_bot') ?? null;
+    const telegramPersonalRecord = communicationPersonalCards.find((card) => card.id === 'telegram_personal') ?? null;
+    const botRecord = telegramBotRecord ? connectorAsExternalCard(telegramBotRecord) : null;
+    const botSetupRecord: ExternalIntegrationCardRecord = {
+      id: botRecord?.id ?? 'connector_telegram_bot',
+      label: botRecord?.label ?? 'Telegram Bot',
+      image: botRecord?.image ?? record.image,
+      detail: botRecord?.detail ?? 'Cloud Telegram bot channel.',
+      statusLabel: botRecord?.statusLabel ?? 'Not connected',
+      statusTone: botRecord?.statusTone ?? 'neutral',
+      summary: botRecord?.summary ?? 'Telegram Bot is the cloud-first Telegram path for Sage and Studio. It does not need Agent Computer.',
+      nextStep: 'Paste the bot token from BotFather and the chat ID or @channel username Sage should send messages to.',
+      actionTarget: 'connection',
+      connectionId: botRecord?.connectionId ?? 'telegram_bot',
+      connectionProvider: botRecord?.connectionProvider ?? 'telegram_bot',
+      connectionAuthFields: (botRecord?.connectionAuthFields ?? []).length > 0
+        ? botRecord?.connectionAuthFields ?? []
+        : ['bot_token', 'chat_id'],
+      locked: false,
+    };
+    const personalRecord = telegramPersonalRecord ? personalAsExternalCard(telegramPersonalRecord) : null;
+    const channelDraft = channelDrafts.telegram;
+    const channelBusy = busyCardId === 'telegram_personal' || busyCardId === 'telegram_personal:test';
+    const repairGatewayId = readString(gatewaySelectionSummary.repairGateway?.gateway_id);
+    const repairGatewayName = gatewayDisplayName(gatewaySelectionSummary.repairGateway);
+    const channelComputerIssue = gatewaySelectionSummary.selectedGatewayMissing
+      ? {
+          message: describeGatewaySelectionRepair(gatewaySelectionSummary),
+          actionLabel: repairGatewayId ? `Use ${repairGatewayName}` : 'Choose Agent Computer',
+          action: repairGatewayId ? 'repair' : 'hardware',
+        }
+      : !selectedGateway
+        ? {
+            message: describeAvailableGatewayChoice(gatewaySelectionSummary),
+            actionLabel: repairGatewayId ? `Use ${repairGatewayName}` : 'Choose Agent Computer',
+            action: repairGatewayId ? 'repair' : 'hardware',
+          }
+        : !selectedGatewayOnline
+          ? {
+              message: repairGatewayId
+                ? `Sage is selected to an offline Agent Computer. ${repairGatewayName} is online; use it before setting up personal channels.`
+                : 'Selected Sage Agent Computer is offline. Reconnect it before setting up personal channels.',
+              actionLabel: repairGatewayId ? `Use ${repairGatewayName}` : 'Open Hardware',
+              action: repairGatewayId ? 'repair' : 'hardware',
+            }
+          : null;
+    const showBotCredentialForm = Boolean(
+      botSetupRecord.actionTarget === 'connection'
+      && !botSetupRecord.locked
+      && readString(botSetupRecord.connectionProvider) !== ''
+      && (botSetupRecord.connectionAuthFields ?? []).length > 0,
+    );
+
+    return (
+      <div className="sage-unified-expand sage-channel-expand">
+        <div className="sage-unified-expand__header">
+          <div className="sage-channel-expand__identity">
+            <BrandLogo
+              id={record.id}
+              label={record.label}
+              src={record.image}
+              failedLogos={failedLogos}
+              onError={markLogoFailed}
+            />
+            <strong className="sage-unified-expand__title">{record.label}</strong>
+          </div>
+          {showClose ? (
+            <button
+              type="button"
+              className="sage-unified-expand__close"
+              onClick={() => setExpandedCardId(null)}
+              aria-label="Close Telegram"
+            >
+              <X size={14} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        <div className="sage-channel-route-tabs" role="tablist" aria-label="Telegram setup type">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={telegramChannelMode === 'bot'}
+            className={joinClassNames('sage-channel-route-tab', telegramChannelMode === 'bot' && 'sage-channel-route-tab--active')}
+            onClick={() => {
+              setTelegramChannelMode('bot');
+              setConfigChannelId(null);
+              setPersonalChannelError(null);
+            }}
+          >
+            Bot
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={telegramChannelMode === 'personal'}
+            className={joinClassNames('sage-channel-route-tab', telegramChannelMode === 'personal' && 'sage-channel-route-tab--active')}
+            onClick={() => {
+              setTelegramChannelMode('personal');
+              setConfigChannelId('telegram');
+              setPersonalChannelError(null);
+            }}
+          >
+            Personal
+          </button>
+        </div>
+        {telegramChannelMode === 'bot' ? (
+          <>
+            {showBotCredentialForm ? renderFlatConnectorCredentialForm(botSetupRecord) : null}
+          </>
+        ) : (
+          <>
+            <div className="sage-unified-expand__text">
+              Personal Telegram uses your logged-in Telegram account on the selected Agent Computer. Use this only when Sage needs your personal account lane.
+            </div>
+            {personalRecord?.nextStep ? <div className="sage-unified-expand__text">{personalRecord.nextStep}</div> : null}
+            <div className="sage-unified-expand__tag-row">
+              <span className="sage-unified-expand__tag">Agent Computer</span>
+              <span className="sage-unified-expand__tag">Personal account</span>
+              <span className="sage-unified-expand__tag">Sage only</span>
+            </div>
+            {channelComputerIssue ? <AppNotice tone="warning">{channelComputerIssue.message}</AppNotice> : null}
+            <div className="sage-unified-expand__actions">
+              {channelComputerIssue ? (
+                <AppButton
+                  type="button"
+                  disabled={channelComputerIssue.action === 'repair' && busyCardId === `gateway:${repairGatewayId}`}
+                  onClick={() => {
+                    if (channelComputerIssue.action === 'repair' && repairGatewayId) {
+                      void chooseSageAgentComputer(repairGatewayId);
+                      return;
+                    }
+                    openGatewaySurface();
+                  }}
+                >
+                  {channelComputerIssue.action === 'repair' && busyCardId === `gateway:${repairGatewayId}`
+                    ? 'Switching...'
+                    : channelComputerIssue.actionLabel}
+                </AppButton>
+              ) : null}
+              <AppButton type="button" tone="ghost" onClick={openGatewaySurface}>
+                Agent Computer settings
+              </AppButton>
+              {showClose ? (
+                <button
+                  type="button"
+                  className="sage-unified-expand__link"
+                  onClick={() => setExpandedCardId(null)}
+                >
+                  Close
+                </button>
+              ) : null}
+            </div>
+            {!channelComputerIssue ? renderPersonalChannelConfig('telegram', channelDraft, channelBusy) : null}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  function renderEmailChannelExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
+    const showClose = options.showClose !== false;
+    const gmailRecord = connectorCards.find((card) => card.id === 'gmail') ?? null;
+    const smtpRecord = connectorCards.find((card) => card.id === 'smtp') ?? null;
+    const gmailBase = gmailRecord ? connectorAsExternalCard(gmailRecord) : null;
+    const smtpBase = smtpRecord ? connectorAsExternalCard(smtpRecord) : null;
+    const gmailSetupRecord: ExternalIntegrationCardRecord | null = gmailBase
+      ? {
+          ...gmailBase,
+          label: 'Gmail',
+          connectionId: gmailBase.connectionId ?? 'google_workspace',
+          connectionProvider: gmailBase.connectionProvider ?? 'google_workspace',
+          connectionAuthFields: (gmailBase.connectionAuthFields ?? []).length > 0
+            ? gmailBase.connectionAuthFields
+            : ['access_token'],
+          actionTarget: 'connection',
+          locked: false,
+        }
+      : null;
+    const smtpSetupRecord: ExternalIntegrationCardRecord | null = smtpBase
+      ? {
+          ...smtpBase,
+          label: 'SMTP / IMAP Email',
+          connectionId: smtpBase.connectionId ?? 'smtp',
+          connectionProvider: smtpBase.connectionProvider ?? 'smtp',
+          connectionAuthFields: (smtpBase.connectionAuthFields ?? []).length > 0
+            ? smtpBase.connectionAuthFields
+            : ['host', 'port', 'username', 'password', 'use_tls'],
+          actionTarget: 'connection',
+          locked: false,
+        }
+      : null;
+    const activeRecord = emailChannelMode === 'gmail' ? gmailSetupRecord : smtpSetupRecord;
+
+    return (
+      <div className="sage-unified-expand sage-channel-expand">
+        <div className="sage-unified-expand__header">
+          <div className="sage-channel-expand__identity">
+            <BrandLogo
+              id={record.id}
+              label={record.label}
+              src={record.image}
+              failedLogos={failedLogos}
+              onError={markLogoFailed}
+            />
+            <strong className="sage-unified-expand__title">{record.label}</strong>
+          </div>
+          {showClose ? (
+            <button
+              type="button"
+              className="sage-unified-expand__close"
+              onClick={() => setExpandedCardId(null)}
+              aria-label="Close Email"
+            >
+              <X size={14} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        <div className="sage-channel-route-tabs" role="tablist" aria-label="Email setup type">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={emailChannelMode === 'gmail'}
+            className={joinClassNames('sage-channel-route-tab', emailChannelMode === 'gmail' && 'sage-channel-route-tab--active')}
+            onClick={() => {
+              setEmailChannelMode('gmail');
+              setPersonalChannelError(null);
+            }}
+          >
+            Gmail
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={emailChannelMode === 'smtp'}
+            className={joinClassNames('sage-channel-route-tab', emailChannelMode === 'smtp' && 'sage-channel-route-tab--active')}
+            onClick={() => {
+              setEmailChannelMode('smtp');
+              setPersonalChannelError(null);
+            }}
+          >
+            SMTP
+          </button>
+        </div>
+        {activeRecord ? renderFlatConnectorCredentialForm(activeRecord) : (
+          <AppNotice tone="warning">This email setup path is not available on this surface.</AppNotice>
+        )}
+      </div>
+    );
+  }
+
+  function renderFlatConnectorCredentialForm(record: ExternalIntegrationCardRecord) {
+    const fields = (record.connectionAuthFields ?? []).filter(Boolean);
+    if (fields.length === 0 || !readString(record.connectionProvider)) {
+      return null;
+    }
+    const draft = connectorDraftCredentials[record.id] ?? {};
+    const busy = busyCardId === record.id;
+    return (
+      <form
+        className="sage-connector-credential-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void handleConnectorCredentialSave(record);
+        }}
+      >
+        <div className="sage-connector-credential-form__fields">
+          {fields.map((field) => (
+            <FormField key={`${record.id}:${field}`} label={connectorCredentialFieldLabelForRecord(record, field)}>
+              <FormInput
+                type={connectorCredentialInputType(field)}
+                value={draft[field] ?? ''}
+                placeholder={connectorCredentialPlaceholder(field)}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                data-1p-ignore="true"
+                data-lpignore="true"
+                onChange={(event) => {
+                  updateConnectorDraftCredential(record.id, field, event.currentTarget.value);
+                }}
+              />
+            </FormField>
+          ))}
+        </div>
+        <AppButton type="submit" disabled={busy}>
+          {busy ? 'Saving...' : connectorCredentialSaveLabel(record)}
+        </AppButton>
+      </form>
+    );
+  }
+
   function renderExternalExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
+    if (record.id === 'telegram') {
+      return renderTelegramChannelExpand(record, options);
+    }
+    if (record.id === 'email_channel') {
+      return renderEmailChannelExpand(record, options);
+    }
     const channel = record.channel ?? null;
     const channelDraft = channel ? channelDrafts[channel] : null;
     const channelBusy = channel ? busyCardId === `${channel}_personal` || busyCardId === `${channel}_personal:test` : false;
@@ -4347,9 +4961,18 @@ export function WorkstationSageConnectorsPane({
       && readString(record.connectionProvider) !== ''
       && (record.connectionAuthFields ?? []).length > 0;
     return (
-      <MotionSlidePanel className="sage-unified-expand">
+      <div className="sage-unified-expand sage-channel-expand">
         <div className="sage-unified-expand__header">
-          <strong className="sage-unified-expand__title">{record.label}</strong>
+          <div className="sage-channel-expand__identity">
+            <BrandLogo
+              id={record.id}
+              label={record.label}
+              src={record.image}
+              failedLogos={failedLogos}
+              onError={markLogoFailed}
+            />
+            <strong className="sage-unified-expand__title">{record.label}</strong>
+          </div>
           {showClose ? (
             <button
               type="button"
@@ -4361,8 +4984,8 @@ export function WorkstationSageConnectorsPane({
             </button>
           ) : null}
         </div>
-        <div className="sage-unified-expand__text">{record.summary}</div>
-        {record.nextStep ? <div className="sage-unified-expand__text">{record.nextStep}</div> : null}
+        {!showConnectorCredentialForm ? <div className="sage-unified-expand__text">{record.summary}</div> : null}
+        {!showConnectorCredentialForm && record.nextStep ? <div className="sage-unified-expand__text">{record.nextStep}</div> : null}
         {channelComputerIssue ? <AppNotice tone="warning">{channelComputerIssue.message}</AppNotice> : null}
         {showConnectorCredentialForm ? renderConnectorCredentialForm(record) : null}
         <div className="sage-unified-expand__actions">
@@ -4432,71 +5055,12 @@ export function WorkstationSageConnectorsPane({
           ) : null}
         </div>
         {channel && channelDraft && configOpen && !channelComputerIssue ? renderPersonalChannelConfig(channel, channelDraft, channelBusy) : null}
-      </MotionSlidePanel>
-    );
-  }
-
-  function renderExternalModal(record: ExternalIntegrationCardRecord) {
-    return (
-      <div
-        className="sage-unified-modal"
-        role="presentation"
-        onClick={() => setExpandedCardId(null)}
-      >
-        <div
-          className="sage-unified-modal__panel"
-          role="dialog"
-          aria-modal="true"
-          aria-label={record.label}
-          onClick={(event) => event.stopPropagation()}
-        >
-          {renderExternalExpand(record)}
-        </div>
       </div>
     );
   }
 
   function renderConnectorCredentialForm(record: ExternalIntegrationCardRecord) {
-    const fields = (record.connectionAuthFields ?? []).filter(Boolean);
-    if (fields.length === 0 || !readString(record.connectionProvider)) {
-      return null;
-    }
-    const draft = connectorDraftCredentials[record.id] ?? {};
-    const busy = busyCardId === record.id;
-    return (
-      <div className="sage-unified-expand__config-disclosure">
-        <div className="sage-unified-expand__text">Connection details are validated before Sage or Studio can use this account.</div>
-        {fields.map((field) => (
-          <FormField key={`${record.id}:${field}`} label={connectorCredentialFieldLabel(field)}>
-            <FormInput
-              type={connectorCredentialInputType(field)}
-              value={draft[field] ?? ''}
-              placeholder={connectorCredentialPlaceholder(field)}
-              autoComplete="off"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              data-1p-ignore="true"
-              data-lpignore="true"
-              onChange={(event) => {
-                updateConnectorDraftCredential(record.id, field, event.currentTarget.value);
-              }}
-            />
-          </FormField>
-        ))}
-        <div className="sage-unified-expand__actions">
-          <AppButton
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              void handleConnectorCredentialSave(record);
-            }}
-          >
-            {busy ? 'Saving...' : 'Save connection'}
-          </AppButton>
-        </div>
-      </div>
-    );
+    return renderFlatConnectorCredentialForm(record);
   }
 
   function renderComputerConnectSheet() {
@@ -4936,7 +5500,23 @@ export function WorkstationSageConnectorsPane({
             <div className="sage-unified-grid sage-unified-grid--4">
               {cards.map(renderExternalCard)}
             </div>
-            {expandedCard ? renderExternalModal(expandedCard) : null}
+            {expandedCard ? (
+              <div
+                className="sage-unified-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`${expandedCard.label} setup`}
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget) {
+                    setExpandedCardId(null);
+                  }
+                }}
+              >
+                <div className="sage-unified-modal__panel">
+                  {renderExternalExpand(expandedCard)}
+                </div>
+              </div>
+            ) : null}
           </>
         ) : (
           <div className="sage-integrations-detail-card">
@@ -5069,7 +5649,7 @@ export function WorkstationSageConnectorsPane({
         {renderExternalCollection(
           showPersonalSurface ? 'Channels' : 'Channels',
           showPersonalSurface
-            ? 'Personal channels stay on Agent Computer. Business/customer channels stay separate.'
+            ? 'Cloud channels work without Agent Computer. Personal account channels use Agent Computer only when needed.'
             : 'Studio channels are customer-facing and separate from Sage personal channels.',
           channelCards,
           'No messaging connectors are available for this surface yet.',

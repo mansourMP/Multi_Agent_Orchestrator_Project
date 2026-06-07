@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from server_modules import connection_catalog_service, gateway_state_repository, routes_connections
+from server_modules import connection_catalog_service, connectors_actions, gateway_state_repository, routes_connections
 
 
 def _install_auth(monkeypatch):
@@ -698,6 +698,20 @@ def test_personal_channel_status_does_not_advertise_dead_generic_test(monkeypatc
     assert by_id["whatsapp_personal"]["next_action"] == "connect"
 
 
+def test_sage_channel_catalog_exposes_cloud_telegram_bot_without_agent_computer():
+    payload = connection_catalog_service.list_catalog_payload(surface="sage")
+    by_id = {item["id"]: item for item in payload["items"]}
+
+    assert "telegram_bot" in by_id
+    assert by_id["telegram_bot"]["requires_gateway"] is False
+    assert by_id["telegram_bot"]["setup_available"] is True
+    assert by_id["telegram_bot"]["runtime_usable"] is True
+    assert by_id["telegram_bot"]["launch_status"] == connection_catalog_service.LAUNCH_LIVE_WHEN_CONFIGURED
+    assert by_id["telegram_bot"]["auth_required_fields"] == ["bot_token", "chat_id"]
+    assert "telegram_personal" in by_id
+    assert by_id["telegram_personal"]["requires_gateway"] is True
+
+
 def test_connection_catalog_exposes_launch_contract_without_ui_side_lock_lists():
     by_id = {item["id"]: item for item in connection_catalog_service.catalog_items()}
 
@@ -730,6 +744,22 @@ def test_connection_catalog_exposes_launch_contract_without_ui_side_lock_lists()
     assert discord["setup_available"] is True
     assert discord["runtime_usable"] is True
     assert discord["launchable"] is True
+    assert discord["auth_required_fields"] == [
+        "bot_token",
+        "channel_id",
+        "guild_id",
+        "application_id",
+        "public_key",
+        "application_public_key",
+    ]
+    assert connectors_actions.connector_contract("discord_bot")["allowed_secret_fields"] == [
+        "bot_token",
+        "channel_id",
+        "guild_id",
+        "application_id",
+        "public_key",
+        "application_public_key",
+    ]
 
     github = by_id["github"]
     assert github["launch_status"] == connection_catalog_service.LAUNCH_LIVE_WHEN_CONFIGURED
@@ -804,6 +834,56 @@ async def test_launchable_notion_and_linear_setup_points_to_connector_vault(monk
         assert payload["setup_endpoint"] == "/api/connectors/vault"
         assert payload["provider"] == connection_id
         assert payload["auth_required_fields"]
+
+
+@pytest.mark.anyio
+async def test_personal_channel_setup_accepts_fresh_active_gateway(monkeypatch):
+    _install_auth(monkeypatch)
+
+    async def fail_create_setup_session(*_args, **_kwargs):
+        raise AssertionError("personal channel setup should return gateway setup endpoint")
+
+    monkeypatch.setattr(routes_connections.setup_sessions, "handle_create_setup_session", fail_create_setup_session)
+    monkeypatch.setattr(
+        routes_connections.sage_agent_computer_selection_service,
+        "get_selection",
+        lambda workspace_id, user_id: {"selected_gateway_id": "gateway-1"},
+    )
+    monkeypatch.setattr(
+        routes_connections.gateway_state_repository,
+        "get_gateway_registration",
+        lambda gateway_id: {
+            "gateway_id": gateway_id,
+            "workspace_id": "ws-1",
+            "user_id": "user-1",
+            "device_trust_state": "verified",
+            "status": "active",
+        },
+    )
+    monkeypatch.setattr(
+        routes_connections.gateway_registry_service,
+        "gateway_registration_public_payload",
+        lambda registration: {
+            **dict(registration),
+            "connection_status": None,
+            "heartbeat_fresh": True,
+        },
+    )
+
+    payload = await routes_connections.start_connection_setup(
+        "telegram_personal",
+        body=routes_connections.ConnectionActionRequest(
+            workspace_id="ws-1",
+            surface="sage",
+            selected_gateway_id="gateway-1",
+        ),
+        request=SimpleNamespace(),
+        current_user={"user_id": "user-1", "role": "member"},
+    )
+
+    assert payload["next_action"] == "personal_channel_setup"
+    assert payload["gateway_id"] == "gateway-1"
+    assert payload["setup_endpoint"] == "/api/personal-channels/telegram/gateways/gateway-1/setup"
 
 
 @pytest.mark.anyio

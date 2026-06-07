@@ -22,10 +22,11 @@ Shell classes are frozen as:
   - web
   - desktop
 - `channel_shell`
-  - Live personal Agent Computer channels: Telegram, WhatsApp, Signal, iMessage, WeChat
-  - Live when configured business/team channels: Telegram Bot, Slack, Discord
-  - Partial channels: Email
-  - Planned channels: Web Chat, WhatsApp Business, Webhook, Teams, Matrix, phone
+  - Live personal Agent Computer channels: Telegram, WhatsApp
+  - Planned personal Agent Computer bridge channels: Signal, iMessage, WeChat
+  - Live when configured cloud/business channels: Telegram Bot, Slack, Discord
+  - Email setup: Gmail through Google Workspace, or custom SMTP / IMAP
+  - Planned/partial channels: Web Chat, WhatsApp Business, Webhook, Teams, Matrix, phone, Microsoft 365
 
 Channel shells may do:
 - conversation

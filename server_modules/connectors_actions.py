@@ -213,7 +213,14 @@ _CONNECTOR_CONTRACT_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "surface_role": CONNECTOR_SURFACE_CHANNEL_SHELL,
         "preferred_execution": CONNECTOR_CLASS_API,
         "capability_patterns": ["receive_channel_message", "send_channel_message", "sync_channel_state"],
-        "allowed_secret_fields": ["bot_token", "channel_id", "guild_id"],
+        "allowed_secret_fields": [
+            "bot_token",
+            "channel_id",
+            "guild_id",
+            "application_id",
+            "public_key",
+            "application_public_key",
+        ],
     },
     "browser_automation": {
         "connector_class": CONNECTOR_CLASS_BROWSER,

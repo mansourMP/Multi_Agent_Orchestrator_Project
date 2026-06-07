@@ -21619,8 +21619,8 @@ body.theme-light .sage-integrations-nav__bucket--active {
   width: fit-content;
   padding: 4px;
   border: 1px solid color-mix(in srgb, var(--app-border-muted) 62%, transparent 38%);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--app-surface-inset) 68%, var(--app-bg-panel) 32%);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--app-surface-inset) 76%, var(--app-bg-panel) 24%);
   box-shadow: none;
 }
 
@@ -21632,11 +21632,11 @@ body.theme-light .sage-integrations-nav__bucket--active {
 
 .sage-integrations-topnav .sage-integrations-nav__bucket {
   width: auto;
-  min-height: 38px;
+  min-height: 44px;
   justify-content: center;
-  padding: 0 16px;
+  padding: 0 22px;
   border-bottom: 0;
-  border-radius: 9px;
+  border-radius: 14px;
   color: var(--app-text-secondary);
   white-space: nowrap;
   transition:
@@ -21650,7 +21650,7 @@ body.theme-light .sage-integrations-nav__bucket--active {
   background: var(--app-bg-panel);
   box-shadow:
     0 1px 0 color-mix(in srgb, white 72%, transparent),
-    0 10px 24px -18px color-mix(in srgb, black 42%, transparent);
+    0 12px 28px -22px color-mix(in srgb, black 42%, transparent);
 }
 
 :root[data-emp-theme='light'] .sage-integrations-topnav .sage-integrations-nav__bucket--active,
@@ -21668,8 +21668,8 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
 
 .sage-integrations-topnav .sage-integrations-nav__label {
   color: inherit;
-  font-size: var(--app-font-14);
-  font-weight: var(--app-weight-semibold);
+  font-size: 15px;
+  font-weight: 700;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -22486,6 +22486,20 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   transform: translateY(-1px);
 }
 
+.sage-unified-card--disabled,
+.sage-unified-card:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.sage-unified-card--disabled:hover,
+.sage-unified-card:disabled:hover {
+  border-color: color-mix(in srgb, var(--app-border-muted) 84%, transparent 16%);
+  background: color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-panel-elevated) 16%);
+  box-shadow: none;
+  transform: none;
+}
+
 .sage-unified-card--selected {
   border-color: color-mix(in srgb, var(--app-border-accent) 22%, transparent 78%);
   background: color-mix(in srgb, var(--accent-subtle) 26%, var(--app-bg-panel) 74%);
@@ -22612,6 +22626,73 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   box-shadow: 0 20px 38px -30px color-mix(in srgb, black 42%, transparent);
 }
 
+.sage-channel-expand {
+  margin-top: 0;
+}
+
+.sage-channel-expand__identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sage-channel-route-tabs {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--app-border-muted) 62%, transparent 38%);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--app-surface-inset) 78%, var(--app-bg-panel) 22%);
+}
+
+.sage-channel-route-tab {
+  min-height: 40px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--app-text-secondary);
+  font-family: var(--app-font-sans);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition:
+    background-color var(--transition),
+    color var(--transition),
+    box-shadow var(--transition);
+}
+
+.sage-channel-route-tab:hover {
+  color: var(--app-text-primary);
+}
+
+.sage-channel-route-tab--active {
+  color: var(--app-text-primary);
+  background: var(--app-bg-panel);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, white 72%, transparent),
+    0 10px 24px -18px color-mix(in srgb, black 42%, transparent);
+}
+
+.sage-connector-credential-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.sage-connector-credential-form__fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+
 .sage-unified-modal {
   position: fixed;
   inset: 0;
@@ -22625,7 +22706,7 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
 }
 
 .sage-unified-modal__panel {
-  width: min(640px, calc(100vw - 32px));
+  width: min(920px, calc(100vw - 32px));
   max-height: min(720px, calc(100vh - 64px));
 }
 
@@ -22884,6 +22965,15 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
 }
 
 @media (max-width: 720px) {
+  .sage-connector-credential-form,
+  .sage-connector-credential-form__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sage-connector-credential-form .app-button {
+    justify-self: start;
+  }
+
   .sage-agent-computer__setting {
     grid-template-columns: minmax(0, 1fr);
     justify-items: start;

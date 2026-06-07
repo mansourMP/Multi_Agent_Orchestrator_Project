@@ -279,10 +279,10 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connection_id="telegram_bot",
         display_name="Telegram Bot",
         lane=LANE_STUDIO_BUSINESS_CHANNEL,
-        surfaces=("studio",),
+        surfaces=("sage", "studio"),
         setup_kind="bot_token",
         launch_status=LAUNCH_LIVE_WHEN_CONFIGURED,
-        description="Studio/business Telegram bot. Separate from Your Telegram.",
+        description="Cloud Telegram bot channel. Separate from your personal Telegram on Agent Computer.",
         supports_inbound=True,
         supports_outbound=True,
         media_support=_media(text=True),
@@ -823,12 +823,17 @@ def status_items(
     surface: Optional[str] = None,
     selected_gateway_id: Optional[str] = None,
 ) -> list[Dict[str, Any]]:
-    selected_gateway, registrations, requested_gateway_id = _selected_gateway(
+    selected_gateway_result = _selected_gateway(
         workspace_id=workspace_id,
         tenant_id=tenant_id,
         user_id=user_id,
         selected_gateway_id=selected_gateway_id,
     )
+    if len(selected_gateway_result) == 2:
+        selected_gateway, registrations = selected_gateway_result
+        requested_gateway_id = None
+    else:
+        selected_gateway, registrations, requested_gateway_id = selected_gateway_result
     selected_gateway_id_value = _text((selected_gateway or {}).get("gateway_id")) or _text(requested_gateway_id) or None
     selected_gateway_missing = bool(selected_gateway_id_value and not selected_gateway)
     selected_gateway_online = _gateway_is_online(selected_gateway)

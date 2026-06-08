@@ -1,0 +1,498 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SERVICE_USER="${EMPYRALIS_SERVICE_USER:-empyralis}"
+INSTALL_ROOT="${EMPYRALIS_INSTALL_ROOT:-/opt/empyralis/agent-computer}"
+STATE_ROOT="${EMPYRALIS_STATE_ROOT:-/var/lib/empyralis/agent-computer}"
+CONFIG_DIR="${EMPYRALIS_CONFIG_DIR:-/etc/empyralis}"
+LOG_DIR="${EMPYRALIS_LOG_DIR:-/var/log/empyralis}"
+RUN_DIR="${EMPYRALIS_RUN_DIR:-/run/empyralis}"
+ENV_FILE="${CONFIG_DIR}/agent-computer.env"
+BIN_DIR="${INSTALL_ROOT}/bin"
+CURRENT_DIR="${INSTALL_ROOT}/current"
+SUPERVISOR_SERVICE="empyralis-supervisor.service"
+GATEWAY_SERVICE="empyralis-gateway.service"
+
+DEFAULT_API_URL="https://empyralis.ai/api"
+API_URL="${EMPYRALIS_API_URL:-${EMPYRALIS_GATEWAY_API_URL:-${DEFAULT_API_URL}}}"
+PAIRING_TOKEN="${EMPYRALIS_PAIRING_TOKEN:-${EMPYRALIS_GATEWAY_PAIRING_TOKEN:-}}"
+AGENT_COMPUTER_VERSION="${EMPYRALIS_AGENT_COMPUTER_VERSION:-latest}"
+ARTIFACT_BASE_URL="${EMPYRALIS_ARTIFACT_BASE_URL:-https://empyralis.ai/releases/agent-computer/${AGENT_COMPUTER_VERSION}}"
+GATEWAY_ARTIFACT_URL="${EMPYRALIS_GATEWAY_ARTIFACT_URL:-${ARTIFACT_BASE_URL}/empyralis-gateway-linux-x64.tar.gz}"
+SUPERVISOR_ARTIFACT_URL="${EMPYRALIS_SUPERVISOR_ARTIFACT_URL:-${ARTIFACT_BASE_URL}/empyralis-supervisor-linux-x64.tar.gz}"
+DISPLAY_NAME="${EMPYRALIS_GATEWAY_DISPLAY_NAME:-$(hostname -f 2>/dev/null || hostname)}"
+SUPERVISOR_URL="${EMPYRALIS_SUPERVISOR_URL:-http://127.0.0.1:7788}"
+SYSTEMD_START_TIMEOUT_SECONDS="${EMPYRALIS_SYSTEMD_START_TIMEOUT_SECONDS:-120}"
+REGISTRATION_TIMEOUT_SECONDS="${EMPYRALIS_REGISTRATION_TIMEOUT_SECONDS:-180}"
+
+log() {
+  printf '[empyralis-agent-computer] %s\n' "$*"
+}
+
+fail() {
+  printf '[empyralis-agent-computer] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+require_root() {
+  if [[ "$(id -u)" != "0" ]]; then
+    fail "run this installer as root, for example: curl -fsSL https://empyralis.ai/install/agent-computer.sh | sudo bash"
+  fi
+}
+
+detect_ubuntu() {
+  local ID VERSION_ID PRETTY_NAME
+  if [[ ! -r /etc/os-release ]]; then
+    fail "unsupported OS: /etc/os-release is missing"
+  fi
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  if [[ "${ID:-}" != "ubuntu" ]]; then
+    fail "unsupported OS: ${PRETTY_NAME:-unknown}. Ubuntu 22.04 or 24.04 is required"
+  fi
+  case "${VERSION_ID:-}" in
+    22.04|24.04) ;;
+    *) fail "unsupported Ubuntu version: ${VERSION_ID:-unknown}. Ubuntu 22.04 or 24.04 is required" ;;
+  esac
+}
+
+require_pairing_token() {
+  if [[ -z "${PAIRING_TOKEN}" ]]; then
+    fail "EMPYRALIS_PAIRING_TOKEN is required"
+  fi
+}
+
+apt_install_system_deps() {
+  export DEBIAN_FRONTEND=noninteractive
+  log "installing system dependencies"
+  apt-get update -y
+  apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    build-essential \
+    openssl \
+    sudo \
+    tar \
+    gzip \
+    xz-utils \
+    python3 \
+    python3-minimal
+}
+
+install_node20() {
+  if [[ "${EMPYRALIS_INSTALL_SKIP_NODE:-0}" == "1" ]]; then
+    log "skipping Node install because EMPYRALIS_INSTALL_SKIP_NODE=1"
+    return
+  fi
+  if command -v node >/dev/null 2>&1 && node --version 2>/dev/null | grep -Eq '^v20\.'; then
+    log "Node 20 already installed"
+    return
+  fi
+  log "installing Node 20 LTS"
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  apt-get install -y --no-install-recommends nodejs
+  if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v20\.'; then
+    fail "Node 20 install failed"
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    fail "npm was not installed with Node 20"
+  fi
+}
+
+install_rust_toolchain() {
+  if [[ "${EMPYRALIS_INSTALL_SKIP_RUST:-0}" == "1" ]]; then
+    log "skipping Rust install because EMPYRALIS_INSTALL_SKIP_RUST=1"
+    return
+  fi
+  if command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1; then
+    log "Rust toolchain already installed"
+    return
+  fi
+  log "installing Rust toolchain"
+  curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+  if [[ -x /root/.cargo/bin/cargo ]]; then
+    ln -sf /root/.cargo/bin/cargo /usr/local/bin/cargo
+  fi
+  if [[ -x /root/.cargo/bin/rustc ]]; then
+    ln -sf /root/.cargo/bin/rustc /usr/local/bin/rustc
+  fi
+  if ! command -v cargo >/dev/null 2>&1 || ! command -v rustc >/dev/null 2>&1; then
+    fail "Rust toolchain install failed"
+  fi
+}
+
+create_service_user() {
+  if id "${SERVICE_USER}" >/dev/null 2>&1; then
+    log "service user ${SERVICE_USER} already exists"
+    return
+  fi
+  log "creating service user ${SERVICE_USER}"
+  useradd --system \
+    --home-dir /var/lib/empyralis \
+    --create-home \
+    --shell /usr/sbin/nologin \
+    "${SERVICE_USER}"
+}
+
+prepare_directories() {
+  mkdir -p "${INSTALL_ROOT}" "${BIN_DIR}" "${STATE_ROOT}/gateway" "${STATE_ROOT}/supervisor" "${CONFIG_DIR}" "${LOG_DIR}" "${RUN_DIR}"
+  chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATE_ROOT}" "${LOG_DIR}" "${RUN_DIR}"
+  chmod 0750 "${STATE_ROOT}" "${LOG_DIR}" "${RUN_DIR}"
+  chmod 0755 "${INSTALL_ROOT}" "${BIN_DIR}" "${CONFIG_DIR}"
+}
+
+existing_env_value() {
+  local key="$1"
+  if [[ ! -r "${ENV_FILE}" ]]; then
+    return 1
+  fi
+  awk -F= -v key="${key}" '
+    $1 == key {
+      value = substr($0, length(key) + 2)
+      gsub(/^"/, "", value)
+      gsub(/"$/, "", value)
+      print value
+      exit 0
+    }
+  ' "${ENV_FILE}"
+}
+
+generate_secret() {
+  openssl rand -hex 32
+}
+
+shell_quote_env() {
+  local value="$1"
+  printf '"%s"' "${value//\"/\\\"}"
+}
+
+write_env_file() {
+  local existing_secret existing_gateway_token existing_gateway_id existing_device_id supervisor_secret previous_umask
+  existing_secret="$(existing_env_value EMPYRALIS_SUPERVISOR_SECRET || true)"
+  existing_gateway_token="$(existing_env_value EMPYRALIS_GATEWAY_TOKEN || true)"
+  existing_gateway_id="$(existing_env_value EMPYRALIS_GATEWAY_ID || true)"
+  existing_device_id="$(existing_env_value EMPYRALIS_GATEWAY_DEVICE_ID || true)"
+  supervisor_secret="${EMPYRALIS_SUPERVISOR_SECRET:-${existing_secret:-}}"
+  if [[ -z "${supervisor_secret}" ]]; then
+    supervisor_secret="$(generate_secret)"
+  fi
+
+  log "writing ${ENV_FILE}"
+  previous_umask="$(umask)"
+  umask 0077
+  {
+    printf 'EMPYRALIS_PAIRING_TOKEN=%s\n' "$(shell_quote_env "${PAIRING_TOKEN}")"
+    printf 'EMPYRALIS_GATEWAY_PAIRING_TOKEN=%s\n' "$(shell_quote_env "${PAIRING_TOKEN}")"
+    printf 'EMPYRALIS_API_URL=%s\n' "$(shell_quote_env "${API_URL}")"
+    printf 'EMPYRALIS_GATEWAY_API_URL=%s\n' "$(shell_quote_env "${API_URL}")"
+    printf 'NODE_ENV="production"\n'
+    printf 'EMPYRALIS_DEPLOY_ENV="agent-computer"\n'
+    printf 'EMPYRALIS_SUPERVISOR_URL=%s\n' "$(shell_quote_env "${SUPERVISOR_URL}")"
+    printf 'EMPYRALIS_SUPERVISOR_SECRET=%s\n' "$(shell_quote_env "${supervisor_secret}")"
+    printf 'EMPYRALIS_GATEWAY_STATE_DIR=%s\n' "$(shell_quote_env "${STATE_ROOT}/gateway")"
+    printf 'EMPYRALIS_SUPERVISOR_AUDIT_DB=%s\n' "$(shell_quote_env "${STATE_ROOT}/supervisor/audit.sqlite3")"
+    printf 'EMPYRALIS_GATEWAY_DISPLAY_NAME=%s\n' "$(shell_quote_env "${DISPLAY_NAME}")"
+    printf 'EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT=%s\n' "$(shell_quote_env "${CURRENT_DIR}")"
+    printf 'EMPYRALIS_GATEWAY_BROWSER_PYTHON="python3"\n'
+    printf 'EMPYRALIS_AGENT_COMPUTER_INSTALL_DIR=%s\n' "$(shell_quote_env "${CURRENT_DIR}")"
+    if [[ -n "${existing_gateway_token}" ]]; then
+      printf 'EMPYRALIS_GATEWAY_TOKEN=%s\n' "$(shell_quote_env "${existing_gateway_token}")"
+    fi
+    if [[ -n "${existing_gateway_id}" ]]; then
+      printf 'EMPYRALIS_GATEWAY_ID=%s\n' "$(shell_quote_env "${existing_gateway_id}")"
+    fi
+    if [[ -n "${existing_device_id}" ]]; then
+      printf 'EMPYRALIS_GATEWAY_DEVICE_ID=%s\n' "$(shell_quote_env "${existing_device_id}")"
+    fi
+  } > "${ENV_FILE}"
+  umask "${previous_umask}"
+  chown root:"${SERVICE_USER}" "${ENV_FILE}"
+  chmod 0640 "${ENV_FILE}"
+}
+
+download_artifact() {
+  local url="$1"
+  local destination="$2"
+  log "downloading ${url}"
+  case "${url}" in
+    file://*)
+      cp "${url#file://}" "${destination}"
+      ;;
+    http://*|https://*)
+      curl -fsSL "${url}" -o "${destination}"
+      ;;
+    *)
+      cp "${url}" "${destination}"
+      ;;
+  esac
+}
+
+extract_artifact() {
+  local archive="$1"
+  local destination="$2"
+  mkdir -p "${destination}"
+  tar -xzf "${archive}" -C "${destination}"
+}
+
+install_release_artifacts() {
+  local tmp_dir release_dir gateway_archive supervisor_archive
+  tmp_dir="$(mktemp -d)"
+  release_dir="${INSTALL_ROOT}/releases/${AGENT_COMPUTER_VERSION}"
+  gateway_archive="${tmp_dir}/gateway.tar.gz"
+  supervisor_archive="${tmp_dir}/supervisor.tar.gz"
+
+  rm -rf "${release_dir}.tmp"
+  mkdir -p "${release_dir}.tmp/gateway" "${release_dir}.tmp/supervisor"
+
+  download_artifact "${GATEWAY_ARTIFACT_URL}" "${gateway_archive}"
+  download_artifact "${SUPERVISOR_ARTIFACT_URL}" "${supervisor_archive}"
+  extract_artifact "${gateway_archive}" "${release_dir}.tmp/gateway"
+  extract_artifact "${supervisor_archive}" "${release_dir}.tmp/supervisor"
+
+  rm -rf "${release_dir}"
+  mv "${release_dir}.tmp" "${release_dir}"
+  ln -sfn "${release_dir}" "${CURRENT_DIR}"
+  chown -R root:root "${INSTALL_ROOT}/releases" "${CURRENT_DIR}"
+  find "${release_dir}" -type d -exec chmod 0755 {} +
+  find "${release_dir}" -type f -exec chmod u=rw,go=r {} +
+  find "${release_dir}/supervisor" -type f -exec chmod 0755 {} +
+  rm -rf "${tmp_dir}"
+}
+
+write_launcher_scripts() {
+  cat > "${BIN_DIR}/run-supervisor" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ENV_FILE="${EMPYRALIS_ENV_FILE:-/etc/empyralis/agent-computer.env}"
+if [[ -r "${ENV_FILE}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}"
+  set +a
+fi
+INSTALL_DIR="${EMPYRALIS_AGENT_COMPUTER_INSTALL_DIR:-/opt/empyralis/agent-computer/current}"
+candidate="${INSTALL_DIR}/supervisor/empyralis-supervisor"
+if [[ ! -x "${candidate}" ]]; then
+  candidate="$(find "${INSTALL_DIR}/supervisor" -type f -name 'empyralis-supervisor' -perm -111 2>/dev/null | head -n 1 || true)"
+fi
+if [[ -z "${candidate}" || ! -x "${candidate}" ]]; then
+  candidate="$(find "${INSTALL_DIR}" -type f -name 'empyralis-supervisor' -perm -111 2>/dev/null | head -n 1 || true)"
+fi
+if [[ -z "${candidate}" || ! -x "${candidate}" ]]; then
+  echo "empyralis-supervisor binary not found under ${INSTALL_DIR}" >&2
+  exit 127
+fi
+exec "${candidate}"
+EOF
+
+  cat > "${BIN_DIR}/run-gateway" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ENV_FILE="${EMPYRALIS_ENV_FILE:-/etc/empyralis/agent-computer.env}"
+if [[ -r "${ENV_FILE}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}"
+  set +a
+fi
+INSTALL_DIR="${EMPYRALIS_AGENT_COMPUTER_INSTALL_DIR:-/opt/empyralis/agent-computer/current}"
+entry=""
+for candidate in \
+  "${INSTALL_DIR}/gateway/dist/index.js" \
+  "${INSTALL_DIR}/gateway/index.js" \
+  "${INSTALL_DIR}/gateway/build/index.js"; do
+  if [[ -f "${candidate}" ]]; then
+    entry="${candidate}"
+    break
+  fi
+done
+if [[ -z "${entry}" ]]; then
+  entry="$(find "${INSTALL_DIR}/gateway" -type f -path '*/dist/index.js' 2>/dev/null | head -n 1 || true)"
+fi
+if [[ -z "${entry}" ]]; then
+  entry="$(find "${INSTALL_DIR}" -type f -path '*/dist/index.js' 2>/dev/null | head -n 1 || true)"
+fi
+if [[ -z "${entry}" ]]; then
+  entry="$(find "${INSTALL_DIR}" -type f -name 'index.js' 2>/dev/null | head -n 1 || true)"
+fi
+if [[ -z "${entry}" || ! -f "${entry}" ]]; then
+  echo "gateway Node entrypoint not found under ${INSTALL_DIR}" >&2
+  exit 127
+fi
+cd "$(dirname "${entry}")"
+exec node "${entry}"
+EOF
+
+  chmod 0755 "${BIN_DIR}/run-supervisor" "${BIN_DIR}/run-gateway"
+}
+
+write_systemd_units() {
+  log "writing systemd units"
+  cat > "/etc/systemd/system/${SUPERVISOR_SERVICE}" <<EOF
+[Unit]
+Description=Empyralis Agent Computer Supervisor
+Documentation=https://empyralis.ai
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
+EnvironmentFile=${ENV_FILE}
+WorkingDirectory=${CURRENT_DIR}
+ExecStart=${BIN_DIR}/run-supervisor
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > "/etc/systemd/system/${GATEWAY_SERVICE}" <<EOF
+[Unit]
+Description=Empyralis Agent Computer Gateway
+Documentation=https://empyralis.ai
+After=network-online.target ${SUPERVISOR_SERVICE}
+Wants=network-online.target
+Requires=${SUPERVISOR_SERVICE}
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
+EnvironmentFile=${ENV_FILE}
+WorkingDirectory=${CURRENT_DIR}
+ExecStart=${BIN_DIR}/run-gateway
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+systemd_available() {
+  command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
+}
+
+start_with_systemd() {
+  log "starting services with systemd"
+  systemctl daemon-reload
+  systemctl enable "${SUPERVISOR_SERVICE}" "${GATEWAY_SERVICE}" >/dev/null
+  systemctl restart "${SUPERVISOR_SERVICE}"
+  systemctl restart "${GATEWAY_SERVICE}"
+}
+
+direct_service_running() {
+  local pid_file="$1"
+  [[ -f "${pid_file}" ]] && kill -0 "$(cat "${pid_file}")" >/dev/null 2>&1
+}
+
+start_direct_service() {
+  local name="$1"
+  local runner="$2"
+  local pid_file="${RUN_DIR}/${name}.pid"
+  local log_file="${LOG_DIR}/${name}.log"
+
+  if direct_service_running "${pid_file}"; then
+    log "${name} is already running without systemd"
+    return
+  fi
+
+  rm -f "${pid_file}"
+  touch "${log_file}"
+  chown "${SERVICE_USER}:${SERVICE_USER}" "${log_file}"
+  log "starting ${name} without systemd"
+  sudo -u "${SERVICE_USER}" \
+    env -i HOME="/var/lib/empyralis" USER="${SERVICE_USER}" PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    "${runner}" >> "${log_file}" 2>&1 &
+  echo "$!" > "${pid_file}"
+  chown "${SERVICE_USER}:${SERVICE_USER}" "${pid_file}"
+}
+
+start_without_systemd() {
+  log "systemd is not active; using direct process fallback"
+  start_direct_service "empyralis-supervisor" "${BIN_DIR}/run-supervisor"
+  sleep 1
+  start_direct_service "empyralis-gateway" "${BIN_DIR}/run-gateway"
+}
+
+start_services() {
+  if systemd_available; then
+    start_with_systemd
+  else
+    start_without_systemd
+  fi
+}
+
+print_recent_logs() {
+  if systemd_available; then
+    journalctl -u "${SUPERVISOR_SERVICE}" -u "${GATEWAY_SERVICE}" -n 80 --no-pager || true
+  else
+    tail -n 80 "${LOG_DIR}/empyralis-supervisor.log" "${LOG_DIR}/empyralis-gateway.log" 2>/dev/null || true
+  fi
+}
+
+wait_for_supervisor() {
+  local deadline now
+  deadline=$((SECONDS + SYSTEMD_START_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if curl -fsS "${SUPERVISOR_URL}/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  print_recent_logs
+  fail "Supervisor did not become healthy at ${SUPERVISOR_URL}/health"
+}
+
+registration_file_present() {
+  [[ -s "${STATE_ROOT}/gateway/registration.json" ]]
+}
+
+wait_for_registration() {
+  local deadline
+  deadline=$((SECONDS + REGISTRATION_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if registration_file_present; then
+      return 0
+    fi
+    sleep 2
+  done
+  print_recent_logs
+  fail "Gateway did not confirm registration within ${REGISTRATION_TIMEOUT_SECONDS}s"
+}
+
+final_status() {
+  wait_for_supervisor
+  wait_for_registration
+  log "Agent Computer connected"
+}
+
+main() {
+  require_root
+  detect_ubuntu
+  require_pairing_token
+  apt_install_system_deps
+  install_node20
+  install_rust_toolchain
+  create_service_user
+  prepare_directories
+  write_env_file
+  install_release_artifacts
+  write_launcher_scripts
+  write_systemd_units
+  chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATE_ROOT}" "${LOG_DIR}" "${RUN_DIR}"
+  start_services
+  final_status
+}
+
+main "$@"

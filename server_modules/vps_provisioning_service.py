@@ -19,8 +19,7 @@ from server_modules.runtime_config import EMPYRALIS_STATE_HOME
 AGENT_INSTALLER_URL_ENV = "EMPYRALIS_AGENT_INSTALLER_URL"
 LEGACY_AGENT_INSTALLER_URL_ENV = "EMPYRALIS_AGENT_COMPUTER_INSTALL_URL"
 DEFAULT_AGENT_INSTALLER_URL = (
-    "https://raw.githubusercontent.com/mansourMP/Multi_Agent_Orchestrator_Project/"
-    "main/scripts/install-agent-computer.sh"
+    "https://empyralis.ai/install/agent-computer.sh"
 )
 PUBLIC_API_URL = (
     os.getenv("EMPYRALIS_PUBLIC_API_URL")

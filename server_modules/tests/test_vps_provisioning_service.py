@@ -11,7 +11,7 @@ def test_cloud_init_script_runs_agent_computer_installer():
     script = vps.cloud_init_script("pair_test", api_url="https://api.example.com")
 
     assert script.startswith("#cloud-config")
-    assert "curl -fsSL https://raw.githubusercontent.com/mansourMP/Multi_Agent_Orchestrator_Project/main/scripts/install-agent-computer.sh" in script
+    assert "curl -fsSL https://empyralis.ai/install/agent-computer.sh" in script
     assert "EMPYRALIS_PAIRING_TOKEN='pair_test'" in script
     assert "EMPYRALIS_API_URL='https://api.example.com'" in script
     assert "sudo -E bash" in script

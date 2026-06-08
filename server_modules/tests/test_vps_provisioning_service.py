@@ -11,10 +11,18 @@ def test_cloud_init_script_runs_agent_computer_installer():
     script = vps.cloud_init_script("pair_test", api_url="https://api.example.com")
 
     assert script.startswith("#cloud-config")
-    assert "curl -fsSL https://empyralis.ai/install/agent-computer.sh" in script
+    assert "curl -fsSL https://raw.githubusercontent.com/mansourMP/Multi_Agent_Orchestrator_Project/main/scripts/install-agent-computer.sh" in script
     assert "EMPYRALIS_PAIRING_TOKEN='pair_test'" in script
     assert "EMPYRALIS_API_URL='https://api.example.com'" in script
     assert "sudo -E bash" in script
+
+
+def test_cloud_init_script_allows_installer_url_env_override(monkeypatch):
+    monkeypatch.setenv(vps.AGENT_INSTALLER_URL_ENV, "https://empyralis.ai/install/agent-computer.sh")
+
+    script = vps.cloud_init_script("pair_test", api_url="https://api.example.com")
+
+    assert "curl -fsSL https://empyralis.ai/install/agent-computer.sh" in script
 
 
 def test_digitalocean_provisioning_payload_uses_curated_region(monkeypatch):
@@ -213,4 +221,3 @@ async def test_hardware_vps_status_route_enforces_workspace_access():
 
     assert response["status"] == "connected"
     access_mock.assert_called_once_with({"user_id": "user-1"}, "ws-1", minimum_role="viewer")
-

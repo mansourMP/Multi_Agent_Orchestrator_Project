@@ -16,9 +16,11 @@ from server_modules import gateway_state_repository, vault_store
 from server_modules.runtime_config import EMPYRALIS_STATE_HOME
 
 
-INSTALLER_URL = os.getenv(
-    "EMPYRALIS_AGENT_COMPUTER_INSTALL_URL",
-    "https://empyralis.ai/install/agent-computer.sh",
+AGENT_INSTALLER_URL_ENV = "EMPYRALIS_AGENT_INSTALLER_URL"
+LEGACY_AGENT_INSTALLER_URL_ENV = "EMPYRALIS_AGENT_COMPUTER_INSTALL_URL"
+DEFAULT_AGENT_INSTALLER_URL = (
+    "https://raw.githubusercontent.com/mansourMP/Multi_Agent_Orchestrator_Project/"
+    "main/scripts/install-agent-computer.sh"
 )
 PUBLIC_API_URL = (
     os.getenv("EMPYRALIS_PUBLIC_API_URL")
@@ -167,10 +169,18 @@ def cloud_init_script(pairing_token: str, *, api_url: Optional[str] = None) -> s
             "package_update: true",
             "runcmd:",
             "  - |",
-            f"    curl -fsSL {INSTALLER_URL} | EMPYRALIS_PAIRING_TOKEN='{_shell_single_quote(token)}' EMPYRALIS_API_URL='{_shell_single_quote(resolved_api_url)}' sudo -E bash",
+            f"    curl -fsSL {agent_installer_url()} | EMPYRALIS_PAIRING_TOKEN='{_shell_single_quote(token)}' EMPYRALIS_API_URL='{_shell_single_quote(resolved_api_url)}' sudo -E bash",
             "",
         ]
     )
+
+
+def agent_installer_url() -> str:
+    return (
+        os.getenv(AGENT_INSTALLER_URL_ENV)
+        or os.getenv(LEGACY_AGENT_INSTALLER_URL_ENV)
+        or DEFAULT_AGENT_INSTALLER_URL
+    ).strip()
 
 
 def provision_vps(

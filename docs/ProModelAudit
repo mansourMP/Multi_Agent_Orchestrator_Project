@@ -1,0 +1,2178 @@
+Repo-verified basis before the paste block: your platform already has Agent Computer/gateway folders, server modules, deploy scripts, Docker mode, personal-channel lane separation, Telegram/WhatsApp personal runtime references, gateway state DB/checkpoints/outbox, server/VPS service mode, and an SSH remote setup path in routes_gateway.py. The existing docs also say personal-channel auth belongs to the Agent Computer/gateway lane, not the Studio connector lane. That means the VPS idea matches the platform, but must be implemented as a controlled hosted Agent Computer/gateway mode, not some random cloud connector blob, because apparently architecture punishes laziness like a disappointed math teacher.  
+
+# Empyralis Hosted Gateway / VPS Agent Computer Persistence Plan
+## Status
+Handoff plan for coding agent.
+Main question:
+Can Empyralis support user-owned personal channels such as Telegram, WhatsApp, Signal, iMessage, WeChat, Gmail, browser profiles, local apps, and customer-support accounts through a hosted VPS / company-provided Agent Computer, while preserving login/session state even when the heavy worker stops, the gateway restarts, or the VPS/container is replaced?
+Short answer:
+Yes, but only if we separate:
+- heavy agent worker lifecycle
+- gateway connector lifecycle
+- channel session persistence
+- gateway registration/session lifecycle
+- hardware/VPS lifecycle
+- workspace memory and audit lifecycle
+Do not tie the user's personal Telegram/WhatsApp login to a temporary agent worker.
+That would be stupid in the very specific way software becomes expensive.
+---
+## Repo-Verified Current Platform Facts
+The current repo already has real foundations for this feature.
+Verified platform areas:
+```text
+empyralis-gateway/
+empyralis-supervisor/
+server_modules/
+deploy/agent-computer/
+docs/domains/agent-computer/
+docs/domains/channels/
+runtime/contracts/
+frontend/
+mobile/
+src-tauri/
+migrations/
+scripts/
+
+Important code/doc facts:
+
+docs/domains/agent-computer/gateway-architecture.md
+
+says empyralis-gateway is the persistent local runtime edge and owns:
+
+* outbound WSS connection
+* local journal
+* local outbox
+* checkpoints
+* personal channel sessions
+* supervisor routing
+
+It also says the cloud control plane remains the identity/policy/approval/audit authority.
+
+docs/domains/agent-computer/server-service-mode.md
+
+already defines Agent Computer Server/VPS service mode.
+
+It includes:
+
+* Linux systemd service mode
+* macOS LaunchDaemon server mode guarded by explicit flag
+* Windows service wrapper idea
+* Docker deployment under deploy/agent-computer/
+* server/VPS-safe capabilities
+* desktop-only capability blocking unless a trusted user-session bridge exists
+
+deploy/agent-computer/docker-compose.yml
+
+already defines an agent-computer service with:
+
+* restart: unless-stopped
+* EMPYRALIS_AGENT_COMPUTER_SYSTEM_SERVICE_MODE=1
+* EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET=server_vps
+* persistent agent-computer-state volume
+* persistent agent-computer-logs volume
+
+deploy/agent-computer/Dockerfile
+
+builds:
+
+* Node runtime
+* Rust runtime
+* empyralis-gateway
+* empyralis-supervisor
+
+and runs:
+
+bash scripts/agent_computer.sh service-run --system
+scripts/agent_computer.sh
+
+already has:
+
+* install/start/stop/status
+* system service install/uninstall/status
+* LaunchAgent/LaunchDaemon paths
+* state dir logic
+* gateway token/pairing token storage
+* supervisor secret generation
+* workspace mismatch protection
+* gateway state under .orion-stack/agent-computer
+* gateway edge state under .orion-stack/agent-computer/edge
+
+server_modules/routes_gateway.py
+
+already includes remote SSH setup concepts:
+
+* host
+* port
+* username
+* auth mode
+* password or SSH key
+* expected host fingerprint
+* remote root
+* pairing token
+* runtime access mode
+* remote command that installs Agent Computer as system service
+
+This means the platform already has the beginning of “connect a VPS / hardware node as Agent Computer.”
+
+docs/security/trust-boundaries.md
+
+says personal channels belong to Sage / Agent Computer lane, while business channels belong to Studio / deployed-agent lane.
+
+docs/domains/channels/README.md
+
+says there are two enforced channel lanes:
+
+* personal-to-Sage through Agent Computer/gateway state
+* business-to-Studio through cloud connectors and deployed-agent routing
+
+server_modules/channel_lane_contract_service.py
+
+defines:
+
+* telegram_personal
+* whatsapp_personal
+* signal_personal
+* imessage_personal
+* wechat_personal
+
+as personal gateway lane channels.
+
+It also defines cloud/business channels separately:
+
+* telegram_bot
+* discord_bot
+* slack
+* github
+* linear
+* notion
+* dropbox
+* s3
+* smtp
+* wechat_work
+* instagram_business
+
+Important:
+
+telegram_personal and whatsapp_personal are marked as live personal gateway runtime channels in code.
+
+signal_personal, imessage_personal, and wechat_personal are bridge/planned-style personal runtime channels and should not be treated as equally ready without inspection.
+
+empyralis-gateway/src/index.ts
+
+creates:
+
+* config
+* process lock
+* state DB
+* journal
+* outbox
+* checkpoints
+* token store
+* supervisor client
+* browser worker/runtime
+* WhatsApp personal runtime
+* Telegram personal runtime
+* local bridge runtimes
+* WSS client
+* personal runtime registry
+
+This means the gateway is already designed as a persistent runtime, not just a one-shot worker.
+
+empyralis-gateway/src/state/db.ts
+
+stores local JSON state with atomic writes and 0600 permissions where possible.
+
+empyralis-gateway/src/state/checkpoints.ts
+
+stores session/checkpoint/health snapshot state.
+
+empyralis-gateway/src/cloud/ws-client.ts
+
+already has:
+
+* registration from pairing
+* session creation
+* WebSocket connection
+* reconnect loop
+* heartbeat loop
+* checkpoint updates
+* outbox replay
+* personal channel runtime start after connection
+* socket failure handling
+
+So the foundation exists.
+
+The missing decision is not “can we connect a VPS?”
+
+The missing decision is:
+
+Should hosted/company-provided VPS Agent Computers keep personal channel session state only on that VPS volume, or should Empyralis add a proper encrypted hosted session vault so the session can move/recover across VPS/container replacement?
+
+That is the real question.
+
+⸻
+
+The Correct Mental Model
+
+Do not think:
+
+User login lives inside a worker.
+Worker stops.
+Everything stops.
+User logs in again tomorrow.
+
+Think:
+
+User workspace owns channel connection metadata.
+Gateway owns live channel runtime.
+Session state is persisted according to placement policy.
+Heavy worker wakes only when needed.
+Control plane owns policy, audit, approval, billing, registry.
+
+Correct lifecycle:
+
+User connects Telegram once.
+Gateway creates local Telegram session state.
+Session state is persisted.
+Gateway listens or reconnects.
+Agent worker is started only when needed.
+Worker uses gateway to act.
+Worker stops.
+Gateway and/or session state survives.
+
+⸻
+
+Core Architecture Rule
+
+Agent worker can die.
+Gateway should not die during always-on mode.
+Gateway can die.
+Login/session should not die if persisted correctly.
+VPS/container can die.
+Live answering stops until another gateway starts, but login/session can survive if state exists outside the destroyed runtime.
+No running gateway = no real-time answering.
+Persistent session is not the same as live presence.
+
+This rule must be written into docs and tests.
+
+⸻
+
+Product Modes We Should Support
+
+1. Local Customer Hardware Gateway
+
+User runs Agent Computer on their own Mac/Windows/Linux machine.
+
+Best for:
+
+* local files
+* local apps
+* browser cookies
+* desktop control
+* private personal channels
+* maximum trust
+* power users
+
+Pros:
+
+* strongest privacy story
+* personal sessions remain on user-owned hardware
+* matches existing trust-boundary docs
+
+Cons:
+
+* user machine must be awake/online
+* onboarding is harder
+* not reliable for always-on customer support unless user’s machine is stable
+
+2. Hosted On-Demand Agent Computer
+
+Empyralis starts a company-provided VPS/container only when the user requests work.
+
+Best for:
+
+* low-cost users
+* manual “check my Telegram now” tasks
+* one-off work
+* early MVP
+* demos
+
+Flow:
+
+User asks Sage to check channel
+Control plane allocates hosted gateway runtime
+Gateway restores session from persistent state if available
+Agent worker performs task
+Gateway checkpoints state
+Runtime shuts down after idle timeout
+
+Pros:
+
+* cheap
+* efficient
+* good for MVP
+
+Cons:
+
+* cannot answer messages while idle/offline
+* cold start delay
+* fragile for WhatsApp if session moves too often
+
+3. Hosted Always-On Lightweight Gateway
+
+Empyralis keeps a lightweight gateway process alive, but not the full agent worker.
+
+Best for:
+
+* “answer customers all day”
+* Telegram customer support
+* business/personal inbox monitoring
+* real-time inbound messages
+
+Flow:
+
+Gateway stays online
+Incoming message arrives
+Gateway emits event to control plane
+Control plane wakes heavy agent worker
+Worker decides response
+Gateway sends response
+Worker sleeps
+Gateway remains online
+
+Pros:
+
+* strong user experience
+* much cheaper than full always-on AI worker
+* supports real-time automation
+
+Cons:
+
+* still costs always-on compute
+* needs gateway leases
+* needs session health UI
+* needs channel-specific reconnect behavior
+
+4. Dedicated Hosted Gateway Container
+
+Each paying workspace/user gets a stable persistent container or VPS-backed gateway.
+
+Best for:
+
+* WhatsApp Web/Baileys
+* Signal bridge
+* browser profiles
+* important customers
+* higher reliability plans
+
+Pros:
+
+* session stability
+* less re-login risk
+* stable storage
+* stable IP/region possible
+* clean isolation
+
+Cons:
+
+* higher cost
+* container lifecycle management required
+* requires stronger operational monitoring
+
+5. Dedicated Company-Provided Hardware / Workstation
+
+This is the “provided by us” model, similar to a managed Agent Computer.
+
+Best for:
+
+* premium users
+* business users
+* customers who want always-on automation but do not want to maintain their own machine
+* tasks needing more RAM/CPU than tiny VPS
+
+Pros:
+
+* strong product differentiation
+* user does not manage hardware
+* can support hosted browser / local tools / personal channels
+
+Cons:
+
+* expensive
+* security responsibility moves to Empyralis
+* needs serious isolation, monitoring, revocation, encryption, backups
+
+⸻
+
+Recommended Product Packaging
+
+Free / Basic
+
+No always-on hosted gateway.
+Local gateway allowed.
+Hosted on-demand gateway limited.
+Telegram personal maybe manual only.
+No WhatsApp always-on.
+
+Pro
+
+Hosted on-demand gateway.
+Optional always-on Telegram gateway.
+Limited runtime hours.
+Limited personal channel count.
+Idle worker shutdown.
+
+Business
+
+Always-on lightweight gateway.
+Dedicated gateway container for fragile channels.
+Telegram + WhatsApp personal/business workflows.
+Audit logs.
+Approval policies.
+Human handoff.
+Higher uptime target.
+
+Enterprise
+
+Dedicated managed Agent Computer.
+Local hardware gateway.
+Private deployment.
+BYOK.
+Custom region.
+Stronger data controls.
+Custom retention.
+
+⸻
+
+Important Product Boundary
+
+Do not merge personal channels into Studio cloud connectors.
+
+Current platform has two lanes:
+
+Personal-to-Sage lane:
+  personal channels
+  Agent Computer
+  gateway
+  paired user
+  direct-chat memory
+  personal runtime session
+Business-to-Studio lane:
+  deployed agents
+  connector accounts
+  webhook/API connector state
+  public business channels
+  team/workspace automation
+
+This must remain true.
+
+Allowed:
+
+Hosted Agent Computer can be company-provided hardware/VPS.
+Hosted Agent Computer can run empyralis-gateway.
+Hosted Agent Computer can own personal channel session runtime.
+Hosted Agent Computer can be assigned to Sage/workspace.
+
+Not allowed without new explicit security decision:
+
+Store personal Telegram/WhatsApp session files inside public Studio connector state.
+Route Telegram personal through telegram_bot connector.
+Treat personal WhatsApp as WhatsApp Business API.
+Let deployed Studio agents inherit Sage Full Access.
+Let multiple gateways use the same personal session.
+
+⸻
+
+The Big Design Choice
+
+There are two possible designs for hosted personal-channel session persistence.
+
+Option A: Hosted Gateway-Local Persistent Volume
+
+This matches the current docs most closely.
+
+Session state lives on the hosted gateway’s persistent volume.
+
+Example:
+
+/app/.orion-stack/agent-computer/
+  agent-computer.env
+  edge/
+    tokens.json
+    identity.json
+    registration.json
+    checkpoints.json
+    journal.ndjson
+    channel-state/
+      telegram/
+      whatsapp/
+
+Pros:
+
+* closest to current implementation
+* easier to build
+* safer than cloud-wide session vault
+* good for MVP
+* matches Docker persistent volume model
+
+Cons:
+
+* if the VPS volume is lost, session is lost
+* moving session across machines is harder
+* backup/recovery is limited
+* user may need to re-login after disaster
+
+Use this first.
+
+Option B: Encrypted Hosted Session Vault
+
+Session state is encrypted and backed up outside the worker/VPS.
+
+Example:
+
+Postgres metadata:
+  session_id
+  channel_connection_id
+  workspace_id
+  gateway_id
+  state_version
+  encryption_key_ref
+  active_lease_id
+  updated_at
+Object storage encrypted blob:
+  users/{user_id}/workspaces/{workspace_id}/channels/{channel_connection_id}/state.enc
+
+Pros:
+
+* restore session onto another gateway
+* disaster recovery
+* migration between VPS hosts
+* better managed-hosting experience
+* supports scaling pool of gateways
+
+Cons:
+
+* much higher security responsibility
+* personal session files now become Empyralis-hosted secrets
+* docs must be changed explicitly
+* legal/trust implications
+* must implement encryption, lease locks, audit, retention, deletion, export
+
+Use later, after gateway-local volume MVP.
+
+⸻
+
+Recommendation
+
+Build in stages.
+
+Do not jump directly into cloud session vault unless the MVP already proves value.
+
+Stage 0: Inspect Current Code
+
+Goal:
+
+Confirm exactly what exists right now.
+
+Coding agent must inspect these files:
+
+empyralis-gateway/src/index.ts
+empyralis-gateway/src/config.ts
+empyralis-gateway/src/cloud/ws-client.ts
+empyralis-gateway/src/state/db.ts
+empyralis-gateway/src/state/journal.ts
+empyralis-gateway/src/state/outbox.ts
+empyralis-gateway/src/state/checkpoints.ts
+empyralis-gateway/src/pairing/token-store.ts
+empyralis-gateway/src/pairing/device-identity.ts
+empyralis-gateway/src/channels/telegram/runtime.ts
+empyralis-gateway/src/channels/whatsapp/runtime.ts
+empyralis-gateway/src/channels/personal-runtime.ts
+empyralis-gateway/src/channels/local-bridge-runtime.ts
+empyralis-gateway/src/browser/runtime.ts
+empyralis-gateway/src/browser/worker.ts
+empyralis-supervisor/src/main.rs
+server_modules/routes_gateway.py
+server_modules/gateway_state_repository.py
+server_modules/gateway_registry_service.py
+server_modules/gateway_pairing_service.py
+server_modules/gateway_protocol_service.py
+server_modules/gateway_execution_service.py
+server_modules/routes_personal_channels.py
+server_modules/personal_channels_service.py
+server_modules/personal_channels_repository.py
+server_modules/channel_lane_contract_service.py
+server_modules/agent_computer_policy_service.py
+server_modules/dedicated_workstation_setup_service.py
+server_modules/hardware_action_broker_service.py
+server_modules/hardware_activity_event_service.py
+server_modules/gateway_health_service.py
+deploy/agent-computer/docker-compose.yml
+deploy/agent-computer/Dockerfile
+scripts/agent_computer.sh
+docs/domains/agent-computer/gateway-architecture.md
+docs/domains/agent-computer/server-service-mode.md
+docs/domains/agent-computer/permission-secret-model.md
+docs/domains/agent-computer/security.md
+docs/domains/agent-computer/user-session-bridge-ipc.md
+docs/security/trust-boundaries.md
+docs/domains/channels/README.md
+
+Agent should answer:
+
+1. Does gateway already survive worker stop?
+2. Does worker lifecycle exist separately from gateway lifecycle?
+3. Where exactly does Telegram session state live?
+4. Where exactly does WhatsApp session state live?
+5. Is channel runtime state inside GatewayStateDb or separate files?
+6. Is any session file encrypted today?
+7. Are gateway token/session token files owner-only?
+8. Does Docker volume persist all required gateway state?
+9. Does service-install preserve state across restart?
+10. What is lost when container is destroyed?
+11. Can remote SSH setup install a hosted Agent Computer cleanly?
+12. Can frontend create/connect a VPS Agent Computer today?
+13. Can one workspace have multiple Agent Computers?
+14. Can one personal channel bind to one selected Agent Computer?
+15. Is there a lease/lock preventing two gateways from using one personal channel session?
+16. What tests already cover reconnect/outbox/checkpoint behavior?
+17. What tests cover Telegram/WhatsApp session restart?
+18. What tests cover VPS service mode?
+19. What tests cover workspace mismatch/refusal?
+20. What tests cover revocation and offline states?
+
+Do not implement before this audit.
+
+⸻
+
+Stage 1: Make Gateway Lifecycle Separate From Worker Lifecycle
+
+Goal:
+
+Heavy agent worker must be disposable.
+
+Gateway must be durable.
+
+Current expected design:
+
+Control plane: always on
+Gateway: long-running lightweight process
+Agent worker: wakes only on job/message/task
+Supervisor: local/server capability executor
+Session state: gateway-owned persistent state
+
+Need to verify and enforce:
+
+Stopping agent run must not stop gateway.
+Stopping browser worker must not stop gateway.
+Stopping model worker must not stop gateway.
+Stopping one task must not disconnect Telegram/WhatsApp.
+
+Acceptance behavior:
+
+User connects Telegram.
+Gateway stays online.
+Agent task runs.
+Agent task ends.
+Gateway remains online.
+Telegram status still connected.
+Incoming message can still be received.
+
+Tests to add:
+
+test_agent_worker_stop_does_not_stop_gateway
+test_gateway_remains_online_after_task_completion
+test_personal_channel_status_survives_worker_idle_timeout
+test_gateway_heartbeat_continues_without_active_run
+
+⸻
+
+Stage 2: Hosted VPS Agent Computer MVP
+
+Goal:
+
+Use existing Server/VPS service mode and Docker mode to provide a company-managed Agent Computer.
+
+This is not a new architecture.
+
+It is a placement type for Agent Computer.
+
+Add explicit placement:
+
+agent_computer_placement:
+  local_user_device
+  hosted_vps
+  hosted_dedicated_container
+  company_managed_workstation
+
+Suggested DB fields:
+
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS placement_kind TEXT DEFAULT 'local_user_device';
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS hosting_provider TEXT;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS hosted_instance_id TEXT;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS hosted_region TEXT;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS state_persistence_mode TEXT DEFAULT 'gateway_local';
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS service_target TEXT;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS system_service_mode BOOLEAN DEFAULT FALSE;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS last_boot_id TEXT;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS host_fingerprint TEXT;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS recovery_policy TEXT DEFAULT 'same_host_only';
+
+Allowed state_persistence_mode:
+
+gateway_local
+hosted_encrypted_backup
+cloud_session_vault
+local_only
+
+For MVP use:
+
+gateway_local
+
+Meaning:
+
+Session state lives on the persistent VPS/container volume.
+If the VPS/container restarts, state survives.
+If the volume is destroyed, session may be lost.
+
+Frontend should show this clearly:
+
+Hosted Agent Computer
+Status: Online / Offline / Reconnecting / Needs Login
+Persistence: Hosted persistent volume
+Recovery: Same hosted machine/volume
+
+No fake promise like:
+
+"Your login is always safe forever."
+
+Please don’t let marketing write distributed systems guarantees. That’s how civilization gets outage pages.
+
+⸻
+
+Stage 3: Use Existing Docker Persistent Volumes Correctly
+
+Current compose already has:
+
+volumes:
+  - agent-computer-state:/app/.orion-stack/agent-computer
+  - agent-computer-logs:/app/.orion-stack/logs
+
+Required audit:
+
+Confirm all required state is inside:
+
+/app/.orion-stack/agent-computer
+/app/.orion-stack/agent-computer/edge
+/app/.orion-stack/logs
+
+Required files to preserve:
+
+agent-computer.env
+edge/tokens.json
+edge/identity.json
+edge/registration.json
+edge/checkpoints.json
+edge/journal.ndjson
+edge/outbox.json or outbox storage
+telegram session files
+whatsapp session files
+browser profile files if hosted browser is tied to gateway
+supervisor HMAC secret
+
+If Telegram/WhatsApp runtime writes outside the volume, fix it.
+
+All personal channel state must use a path under configured gateway state dir.
+
+Add config rule:
+
+EMPYRALIS_GATEWAY_STATE_DIR must point inside persistent volume in hosted mode.
+
+Add boot validation:
+
+If EMPYRALIS_AGENT_COMPUTER_SERVICE_TARGET=server_vps
+and EMPYRALIS_GATEWAY_STATE_DIR is not inside the persistent mounted state dir,
+fail startup.
+
+Tests:
+
+test_hosted_gateway_state_dir_is_persistent_volume
+test_telegram_session_path_under_gateway_state_dir
+test_whatsapp_session_path_under_gateway_state_dir
+test_container_restart_preserves_tokens_identity_checkpoints
+
+⸻
+
+Stage 4: Hosted Gateway Provisioning Flow
+
+Current route code already suggests remote SSH setup.
+
+Product flow should become:
+
+User opens Hardware / Agent Computer section.
+User chooses:
+  - Use my own computer
+  - Connect my own VPS
+  - Use Empyralis hosted computer
+For "Connect my own VPS":
+  User enters host, port, username, auth mode, SSH key/password, expected host fingerprint.
+  Backend creates pairing token.
+  Backend SSHes into server.
+  Backend runs remote setup command.
+  Agent Computer installs system service.
+  Gateway pairs and registers.
+  Dashboard shows online.
+For "Use Empyralis hosted computer":
+  Backend provisions VPS/container from provider.
+  Backend injects pairing token securely.
+  Agent Computer service starts.
+  Gateway pairs and registers.
+  Dashboard shows online.
+
+Important:
+
+Do not store raw SSH password/key longer than necessary.
+
+Remote setup should:
+
+1. Create pairing token with short TTL.
+2. Verify host fingerprint if provided.
+3. Connect via SSH.
+4. Run setup command.
+5. Clear sensitive setup material.
+6. Record audit event.
+7. Show install status.
+
+Add audit events:
+
+agent_computer.remote_setup.started
+agent_computer.remote_setup.ssh_verified
+agent_computer.remote_setup.install_started
+agent_computer.remote_setup.install_failed
+agent_computer.remote_setup.gateway_registered
+agent_computer.remote_setup.completed
+
+Add frontend states:
+
+provisioning
+installing
+pairing
+online
+failed
+needs_attention
+
+⸻
+
+Stage 5: Gateway Lease / Single Owner Lock
+
+Problem:
+
+If two gateway processes use the same channel session, bad things happen:
+
+* duplicate replies
+* broken Telegram/WhatsApp session
+* provider security checks
+* race conditions
+* corrupted local state
+* user loses trust
+
+Need two locks:
+
+A. Local process lock
+
+Already exists in empyralis-gateway/src/index.ts using gateway.lock.
+
+This prevents two local gateway processes from using the same state dir.
+
+Keep it.
+
+B. Cloud gateway/channel lease
+
+Need a control-plane lease preventing two gateways from owning the same channel connection.
+
+Add table:
+
+CREATE TABLE IF NOT EXISTS personal_channel_leases (
+  lease_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  channel_connection_id TEXT NOT NULL,
+  channel_key TEXT NOT NULL,
+  gateway_id TEXT NOT NULL,
+  device_id TEXT,
+  placement_kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  heartbeat_at TIMESTAMPTZ,
+  fencing_token BIGINT NOT NULL,
+  release_reason TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  UNIQUE (workspace_id, channel_connection_id)
+);
+
+Lease states:
+
+active
+expired
+released
+revoked
+stolen_after_timeout
+recovery_pending
+
+Rules:
+
+Only one active lease per channel_connection_id.
+Gateway heartbeat renews lease.
+If heartbeat stale, lease expires.
+New gateway may acquire only after expiry or admin/user recovery action.
+Every outbound send must include lease_id and fencing_token.
+Backend rejects stale fencing tokens.
+
+Add to gateway heartbeat:
+
+{
+  "gateway_id": "gw_x",
+  "channel_leases": [
+    {
+      "channel_connection_id": "pc_x",
+      "channel_key": "telegram_personal",
+      "lease_id": "lease_x",
+      "fencing_token": 123,
+      "state": "connected"
+    }
+  ]
+}
+
+Tests:
+
+test_single_active_personal_channel_lease
+test_second_gateway_rejected_for_same_channel_connection
+test_expired_lease_allows_recovery
+test_stale_fencing_token_rejected
+test_revoked_gateway_releases_channel_leases
+
+⸻
+
+Stage 6: Personal Channel Connection Model
+
+Create explicit personal channel connection records.
+
+Suggested table:
+
+CREATE TABLE IF NOT EXISTS personal_channel_connections (
+  channel_connection_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  channel_key TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  selected_gateway_id TEXT,
+  placement_preference TEXT NOT NULL DEFAULT 'local_or_hosted',
+  status TEXT NOT NULL DEFAULT 'not_connected',
+  login_state TEXT NOT NULL DEFAULT 'not_started',
+  state_persistence_mode TEXT NOT NULL DEFAULT 'gateway_local',
+  session_state_ref TEXT,
+  session_state_version BIGINT NOT NULL DEFAULT 0,
+  last_connected_at TIMESTAMPTZ,
+  last_disconnected_at TIMESTAMPTZ,
+  last_inbound_at TIMESTAMPTZ,
+  last_outbound_at TIMESTAMPTZ,
+  needs_user_action BOOLEAN NOT NULL DEFAULT FALSE,
+  user_action_reason TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+Status values:
+
+not_connected
+setup_started
+waiting_for_code
+waiting_for_qr
+connected
+online
+offline
+reconnecting
+needs_login
+session_expired
+blocked
+revoked
+error
+
+Important:
+
+Do not use only gateway_id as the channel identity.
+
+A user may later move a channel from one hosted Agent Computer to another.
+
+Use:
+
+channel_connection_id
+
+as durable channel identity.
+
+gateway_id is the active host/runtime.
+
+⸻
+
+Stage 7: Session Persistence Modes
+
+Define these modes clearly.
+
+local_only
+
+For user hardware.
+
+Session files stay only on customer-owned hardware.
+Cloud never receives backup blob.
+If device dies, user reconnects.
+
+Matches current trust-boundary model best.
+
+gateway_local
+
+For hosted VPS/container MVP.
+
+Session files stay on the hosted gateway persistent volume.
+Cloud control plane tracks metadata/status only.
+If container restarts with same volume, session survives.
+If volume is lost, user reconnects.
+
+Best MVP.
+
+hosted_encrypted_backup
+
+Middle stage.
+
+Session state is encrypted on the hosted gateway and backed up to company storage.
+Restore only to same workspace and approved replacement gateway.
+Encryption keys are scoped.
+Recovery is audited.
+
+cloud_session_vault
+
+Full future version.
+
+Control plane manages encrypted session state blobs and can restore to any trusted gateway host.
+Requires stronger key management, vault policy, legal/privacy text, deletion, rotation, export.
+
+Do not start with this unless absolutely needed.
+
+⸻
+
+Stage 8: Channel-Specific Rules
+
+Telegram Personal
+
+Current code marks telegram_personal as live personal gateway lane.
+
+Use Telegram first.
+
+Why:
+
+* easier than WhatsApp
+* session restore is more realistic
+* less fragile than QR/browser/device-style sessions
+* good MVP proof
+
+Required behavior:
+
+User enters api_id/api_hash/phone.
+Gateway receives login code/password flow.
+Gateway stores session under gateway state dir.
+Connection status updates control plane.
+Inbound messages publish to Sage.
+Outbound replies require policy/approval where needed.
+Gateway restart restores session.
+Container restart with persistent volume restores session.
+
+Acceptance tests:
+
+test_telegram_setup_creates_session_under_gateway_state_dir
+test_telegram_gateway_restart_restores_session_without_relogin
+test_telegram_inbound_after_worker_stopped_wakes_worker
+test_telegram_manual_send_requires_approval_when configured
+test_telegram_outbound_idempotency_prevents_duplicate_send
+
+WhatsApp Personal
+
+Current code marks whatsapp_personal as live personal gateway lane, but it is riskier.
+
+Use after Telegram.
+
+Why riskier:
+
+* WhatsApp sessions are fragile
+* QR/pairing state can expire
+* moving between VPS/IP/device can trigger re-login
+* browser/Baileys-style state must be carefully persisted
+* duplicate sessions can cause weird failures
+
+Required behavior:
+
+Stable persistent volume.
+Prefer dedicated hosted gateway/container.
+Do not move session between providers casually.
+Show "needs QR scan" clearly.
+Never promise perfect persistence.
+
+Acceptance tests:
+
+test_whatsapp_session_path_under_persistent_volume
+test_whatsapp_restart_uses_existing_auth_state
+test_whatsapp_duplicate_gateway_blocked_by_lease
+test_whatsapp_needs_qr_status_surfaces_to_frontend
+test_whatsapp_outbound_idempotency_prevents_duplicate_send
+
+Signal Personal
+
+Treat as bridge-required until code proves otherwise.
+
+Should use local or dedicated persistent gateway.
+
+Do not advertise as fully live unless tests prove:
+
+real account setup
+durable replay
+outbound approval
+health reporting
+account lifecycle
+session restore
+
+iMessage Personal
+
+Requires Mac/user-session bridge or BlueBubbles-style local bridge.
+
+Do not put this on cheap Linux VPS.
+
+Requires:
+
+Mac host
+user-session bridge
+permission model
+desktop/session lifecycle
+
+WeChat Personal
+
+Treat as bridge/private runtime until proven.
+
+High risk.
+
+Do not launch first.
+
+Gmail / Email
+
+Prefer OAuth/API in Studio/business connector lane or proper connected app lane.
+
+Do not use browser login unless necessary.
+
+⸻
+
+Stage 9: Worker Wake/Sleep Model
+
+This is the efficiency model.
+
+Heavy workers should sleep.
+
+Gateway should stay alive when required.
+
+Flow:
+
+Incoming message arrives on gateway.
+Gateway sends channel.inbound event to control plane.
+Control plane records inbound event.
+Control plane decides if policy allows automatic reply.
+Control plane enqueues agent job.
+Worker wakes.
+Worker reads thread/memory/context.
+Worker drafts or sends response through gateway.
+Gateway sends outbound message.
+Worker writes result.
+Worker sleeps after idle timeout.
+Gateway stays alive.
+
+Add worker lifecycle fields:
+
+CREATE TABLE IF NOT EXISTS agent_worker_sessions (
+  worker_session_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT,
+  trigger_kind TEXT NOT NULL,
+  trigger_ref TEXT,
+  status TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_active_at TIMESTAMPTZ,
+  stopped_at TIMESTAMPTZ,
+  stop_reason TEXT,
+  assigned_gateway_id TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+Worker stop reasons:
+
+idle_timeout
+task_complete
+user_stopped
+error
+quota_exceeded
+policy_blocked
+deployment_restart
+
+Acceptance:
+
+Worker stopped does not change gateway online status.
+Gateway incoming message can wake new worker.
+Worker can use existing gateway session.
+
+⸻
+
+Stage 10: Gateway Health States
+
+Dashboard must show real states.
+
+Use:
+
+online
+reconnecting
+offline
+degraded
+blocked
+revoked
+needs_login
+session_expired
+needs_qr
+needs_code
+wrong_workspace
+stale_heartbeat
+
+For hosted VPS:
+
+provisioning
+installing
+pairing
+service_starting
+online
+offline
+restarting
+recovery_pending
+volume_missing
+destroyed
+
+For channel:
+
+not_connected
+setup_required
+waiting_for_code
+waiting_for_qr
+connected_gateway_offline
+connected_online
+reconnecting
+needs_login
+blocked_by_policy
+blocked_by_approval
+revoked
+
+Frontend should not lie.
+
+Example:
+
+Telegram
+Connected, gateway offline.
+Your login is saved on the hosted Agent Computer volume.
+Start the Agent Computer to resume.
+
+Example:
+
+WhatsApp
+Needs QR scan.
+The previous session expired or was invalidated by WhatsApp.
+
+Example:
+
+Hosted Agent Computer
+Offline.
+Live replies are paused.
+Session state should restore when the gateway restarts.
+
+⸻
+
+Stage 11: Recovery Behavior
+
+Graceful Gateway Shutdown
+
+Flow:
+
+Gateway receives SIGTERM.
+Gateway stops accepting new work.
+Gateway checkpoints state.
+Gateway sends gateway.disconnect if socket active.
+Gateway stops personal runtimes.
+Gateway releases process lock.
+Control plane marks offline/stopped.
+
+Need verify current cleanup actually flushes checkpoints/outbox.
+
+Add:
+
+checkpoint.flush()
+outbox.flush()
+personalChannelRuntimes.stopAll()
+
+if missing.
+
+Test:
+
+test_gateway_sigterm_flushes_state_before_exit
+
+Gateway Crash
+
+Flow:
+
+Heartbeat stops.
+Control plane marks stale after timeout.
+Lease expires after grace period.
+Dashboard shows reconnecting/offline.
+Restarted service loads local state.
+Gateway reconnects and resumes.
+
+Test:
+
+test_gateway_crash_then_restart_recovers_session
+test_gateway_crash_marks_channel_connected_gateway_offline
+
+VPS Reboot
+
+Flow:
+
+System service restarts.
+Persistent volume remains.
+Gateway loads tokens/identity/session files.
+Gateway reconnects.
+Channel runtimes start.
+Dashboard returns online.
+
+Test:
+
+test_docker_restart_preserves_gateway_identity
+test_docker_restart_preserves_personal_channel_state
+
+VPS Destroyed But Volume Survives
+
+Flow:
+
+New container attaches same volume.
+Gateway starts.
+Gateway loads state.
+Control plane verifies gateway identity.
+Lease recovered.
+
+Risk:
+
+If host fingerprint/device identity changes, control plane may require confirmation.
+
+VPS Destroyed And Volume Lost
+
+Flow:
+
+Gateway lost.
+Channel session lost.
+Control plane shows needs_login.
+User reconnects.
+
+Do not pretend otherwise.
+
+Restore To Different Gateway
+
+Only allowed in future encrypted backup/vault mode.
+
+Requires:
+
+session vault
+lease fencing
+explicit recovery action
+audit trail
+possibly user confirmation
+
+⸻
+
+Stage 12: Security Requirements
+
+This feature is high-risk because personal channel sessions are basically user identity.
+
+Rules:
+
+Never store personal channel secrets in public Studio connector state.
+Never display raw tokens/cookies/session files.
+Never put session tokens in heartbeat metadata.
+Never store raw Telegram/WhatsApp credentials in logs.
+Never include raw secrets in diagnostics export.
+Never let deployed Studio agents use Sage personal session by default.
+Never allow two active gateways to own the same personal channel session.
+Never allow workspace mismatch.
+Never allow revoked gateway reconnect.
+Never let hosted VPS full-access mode claim desktop-only capabilities without bridge.
+
+Encryption:
+
+For MVP gateway-local mode:
+
+File permissions 0600 minimum.
+Hosted volume isolated per workspace/gateway.
+No shared Chrome/profile/session dir.
+Secrets redacted from logs.
+
+For hosted encrypted backup:
+
+Envelope encryption.
+Per-workspace data key.
+Key reference stored separately from blob.
+Blob integrity hash.
+Versioned backups.
+Explicit deletion flow.
+Recovery audit.
+
+Suggested metadata:
+
+{
+  "state_persistence_mode": "gateway_local",
+  "hosted": true,
+  "volume_id": "vol_x",
+  "encryption": {
+    "at_rest": true,
+    "mode": "provider_volume_encryption"
+  },
+  "recovery_policy": "same_volume_only"
+}
+
+⸻
+
+Stage 13: Approval / Policy
+
+Personal channel outbound replies should respect policy.
+
+Modes:
+
+manual_only
+draft_only
+ask_every_time
+safe_autopilot
+trusted_autopilot
+full_access
+emergency_stop
+
+For customer support, recommended default:
+
+safe_autopilot for low-risk replies
+approval required for sensitive categories
+
+Sensitive categories:
+
+payments
+refunds
+discounts
+legal statements
+medical advice
+account deletion
+password/security
+private data disclosure
+insults/threats
+external links
+large irreversible actions
+
+Outbound event should include:
+
+{
+  "channel_key": "telegram_personal",
+  "remote_jid": "...",
+  "thread_id": "...",
+  "message_preview": "...",
+  "risk_level": "normal|high|critical",
+  "approval_required": true,
+  "idempotency_key": "..."
+}
+
+⸻
+
+Stage 14: Idempotency
+
+Message sending must be idempotent.
+
+Every outbound message must include:
+
+idempotency_key
+channel_connection_id
+remote_jid
+gateway_id
+lease_id
+fencing_token
+
+Backend should store:
+
+CREATE TABLE IF NOT EXISTS personal_channel_outbound_dedup (
+  idempotency_key TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  channel_connection_id TEXT NOT NULL,
+  remote_jid TEXT NOT NULL,
+  gateway_id TEXT NOT NULL,
+  external_message_id TEXT,
+  status TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (workspace_id, channel_connection_id, idempotency_key)
+);
+
+Prevents:
+
+duplicate sends after reconnect
+duplicate sends after timeout
+duplicate sends after worker retry
+duplicate sends after outbox replay
+
+⸻
+
+Stage 15: Memory Model
+
+Do not confuse memory types.
+
+Agent Memory
+
+Stored centrally:
+
+user preferences
+customer support rules
+business policies
+past summaries
+conversation summaries
+workspace knowledge
+
+Task Memory
+
+Stored centrally:
+
+current task state
+pending approval
+last step
+tool result summary
+run checkpoints
+
+Channel Session Memory
+
+Stored gateway-local or session vault:
+
+Telegram auth/session
+WhatsApp auth/session
+Signal device state
+browser profile state
+cookies/localStorage
+
+Gateway Runtime State
+
+Stored gateway state dir:
+
+tokens.json
+identity.json
+registration.json
+checkpoints.json
+journal.ndjson
+outbox
+presence
+hello
+
+Audit Memory
+
+Stored centrally:
+
+who connected channel
+who approved send
+what message was sent
+which gateway sent it
+which policy allowed it
+when session expired/recovered
+
+Rule:
+
+VPS should not be the brain.
+VPS should be the muscle and live connector.
+
+⸻
+
+Stage 16: Database/Backend Additions
+
+Minimum MVP additions:
+
+-- Hosted Agent Computer placement metadata
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS placement_kind TEXT DEFAULT 'local_user_device';
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS state_persistence_mode TEXT DEFAULT 'local_only';
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS hosted_instance_id TEXT;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS hosted_region TEXT;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS service_target TEXT;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS system_service_mode BOOLEAN DEFAULT FALSE;
+ALTER TABLE gateway_registrations
+ADD COLUMN IF NOT EXISTS recovery_policy TEXT DEFAULT 'same_host_only';
+
+New table:
+
+CREATE TABLE IF NOT EXISTS personal_channel_connections (
+  channel_connection_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  channel_key TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  selected_gateway_id TEXT,
+  placement_preference TEXT NOT NULL DEFAULT 'local_or_hosted',
+  status TEXT NOT NULL DEFAULT 'not_connected',
+  login_state TEXT NOT NULL DEFAULT 'not_started',
+  state_persistence_mode TEXT NOT NULL DEFAULT 'gateway_local',
+  session_state_ref TEXT,
+  session_state_version BIGINT NOT NULL DEFAULT 0,
+  last_connected_at TIMESTAMPTZ,
+  last_disconnected_at TIMESTAMPTZ,
+  last_inbound_at TIMESTAMPTZ,
+  last_outbound_at TIMESTAMPTZ,
+  needs_user_action BOOLEAN NOT NULL DEFAULT FALSE,
+  user_action_reason TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+New lease table:
+
+CREATE TABLE IF NOT EXISTS personal_channel_leases (
+  lease_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  channel_connection_id TEXT NOT NULL,
+  channel_key TEXT NOT NULL,
+  gateway_id TEXT NOT NULL,
+  device_id TEXT,
+  placement_kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  heartbeat_at TIMESTAMPTZ,
+  fencing_token BIGINT NOT NULL,
+  release_reason TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  UNIQUE (workspace_id, channel_connection_id)
+);
+
+Outbound dedup:
+
+CREATE TABLE IF NOT EXISTS personal_channel_outbound_dedup (
+  idempotency_key TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  channel_connection_id TEXT NOT NULL,
+  remote_jid TEXT NOT NULL,
+  gateway_id TEXT NOT NULL,
+  external_message_id TEXT,
+  status TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (workspace_id, channel_connection_id, idempotency_key)
+);
+
+Hosted provision table:
+
+CREATE TABLE IF NOT EXISTS hosted_agent_computer_instances (
+  hosted_instance_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  gateway_id TEXT,
+  provider TEXT NOT NULL,
+  provider_instance_id TEXT,
+  region TEXT,
+  size TEXT,
+  status TEXT NOT NULL,
+  state_volume_id TEXT,
+  public_ip TEXT,
+  hostname TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  destroyed_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+⸻
+
+Stage 17: API Additions
+
+Create hosted Agent Computer
+
+POST /api/gateway/hosted-agent-computers
+
+Request:
+
+{
+  "workspace_id": "w_x",
+  "placement_kind": "hosted_vps",
+  "region": "us-west",
+  "size": "small",
+  "runtime_access_mode": "default"
+}
+
+Response:
+
+{
+  "hosted_instance_id": "hac_x",
+  "gateway_id": "gw_x",
+  "status": "provisioning"
+}
+
+Connect own VPS
+
+Existing SSH setup path can become official product endpoint.
+
+POST /api/gateway/agent-computers/ssh-setup
+
+Request:
+
+{
+  "workspace_id": "w_x",
+  "host": "1.2.3.4",
+  "port": 22,
+  "username": "root",
+  "auth_mode": "ssh_key",
+  "ssh_key": "...",
+  "expected_host_fingerprint": "sha256:...",
+  "remote_root": "~/Multi_Agent_Orchestrator_Project",
+  "runtime_access_mode": "default"
+}
+
+Important:
+
+SSH key/password must not be persisted after setup.
+
+Select gateway for personal channel
+
+POST /api/personal-channels/{channel_key}/connections
+
+Request:
+
+{
+  "workspace_id": "w_x",
+  "gateway_id": "gw_x",
+  "state_persistence_mode": "gateway_local"
+}
+
+Get channel status
+
+GET /api/personal-channels/connections/{channel_connection_id}
+
+Acquire/release lease
+
+Internal:
+
+POST /api/internal/personal-channels/{channel_connection_id}/lease/acquire
+POST /api/internal/personal-channels/{channel_connection_id}/lease/renew
+POST /api/internal/personal-channels/{channel_connection_id}/lease/release
+
+⸻
+
+Stage 18: Frontend UX
+
+Hardware / Agent Computer section should show:
+
+Agent Computers
+1. This computer
+2. Connect VPS/server
+3. Use Empyralis hosted computer
+
+For each Agent Computer:
+
+Name
+Placement: Local / Hosted VPS / Dedicated hosted / Company-managed workstation
+Status: Online / Offline / Reconnecting / Revoked
+Capabilities
+Runtime access mode
+Connected personal channels
+Last heartbeat
+State persistence
+Recovery policy
+Logs/diagnostics
+Stop / Restart / Revoke
+
+For channels:
+
+Personal Channels
+Telegram Personal
+  Status
+  Connected gateway
+  Placement
+  Session persistence
+  Last inbound
+  Last outbound
+  Needs action
+  Connect / Reconnect / Move / Disconnect
+WhatsApp Personal
+  QR / pairing status
+  Connected gateway
+  Session persistence
+  Reliability warning
+
+Important warnings:
+
+Hosted gateway can keep the channel online while the heavy worker sleeps.
+If the hosted gateway is stopped, live replies pause.
+If the persistent volume is lost, you may need to reconnect.
+WhatsApp may require QR scan again if the provider invalidates session.
+
+⸻
+
+Stage 19: What To Do About 1GB RAM VPS
+
+Use 1GB VPS only for lightweight gateway and simple connectors.
+
+Good for:
+
+Telegram gateway
+small Node gateway
+websocket heartbeat
+message relay
+queue polling
+basic shell/files server mode
+small supervisor
+
+Bad for:
+
+Chrome/Playwright
+multiple browser sessions
+WhatsApp + heavy runtime
+local LLMs
+large vector DB
+many users
+desktop-like computer use
+
+Recommended sizes:
+
+1GB RAM:
+  Telegram-only lightweight gateway for one low-volume user.
+2GB RAM:
+  Better minimum hosted Agent Computer MVP.
+4GB RAM:
+  Browser, WhatsApp, mixed personal channels, more stable.
+8GB+ RAM:
+  dedicated business/customer-support gateway with browser/computer-use.
+
+Do not put many users’ personal channels into one messy shared VPS without strict container isolation.
+
+Correct multi-user model:
+
+one container per workspace/gateway
+separate volume per gateway
+separate gateway_id
+separate channel leases
+separate secrets
+no shared browser profile
+no shared Telegram/WhatsApp session dir
+
+⸻
+
+Stage 20: What Happens When User Stops Work
+
+There are different “stop” buttons.
+
+We must distinguish them.
+
+Stop current run
+
+Stops heavy agent worker.
+Gateway remains online.
+Personal channels remain connected.
+Always-on automation may continue depending on policy.
+
+Pause automation
+
+Gateway remains connected.
+Inbound messages are recorded.
+Agent does not auto-reply.
+User can manually resume.
+
+Stop gateway
+
+Gateway disconnects.
+Live answering stops.
+Session files remain on persistent state.
+User can restart gateway later.
+
+Revoke Agent Computer
+
+Gateway trust revoked.
+Gateway cannot reconnect.
+Personal channel is disconnected from platform.
+May optionally delete hosted session state.
+
+Destroy hosted VPS
+
+Live answering stops.
+If volume kept, session may restore later.
+If volume deleted, session likely lost.
+
+Frontend must not use one vague “Stop” button for all of this. That would be a UI crime scene.
+
+⸻
+
+Stage 21: Minimum Viable Implementation Plan
+
+MVP 1: Audit and confirm
+
+Deliverable:
+
+docs/reports/hosted-gateway-persistence-audit.md
+
+Must include:
+
+current state paths
+Telegram session path
+WhatsApp session path
+Docker volume coverage
+restart behavior
+missing tests
+recommended changes
+
+MVP 2: Hosted gateway local persistence
+
+Deliverable:
+
+Hosted VPS Agent Computer can run with persistent volume.
+Gateway survives container restart.
+Telegram session survives restart.
+Worker can stop while gateway remains online.
+
+Do not implement cloud session vault yet.
+
+MVP 3: Dashboard status
+
+Deliverable:
+
+Hardware section shows hosted gateway placement/status.
+Personal channels show gateway/channel/session status.
+
+MVP 4: Telegram always-on
+
+Deliverable:
+
+Telegram personal gateway receives inbound while worker is asleep.
+Worker wakes and can reply.
+
+MVP 5: Lease lock
+
+Deliverable:
+
+Only one gateway can own one personal channel connection.
+Duplicate gateway startup is blocked/recovery-gated.
+
+MVP 6: WhatsApp dedicated mode
+
+Deliverable:
+
+WhatsApp personal supports dedicated hosted gateway/container with persistent volume.
+QR/session state is visible.
+No migration between hosts without explicit recovery mode.
+
+⸻
+
+Stage 22: Do Not Build Yet Until These Questions Are Answered
+
+Coding agent must answer these exact questions from code:
+
+1. Where does Telegram runtime store its GramJS/StringSession or session material?
+2. Is Telegram session under EMPYRALIS_GATEWAY_STATE_DIR?
+3. Where does WhatsApp/Baileys store auth state?
+4. Is WhatsApp auth state under EMPYRALIS_GATEWAY_STATE_DIR?
+5. Does GatewayStateDb currently store channel runtime session files or only metadata?
+6. Are personal channel credentials encrypted or only chmod 0600?
+7. Does Docker persistent volume include every required channel/session file?
+8. Does service-run keep supervisor and edge gateway running together?
+9. Does stopping a worker currently affect gateway process?
+10. Is there an actual separate worker idle timeout path?
+11. Is there an actual frontend hardware section for VPS/provided hardware?
+12. Which endpoint creates remote SSH setup?
+13. Is the SSH setup endpoint currently protected by owner/admin role?
+14. Are raw SSH credentials stored anywhere?
+15. Is host fingerprint verification required or optional?
+16. Does gateway registration include placement metadata today?
+17. Does active session tracking prevent duplicate gateways?
+18. Does gateway_state_repository enforce one live session per gateway?
+19. Does anything enforce one active gateway per personal channel?
+20. Does channel outbound dispatch verify the selected gateway owns the channel?
+21. Does personal channel inbound create stable thread IDs?
+22. Does outbox replay include idempotency for channel.inbound/channel.outbound?
+23. Does outbound send dedup exist?
+24. Can gateway recover after stale heartbeat?
+25. What user-visible status appears after gateway offline?
+
+⸻
+
+Stage 23: Exact Prompt For Coding Agent
+
+Paste this to the coding agent:
+
+You are working inside the Empyralis / Multi_Agent_Orchestrator_Project repo.
+We need a factual audit and implementation plan for hosted persistent Agent Computer gateways.
+User goal:
+A user connects their own personal Telegram/WhatsApp/Signal/etc. through Empyralis gateway. The heavy agent worker may stop after idle timeout. The VPS/container may restart. Tomorrow the user should still see the channel connected if the session state survived. If the user wants always-on customer replies, a lightweight gateway must stay running even while heavy workers sleep.
+Important product rule:
+Do not merge personal channels into Studio/business connector state. Personal channels belong to Sage / Agent Computer / gateway lane. Business channels belong to Studio connector lane.
+Please inspect the actual repo code, not just docs.
+Inspect at minimum:
+- empyralis-gateway/src/index.ts
+- empyralis-gateway/src/config.ts
+- empyralis-gateway/src/cloud/ws-client.ts
+- empyralis-gateway/src/state/db.ts
+- empyralis-gateway/src/state/journal.ts
+- empyralis-gateway/src/state/outbox.ts
+- empyralis-gateway/src/state/checkpoints.ts
+- empyralis-gateway/src/pairing/token-store.ts
+- empyralis-gateway/src/pairing/device-identity.ts
+- empyralis-gateway/src/channels/telegram/runtime.ts
+- empyralis-gateway/src/channels/whatsapp/runtime.ts
+- empyralis-gateway/src/channels/personal-runtime.ts
+- empyralis-gateway/src/channels/local-bridge-runtime.ts
+- server_modules/routes_gateway.py
+- server_modules/gateway_state_repository.py
+- server_modules/gateway_registry_service.py
+- server_modules/gateway_pairing_service.py
+- server_modules/gateway_protocol_service.py
+- server_modules/gateway_execution_service.py
+- server_modules/routes_personal_channels.py
+- server_modules/personal_channels_service.py
+- server_modules/channel_lane_contract_service.py
+- server_modules/agent_computer_policy_service.py
+- server_modules/dedicated_workstation_setup_service.py
+- deploy/agent-computer/docker-compose.yml
+- deploy/agent-computer/Dockerfile
+- scripts/agent_computer.sh
+- docs/domains/agent-computer/*
+- docs/domains/channels/*
+- docs/security/trust-boundaries.md
+Answer these:
+1. Does the current repo already support Agent Computer Server/VPS service mode?
+2. Does Docker mode persist all required gateway state?
+3. Does the current remote SSH setup path install/pair Agent Computer on a VPS?
+4. Is gateway lifecycle separate from heavy agent worker lifecycle?
+5. If worker stops, does gateway keep listening?
+6. If gateway restarts, does Telegram personal session restore?
+7. If gateway restarts, does WhatsApp personal session restore?
+8. Where exactly are Telegram and WhatsApp session files written?
+9. Are those files inside persistent volume / state dir?
+10. Is there any encrypted session vault today, or only local files with owner permissions?
+11. Is there a cloud lease preventing two gateways from owning the same personal channel?
+12. Is there a local process lock preventing two gateway processes using one state dir?
+13. What exact code changes are required for hosted gateway MVP?
+14. What migrations are required?
+15. What frontend changes are required?
+16. What tests must be added before launch?
+Do not implement first. Produce:
+- current behavior report with file paths
+- risk list
+- exact implementation plan
+- test plan
+- final recommendation: gateway-local persistent volume MVP vs encrypted hosted session vault
+
+⸻
+
+Stage 24: My Recommendation
+
+Do it.
+
+But do it like this:
+
+1. Use current Agent Computer Server/VPS mode.
+2. Use Docker persistent volume.
+3. Keep session persistence gateway-local for MVP.
+4. Separate worker lifecycle from gateway lifecycle.
+5. Telegram first.
+6. Add cloud lease before serious always-on.
+7. Add frontend status clarity.
+8. Delay encrypted cloud session vault until after hosted gateway MVP works.
+9. Delay WhatsApp scaling until Telegram restart/reconnect is proven.
+10. Keep personal channel lane separate from Studio connector lane.
+
+The strategic value is high.
+
+The gateway is your product advantage.
+
+A hosted/company-managed Agent Computer makes the product easier for normal users because they do not need to keep their own laptop awake.
+
+But the security responsibility becomes much bigger.
+
+So the correct launch shape is:
+
+Hosted Gateway MVP:
+  persistent volume
+  one workspace per gateway/container
+  Telegram first
+  honest status UI
+  no cross-machine session migration promise
+Later:
+  encrypted session vault
+  gateway failover
+  session migration
+  dedicated WhatsApp containers
+  enterprise BYOK/private deployment
+
+⸻
+
+Final Decision Summary
+
+If only heavy worker stops:
+
+Gateway should stay alive.
+Personal channels should stay connected.
+Build/verify this.
+
+If gateway process stops:
+
+Live replies stop.
+Session should survive if gateway state persists.
+Restart should restore.
+
+If VPS/container restarts:
+
+Live replies pause during restart.
+Session should survive if persistent volume is mounted.
+
+If VPS/container is destroyed but volume survives:
+
+Session may restore on replacement container using same state.
+Need careful gateway identity/recovery handling.
+
+If VPS/container and volume are destroyed:
+
+Session is lost unless encrypted backup/session vault exists.
+User reconnects.
+
+If user wants 24/7 replies:
+
+At least one lightweight gateway must remain online.
+The heavy agent worker can sleep.
+
+This is the architecture:
+
+Control plane: always on
+Hosted/local gateway: durable connector
+Heavy worker: temporary compute
+Personal session: gateway-local now, encrypted vault later
+Memory/audit/policy: central control plane

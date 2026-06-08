@@ -678,7 +678,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'figma',
     label: 'Figma',
-    image: '/brand-assets/generic/api.svg?v=3',
+    image: '/brand-assets/apps/figma.ico?v=3',
     connectorIds: ['figma'],
     capabilityTags: ['Design files', 'Comments'],
     summary: 'Figma lets Sage use design files, metadata, and comments for product work.',
@@ -688,7 +688,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'todoist',
     label: 'Todoist',
-    image: '/brand-assets/generic/api.svg?v=3',
+    image: '/brand-assets/apps/todoist.ico?v=3',
     connectorIds: ['todoist'],
     capabilityTags: ['Tasks', 'Projects'],
     summary: 'Todoist lets Sage read and update personal tasks and project lists.',
@@ -698,7 +698,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'airtable',
     label: 'Airtable',
-    image: '/brand-assets/generic/api.svg?v=3',
+    image: '/brand-assets/apps/airtable.png?v=3',
     connectorIds: ['airtable'],
     capabilityTags: ['Bases', 'Records'],
     summary: 'Airtable lets Sage read bases, inspect schema, and update records with approval.',
@@ -708,11 +708,261 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'canva',
     label: 'Canva',
-    image: '/brand-assets/generic/api.svg?v=3',
+    image: '/brand-assets/apps/canva.ico?v=3',
     connectorIds: ['canva'],
     capabilityTags: ['Designs', 'Assets'],
     summary: 'Canva lets Sage use design metadata, folders, and assets in creative workflows.',
     setupHint: 'Connect Canva when Sage should work with Canva designs and brand assets.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'asana',
+    label: 'Asana',
+    image: '/brand-assets/apps/asana.ico?v=3',
+    connectorIds: ['asana'],
+    capabilityTags: ['Tasks', 'Projects'],
+    summary: 'Asana lets Sage read tasks, projects, and workspaces, then prepare approved project updates.',
+    setupHint: 'Connect Asana when Sage should help manage project work.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'hubspot',
+    label: 'HubSpot',
+    image: '/brand-assets/apps/hubspot.png?v=3',
+    connectorIds: ['hubspot'],
+    capabilityTags: ['CRM', 'Sales'],
+    summary: 'HubSpot lets Sage work with contacts, companies, deals, and approved follow-up workflows.',
+    setupHint: 'Connect HubSpot when Sage should help with CRM and sales operations.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'zoom',
+    label: 'Zoom',
+    image: '/brand-assets/apps/zoom.ico?v=3',
+    connectorIds: ['zoom'],
+    capabilityTags: ['Meetings', 'Profile'],
+    summary: 'Zoom lets Sage use meeting account context and prepare approved meeting workflows.',
+    setupHint: 'Connect Zoom when Sage should help with meeting operations.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'calendly',
+    label: 'Calendly',
+    image: '/brand-assets/apps/calendly.ico?v=3',
+    connectorIds: ['calendly'],
+    capabilityTags: ['Scheduling', 'Events'],
+    summary: 'Calendly lets Sage use scheduling links, event types, and booking context.',
+    setupHint: 'Connect Calendly when Sage should coordinate scheduling workflows.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'clickup',
+    label: 'ClickUp',
+    image: '/brand-assets/apps/clickup.png?v=3',
+    connectorIds: ['clickup'],
+    capabilityTags: ['Tasks', 'Lists'],
+    summary: 'ClickUp lets Sage read tasks, lists, and workspaces, then prepare approved project updates.',
+    setupHint: 'Connect ClickUp when Sage should help manage project execution.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'jira',
+    label: 'Jira',
+    image: '/brand-assets/apps/jira.ico?v=3',
+    connectorIds: ['jira'],
+    capabilityTags: ['Issues', 'Projects'],
+    summary: 'Jira lets Sage read issues, projects, comments, and prepare approved project updates.',
+    setupHint: 'Connect Jira when Sage should help manage engineering and product work.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'stripe',
+    label: 'Stripe',
+    image: '/brand-assets/apps/stripe.ico?v=3',
+    connectorIds: ['stripe'],
+    capabilityTags: ['Payments', 'Revenue'],
+    summary: 'Stripe lets Sage use account, customer, payment, invoice, and revenue context.',
+    setupHint: 'Connect Stripe when Sage should help understand payments and business operations.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'salesforce',
+    label: 'Salesforce',
+    image: '/brand-assets/apps/salesforce.ico?v=3',
+    connectorIds: ['salesforce'],
+    capabilityTags: ['CRM', 'Sales'],
+    summary: 'Salesforce lets Sage work with CRM records, accounts, leads, and approved sales workflows.',
+    setupHint: 'Connect Salesforce when Sage should support CRM and sales operations.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'webflow',
+    label: 'Webflow',
+    image: '/brand-assets/apps/webflow.ico?v=3',
+    connectorIds: ['webflow'],
+    capabilityTags: ['Sites', 'CMS'],
+    summary: 'Webflow lets Sage use sites, pages, CMS, assets, and form context.',
+    setupHint: 'Connect Webflow when Sage should help with website and CMS workflows.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'monday',
+    label: 'monday.com',
+    image: '/brand-assets/apps/monday.ico?v=3',
+    connectorIds: ['monday'],
+    capabilityTags: ['Boards', 'Workflows'],
+    summary: 'monday.com lets Sage use boards, updates, workspaces, and approved project workflows.',
+    setupHint: 'Connect monday.com when Sage should help manage operational work.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'box',
+    label: 'Box',
+    image: '/brand-assets/apps/box.ico?v=3',
+    connectorIds: ['box'],
+    capabilityTags: ['Files', 'Folders'],
+    summary: 'Box lets Sage work with enterprise files, folders, and approved document workflows.',
+    setupHint: 'Connect Box when Sage should help with shared files and enterprise documents.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'gitlab',
+    label: 'GitLab',
+    image: '/brand-assets/apps/gitlab.ico?v=3',
+    connectorIds: ['gitlab'],
+    capabilityTags: ['Code', 'Issues'],
+    summary: 'GitLab lets Sage use repositories, merge requests, issues, and engineering context.',
+    setupHint: 'Connect GitLab when Sage should help with code and project delivery.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'bitbucket',
+    label: 'Bitbucket',
+    image: '/brand-assets/apps/bitbucket.ico?v=3',
+    connectorIds: ['bitbucket'],
+    capabilityTags: ['Code', 'Pull requests'],
+    summary: 'Bitbucket lets Sage use repositories, pull requests, issues, and approved code workflows.',
+    setupHint: 'Connect Bitbucket when Sage should help with Atlassian code workflows.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'confluence',
+    label: 'Confluence',
+    image: '/brand-assets/apps/confluence.ico?v=3',
+    connectorIds: ['confluence'],
+    capabilityTags: ['Docs', 'Knowledge'],
+    summary: 'Confluence lets Sage use spaces, pages, knowledge, and approved content workflows.',
+    setupHint: 'Connect Confluence when Sage should use team knowledge and docs.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'miro',
+    label: 'Miro',
+    image: '/brand-assets/apps/miro.png?v=3',
+    connectorIds: ['miro'],
+    capabilityTags: ['Boards', 'Planning'],
+    summary: 'Miro lets Sage use boards, whiteboards, and approved planning workflows.',
+    setupHint: 'Connect Miro when Sage should help with planning and visual collaboration.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'mailchimp',
+    label: 'Mailchimp',
+    image: '/brand-assets/apps/mailchimp.ico?v=3',
+    connectorIds: ['mailchimp'],
+    capabilityTags: ['Marketing', 'Campaigns'],
+    summary: 'Mailchimp lets Sage use audiences, campaigns, reports, and approved marketing workflows.',
+    setupHint: 'Connect Mailchimp when Sage should help with marketing operations.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'pipedrive',
+    label: 'Pipedrive',
+    image: '/brand-assets/apps/pipedrive.ico?v=3',
+    connectorIds: ['pipedrive'],
+    capabilityTags: ['CRM', 'Deals'],
+    summary: 'Pipedrive lets Sage use deals, contacts, activities, and approved sales workflows.',
+    setupHint: 'Connect Pipedrive when Sage should help with sales pipeline work.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'intercom',
+    label: 'Intercom',
+    image: '/brand-assets/apps/intercom.ico?v=3',
+    connectorIds: ['intercom'],
+    capabilityTags: ['Support', 'Conversations'],
+    summary: 'Intercom lets Sage use conversations, users, tickets, and approved support workflows.',
+    setupHint: 'Connect Intercom when Sage should help with customer support operations.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'docusign',
+    label: 'Docusign',
+    image: '/brand-assets/apps/docusign.ico?v=3',
+    connectorIds: ['docusign'],
+    capabilityTags: ['Documents', 'Signatures'],
+    summary: 'Docusign lets Sage use envelopes, signing status, and approved document workflows.',
+    setupHint: 'Connect Docusign when Sage should help with signing workflows.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'square',
+    label: 'Square',
+    image: '/brand-assets/apps/square.ico?v=3',
+    connectorIds: ['square'],
+    capabilityTags: ['Payments', 'Orders'],
+    summary: 'Square lets Sage use seller profile, customers, orders, payments, and invoices.',
+    setupHint: 'Connect Square when Sage should help with seller and payment operations.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'typeform',
+    label: 'Typeform',
+    image: '/brand-assets/apps/typeform.ico?v=3',
+    connectorIds: ['typeform'],
+    capabilityTags: ['Forms', 'Responses'],
+    summary: 'Typeform lets Sage use forms, responses, accounts, and approved form workflows.',
+    setupHint: 'Connect Typeform when Sage should help with surveys and intake forms.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'quickbooks',
+    label: 'QuickBooks',
+    image: '/brand-assets/apps/quickbooks.png?v=3',
+    connectorIds: ['quickbooks'],
+    capabilityTags: ['Accounting', 'Invoices'],
+    summary: 'QuickBooks lets Sage use accounting context, customers, invoices, and finance workflows.',
+    setupHint: 'Connect QuickBooks when Sage should help with accounting operations.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'xero',
+    label: 'Xero',
+    image: '/brand-assets/apps/xero.ico?v=3',
+    connectorIds: ['xero'],
+    capabilityTags: ['Accounting', 'Contacts'],
+    summary: 'Xero lets Sage use accounting organisations, contacts, invoices, and finance workflows.',
+    setupHint: 'Connect Xero when Sage should help with accounting and finance work.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'freshbooks',
+    label: 'FreshBooks',
+    image: '/brand-assets/apps/freshbooks.ico?v=3',
+    connectorIds: ['freshbooks'],
+    capabilityTags: ['Accounting', 'Clients'],
+    summary: 'FreshBooks lets Sage use clients, invoices, expenses, and accounting workflows.',
+    setupHint: 'Connect FreshBooks when Sage should help with small-business accounting.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'vercel',
+    label: 'Vercel',
+    image: '/brand-assets/apps/vercel.ico?v=3',
+    connectorIds: ['vercel'],
+    capabilityTags: ['Deployments', 'Projects'],
+    summary: 'Vercel lets Sage use account identity, projects, deployments, and developer workflows.',
+    setupHint: 'Connect Vercel when Sage should help with web app delivery.',
     surfaceScope: 'all',
   },
   {
@@ -769,6 +1019,31 @@ const CONNECTOR_AUTH_FIELD_FALLBACKS: Record<string, string[]> = {
   todoist: ['access_token'],
   airtable: ['access_token'],
   canva: ['access_token'],
+  asana: ['access_token'],
+  hubspot: ['access_token'],
+  zoom: ['access_token'],
+  calendly: ['access_token'],
+  clickup: ['access_token'],
+  jira: ['access_token'],
+  stripe: ['access_token'],
+  salesforce: ['access_token'],
+  webflow: ['access_token'],
+  monday: ['access_token'],
+  box: ['access_token'],
+  gitlab: ['access_token'],
+  bitbucket: ['access_token'],
+  confluence: ['access_token'],
+  miro: ['access_token'],
+  mailchimp: ['access_token'],
+  pipedrive: ['access_token'],
+  intercom: ['access_token'],
+  docusign: ['access_token'],
+  square: ['access_token'],
+  typeform: ['access_token'],
+  quickbooks: ['access_token'],
+  xero: ['access_token'],
+  freshbooks: ['access_token'],
+  vercel: ['access_token'],
   s3: ['aws_access_key_id', 'aws_secret_access_key', 'region'],
   smtp: ['host', 'port', 'username', 'password', 'use_tls'],
   telegram_bot: ['bot_token', 'chat_id'],
@@ -794,6 +1069,31 @@ const CONSUMER_APP_CARD_IDS = new Set([
   'todoist',
   'airtable',
   'canva',
+  'asana',
+  'hubspot',
+  'zoom',
+  'calendly',
+  'clickup',
+  'jira',
+  'stripe',
+  'salesforce',
+  'webflow',
+  'monday',
+  'box',
+  'gitlab',
+  'bitbucket',
+  'confluence',
+  'miro',
+  'mailchimp',
+  'pipedrive',
+  'intercom',
+  'docusign',
+  'square',
+  'typeform',
+  'quickbooks',
+  'xero',
+  'freshbooks',
+  'vercel',
   'instagram_business',
 ]);
 
@@ -817,6 +1117,31 @@ const OAUTH_READY_APP_CARD_IDS = new Set([
   'todoist',
   'airtable',
   'canva',
+  'asana',
+  'hubspot',
+  'zoom',
+  'calendly',
+  'clickup',
+  'jira',
+  'stripe',
+  'salesforce',
+  'webflow',
+  'monday',
+  'box',
+  'gitlab',
+  'bitbucket',
+  'confluence',
+  'miro',
+  'mailchimp',
+  'pipedrive',
+  'intercom',
+  'docusign',
+  'square',
+  'typeform',
+  'quickbooks',
+  'xero',
+  'freshbooks',
+  'vercel',
   'slack',
 ]);
 
@@ -2961,6 +3286,18 @@ export function WorkstationSageConnectorsPane({
       || card.id === 'figma'
       || card.id === 'airtable'
       || card.id === 'canva'
+      || card.id === 'asana'
+      || card.id === 'clickup'
+      || card.id === 'jira'
+      || card.id === 'webflow'
+      || card.id === 'monday'
+      || card.id === 'box'
+      || card.id === 'gitlab'
+      || card.id === 'bitbucket'
+      || card.id === 'confluence'
+      || card.id === 'miro'
+      || card.id === 'typeform'
+      || card.id === 'vercel'
       || card.id === 's3',
     ),
     [connectorCards],
@@ -2986,6 +3323,31 @@ export function WorkstationSageConnectorsPane({
         || card.id === 'todoist'
         || card.id === 'airtable'
         || card.id === 'canva'
+        || card.id === 'asana'
+        || card.id === 'hubspot'
+        || card.id === 'zoom'
+        || card.id === 'calendly'
+        || card.id === 'clickup'
+        || card.id === 'jira'
+        || card.id === 'stripe'
+        || card.id === 'salesforce'
+        || card.id === 'webflow'
+        || card.id === 'monday'
+        || card.id === 'box'
+        || card.id === 'gitlab'
+        || card.id === 'bitbucket'
+        || card.id === 'confluence'
+        || card.id === 'miro'
+        || card.id === 'mailchimp'
+        || card.id === 'pipedrive'
+        || card.id === 'intercom'
+        || card.id === 'docusign'
+        || card.id === 'square'
+        || card.id === 'typeform'
+        || card.id === 'quickbooks'
+        || card.id === 'xero'
+        || card.id === 'freshbooks'
+        || card.id === 'vercel'
         || card.id === 's3'
         || card.id === 'smtp'
         || card.id === 'wechat_work'

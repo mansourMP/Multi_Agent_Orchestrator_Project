@@ -12,6 +12,7 @@ from server_modules import skills_service
 from server_modules import secret_redaction_service
 from server_modules import agent_action_metering_service, tool_broker_guard_service
 from server_modules import rust_runtime_kernel_client
+from server_modules import hardware_runtime_target_resolver
 
 _BROWSER_CAPTURE_ACTIONS = {"screenshot", "pdf"}
 _BROWSER_MUTATION_ACTIONS = {"click", "fill", "execute_js", "download_file"}
@@ -22,6 +23,38 @@ _FILE_WRITE_ACTIONS = {"write", "append", "rename", "move", "copy", "mkdir", "to
 _CHANNEL_CONNECTORS = {"discord", "email", "gmail", "imsg", "mail", "signal", "slack", "telegram", "whatsapp"}
 _HTTP_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 _CLOUD_COMPUTER_RUNTIME_CONNECTORS = {"browser", "computer", "shell"}
+
+
+def _execution_environment_for_direct_tool(
+    connector_id: str,
+    action_id: str,
+    arguments: Dict[str, Any],
+    result_payload: Optional[Dict[str, Any]] = None,
+) -> str:
+    payload = arguments if isinstance(arguments, dict) else {}
+    result = result_payload if isinstance(result_payload, dict) else {}
+    runtime_session = result.get("runtime_session") if isinstance(result.get("runtime_session"), dict) else {}
+    runtime_target = (
+        str(result.get("runtime_target") or "").strip()
+        or str(runtime_session.get("canonical_runtime_target") or "").strip()
+        or str(runtime_session.get("runtime_target") or "").strip()
+        or str(payload.get("runtime_target") or "").strip()
+    )
+    if runtime_target:
+        return hardware_runtime_target_resolver.execution_environment_for_runtime_target(
+            hardware_runtime_target_resolver.resolve_runtime_target(runtime_target).canonical_runtime_target
+        )
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    if normalized_connector in {"file", "shell", "screenshot", "computer"}:
+        return "local_gateway"
+    if normalized_connector == "hardware" and hardware_runtime_target_resolver.action_requires_local_hardware(
+        payload.get("capability_id") or payload.get("action") or normalized_action
+    ):
+        return "local_gateway"
+    if normalized_connector == "browser":
+        return "cloud_browser"
+    return "cloud_provider"
 
 
 class DirectToolExecutionRustGateError(RuntimeError):
@@ -652,6 +685,7 @@ def build_direct_tool_trace_metadata(
     browser_action: Optional[Dict[str, Any]] = None
     browser_screenshot: Optional[Dict[str, Any]] = None
     result_summary = _compact_trace_text(result_text or payload.get("query") or payload.get("url"))
+    result_payload: Dict[str, Any] = {}
 
     if normalized_connector == "web" and normalized_action == "search":
         search_query = str(payload.get("query") or payload.get("input") or "").strip()
@@ -726,6 +760,12 @@ def build_direct_tool_trace_metadata(
         "browser_action": browser_action,
         "browser_screenshot": browser_screenshot,
         "result_summary": result_summary,
+        "execution_environment": _execution_environment_for_direct_tool(
+            normalized_connector,
+            normalized_action,
+            payload,
+            result_payload,
+        ),
     }
 
 

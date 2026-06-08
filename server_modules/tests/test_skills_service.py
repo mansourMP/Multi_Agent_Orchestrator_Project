@@ -977,6 +977,97 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(call_kwargs["request_id"], "chat-request-1")
         self.assertEqual(call_kwargs["runtime_access_mode"], "full_access")
 
+    def test_execute_single_direct_tool_call_forces_hardware_shell_to_gateway_when_live(self) -> None:
+        callbacks = self._execution_callbacks()
+        callbacks = direct_tool_execution_service.DirectToolExecutionCallbacks(
+            **{
+                **callbacks.__dict__,
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+        execute_hardware_mock = AsyncMock(
+            return_value={
+                "status": "completed",
+                "runtime_session": {
+                    "state": "completed",
+                    "canonical_runtime_target": "user_device_gateway",
+                    "gateway_id": "gw-1",
+                },
+            }
+        )
+        with (
+            patch(
+                "server_modules.skills_service._resolve_direct_tool_gateway_id",
+                return_value="gw-1",
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.execute_hardware_action",
+                execute_hardware_mock,
+            ),
+        ):
+            raw = skills_service.execute_single_direct_tool_call(
+                tool_call={
+                    "name": "hardware__action",
+                    "arguments": {
+                        "action": "shell.execute",
+                        "arguments": {"command": "pwd"},
+                    },
+                },
+                workspace_id="default",
+                thread_id="thread-1",
+                index=1,
+                session_ctx={
+                    "tenant_id": "tenant-1",
+                    "request_id": "chat-request-shell",
+                    "client_request_id": "chat-request-shell",
+                },
+                callbacks=callbacks,
+            )
+
+        payload = json.loads(raw)
+        self.assertEqual(payload["runtime_target"], "user_device_gateway")
+        execute_hardware_mock.assert_awaited_once()
+        call_kwargs = execute_hardware_mock.await_args.kwargs
+        self.assertEqual(call_kwargs["runtime_target"], "user_device_gateway")
+        self.assertEqual(call_kwargs["action_id"], "shell.execute")
+        self.assertEqual(call_kwargs["gateway_id"], "gw-1")
+
+    def test_execute_single_direct_tool_call_hardware_shell_offline_fails_closed(self) -> None:
+        callbacks = self._execution_callbacks()
+        execute_hardware_mock = AsyncMock(return_value={})
+        with (
+            patch(
+                "server_modules.skills_service._resolve_direct_tool_gateway_id",
+                return_value=None,
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.execute_hardware_action",
+                execute_hardware_mock,
+            ),
+        ):
+            raw = skills_service.execute_single_direct_tool_call(
+                tool_call={
+                    "name": "hardware__action",
+                    "arguments": {
+                        "action": "shell.execute",
+                        "arguments": {"command": "pwd"},
+                    },
+                },
+                workspace_id="default",
+                thread_id="thread-1",
+                index=1,
+                session_ctx={"request_id": "chat-request-shell"},
+                callbacks=callbacks,
+            )
+
+        payload = json.loads(raw)
+        self.assertEqual(payload["status"], "offline")
+        self.assertEqual(payload["reason"], "agent_computer_offline")
+        self.assertEqual(payload["runtime_target"], "user_device_gateway")
+        self.assertEqual(payload["execution_environment"], "local_gateway")
+        self.assertIn("Agent Computer offline", payload["summary"])
+        execute_hardware_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -39,6 +39,27 @@ def _pack_id_from_context(run: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _execution_environment_from_metadata(metadata: Dict[str, Any]) -> Optional[str]:
+    value = str(metadata.get("execution_environment") or "").strip()
+    if value:
+        return value
+    target = str(
+        metadata.get("execution_target_selected")
+        or metadata.get("runtime_target")
+        or metadata.get("canonical_runtime_target")
+        or ""
+    ).strip()
+    if not target:
+        return None
+    try:
+        from server_modules import hardware_runtime_target_resolver
+
+        resolved = hardware_runtime_target_resolver.resolve_runtime_target(target)
+        return resolved.execution_environment
+    except Exception:
+        return None
+
+
 def _build_replay_request_from_context(context: Dict[str, Any]) -> Dict[str, Any]:
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     replay_metadata = dict(metadata)
@@ -403,6 +424,7 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "trust_mode": metadata.get("trust_mode"),
         "execution_target_requested": metadata.get("execution_target_requested"),
         "execution_target_selected": metadata.get("execution_target_selected"),
+        "execution_environment": _execution_environment_from_metadata(metadata),
         "execution_target_reason": metadata.get("execution_target_reason"),
         "execution_target_fallback": metadata.get("execution_target_fallback"),
         "execution_target_required_capabilities": metadata.get("execution_target_required_capabilities"),

@@ -32,6 +32,25 @@ class HardwareRuntimeTargetResolverTests(unittest.TestCase):
             },
         )
 
+    def test_local_hardware_action_uses_gateway_or_offline_error_when_target_missing(self) -> None:
+        live = resolver.resolve_runtime_target(
+            None,
+            action_type="shell.execute",
+            selected_gateway_live=True,
+        )
+        self.assertEqual(live.canonical_runtime_target, "user_device_gateway")
+        self.assertEqual(live.execution_environment, "local_gateway")
+        self.assertEqual(live.error, "")
+
+        offline = resolver.resolve_runtime_target(
+            None,
+            action_type="filesystem.read_write",
+            selected_gateway_live=False,
+        )
+        self.assertEqual(offline.canonical_runtime_target, "cloud_default")
+        self.assertEqual(offline.execution_environment, "cloud_provider")
+        self.assertEqual(offline.error, resolver.AGENT_COMPUTER_OFFLINE_ERROR)
+
 
 if __name__ == "__main__":
     unittest.main()

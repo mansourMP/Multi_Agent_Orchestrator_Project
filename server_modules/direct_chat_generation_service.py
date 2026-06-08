@@ -14,6 +14,7 @@ from server_modules import empyralis_model_tier_routing_service
 from server_modules import healthguide_safety_service
 from server_modules import response_leak_guard_service
 from server_modules import secret_redaction_service
+from server_modules import workspace_context_memory_adapter
 from server_modules.direct_chat_context_service import is_public_generation_error_message
 from server_modules.direct_chat_intervention_service import build_intervention
 from server_modules.direct_tool_config_service import run_async_tool_call
@@ -99,6 +100,40 @@ _ASSISTANT_SHELL_PLAN_MARKERS = (
     "i'll grab",
     "i will grab",
 )
+
+_LOCAL_PRIVATE_TOOL_RESULT_PROVIDERS = {"ollama"}
+
+
+def _tool_result_context_is_local_private(provider: Any, credentials: Any) -> bool:
+    provider_token = str(provider or "").strip().lower().replace("-", "_")
+    if provider_token in _LOCAL_PRIVATE_TOOL_RESULT_PROVIDERS:
+        return True
+    if not isinstance(credentials, dict):
+        return False
+    if credentials.get("local_only") is True or credentials.get("machine_bound") is True:
+        return True
+    provider_scopes = credentials.get("provider_scopes")
+    if isinstance(provider_scopes, list) and "local_only" in {str(item or "").strip().lower() for item in provider_scopes}:
+        return True
+    identity_owner = str(credentials.get("identity_owner") or "").strip().lower()
+    if identity_owner in {"local_machine", "machine_owner"}:
+        return True
+    credential_plane = str(credentials.get("credential_plane") or "").strip().lower()
+    return credential_plane in {"local_machine", "machine_local", "local_private"}
+
+
+def sanitize_tool_result_for_context(
+    tool_result: Any,
+    *,
+    provider: Any = None,
+    credentials: Any = None,
+) -> str:
+    result_text = str(tool_result or "")
+    if not result_text:
+        return ""
+    if _tool_result_context_is_local_private(provider, credentials):
+        return result_text
+    return workspace_context_memory_adapter.strip_red_facts_from_external_context(result_text)
 
 
 def _has_shell_exec_tool(tools: List[Dict[str, Any]]) -> bool:
@@ -907,6 +942,7 @@ def stream_provider_backed_direct_chat(
                                     "tool_name": tool_name,
                                     "capability_id": tool_trace_metadata.get("capability_id"),
                                     "connector_id": connector_id or None,
+                                    "execution_environment": tool_trace_metadata.get("execution_environment"),
                                     "args_preview": secret_redaction_service.sanitize_mapping(argument_payload),
                                 },
                                 persisted=True,
@@ -975,11 +1011,16 @@ def stream_provider_backed_direct_chat(
                                 session_ctx=session_ctx,
                             )
                             executed_any_tools = True
+                            tool_result_for_context = sanitize_tool_result_for_context(
+                                tool_result,
+                                provider=effective_iteration_provider or actual_provider or context.get("provider"),
+                                credentials=direct_chat_credentials,
+                            )
                             completed_trace_metadata = direct_tool_execution_service.build_direct_tool_trace_metadata(
                                 connector_id,
                                 action_id,
                                 argument_payload,
-                                result_text=tool_result,
+                                result_text=tool_result_for_context,
                             )
                             if isinstance(completed_trace_metadata.get("search_results"), list) and completed_trace_metadata.get("search_results"):
                                 trace_search_results = _emit_trace_event(
@@ -1012,7 +1053,8 @@ def stream_provider_backed_direct_chat(
                                 event_type="tool.result",
                                 data={
                                     "status": "ok",
-                                    "summary": str(completed_trace_metadata.get("result_summary") or tool_result or "").strip(),
+                                    "summary": str(completed_trace_metadata.get("result_summary") or tool_result_for_context or "").strip(),
+                                    "execution_environment": completed_trace_metadata.get("execution_environment"),
                                     "artifact_ids": (
                                         [str((completed_trace_metadata.get("browser_screenshot") or {}).get("artifact_id") or "").strip()]
                                         if isinstance(completed_trace_metadata.get("browser_screenshot"), dict)
@@ -1051,7 +1093,7 @@ def stream_provider_backed_direct_chat(
                                         "role": "user",
                                         "content": services.direct_tool_followup_message(
                                             str(tool_call.get("name") or f"{connector_id}__{action_id}"),
-                                            tool_result,
+                                            tool_result_for_context,
                                         ),
                                     }
                                 )
@@ -1061,7 +1103,7 @@ def stream_provider_backed_direct_chat(
                                         "role": "tool",
                                         "tool_call_id": tool_call_id,
                                         "name": str(tool_call.get("name") or f"{connector_id}__{action_id}"),
-                                        "content": tool_result,
+                                        "content": tool_result_for_context,
                                     }
                                 )
                         if effective_iteration_provider == "codex_cli":

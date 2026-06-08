@@ -1908,6 +1908,34 @@ def _direct_tool_targets_agent_computer(runtime_target: Any, metadata: Dict[str,
         return False
 
 
+def _hardware_action_requires_local_gateway(action_id: Any, capability_id: Any = None) -> bool:
+    from server_modules import hardware_runtime_target_resolver
+
+    return hardware_runtime_target_resolver.action_requires_local_hardware(capability_id or action_id)
+
+
+def _hardware_action_offline_result(action_id: Any, gateway_id: Any = None) -> str:
+    from server_modules import hardware_runtime_target_resolver
+
+    return json.dumps(
+        {
+            "status": "offline",
+            "reason": "agent_computer_offline",
+            "summary": hardware_runtime_target_resolver.AGENT_COMPUTER_OFFLINE_ERROR,
+            "runtime_target": "user_device_gateway",
+            "execution_environment": "local_gateway",
+            "runtime_session": {
+                "state": "offline",
+                "canonical_runtime_target": "user_device_gateway",
+                "runtime_target": "user_device_gateway",
+                "gateway_id": str(gateway_id or "").strip() or None,
+            },
+            "action_id": str(action_id or "").strip() or None,
+        },
+        ensure_ascii=False,
+    )
+
+
 def _runtime_access_mode_from_direct_tool_context(
     *,
     explicit_mode: Any = None,
@@ -2323,8 +2351,15 @@ def _execute_hardware_action_tool_call(
         session_ctx=session_ctx,
     )
     normalized_action_id = action_id.strip().lower()
+    local_gateway_required = _hardware_action_requires_local_gateway(
+        action_id,
+        payload.get("capability_id"),
+    )
+    if local_gateway_required and not gateway_id:
+        return _hardware_action_offline_result(action_id)
     if gateway_id and (
-        normalized_action_id in {
+        local_gateway_required
+        or normalized_action_id in {
             "screenshot",
             "screenshot.capture",
             "screen.capture",

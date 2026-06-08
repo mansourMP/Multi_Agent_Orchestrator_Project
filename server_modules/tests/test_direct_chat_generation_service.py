@@ -939,6 +939,93 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "final")
         self.assertEqual(events[-1]["payload"]["reply"], "Here you go")
 
+    def test_stream_provider_backed_direct_chat_sanitizes_tool_result_before_cloud_followup_prompt(self) -> None:
+        captured_messages: list[list[dict[str, object]]] = []
+        stream_rounds = iter(
+            [
+                [
+                    {
+                        "type": "result",
+                        "reply": "",
+                        "usage_masked": {"provider": "openai"},
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "openai",
+                        "error": "",
+                        "tool_calls": [
+                            {
+                                "id": "tool-call-red",
+                                "name": "file__read",
+                                "arguments": {"path": "/Users/mansur/private.txt"},
+                            }
+                        ],
+                    }
+                ],
+                [
+                    {
+                        "type": "result",
+                        "reply": "Done",
+                        "usage_masked": {"provider": "openai"},
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "openai",
+                        "error": "",
+                        "tool_calls": [],
+                    }
+                ],
+            ]
+        )
+
+        def _stream_events(**kwargs):
+            captured_messages.append(list(kwargs.get("prior_messages") or []))
+            return iter(next(stream_rounds))
+
+        services = self._services(stream_events=[])
+        services.generate_chat_reply_stream_with_provider_fallback = _stream_events
+        services.execute_single_direct_tool_call = lambda **_kwargs: (
+            "Visible line\n"
+            "[red] API_TOKEN=super-secret-token\n"
+            "Another safe line"
+        )
+
+        events = list(
+            direct_chat_generation_service.stream_provider_backed_direct_chat(
+                services=services,
+                context={"provider": "openai"},
+                metadata={"provider": "openai", "model": "gpt-5.4"},
+                system_prompt="System prompt",
+                normalized_workspace_id="default",
+                normalized_requested_provider="openai",
+                normalized_requested_model="gpt-5.4",
+                normalized_reasoning_effort="medium",
+                normalized_thread_id="thread-1",
+                normalized_message="Read the file.",
+                compacted_prior_messages=[],
+                prior_messages_used=False,
+                history_mode="none",
+                connected_systems=[],
+                tool_capabilities=[],
+                availability_payload={"ai_ready": True},
+                tools=[{"name": "file__read"}],
+                direct_chat_credentials={},
+                proactive_suggestions=[],
+                tool_loop_session_key="session-red",
+                fallback_reason=None,
+                session_ctx=None,
+                trace_context=None,
+                resolved_chat_max_iterations=3,
+                direct_tool_result_summary_system_message="Summarize tool results.",
+            )
+        )
+
+        self.assertEqual(events[-1]["payload"]["reply"], "Done")
+        self.assertEqual(len(captured_messages), 2)
+        followup_prompt = str(captured_messages[1])
+        self.assertIn("Visible line", followup_prompt)
+        self.assertIn("Another safe line", followup_prompt)
+        self.assertNotIn("super-secret-token", followup_prompt)
+        self.assertNotIn("API_TOKEN", followup_prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

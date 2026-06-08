@@ -143,6 +143,50 @@ test.describe('Agent Computer policy settings', () => {
     await mockAgentComputerSettings(page);
     let provisionBody = null;
 
+    await page.route('**/api/hardware/vps/oauth/digitalocean/start?**', async (route) => {
+      await route.fulfill({
+        json: {
+          provider: 'digitalocean',
+          oauth_redirect: 'https://oauth.example.test/digitalocean',
+          redirect_uri: 'https://empyralis.ai/api/hardware/vps/oauth/digitalocean/callback',
+          state: 'state_1',
+        },
+      });
+    });
+    await page.route('https://oauth.example.test/digitalocean', async (route) => {
+      await route.fulfill({ html: '<html><body>DigitalOcean OAuth</body></html>' });
+    });
+    await page.route('**/api/hardware/vps/plans?provider=digitalocean&**', async (route) => {
+      await route.fulfill({
+        json: {
+          provider: 'digitalocean',
+          plans: [
+            {
+              id: 's-1vcpu-2gb',
+              slug: 's-1vcpu-2gb',
+              label: '1 CPU · 2GB · 50GB SSD',
+              vcpus: 1,
+              memory_mb: 2048,
+              disk_gb: 50,
+              price_monthly: 12,
+              price_label: '$12/mo',
+              recommended: false,
+            },
+            {
+              id: 's-2vcpu-4gb',
+              slug: 's-2vcpu-4gb',
+              label: '2 CPU · 4GB · 80GB SSD',
+              vcpus: 2,
+              memory_mb: 4096,
+              disk_gb: 80,
+              price_monthly: 24,
+              price_label: '$24/mo',
+              recommended: true,
+            },
+          ],
+        },
+      });
+    });
     await page.route('**/api/hardware/vps/regions?provider=digitalocean', async (route) => {
       await route.fulfill({
         json: {
@@ -188,9 +232,23 @@ test.describe('Agent Computer policy settings', () => {
     await page.getByRole('button', { name: /^Connect$/ }).first().click();
     await page.getByRole('button', { name: /^Choose provider$/ }).click();
     await page.getByRole('button', { name: /DigitalOcean/ }).click();
-    await expect(page.getByLabel('DigitalOcean PAT')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Log in with DigitalOcean$/ })).toBeVisible();
 
-    await page.getByLabel('DigitalOcean PAT').fill('do_test_token');
+    const popupPromise = page.waitForEvent('popup');
+    await page.getByRole('button', { name: /^Log in with DigitalOcean$/ }).click();
+    await popupPromise;
+    await page.evaluate(() => {
+      window.postMessage(
+        {
+          type: 'empyralis:vps-oauth',
+          provider: 'digitalocean',
+          token_id: 'vps_token_do_1',
+        },
+        '*',
+      );
+    });
+    await expect(page.getByRole('button', { name: /2 CPU · 4GB · 80GB SSD/ })).toBeVisible();
+    await page.getByRole('button', { name: /2 CPU · 4GB · 80GB SSD/ }).click();
     await page.getByRole('button', { name: /^Next$/ }).click();
     await expect(page.getByLabel('Region')).toHaveValue('nyc3');
     await page.getByLabel('Region').selectOption('sfo3');
@@ -198,6 +256,7 @@ test.describe('Agent Computer policy settings', () => {
 
     await expect(page.getByText('DigitalOcean')).toBeVisible();
     await expect(page.getByText('San Francisco 3 · sfo3')).toBeVisible();
+    await expect(page.getByText('2 CPU · 4GB · 80GB SSD')).toBeVisible();
     await expect(page.getByText('Sage will have Full Access on this dedicated Agent Computer.')).toBeVisible();
     await page.getByRole('button', { name: /^Create Agent Computer$/ }).click();
 
@@ -205,9 +264,9 @@ test.describe('Agent Computer policy settings', () => {
     expect(provisionBody).toMatchObject({
       workspace_id: 'ws-1',
       provider: 'digitalocean',
-      credentials: { api_token: 'do_test_token' },
+      token_id: 'vps_token_do_1',
       region: 'sfo3',
-      size: 's-1vcpu-2gb',
+      size: 's-2vcpu-4gb',
       runtime_access_mode: 'full_access',
       autonomous_agent_setup_warning_acknowledged: true,
       metadata: {

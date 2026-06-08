@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette import status
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -689,11 +689,18 @@ class HardwareVPSProvisionRequest(BaseModel):
     workspace_id: Optional[str] = None
     provider: str = Field(min_length=1, max_length=64)
     credentials: Dict[str, Any] = Field(default_factory=dict)
+    token_id: Optional[str] = Field(default=None, max_length=192)
     region: Optional[str] = Field(default=None, max_length=64)
     size: Optional[str] = Field(default=None, max_length=128)
     runtime_access_mode: Optional[str] = None
     autonomous_agent_setup_warning_acknowledged: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class HardwareVPSTokenRequest(BaseModel):
+    workspace_id: Optional[str] = None
+    provider: str = Field(min_length=1, max_length=64)
+    credentials: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _gateway_api_url_for_remote_setup() -> str:
@@ -752,6 +759,37 @@ def _remote_agent_computer_setup_command(
             "scripts/agent_computer.sh start",
         ]
     )
+
+
+def _vps_oauth_popup_html(
+    *,
+    result: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> str:
+    payload: Dict[str, Any] = {
+        "type": "empyralis:vps-oauth",
+        "provider": "digitalocean",
+    }
+    if error:
+        payload["error"] = str(error)
+    else:
+        payload.update(result or {})
+    serialized = json.dumps(payload, separators=(",", ":"))
+    return f"""<!doctype html>
+<html>
+  <head><meta charset="utf-8"><title>DigitalOcean connected</title></head>
+  <body>
+    <script>
+      const payload = {serialized};
+      if (window.opener) {{
+        window.opener.postMessage(payload, '*');
+        window.close();
+      }} else {{
+        document.body.textContent = payload.error || 'DigitalOcean connected. You can close this window.';
+      }}
+    </script>
+  </body>
+</html>"""
 
 
 def _run_remote_agent_computer_setup_via_ssh(
@@ -1577,6 +1615,103 @@ async def create_gateway_ssh_pairing(
     }
 
 
+@router.get("/hardware/vps/oauth/digitalocean/start")
+async def start_digitalocean_vps_oauth(
+    workspace_id: Optional[str] = None,
+    current_user=Depends(require_api_key),
+):
+    workspace = enforce_workspace_access(
+        current_user,
+        workspace_id or "default",
+        minimum_role="owner",
+    )
+    tenant_id = workspace_tenant_id(current_user, workspace)
+    user_id = str((current_user or {}).get("user_id") or "").strip() or "unknown-user"
+    try:
+        return vps_provisioning_service.create_digitalocean_oauth_start(
+            workspace_id=workspace,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+    except vps_provisioning_service.VPSProvisioningError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/hardware/vps/oauth/digitalocean/callback", response_class=HTMLResponse)
+async def complete_digitalocean_vps_oauth(
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+):
+    if error:
+        message = str(error_description or error or "DigitalOcean authorization was cancelled.")
+        return HTMLResponse(_vps_oauth_popup_html(error=message), status_code=400)
+    try:
+        result = vps_provisioning_service.complete_digitalocean_oauth_callback(
+            code=str(code or ""),
+            state=str(state or ""),
+        )
+    except vps_provisioning_service.VPSProvisioningError as exc:
+        return HTMLResponse(_vps_oauth_popup_html(error=str(exc)), status_code=400)
+    return HTMLResponse(_vps_oauth_popup_html(result=result))
+
+
+@router.post("/hardware/vps/tokens")
+async def create_hardware_vps_token(
+    body: HardwareVPSTokenRequest,
+    current_user=Depends(require_api_key),
+):
+    workspace_id = enforce_workspace_access(
+        current_user,
+        body.workspace_id or "default",
+        minimum_role="owner",
+    )
+    tenant_id = workspace_tenant_id(current_user, workspace_id)
+    user_id = str((current_user or {}).get("user_id") or "").strip() or "unknown-user"
+    try:
+        token_id = vps_provisioning_service.store_vps_provider_token(
+            provider=body.provider,
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            credentials=body.credentials,
+            source="api_token",
+        )
+        provider_id = vps_provisioning_service.resolve_provider_options(body.provider, None, None)["provider"]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"provider": provider_id, "token_id": token_id}
+
+
+@router.get("/hardware/vps/plans")
+async def get_hardware_vps_plans(
+    provider: str = Query(..., min_length=1),
+    token_id: str = Query(..., min_length=1),
+    workspace_id: Optional[str] = None,
+    current_user=Depends(require_api_key),
+):
+    workspace = enforce_workspace_access(
+        current_user,
+        workspace_id or "default",
+        minimum_role="owner",
+    )
+    user_id = str((current_user or {}).get("user_id") or "").strip() or None
+    try:
+        return vps_provisioning_service.fetch_provider_plans(
+            provider,
+            token_id=token_id,
+            workspace_id=workspace,
+            user_id=user_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="VPS provider credential was not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except vps_provisioning_service.VPSProvisioningError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.post("/hardware/vps/provision")
 async def provision_hardware_vps(
     body: HardwareVPSProvisionRequest,
@@ -1627,9 +1762,19 @@ async def provision_hardware_vps(
     if not pairing_token:
         raise HTTPException(status_code=500, detail="Gateway pairing token was not created.")
     try:
+        credentials = (
+            vps_provisioning_service.load_vps_provider_credentials(
+                str(body.token_id or ""),
+                provider=resolved["provider"],
+                workspace_id=workspace_id,
+                user_id=user_id,
+            )
+            if str(body.token_id or "").strip()
+            else body.credentials
+        )
         result = vps_provisioning_service.provision_vps(
             resolved["provider"],
-            body.credentials,
+            credentials,
             resolved["region"],
             resolved["size"],
             pairing_token,
@@ -1646,9 +1791,11 @@ async def provision_hardware_vps(
             size=result.size,
             status=result.status,
             pairing_token=pairing_token,
-            credentials=body.credentials,
+            credentials=credentials,
             pairing_id=str(pairing.get("pairing_id") or "").strip() or None,
         )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="VPS provider credential was not found.") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except vps_provisioning_service.VPSProvisioningError as exc:

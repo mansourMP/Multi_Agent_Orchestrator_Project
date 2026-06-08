@@ -26582,7 +26582,7 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
 
 .workstation-hardware-vps-steps {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -26774,6 +26774,68 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   text-underline-offset: 3px;
 }
 
+.workstation-hardware-vps-plan-grid {
+  display: grid;
+  gap: var(--space-2, 8px);
+}
+
+.workstation-hardware-vps-plan-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3, 12px);
+  min-height: 62px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: var(--app-radius-md);
+  padding: 12px;
+  color: var(--app-text-primary);
+  background: var(--app-bg-panel);
+  cursor: pointer;
+  text-align: left;
+}
+
+.workstation-hardware-vps-plan-card:hover,
+.workstation-hardware-vps-plan-card.is-selected {
+  border-color: color-mix(in srgb, var(--app-accent) 72%, #ffffff 28%);
+  background: color-mix(in srgb, var(--app-accent) 8%, var(--app-bg-panel) 92%);
+}
+
+.workstation-hardware-vps-plan-card span {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.workstation-hardware-vps-plan-card strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text-primary);
+  font-size: var(--app-font-13);
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workstation-hardware-vps-plan-card em {
+  flex: 0 0 auto;
+  border-radius: var(--radius-full);
+  padding: 3px 7px;
+  color: color-mix(in srgb, var(--app-success) 82%, var(--app-text-primary) 18%);
+  background: color-mix(in srgb, var(--app-success) 14%, transparent);
+  font-size: var(--app-font-10);
+  font-style: normal;
+  font-weight: var(--app-weight-semibold);
+}
+
+.workstation-hardware-vps-plan-card small {
+  flex: 0 0 auto;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+}
+
 .workstation-hardware-vps-actions {
   display: flex;
   justify-content: flex-end;
@@ -26880,6 +26942,7 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   .workstation-hardware-vps-steps,
   .workstation-hardware-vps-provider-grid,
   .workstation-hardware-vps-advanced-row,
+  .workstation-hardware-vps-plan-grid,
   .workstation-hardware-vps-summary {
     grid-template-columns: 1fr;
   }

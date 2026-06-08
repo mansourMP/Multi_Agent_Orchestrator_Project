@@ -16,7 +16,7 @@ type HardwareTab = 'this_device' | 'other_computers' | 'ssh_server';
 type ConnectOptionId = 'this_device' | 'other_computer' | 'ssh_server' | 'cloud_vps';
 type ConnectModalContext = ConnectOptionId | 'all';
 type VpsProviderId = 'digitalocean' | 'hetzner' | 'vultr';
-type VpsStep = 'provider' | 'credentials' | 'region' | 'confirm' | 'progress';
+type VpsStep = 'provider' | 'credentials' | 'plans' | 'region' | 'confirm' | 'progress';
 type VpsProgressStage = 'idle' | 'creating' | 'installing' | 'connecting' | 'connected' | 'failed';
 
 type HardwareAttachment = {
@@ -129,6 +129,35 @@ type VpsProviderRegionsPayload = {
   regions?: VpsRegion[];
 };
 
+type VpsPlan = {
+  id: string;
+  slug: string;
+  label: string;
+  vcpus: number;
+  memory_mb: number;
+  disk_gb: number;
+  price_monthly: number;
+  price_label: string;
+  recommended?: boolean;
+};
+
+type VpsProviderPlansPayload = {
+  provider?: string;
+  plans?: VpsPlan[];
+};
+
+type VpsTokenResponse = {
+  provider?: string;
+  token_id?: string;
+};
+
+type VpsOAuthStartResponse = {
+  provider?: string;
+  oauth_redirect?: string;
+  redirect_uri?: string;
+  state?: string;
+};
+
 type VpsProvisionResponse = {
   pairing_token?: string;
   vps_id?: string;
@@ -153,7 +182,6 @@ type VpsProviderCard = {
   price: string;
   specs: string;
   tagline: string;
-  size: string;
   regionFallback: string;
   tokenLabel: string;
   tokenUrl: string;
@@ -205,25 +233,23 @@ const VPS_PROVIDER_CARDS: Record<VpsProviderId, VpsProviderCard> = {
     id: 'digitalocean',
     label: 'DigitalOcean',
     price: '$12/mo',
-    specs: '1 CPU · 2GB RAM',
+    specs: 'Live plans after login',
     tagline: 'Simplest setup',
-    size: 's-1vcpu-2gb',
     regionFallback: 'nyc3',
-    tokenLabel: 'DigitalOcean PAT',
-    tokenUrl: 'https://cloud.digitalocean.com/account/api/tokens',
+    tokenLabel: 'DigitalOcean',
+    tokenUrl: 'https://cloud.digitalocean.com/account/api/oauth_apps',
     logoText: 'DO',
     logoSrc: '/brand-assets/infrastructure/digitalocean.svg',
-    features: ['Simple API token', 'Ubuntu 24.04', 'Fast provisioning'],
+    features: ['OAuth login', 'Ubuntu 24.04', 'Fast provisioning'],
   },
   hetzner: {
     id: 'hetzner',
     label: 'Hetzner',
     price: '€4/mo',
-    specs: '2 CPU · 4GB RAM',
+    specs: 'Live plans after token',
     tagline: 'Best value · EU',
-    size: 'cx22',
     regionFallback: 'nbg1',
-    tokenLabel: 'Hetzner Cloud API token',
+    tokenLabel: 'API Token',
     tokenUrl: 'https://console.hetzner.cloud/projects',
     logoText: 'HC',
     logoSrc: '/brand-assets/infrastructure/hetzner.svg',
@@ -233,11 +259,10 @@ const VPS_PROVIDER_CARDS: Record<VpsProviderId, VpsProviderCard> = {
     id: 'vultr',
     label: 'Vultr',
     price: '$12/mo',
-    specs: '1 CPU · 2GB RAM',
+    specs: 'Live plans after token',
     tagline: 'Global regions',
-    size: 'vc2-1c-2gb',
     regionFallback: 'ewr',
-    tokenLabel: 'Vultr API key',
+    tokenLabel: 'API Token',
     tokenUrl: 'https://my.vultr.com/settings/#settingsapi',
     logoText: 'VT',
     logoSrc: '/brand-assets/infrastructure/vultr.svg',
@@ -641,6 +666,25 @@ function normalizeVpsRegionsPayload(payload: VpsProviderRegionsPayload | null): 
     .filter((region) => region.id && region.label);
 }
 
+function normalizeVpsPlansPayload(payload: VpsProviderPlansPayload | null): VpsPlan[] {
+  if (!payload || !Array.isArray(payload.plans)) {
+    return [];
+  }
+  return payload.plans
+    .map((plan) => ({
+      id: String(plan?.id || '').trim(),
+      slug: String(plan?.slug || plan?.id || '').trim(),
+      label: String(plan?.label || '').trim(),
+      vcpus: Number(plan?.vcpus || 0),
+      memory_mb: Number(plan?.memory_mb || 0),
+      disk_gb: Number(plan?.disk_gb || 0),
+      price_monthly: Number(plan?.price_monthly || 0),
+      price_label: String(plan?.price_label || '').trim(),
+      recommended: Boolean(plan?.recommended),
+    }))
+    .filter((plan) => plan.id && plan.slug && plan.label && plan.vcpus >= 1 && plan.memory_mb >= 1024);
+}
+
 function preferredVpsRegion(providerId: VpsProviderId, regions: VpsRegion[], fallback: string): string {
   if (!regions.length) {
     return fallback;
@@ -975,7 +1019,11 @@ export function WorkstationHardwarePane() {
   const [vpsRegions, setVpsRegions] = useState<VpsRegion[]>([]);
   const [vpsSelectedRegion, setVpsSelectedRegion] = useState('');
   const [vpsToken, setVpsToken] = useState('');
+  const [vpsTokenId, setVpsTokenId] = useState('');
+  const [vpsPlans, setVpsPlans] = useState<VpsPlan[]>([]);
+  const [vpsSelectedPlanId, setVpsSelectedPlanId] = useState('');
   const [vpsLoadingRegions, setVpsLoadingRegions] = useState(false);
+  const [vpsLoadingPlans, setVpsLoadingPlans] = useState(false);
   const [vpsBusy, setVpsBusy] = useState(false);
   const [vpsError, setVpsError] = useState<string | null>(null);
   const [vpsProvisionId, setVpsProvisionId] = useState<string | null>(null);
@@ -989,6 +1037,33 @@ export function WorkstationHardwarePane() {
   useEffect(() => {
     setActiveTab(requestedHardwareTab);
   }, [requestedHardwareTab]);
+
+  useEffect(() => {
+    function handleVpsOAuthMessage(event: MessageEvent) {
+      const payload = readRecord(event.data);
+      if (readString(payload, 'type') !== 'empyralis:vps-oauth') {
+        return;
+      }
+      if (readString(payload, 'provider') !== 'digitalocean') {
+        return;
+      }
+      const callbackError = readString(payload, 'error');
+      if (callbackError) {
+        setVpsError(callbackError);
+        return;
+      }
+      const tokenId = readString(payload, 'token_id');
+      if (!tokenId) {
+        setVpsError('DigitalOcean did not return a stored credential.');
+        return;
+      }
+      setVpsTokenId(tokenId);
+      setVpsError(null);
+      void loadVpsPlans('digitalocean', tokenId);
+    }
+    window.addEventListener('message', handleVpsOAuthMessage);
+    return () => window.removeEventListener('message', handleVpsOAuthMessage);
+  }, []);
 
   async function refreshHardwareAttachments(): Promise<void> {
     try {
@@ -1423,7 +1498,11 @@ export function WorkstationHardwarePane() {
     setVpsRegions([]);
     setVpsSelectedRegion('');
     setVpsToken('');
+    setVpsTokenId('');
+    setVpsPlans([]);
+    setVpsSelectedPlanId('');
     setVpsLoadingRegions(false);
+    setVpsLoadingPlans(false);
     setVpsBusy(false);
     setVpsError(null);
     setVpsProvisionId(null);
@@ -1463,6 +1542,9 @@ export function WorkstationHardwarePane() {
     setSelectedConnectOption('cloud_vps');
     setVpsSelectedProvider(providerId);
     setVpsToken('');
+    setVpsTokenId('');
+    setVpsPlans([]);
+    setVpsSelectedPlanId('');
     setVpsProvisionId(null);
     setVpsProviderResourceId(null);
     setVpsProgressStage('idle');
@@ -1470,9 +1552,63 @@ export function WorkstationHardwarePane() {
     void loadVpsRegions(providerId);
   }
 
+  async function loadVpsPlans(providerId: VpsProviderId, tokenId: string): Promise<VpsPlan[]> {
+    setVpsLoadingPlans(true);
+    setVpsError(null);
+    try {
+      const payload = await services.client.requestJson<VpsProviderPlansPayload>({
+        path: `/api/hardware/vps/plans?provider=${encodeURIComponent(providerId)}&token_id=${encodeURIComponent(tokenId)}&workspace_id=${encodeURIComponent(workspaceId)}`,
+      });
+      const plans = normalizeVpsPlansPayload(payload);
+      if (!plans.length) {
+        throw new Error('Plans are unavailable for this provider.');
+      }
+      const recommended = plans.find((plan) => plan.recommended) ?? plans[0];
+      setVpsPlans(plans);
+      setVpsSelectedPlanId(recommended?.id ?? plans[0]?.id ?? '');
+      setVpsStep('plans');
+      return plans;
+    } catch (plansError) {
+      setVpsError(plansError instanceof Error ? plansError.message : 'Could not load VPS plans.');
+      setVpsPlans([]);
+      setVpsSelectedPlanId('');
+      return [];
+    } finally {
+      setVpsLoadingPlans(false);
+    }
+  }
+
+  async function startDigitalOceanOAuth() {
+    setVpsError(null);
+    setVpsBusy(true);
+    try {
+      const payload = await services.client.requestJson<VpsOAuthStartResponse>({
+        path: `/api/hardware/vps/oauth/digitalocean/start?workspace_id=${encodeURIComponent(workspaceId)}`,
+      });
+      const redirect = String(payload?.oauth_redirect || '').trim();
+      if (!redirect) {
+        throw new Error('DigitalOcean OAuth URL was not returned.');
+      }
+      const popup = window.open(redirect, 'empyralis-digitalocean-oauth', 'width=720,height=780');
+      if (!popup) {
+        window.location.assign(redirect);
+      } else {
+        popup.focus();
+      }
+    } catch (oauthError) {
+      setVpsError(oauthError instanceof Error ? oauthError.message : 'Could not start DigitalOcean login.');
+    } finally {
+      setVpsBusy(false);
+    }
+  }
+
   async function continueVpsCredentials() {
     if (!vpsSelectedProvider) {
       setVpsError('Choose a cloud provider first.');
+      return;
+    }
+    if (vpsSelectedProvider === 'digitalocean') {
+      await startDigitalOceanOAuth();
       return;
     }
     if (!vpsToken.trim()) {
@@ -1480,11 +1616,44 @@ export function WorkstationHardwarePane() {
       return;
     }
     setVpsError(null);
-    if (!vpsRegions.length) {
-      const regions = await loadVpsRegions(vpsSelectedProvider);
-      if (!regions.length) {
-        return;
+    setVpsBusy(true);
+    try {
+      const payload = await services.client.requestJson<VpsTokenResponse>({
+        path: '/api/hardware/vps/tokens',
+        init: {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            provider: vpsSelectedProvider,
+            credentials: vpsCredentialPayload(vpsSelectedProvider, vpsToken),
+          }),
+        },
+      });
+      const tokenId = String(payload?.token_id || '').trim();
+      if (!tokenId) {
+        throw new Error('Stored provider credential id was not returned.');
       }
+      setVpsTokenId(tokenId);
+      await loadVpsPlans(vpsSelectedProvider, tokenId);
+    } catch (tokenError) {
+      setVpsError(tokenError instanceof Error ? tokenError.message : 'Could not save provider credential.');
+    } finally {
+      setVpsBusy(false);
+    }
+  }
+
+  function continueVpsPlans() {
+    if (!vpsSelectedProvider) {
+      setVpsError('Choose a cloud provider first.');
+      return;
+    }
+    if (!vpsSelectedPlanId) {
+      setVpsError('Choose a plan to continue.');
+      return;
     }
     setVpsStep('region');
   }
@@ -1541,9 +1710,14 @@ export function WorkstationHardwarePane() {
       setVpsStep('provider');
       return;
     }
-    if (!vpsToken.trim()) {
-      setVpsError('Enter an API token to continue.');
+    if (!vpsTokenId) {
+      setVpsError('Connect the cloud provider first.');
       setVpsStep('credentials');
+      return;
+    }
+    if (!vpsSelectedPlanId) {
+      setVpsError('Choose a plan to continue.');
+      setVpsStep('plans');
       return;
     }
     if (!vpsSelectedRegion) {
@@ -1567,9 +1741,9 @@ export function WorkstationHardwarePane() {
           body: JSON.stringify({
             workspace_id: workspaceId,
             provider: vpsSelectedProvider,
-            credentials: vpsCredentialPayload(vpsSelectedProvider, vpsToken),
+            token_id: vpsTokenId,
             region: vpsSelectedRegion,
-            size: provider.size,
+            size: vpsSelectedPlanId,
             runtime_access_mode: 'full_access',
             autonomous_agent_setup_warning_acknowledged: true,
             metadata: {
@@ -1736,6 +1910,7 @@ export function WorkstationHardwarePane() {
   const showOtherComputerCard = connectContext === 'all' || connectContext === 'other_computer';
   const selectedVpsProviderCard = vpsProviderCard(vpsSelectedProvider);
   const selectedVpsRegion = vpsRegions.find((region) => region.id === vpsSelectedRegion) ?? null;
+  const selectedVpsPlan = vpsPlans.find((plan) => plan.id === vpsSelectedPlanId) ?? null;
 
   return (
     <section className="workstation-hardware-pane" aria-label="Hardware">
@@ -1994,8 +2169,8 @@ export function WorkstationHardwarePane() {
                 {selectedConnectOption === 'cloud_vps' ? (
                   <div className="workstation-hardware-vps-flow">
                     <div className="workstation-hardware-vps-steps" aria-label="Cloud VPS setup steps">
-                      {['Provider', 'Credentials', 'Region', 'Confirm'].map((label, index) => {
-                        const stepOrder: VpsStep[] = ['provider', 'credentials', 'region', 'confirm'];
+                      {['Provider', 'Access', 'Plan', 'Region', 'Confirm'].map((label, index) => {
+                        const stepOrder: VpsStep[] = ['provider', 'credentials', 'plans', 'region', 'confirm'];
                         const activeIndex = stepOrder.indexOf(vpsStep === 'progress' ? 'confirm' : vpsStep);
                         return (
                           <span
@@ -2069,31 +2244,70 @@ export function WorkstationHardwarePane() {
 
                     {vpsStep === 'credentials' && selectedVpsProviderCard ? (
                       <div className="workstation-hardware-vps-step-panel">
-                        <label className="app-form-field">
-                          <span className="app-form-field__label">{selectedVpsProviderCard.tokenLabel}</span>
-                          <input
-                            className="app-field"
-                            type="password"
-                            value={vpsToken}
-                            onChange={(event) => setVpsToken(event.target.value)}
-                            placeholder="Paste API token"
-                          />
-                        </label>
-                        <a
-                          className="workstation-hardware-vps-token-link"
-                          href={selectedVpsProviderCard.tokenUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <span>{`Get your ${selectedVpsProviderCard.label} API token`}</span>
-                          <ExternalLink size={13} strokeWidth={2} aria-hidden="true" />
-                        </a>
+                        {vpsSelectedProvider === 'digitalocean' ? (
+                          <AppButton tone="primary" type="button" onClick={() => void startDigitalOceanOAuth()} disabled={vpsBusy}>
+                            {vpsBusy ? 'Opening DigitalOcean' : 'Log in with DigitalOcean'}
+                          </AppButton>
+                        ) : (
+                          <>
+                            <label className="app-form-field">
+                              <span className="app-form-field__label">API Token</span>
+                              <input
+                                className="app-field"
+                                type="password"
+                                value={vpsToken}
+                                onChange={(event) => setVpsToken(event.target.value)}
+                                placeholder="Paste API token"
+                              />
+                            </label>
+                            <a
+                              className="workstation-hardware-vps-token-link"
+                              href={selectedVpsProviderCard.tokenUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <span>Create token</span>
+                              <ExternalLink size={13} strokeWidth={2} aria-hidden="true" />
+                            </a>
+                          </>
+                        )}
                         <div className="workstation-hardware-vps-actions">
                           <AppButton tone="secondary" type="button" onClick={() => setVpsStep('provider')}>
                             Back
                           </AppButton>
-                          <AppButton tone="primary" type="button" onClick={() => void continueVpsCredentials()}>
-                            Next
+                          {vpsSelectedProvider !== 'digitalocean' ? (
+                            <AppButton tone="primary" type="button" onClick={() => void continueVpsCredentials()} disabled={vpsBusy || vpsLoadingPlans}>
+                              {vpsBusy || vpsLoadingPlans ? 'Loading plans' : 'Next'}
+                            </AppButton>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {vpsStep === 'plans' && selectedVpsProviderCard ? (
+                      <div className="workstation-hardware-vps-step-panel">
+                        <div className="workstation-hardware-vps-plan-grid">
+                          {vpsPlans.map((plan) => (
+                            <button
+                              key={plan.id}
+                              type="button"
+                              className={joinClassNames('workstation-hardware-vps-plan-card', vpsSelectedPlanId === plan.id && 'is-selected')}
+                              onClick={() => setVpsSelectedPlanId(plan.id)}
+                            >
+                              <span>
+                                <strong>{plan.label}</strong>
+                                {plan.recommended ? <em>Recommended</em> : null}
+                              </span>
+                              <small>{plan.price_label}</small>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="workstation-hardware-vps-actions">
+                          <AppButton tone="secondary" type="button" onClick={() => setVpsStep('plans')}>
+                            Back
+                          </AppButton>
+                          <AppButton tone="primary" type="button" onClick={continueVpsPlans} disabled={!vpsSelectedPlanId || vpsLoadingPlans}>
+                            {vpsLoadingPlans ? 'Loading plans' : 'Next'}
                           </AppButton>
                         </div>
                       </div>
@@ -2139,12 +2353,12 @@ export function WorkstationHardwarePane() {
                             <strong>{selectedVpsRegion ? `${selectedVpsRegion.label} · ${selectedVpsRegion.id}` : vpsSelectedRegion}</strong>
                           </div>
                           <div>
-                            <span>Size</span>
-                            <strong>{selectedVpsProviderCard.specs}</strong>
+                            <span>Plan</span>
+                            <strong>{selectedVpsPlan?.label ?? vpsSelectedPlanId}</strong>
                           </div>
                           <div>
                             <span>Est. cost/mo</span>
-                            <strong>{selectedVpsProviderCard.price}</strong>
+                            <strong>{selectedVpsPlan?.price_label ?? 'Provider billed'}</strong>
                           </div>
                         </div>
                         <p className="workstation-hardware-vps-warning">

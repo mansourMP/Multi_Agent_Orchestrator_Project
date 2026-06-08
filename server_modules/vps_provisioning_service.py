@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 from urllib import error as urlerror
+from urllib import parse as urlparse
 from urllib import request as urlrequest
 
 from server_modules import gateway_state_repository, vault_store
@@ -20,6 +21,16 @@ AGENT_INSTALLER_URL_ENV = "EMPYRALIS_AGENT_INSTALLER_URL"
 LEGACY_AGENT_INSTALLER_URL_ENV = "EMPYRALIS_AGENT_COMPUTER_INSTALL_URL"
 DEFAULT_AGENT_INSTALLER_URL = (
     "https://empyralis.ai/install/agent-computer.sh"
+)
+DIGITALOCEAN_OAUTH_AUTHORIZE_URL = "https://cloud.digitalocean.com/v1/oauth/authorize"
+DIGITALOCEAN_OAUTH_TOKEN_URL = "https://cloud.digitalocean.com/v1/oauth/token"
+DIGITALOCEAN_OAUTH_REDIRECT_URI_ENV = "EMPYRALIS_DIGITALOCEAN_OAUTH_REDIRECT_URI"
+DIGITALOCEAN_CLIENT_ID_ENV = "DIGITALOCEAN_CLIENT_ID"
+DIGITALOCEAN_CLIENT_SECRET_ENV = "DIGITALOCEAN_CLIENT_SECRET"
+LEGACY_DIGITALOCEAN_CLIENT_ID_ENV = "DIGITALOCEAN_OAUTH_CLIENT_ID"
+LEGACY_DIGITALOCEAN_CLIENT_SECRET_ENV = "DIGITALOCEAN_OAUTH_CLIENT_SECRET"
+DEFAULT_DIGITALOCEAN_OAUTH_REDIRECT_URI = (
+    "https://empyralis.ai/api/hardware/vps/oauth/digitalocean/callback"
 )
 PUBLIC_API_URL = (
     os.getenv("EMPYRALIS_PUBLIC_API_URL")
@@ -63,6 +74,19 @@ class VPSResult:
     size: str
     status: str
     provider: str
+
+
+@dataclass(frozen=True)
+class VPSPlan:
+    id: str
+    slug: str
+    label: str
+    vcpus: int
+    memory_mb: int
+    disk_gb: int
+    price_monthly: float
+    price_label: str
+    recommended: bool = False
 
 
 class VPSProvisioningError(RuntimeError):
@@ -138,6 +162,164 @@ def provider_catalog() -> Dict[str, Any]:
             "regions": [asdict(region) for region in config.regions],
         }
         for key, config in PROVIDER_CONFIGS.items()
+    }
+
+
+def digitalocean_oauth_redirect_uri() -> str:
+    return (
+        os.getenv(DIGITALOCEAN_OAUTH_REDIRECT_URI_ENV)
+        or DEFAULT_DIGITALOCEAN_OAUTH_REDIRECT_URI
+    ).strip()
+
+
+def create_digitalocean_oauth_start(
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    user_id: str,
+) -> Dict[str, str]:
+    client_id = _digitalocean_client_id()
+    state_token = secrets.token_urlsafe(32)
+    state = {
+        "state": state_token,
+        "provider": "digitalocean",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "user_id": str(user_id or "").strip() or "unknown-user",
+        "created_at": _utc_now_iso(),
+    }
+    with _STATE_LOCK:
+        payload = _load_state()
+        payload.setdefault("oauth_states", {})[state_token] = state
+        _write_state(payload)
+    query = urlparse.urlencode(
+        {
+            "client_id": client_id,
+            "redirect_uri": digitalocean_oauth_redirect_uri(),
+            "response_type": "code",
+            "scope": "read write",
+            "state": state_token,
+        }
+    )
+    return {
+        "provider": "digitalocean",
+        "oauth_redirect": f"{DIGITALOCEAN_OAUTH_AUTHORIZE_URL}?{query}",
+        "redirect_uri": digitalocean_oauth_redirect_uri(),
+        "state": state_token,
+    }
+
+
+def complete_digitalocean_oauth_callback(*, code: str, state: str) -> Dict[str, str]:
+    clean_code = str(code or "").strip()
+    clean_state = str(state or "").strip()
+    if not clean_code:
+        raise VPSProvisioningError("DigitalOcean OAuth callback is missing code.")
+    if not clean_state:
+        raise VPSProvisioningError("DigitalOcean OAuth callback is missing state.")
+    with _STATE_LOCK:
+        payload = _load_state()
+        state_record = dict((payload.get("oauth_states") or {}).pop(clean_state, {}) or {})
+        _write_state(payload)
+    if not state_record or str(state_record.get("provider") or "") != "digitalocean":
+        raise VPSProvisioningError("DigitalOcean OAuth state is invalid or expired.")
+    token_payload = _exchange_digitalocean_oauth_code(clean_code)
+    token_id = store_vps_provider_token(
+        provider="digitalocean",
+        workspace_id=str(state_record.get("workspace_id") or "default"),
+        tenant_id=str(state_record.get("tenant_id") or "default"),
+        user_id=str(state_record.get("user_id") or "unknown-user"),
+        credentials=token_payload,
+        source="oauth",
+    )
+    return {
+        "provider": "digitalocean",
+        "token_id": token_id,
+        "workspace_id": str(state_record.get("workspace_id") or "default"),
+    }
+
+
+def store_vps_provider_token(
+    *,
+    provider: str,
+    workspace_id: str,
+    tenant_id: str,
+    user_id: str,
+    credentials: Mapping[str, Any],
+    source: str = "api_token",
+) -> str:
+    provider_id = _normalize_provider(provider)
+    token = _provider_token(PROVIDER_CONFIGS[provider_id], credentials)
+    token_id = f"vps_token_{secrets.token_hex(16)}"
+    now = _utc_now_iso()
+    record = {
+        "token_id": token_id,
+        "provider": provider_id,
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "tenant_id": str(tenant_id or "").strip() or "default",
+        "user_id": str(user_id or "").strip() or "unknown-user",
+        "source": str(source or "api_token").strip() or "api_token",
+        "credentials_ciphertext": _encrypt_secret(dict(credentials or {}, access_token=token)),
+        "created_at": now,
+        "updated_at": now,
+    }
+    with _STATE_LOCK:
+        state = _load_state()
+        state.setdefault("tokens", {})[token_id] = record
+        _write_state(state)
+    return token_id
+
+
+def load_vps_provider_credentials(
+    token_id: str,
+    *,
+    provider: str,
+    workspace_id: str,
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    clean_token_id = _clean_identifier(token_id, field_name="token_id")
+    provider_id = _normalize_provider(provider)
+    with _STATE_LOCK:
+        record = dict((_load_state().get("tokens") or {}).get(clean_token_id) or {})
+    if not record:
+        raise KeyError(clean_token_id)
+    if str(record.get("provider") or "") != provider_id:
+        raise ValueError("Stored VPS credential does not match provider.")
+    if str(record.get("workspace_id") or "").strip() != str(workspace_id or "").strip():
+        raise KeyError(clean_token_id)
+    if user_id and str(record.get("user_id") or "").strip() != str(user_id or "").strip():
+        raise KeyError(clean_token_id)
+    return _decrypt_secret(str(record.get("credentials_ciphertext") or ""))
+
+
+def fetch_provider_plans(
+    provider: str,
+    *,
+    token_id: str,
+    workspace_id: str,
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    provider_id = _normalize_provider(provider)
+    credentials = load_vps_provider_credentials(
+        token_id,
+        provider=provider_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+    )
+    token = _provider_token(PROVIDER_CONFIGS[provider_id], credentials)
+    if provider_id == "digitalocean":
+        raw = _http_json("GET", "https://api.digitalocean.com/v2/sizes", token=token, payload=None, provider=provider_id)
+        plans = _normalize_digitalocean_plans(raw)
+    elif provider_id == "hetzner":
+        raw = _http_json("GET", "https://api.hetzner.cloud/v1/server_types", token=token, payload=None, provider=provider_id)
+        plans = _normalize_hetzner_plans(raw)
+    elif provider_id == "vultr":
+        raw = _http_json("GET", "https://api.vultr.com/v2/plans?type=vc2", token=token, payload=None, provider=provider_id)
+        plans = _normalize_vultr_plans(raw)
+    else:  # pragma: no cover - guarded by _normalize_provider.
+        raise VPSProvisioningError(f"Unsupported VPS provider: {provider_id}")
+    return {
+        "provider": provider_id,
+        "plans": [asdict(plan) for plan in plans],
     }
 
 
@@ -420,17 +602,17 @@ def _http_json(
     url: str,
     *,
     token: str,
-    payload: Mapping[str, Any],
+    payload: Optional[Mapping[str, Any]],
     provider: str,
 ) -> Dict[str, Any]:
-    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8") if payload is not None else None
     request = urlrequest.Request(
         url,
         data=body,
         method=method,
         headers={
             "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
+            **({"Content-Type": "application/json"} if body is not None else {}),
             "Accept": "application/json",
             "User-Agent": "Empyralis-VPS-Provisioner/1.0",
         },
@@ -449,6 +631,41 @@ def _http_json(
         raise VPSProvisioningError(f"{provider} returned invalid JSON.") from exc
     if not isinstance(parsed, dict):
         raise VPSProvisioningError(f"{provider} returned an invalid response.")
+    return parsed
+
+
+def _http_form_json(
+    method: str,
+    url: str,
+    *,
+    payload: Mapping[str, Any],
+    provider: str,
+) -> Dict[str, Any]:
+    body = urlparse.urlencode(dict(payload)).encode("utf-8")
+    request = urlrequest.Request(
+        url,
+        data=body,
+        method=method,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "User-Agent": "Empyralis-VPS-Provisioner/1.0",
+        },
+    )
+    try:
+        with urlrequest.urlopen(request, timeout=30) as response:
+            response_body = response.read().decode("utf-8")
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:500]
+        raise VPSProvisioningError(f"{provider} OAuth failed: HTTP {exc.code} {detail}") from exc
+    except urlerror.URLError as exc:
+        raise VPSProvisioningError(f"{provider} OAuth failed: {exc.reason}") from exc
+    try:
+        parsed = json.loads(response_body) if response_body else {}
+    except json.JSONDecodeError as exc:
+        raise VPSProvisioningError(f"{provider} returned invalid OAuth JSON.") from exc
+    if not isinstance(parsed, dict):
+        raise VPSProvisioningError(f"{provider} returned an invalid OAuth response.")
     return parsed
 
 
@@ -540,7 +757,7 @@ def _resolved_record_status(record: Mapping[str, Any]) -> str:
 
 def _load_state() -> Dict[str, Any]:
     if not VPS_STATE_FILE.exists():
-        return {"v": 1, "vps": {}}
+        return {"v": 1, "vps": {}, "tokens": {}, "oauth_states": {}}
     try:
         parsed = json.loads(VPS_STATE_FILE.read_text(encoding="utf-8"))
     except Exception:
@@ -549,6 +766,10 @@ def _load_state() -> Dict[str, Any]:
         return {"v": 1, "vps": {}}
     if not isinstance(parsed.get("vps"), dict):
         parsed["vps"] = {}
+    if not isinstance(parsed.get("tokens"), dict):
+        parsed["tokens"] = {}
+    if not isinstance(parsed.get("oauth_states"), dict):
+        parsed["oauth_states"] = {}
     parsed.setdefault("v", 1)
     return parsed
 
@@ -604,6 +825,198 @@ def _provider_token(config: ProviderConfig, credentials: Mapping[str, Any]) -> s
         if token:
             return token
     raise ValueError(f"{config.auth_label} is required.")
+
+
+def _digitalocean_client_id() -> str:
+    client_id = (
+        os.getenv(DIGITALOCEAN_CLIENT_ID_ENV)
+        or os.getenv(LEGACY_DIGITALOCEAN_CLIENT_ID_ENV)
+        or ""
+    ).strip()
+    if not client_id:
+        raise VPSProvisioningError("DigitalOcean OAuth client id is not configured.")
+    return client_id
+
+
+def _digitalocean_client_secret() -> str:
+    client_secret = (
+        os.getenv(DIGITALOCEAN_CLIENT_SECRET_ENV)
+        or os.getenv(LEGACY_DIGITALOCEAN_CLIENT_SECRET_ENV)
+        or ""
+    ).strip()
+    if not client_secret:
+        raise VPSProvisioningError("DigitalOcean OAuth client secret is not configured.")
+    return client_secret
+
+
+def _exchange_digitalocean_oauth_code(code: str) -> Dict[str, Any]:
+    token_payload = _http_form_json(
+        "POST",
+        DIGITALOCEAN_OAUTH_TOKEN_URL,
+        provider="digitalocean",
+        payload={
+            "grant_type": "authorization_code",
+            "client_id": _digitalocean_client_id(),
+            "client_secret": _digitalocean_client_secret(),
+            "code": code,
+            "redirect_uri": digitalocean_oauth_redirect_uri(),
+        },
+    )
+    access_token = str(token_payload.get("access_token") or "").strip()
+    if not access_token:
+        raise VPSProvisioningError("DigitalOcean OAuth did not return an access token.")
+    return token_payload
+
+
+def _normalize_digitalocean_plans(payload: Mapping[str, Any]) -> list[VPSPlan]:
+    items = payload.get("sizes") if isinstance(payload.get("sizes"), list) else []
+    plans: list[VPSPlan] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        vcpus = _to_int(item.get("vcpus"))
+        memory_mb = _to_int(item.get("memory"))
+        disk_gb = _to_int(item.get("disk"))
+        price = _to_float(item.get("price_monthly"))
+        slug = str(item.get("slug") or "").strip()
+        if not slug or vcpus < 1 or memory_mb < 1024 or price <= 0:
+            continue
+        if item.get("available") is False:
+            continue
+        plans.append(
+            VPSPlan(
+                id=slug,
+                slug=slug,
+                label=f"{vcpus} CPU · {_memory_label(memory_mb)} · {disk_gb}GB SSD",
+                vcpus=vcpus,
+                memory_mb=memory_mb,
+                disk_gb=disk_gb,
+                price_monthly=price,
+                price_label=f"${price:g}/mo",
+            )
+        )
+    return _mark_recommended(plans)
+
+
+def _normalize_hetzner_plans(payload: Mapping[str, Any]) -> list[VPSPlan]:
+    items = payload.get("server_types") if isinstance(payload.get("server_types"), list) else []
+    plans: list[VPSPlan] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        architecture = str(item.get("architecture") or "").strip().lower()
+        vcpus = _to_int(item.get("cores"))
+        memory_mb = int(_to_float(item.get("memory")) * 1024)
+        disk_gb = _to_int(item.get("disk"))
+        slug = str(item.get("name") or item.get("id") or "").strip()
+        if architecture != "x86" or not slug or vcpus < 1 or memory_mb < 1024:
+            continue
+        price = _hetzner_monthly_price(item)
+        if price <= 0:
+            continue
+        plans.append(
+            VPSPlan(
+                id=slug,
+                slug=slug,
+                label=f"{vcpus} CPU · {_memory_label(memory_mb)} · {disk_gb}GB SSD",
+                vcpus=vcpus,
+                memory_mb=memory_mb,
+                disk_gb=disk_gb,
+                price_monthly=price,
+                price_label=f"€{price:g}/mo",
+            )
+        )
+    return _mark_recommended(plans)
+
+
+def _normalize_vultr_plans(payload: Mapping[str, Any]) -> list[VPSPlan]:
+    items = payload.get("plans") if isinstance(payload.get("plans"), list) else []
+    plans: list[VPSPlan] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        vcpus = _to_int(item.get("vcpu_count"))
+        memory_mb = _to_int(item.get("ram"))
+        disk_gb = _to_int(item.get("disk"))
+        price = _to_float(item.get("monthly_cost"))
+        slug = str(item.get("id") or "").strip()
+        if not slug or vcpus < 1 or memory_mb < 1024 or price <= 0:
+            continue
+        plans.append(
+            VPSPlan(
+                id=slug,
+                slug=slug,
+                label=f"{vcpus} CPU · {_memory_label(memory_mb)} · {disk_gb}GB SSD",
+                vcpus=vcpus,
+                memory_mb=memory_mb,
+                disk_gb=disk_gb,
+                price_monthly=price,
+                price_label=f"${price:g}/mo",
+            )
+        )
+    return _mark_recommended(plans)
+
+
+def _mark_recommended(plans: list[VPSPlan]) -> list[VPSPlan]:
+    sorted_plans = sorted(plans, key=lambda plan: (plan.price_monthly, plan.memory_mb, plan.vcpus))
+    recommended_id = ""
+    for plan in sorted_plans:
+        if plan.vcpus >= 2 and plan.memory_mb >= 4096:
+            recommended_id = plan.id
+            break
+    if not recommended_id:
+        for plan in sorted_plans:
+            if plan.memory_mb >= 2048:
+                recommended_id = plan.id
+                break
+    if not recommended_id and sorted_plans:
+        recommended_id = sorted_plans[0].id
+    return [
+        VPSPlan(
+            id=plan.id,
+            slug=plan.slug,
+            label=plan.label,
+            vcpus=plan.vcpus,
+            memory_mb=plan.memory_mb,
+            disk_gb=plan.disk_gb,
+            price_monthly=plan.price_monthly,
+            price_label=plan.price_label,
+            recommended=plan.id == recommended_id,
+        )
+        for plan in sorted_plans
+    ]
+
+
+def _hetzner_monthly_price(item: Mapping[str, Any]) -> float:
+    prices = item.get("prices") if isinstance(item.get("prices"), list) else []
+    for entry in prices:
+        if not isinstance(entry, Mapping):
+            continue
+        monthly = entry.get("price_monthly") if isinstance(entry.get("price_monthly"), Mapping) else {}
+        price = _to_float(monthly.get("gross") or monthly.get("net"))
+        if price > 0:
+            return price
+    return 0.0
+
+
+def _memory_label(memory_mb: int) -> str:
+    if memory_mb % 1024 == 0:
+        return f"{memory_mb // 1024}GB"
+    return f"{memory_mb}MB"
+
+
+def _to_int(value: Any) -> int:
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _to_float(value: Any) -> float:
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _normalize_provider(provider: str) -> str:

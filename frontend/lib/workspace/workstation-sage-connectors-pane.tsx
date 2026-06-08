@@ -191,7 +191,6 @@ type PersonalChannelSurfacesPayload = Record<string, unknown> & {
 
 type PersonalCardStatusTone = 'neutral' | 'connected' | 'warning' | 'danger';
 type PersonalCommunicationChannel = 'telegram' | 'whatsapp';
-type EmailChannelMode = 'gmail' | 'smtp';
 type GatewayRuntimeDependency = 'cloud_only' | 'gateway_optional' | 'gateway_required';
 type ConsumerSetupState = 'oauth_ready' | 'oauth_not_wired' | 'advanced_only';
 
@@ -2156,7 +2155,7 @@ export function WorkstationSageConnectorsPane({
   const router = useRouter();
   const searchParams = useSearchParams();
   const gridColumns = useResponsiveColumns();
-  const cacheKey = bootstrap.workspace.id;
+  const cacheKey = `${bootstrap.workspace.id}:${surface}:connection-split-v2`;
   const cachedState = sageConnectorsPaneCache.get(cacheKey) ?? null;
   const workspaceId = bootstrap.workspace.id;
   const [providers, setProviders] = useState<ProviderSnapshot[]>(() => cachedState?.providers ?? []);
@@ -2179,7 +2178,6 @@ export function WorkstationSageConnectorsPane({
   const [, setStatus] = useState<string | null>(null);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [telegramChannelMode, setTelegramChannelMode] = useState<'bot' | 'personal'>('bot');
-  const [emailChannelMode, setEmailChannelMode] = useState<EmailChannelMode>('gmail');
   const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => (
     normalizeIntegrationCategoryId(searchParams.get('section') ?? searchParams.get('connection'))
     ?? (showProviders ? 'apps' : 'channels')
@@ -2755,11 +2753,15 @@ export function WorkstationSageConnectorsPane({
     if (record.connected || statusItem?.connected === true) {
       return null;
     }
+    const nextAction = readString(statusItem?.next_action).toLowerCase();
+    const setupCanStart = Boolean(statusItem)
+      && statusItem?.setup_available !== false
+      && nextAction === 'connect';
     if (CONSUMER_APP_CARD_IDS.has(record.id)) {
-      return OAUTH_READY_APP_CARD_IDS.has(record.id) ? 'oauth_ready' : null;
+      return OAUTH_READY_APP_CARD_IDS.has(record.id) && setupCanStart ? 'oauth_ready' : null;
     }
     if (CLOUD_CHANNEL_INSTALL_CARD_IDS.has(record.id)) {
-      return OAUTH_READY_APP_CARD_IDS.has(record.id) ? 'oauth_ready' : null;
+      return OAUTH_READY_APP_CARD_IDS.has(record.id) && setupCanStart ? 'oauth_ready' : null;
     }
     return null;
   }
@@ -2809,7 +2811,10 @@ export function WorkstationSageConnectorsPane({
     const fallbackConnectionId = readString(record.definition.connectorIds?.[0]) || record.id;
     const connectionId = readString(statusItem?.id) || fallbackConnectionId || null;
     const opensAdvancedSetup = record.id === 'webhook';
+    const oauthManaged = OAUTH_READY_APP_CARD_IDS.has(record.id)
+      || OAUTH_READY_APP_CARD_IDS.has(fallbackConnectionId);
     const locked = connectionLaunchLocked(statusItem)
+      || (oauthManaged && !statusItem)
       || CONNECTOR_STATIC_LOCKED_IDS.has(record.id)
       || CONNECTOR_STATIC_LOCKED_IDS.has(fallbackConnectionId);
     const nextAction = readString(statusItem?.next_action).toLowerCase();
@@ -2839,7 +2844,7 @@ export function WorkstationSageConnectorsPane({
       id: `connector_${record.id}`,
       label: record.label,
       image: record.image,
-      detail: locked ? readString(statusItem?.description, 'Connection setup is not available yet.') : describeConnectorCard(record, connected),
+      detail: locked ? readString(statusItem?.description, record.definition.summary) : describeConnectorCard(record, connected),
       statusLabel: opensAdvancedSetup
         ? 'Advanced setup'
         : locked ? connectionLockedLabel(statusItem, 'Requires setup') : connected ? 'Connected' : consumerSetupStatusLabel(setupState) ?? 'Not connected',
@@ -2954,29 +2959,6 @@ export function WorkstationSageConnectorsPane({
             runtimeDependency: 'gateway_optional',
           }
         : null;
-      const gmailRecord = connectorCards.find((card) => card.id === 'gmail') ?? null;
-      const smtpRecord = connectorCards.find((card) => card.id === 'smtp') ?? null;
-      const gmail = gmailRecord ? connectorAsExternalCard(gmailRecord) : null;
-      const smtp = smtpRecord ? connectorAsExternalCard(smtpRecord) : null;
-      const emailConnected = gmail?.statusTone === 'connected' || smtp?.statusTone === 'connected';
-      const emailCard: ExternalIntegrationCardRecord | null = gmail || smtp
-        ? {
-            id: 'email_channel',
-            label: 'Email',
-            image: gmail?.image ?? smtp?.image ?? '/brand-assets/generic/api.svg?v=3',
-            detail: 'Use Gmail or a custom SMTP mailbox.',
-            statusLabel: gmail?.statusTone === 'connected'
-              ? 'Gmail connected'
-              : smtp?.statusTone === 'connected'
-                ? 'SMTP connected'
-                : 'Choose setup',
-            statusTone: emailConnected ? 'connected' : 'neutral',
-            summary: 'Choose Gmail for Google Workspace mail, or SMTP for a custom mailbox.',
-            nextStep: null,
-            actionTarget: 'close',
-            runtimeDependency: 'cloud_only',
-          }
-        : null;
       const cloudChannelOrder = ['slack', 'discord_bot', 'whatsapp_twilio'];
       const cloudCards = cloudChannelOrder
         .map((id) => connectorCards.find((card) => card.id === id) ?? null)
@@ -2987,7 +2969,6 @@ export function WorkstationSageConnectorsPane({
         .map((card) => withRuntimeDependency(personalAsExternalCard(card), 'gateway_required'));
       return [
         ...(telegramCard ? [telegramCard] : []),
-        ...(emailCard ? [emailCard] : []),
         ...cloudCards,
         ...(showPersonalSurface ? personalCards : []),
       ];
@@ -3029,7 +3010,7 @@ export function WorkstationSageConnectorsPane({
       id: 'channels',
       label: 'Channels',
       description: 'Messaging channels Sage can use.',
-      detail: 'Telegram, WhatsApp, Signal, iMessage, WeChat, email, Slack, and Discord.',
+      detail: 'Telegram, WhatsApp, Signal, iMessage, WeChat, Slack, and Discord.',
       countLabel: `${channelCards.length}`,
       statusTone: channelCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
     });
@@ -4260,6 +4241,9 @@ export function WorkstationSageConnectorsPane({
           record.locked && 'sage-unified-card--disabled',
         )}
         onClick={() => {
+          if (record.locked) {
+            return;
+          }
           if (record.actionTarget === 'computer') {
             openComputerConnectSheet();
             return;
@@ -4275,9 +4259,6 @@ export function WorkstationSageConnectorsPane({
           }
           if (record.id === 'telegram' && !isExpanded) {
             setTelegramChannelMode('bot');
-          }
-          if (record.id === 'email_channel' && !isExpanded) {
-            setEmailChannelMode('gmail');
           }
           setExpandedCardId(isExpanded ? null : record.id);
         }}
@@ -4968,91 +4949,13 @@ export function WorkstationSageConnectorsPane({
     if (record.consumerSetupMessage) {
       return <AppNotice tone="warning">{record.consumerSetupMessage}</AppNotice>;
     }
+    if (record.consumerSetupState === 'oauth_ready') {
+      return null;
+    }
     if (hasFields) {
       return renderFlatConnectorCredentialForm(record);
     }
-    return <AppNotice tone="warning">This connection is not ready for setup yet.</AppNotice>;
-  }
-
-  function renderEmailChannelExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
-    const showClose = options.showClose !== false;
-    const gmailRecord = connectorCards.find((card) => card.id === 'gmail') ?? null;
-    const smtpRecord = connectorCards.find((card) => card.id === 'smtp') ?? null;
-    const gmailBase = gmailRecord ? connectorAsExternalCard(gmailRecord) : null;
-    const smtpBase = smtpRecord ? connectorAsExternalCard(smtpRecord) : null;
-    const gmailSetupRecord: ExternalIntegrationCardRecord | null = gmailBase
-      ? {
-          ...gmailBase,
-          label: 'Gmail',
-          connectionId: gmailBase.connectionId ?? 'google_workspace',
-          connectionProvider: gmailBase.connectionProvider ?? 'google_workspace',
-        }
-      : null;
-    const smtpSetupRecord: ExternalIntegrationCardRecord | null = smtpBase
-      ? {
-          ...smtpBase,
-          label: 'SMTP / IMAP Email',
-          connectionId: smtpBase.connectionId ?? 'smtp',
-          connectionProvider: smtpBase.connectionProvider ?? 'smtp',
-        }
-      : null;
-    const activeRecord = emailChannelMode === 'gmail' ? gmailSetupRecord : smtpSetupRecord;
-
-    return (
-      <div className="sage-unified-expand sage-channel-expand">
-        <div className="sage-unified-expand__header">
-          <div className="sage-channel-expand__identity">
-            <BrandLogo
-              id={record.id}
-              label={record.label}
-              src={record.image}
-              failedLogos={failedLogos}
-              onError={markLogoFailed}
-            />
-            <strong className="sage-unified-expand__title">{record.label}</strong>
-          </div>
-          {showClose ? (
-            <button
-              type="button"
-              className="sage-unified-expand__close"
-              onClick={() => setExpandedCardId(null)}
-              aria-label="Close Email"
-            >
-              <X size={14} strokeWidth={1.9} aria-hidden="true" />
-            </button>
-          ) : null}
-        </div>
-        <div className="sage-channel-route-tabs" role="tablist" aria-label="Email setup type">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={emailChannelMode === 'gmail'}
-            className={joinClassNames('sage-channel-route-tab', emailChannelMode === 'gmail' && 'sage-channel-route-tab--active')}
-            onClick={() => {
-              setEmailChannelMode('gmail');
-              setPersonalChannelError(null);
-            }}
-          >
-            Gmail
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={emailChannelMode === 'smtp'}
-            className={joinClassNames('sage-channel-route-tab', emailChannelMode === 'smtp' && 'sage-channel-route-tab--active')}
-            onClick={() => {
-              setEmailChannelMode('smtp');
-              setPersonalChannelError(null);
-            }}
-          >
-            SMTP
-          </button>
-        </div>
-        {activeRecord ? renderConnectorModeSetup(activeRecord) : (
-          <AppNotice tone="warning">This email setup path is not available on this surface.</AppNotice>
-        )}
-      </div>
-    );
+    return <AppNotice tone="warning">Setup is unavailable.</AppNotice>;
   }
 
   function renderFlatConnectorCredentialForm(record: ExternalIntegrationCardRecord) {
@@ -5100,9 +5003,6 @@ export function WorkstationSageConnectorsPane({
   function renderExternalExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
     if (record.id === 'telegram') {
       return renderTelegramChannelExpand(record, options);
-    }
-    if (record.id === 'email_channel') {
-      return renderEmailChannelExpand(record, options);
     }
     const channel = record.channel ?? null;
     const channelDraft = channel ? channelDrafts[channel] : null;

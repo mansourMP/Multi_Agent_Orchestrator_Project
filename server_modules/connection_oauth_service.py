@@ -195,6 +195,11 @@ def ensure_oauth_configured(provider: str) -> tuple[str, str]:
     return client_id, client_secret
 
 
+def oauth_provider_configured(provider: str) -> bool:
+    client_id, client_secret, _client_names, _secret_names = _provider_env(provider)
+    return bool(client_id and client_secret)
+
+
 def provider_from_connection_id(connection_id: str) -> str:
     normalized = str(connection_id or "").strip().lower()
     if normalized in {"google_workspace", "gmail", "google_calendar", "google_drive", "drive"}:
@@ -212,6 +217,10 @@ def provider_from_connection_id(connection_id: str) -> str:
     if normalized == "dropbox":
         return "dropbox"
     raise HTTPException(status_code=409, detail="This connection does not have a one-click OAuth setup yet.")
+
+
+def oauth_connection_configured(connection_id: str) -> bool:
+    return oauth_provider_configured(provider_from_connection_id(connection_id))
 
 
 def _microsoft_tenant() -> str:

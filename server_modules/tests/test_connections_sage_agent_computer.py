@@ -785,6 +785,81 @@ def test_connection_catalog_exposes_launch_contract_without_ui_side_lock_lists()
     assert linear["supports_outbound"] is True
 
 
+def test_oauth_status_locks_setup_when_provider_credentials_are_missing(monkeypatch):
+    for name in (
+        "GOOGLE_WORKSPACE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        connection_catalog_service.runtime_common,
+        "list_vault_connectors",
+        lambda workspace_id: [],
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.sage_agent_computer_selection_service,
+        "get_selection",
+        lambda **_kwargs: None,
+    )
+
+    by_id = {
+        item["id"]: item
+        for item in connection_catalog_service.status_items(
+            workspace_id="ws-1",
+            user_id="user-1",
+            surface="sage",
+        )
+    }
+
+    google = by_id["google_workspace"]
+    assert google["setup_available"] is False
+    assert google["next_action"] == "locked"
+    assert google["health_status"] == "setup_missing"
+
+
+def test_oauth_status_allows_setup_when_provider_credentials_exist(monkeypatch):
+    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_ID", "github-client-id")
+    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_SECRET", "github-client-secret")
+    monkeypatch.setattr(
+        connection_catalog_service.runtime_common,
+        "list_vault_connectors",
+        lambda workspace_id: [],
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.sage_agent_computer_selection_service,
+        "get_selection",
+        lambda **_kwargs: None,
+    )
+
+    by_id = {
+        item["id"]: item
+        for item in connection_catalog_service.status_items(
+            workspace_id="ws-1",
+            user_id="user-1",
+            surface="sage",
+        )
+    }
+
+    github = by_id["github"]
+    assert github["setup_available"] is True
+    assert github["next_action"] == "connect"
+    assert github["health_status"] == "not_configured"
+
+
 @pytest.mark.anyio
 async def test_google_workspace_connection_setup_starts_oauth_not_fake_session(monkeypatch):
     _install_auth(monkeypatch)

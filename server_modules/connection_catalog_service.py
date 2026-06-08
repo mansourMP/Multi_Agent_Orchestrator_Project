@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, Optional
 
 from server_modules import (
     channel_lane_contract_service,
+    connection_oauth_service,
     gateway_registry_service,
     gateway_state_repository,
     personal_channels_repository,
@@ -31,6 +32,7 @@ LAUNCH_LOCKED = "locked"
 
 _USABLE_LAUNCH_STATUSES = {LAUNCH_LIVE, LAUNCH_LIVE_WHEN_CONFIGURED}
 _GENERIC_CONNECTION_TEST_RUNNER = "not_implemented"
+_OAUTH_SETUP_KINDS = {"oauth", "oauth_or_app_install", "oauth_mailbox"}
 
 
 def _text(value: Any, fallback: str = "") -> str:
@@ -814,6 +816,15 @@ def _next_action(
     return "connect" if item.get("setup_available") else "locked"
 
 
+def _oauth_setup_unconfigured(item: Dict[str, Any]) -> bool:
+    if _token(item.get("setup_kind")) not in _OAUTH_SETUP_KINDS:
+        return False
+    try:
+        return not connection_oauth_service.oauth_connection_configured(_text(item.get("id")))
+    except Exception:
+        return True
+
+
 def status_items(
     *,
     workspace_id: str,
@@ -845,6 +856,7 @@ def status_items(
     vault_connector_ids = _vault_connector_ids(workspace_id)
     out: list[Dict[str, Any]] = []
     for item in catalog_items(surface=surface):
+        effective_item = deepcopy(item)
         item_id = _text(item.get("id"))
         lane = _token(item.get("lane"))
         connected = False
@@ -881,19 +893,23 @@ def status_items(
             connected = bool(aliases & vault_connector_ids)
             configured = connected
             health_status = "healthy" if connected else "not_configured"
+            if not connected and _oauth_setup_unconfigured(item):
+                effective_item["setup_available"] = False
+                health_status = "setup_missing"
+                last_error = "OAuth provider credentials are not configured."
         elif lane == LANE_MCP_PLUGIN:
             health_status = "available"
         elif lane == LANE_APPLICATION:
             health_status = "available"
 
         next_action = _next_action(
-            item,
+            effective_item,
             connected=connected,
             configured=configured,
             selected_gateway=selected_gateway,
             selected_gateway_online=selected_gateway_online,
         )
-        payload = deepcopy(item)
+        payload = deepcopy(effective_item)
         payload.update({
             "connected": connected,
             "configured": configured,

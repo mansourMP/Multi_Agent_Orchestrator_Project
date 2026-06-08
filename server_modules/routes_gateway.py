@@ -691,6 +691,9 @@ class HardwareVPSProvisionRequest(BaseModel):
     credentials: Dict[str, Any] = Field(default_factory=dict)
     region: Optional[str] = Field(default=None, max_length=64)
     size: Optional[str] = Field(default=None, max_length=128)
+    runtime_access_mode: Optional[str] = None
+    autonomous_agent_setup_warning_acknowledged: bool = False
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _gateway_api_url_for_remote_setup() -> str:
@@ -1593,6 +1596,17 @@ async def provision_hardware_vps(
 
     vps_id = f"vps_{uuid.uuid4().hex}"
     try:
+        request_metadata = dict(body.metadata or {})
+        request_metadata.update(
+            {
+                "setup_source": "vps",
+                "vps_id": vps_id,
+                "provider": resolved["provider"],
+                "region": resolved["region"],
+                "size": resolved["size"],
+                "agent_scope": "sage",
+            }
+        )
         pairing = gateway_pairing_service.create_gateway_pairing_intent(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -1600,14 +1614,9 @@ async def provision_hardware_vps(
             ttl_seconds=None,
             display_name=f"{vps_provisioning_service.PROVIDER_CONFIGS[resolved['provider']].label} Agent Computer",
             platform="linux",
-            metadata={
-                "setup_source": "vps",
-                "vps_id": vps_id,
-                "provider": resolved["provider"],
-                "region": resolved["region"],
-                "size": resolved["size"],
-                "agent_scope": "sage",
-            },
+            metadata=request_metadata,
+            runtime_access_mode=body.runtime_access_mode,
+            autonomous_agent_setup_warning_acknowledged=body.autonomous_agent_setup_warning_acknowledged,
         )
     except ValueError as exc:
         detail = str(exc)
@@ -1655,6 +1664,22 @@ async def provision_hardware_vps(
     }
 
 
+@router.get("/hardware/vps/regions")
+async def get_hardware_vps_regions(
+    provider: str = Query(..., min_length=1),
+    current_user=Depends(require_api_key),
+):
+    try:
+        catalog = vps_provisioning_service.provider_catalog()
+        provider_id = vps_provisioning_service.resolve_provider_options(provider, None, None)["provider"]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    item = catalog.get(provider_id)
+    if not isinstance(item, dict):
+        raise HTTPException(status_code=404, detail="VPS provider was not found.")
+    return item
+
+
 @router.get("/hardware/vps/{vps_id}/status")
 async def get_hardware_vps_status(
     vps_id: str,
@@ -1683,6 +1708,36 @@ async def get_hardware_vps_status(
         "region": status_record["region"],
         "size": status_record["size"],
         "status": status_record["status"],
+    }
+
+
+@router.delete("/hardware/vps/{vps_id}")
+async def delete_hardware_vps(
+    vps_id: str,
+    current_user=Depends(require_api_key),
+):
+    try:
+        record = vps_provisioning_service.load_vps_record(vps_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="VPS provisioning record was not found.") from exc
+    workspace_id = enforce_workspace_access(
+        current_user,
+        record.get("workspace_id") or "default",
+        minimum_role="owner",
+    )
+    if workspace_id != str(record.get("workspace_id") or "").strip():
+        raise HTTPException(status_code=404, detail="VPS provisioning record was not found.")
+    try:
+        deleted_record = vps_provisioning_service.delete_recorded_vps(vps_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="VPS provisioning record was not found.") from exc
+    except vps_provisioning_service.VPSProvisioningError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "vps_id": deleted_record["vps_id"],
+        "provider": deleted_record["provider"],
+        "provider_resource_id": deleted_record["provider_resource_id"],
+        "status": deleted_record["status"],
     }
 
 

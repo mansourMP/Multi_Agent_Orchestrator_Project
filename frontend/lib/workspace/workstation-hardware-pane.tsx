@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Cloud, Copy, Monitor, Plus, Server, X } from 'lucide-react';
+import { Check, Cloud, Copy, ExternalLink, Monitor, Plus, Server, X } from 'lucide-react';
 import { toDataURL } from 'qrcode';
 
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
@@ -13,8 +13,11 @@ import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 type HardwareKind = 'local_companion' | 'self_hosted_business_node' | 'cloud_computer';
 type HardwareStatus = 'Connected' | 'Offline' | 'Needs approval' | 'Unavailable';
 type HardwareTab = 'this_device' | 'other_computers' | 'ssh_server';
-type ConnectOptionId = 'this_device' | 'other_computer' | 'ssh_server';
+type ConnectOptionId = 'this_device' | 'other_computer' | 'ssh_server' | 'cloud_vps';
 type ConnectModalContext = ConnectOptionId | 'all';
+type VpsProviderId = 'digitalocean' | 'hetzner' | 'vultr';
+type VpsStep = 'provider' | 'credentials' | 'region' | 'confirm' | 'progress';
+type VpsProgressStage = 'idle' | 'creating' | 'installing' | 'connecting' | 'connected' | 'failed';
 
 type HardwareAttachment = {
   kind: HardwareKind;
@@ -113,6 +116,52 @@ type SageAgentComputerSelectionPayload = Record<string, unknown> & {
 
 type SshAuthMode = 'password' | 'ssh_key';
 
+type VpsRegion = {
+  id: string;
+  label: string;
+};
+
+type VpsProviderRegionsPayload = {
+  provider?: string;
+  label?: string;
+  default_region?: string;
+  default_size?: string;
+  regions?: VpsRegion[];
+};
+
+type VpsProvisionResponse = {
+  pairing_token?: string;
+  vps_id?: string;
+  provider_resource_id?: string;
+  public_ip?: string | null;
+  status?: string;
+};
+
+type VpsProvisionStatusPayload = {
+  vps_id?: string;
+  provider?: string;
+  provider_resource_id?: string;
+  public_ip?: string | null;
+  region?: string;
+  size?: string;
+  status?: 'provisioning' | 'registering' | 'connected' | 'failed' | 'deleted' | string;
+};
+
+type VpsProviderCard = {
+  id: VpsProviderId;
+  label: string;
+  price: string;
+  specs: string;
+  tagline: string;
+  size: string;
+  regionFallback: string;
+  tokenLabel: string;
+  tokenUrl: string;
+  logoText: string;
+  logoSrc: string;
+  features: string[];
+};
+
 const TRAY_STATUS_URL = 'http://127.0.0.1:7790/status';
 const TRAY_CONNECT_URL = 'http://127.0.0.1:7790/connect';
 const AGENT_DOWNLOAD_URL = 'https://empyralis.io/downloads/empyralis-agent/macos/Empyralis-Agent.dmg';
@@ -149,6 +198,66 @@ const HARDWARE_TABS: Array<{ id: HardwareTab; label: string }> = [
   { id: 'this_device', label: 'This device' },
   { id: 'other_computers', label: 'Other computers' },
   { id: 'ssh_server', label: 'SSH / Server' },
+];
+
+const VPS_PROVIDER_CARDS: Record<VpsProviderId, VpsProviderCard> = {
+  digitalocean: {
+    id: 'digitalocean',
+    label: 'DigitalOcean',
+    price: '$12/mo',
+    specs: '1 CPU · 2GB RAM',
+    tagline: 'Simplest setup',
+    size: 's-1vcpu-2gb',
+    regionFallback: 'nyc3',
+    tokenLabel: 'DigitalOcean PAT',
+    tokenUrl: 'https://cloud.digitalocean.com/account/api/tokens',
+    logoText: 'DO',
+    logoSrc: '/brand-assets/infrastructure/digitalocean.svg',
+    features: ['Simple API token', 'Ubuntu 24.04', 'Fast provisioning'],
+  },
+  hetzner: {
+    id: 'hetzner',
+    label: 'Hetzner',
+    price: '€4/mo',
+    specs: '2 CPU · 4GB RAM',
+    tagline: 'Best value · EU',
+    size: 'cx22',
+    regionFallback: 'nbg1',
+    tokenLabel: 'Hetzner Cloud API token',
+    tokenUrl: 'https://console.hetzner.cloud/projects',
+    logoText: 'HC',
+    logoSrc: '/brand-assets/infrastructure/hetzner.svg',
+    features: ['Lowest monthly cost', 'EU locations', 'Ubuntu 24.04'],
+  },
+  vultr: {
+    id: 'vultr',
+    label: 'Vultr',
+    price: '$12/mo',
+    specs: '1 CPU · 2GB RAM',
+    tagline: 'Global regions',
+    size: 'vc2-1c-2gb',
+    regionFallback: 'ewr',
+    tokenLabel: 'Vultr API key',
+    tokenUrl: 'https://my.vultr.com/settings/#settingsapi',
+    logoText: 'VT',
+    logoSrc: '/brand-assets/infrastructure/vultr.svg',
+    features: ['Global coverage', 'Cloud-init setup', 'Ubuntu 24.04'],
+  },
+};
+
+const VPS_MAIN_PROVIDER_IDS: VpsProviderId[] = ['digitalocean', 'hetzner', 'vultr'];
+
+const VPS_ADVANCED_OPTIONS: Array<{ id: 'aws_lightsail' | 'google_cloud' | 'custom_ssh'; label: string; detail: string }> = [
+  { id: 'aws_lightsail', label: 'AWS Lightsail', detail: 'Later' },
+  { id: 'google_cloud', label: 'Google Cloud', detail: 'Later' },
+  { id: 'custom_ssh', label: 'Custom SSH', detail: 'Existing flow' },
+];
+
+const VPS_PROGRESS_STEPS: Array<{ id: VpsProgressStage; label: string }> = [
+  { id: 'creating', label: 'Creating server...' },
+  { id: 'installing', label: 'Installing software...' },
+  { id: 'connecting', label: 'Connecting...' },
+  { id: 'connected', label: 'Connected ✓' },
 ];
 
 const KIND_ID_ALIASES: Record<HardwareKind, string[]> = {
@@ -520,6 +629,73 @@ function normalizeHardwareTab(value: string | null): HardwareTab {
   return 'this_device';
 }
 
+function normalizeVpsRegionsPayload(payload: VpsProviderRegionsPayload | null): VpsRegion[] {
+  if (!payload || !Array.isArray(payload.regions)) {
+    return [];
+  }
+  return payload.regions
+    .map((region) => ({
+      id: String(region?.id || '').trim(),
+      label: String(region?.label || '').trim(),
+    }))
+    .filter((region) => region.id && region.label);
+}
+
+function preferredVpsRegion(providerId: VpsProviderId, regions: VpsRegion[], fallback: string): string {
+  if (!regions.length) {
+    return fallback;
+  }
+  const available = new Set(regions.map((region) => region.id));
+  const timezone = typeof Intl !== 'undefined'
+    ? String(Intl.DateTimeFormat().resolvedOptions().timeZone || '').toLowerCase()
+    : '';
+  const preferredByProvider: Record<VpsProviderId, string[]> = {
+    digitalocean: timezone.includes('asia')
+      ? ['sgp1', 'blr1']
+      : timezone.includes('europe')
+        ? ['fra1', 'lon1']
+        : ['nyc3', 'sfo3'],
+    hetzner: timezone.includes('america')
+      ? ['ash', 'hil']
+      : ['nbg1', 'fsn1', 'hel1'],
+    vultr: timezone.includes('australia')
+      ? ['syd']
+      : timezone.includes('asia')
+        ? ['sgp']
+        : timezone.includes('europe')
+          ? ['fra', 'lhr']
+          : ['ewr'],
+  };
+  return preferredByProvider[providerId].find((regionId) => available.has(regionId)) ?? regions[0]?.id ?? fallback;
+}
+
+function vpsProviderCard(providerId: VpsProviderId | null): VpsProviderCard | null {
+  return providerId ? VPS_PROVIDER_CARDS[providerId] : null;
+}
+
+function vpsCredentialPayload(providerId: VpsProviderId, token: string): Record<string, string> {
+  const trimmed = token.trim();
+  if (providerId === 'vultr') {
+    return { api_key: trimmed };
+  }
+  return { api_token: trimmed };
+}
+
+function vpsProgressRank(stage: VpsProgressStage): number {
+  return ['idle', 'creating', 'installing', 'connecting', 'connected', 'failed'].indexOf(stage);
+}
+
+function vpsProgressStepDone(step: VpsProgressStage, current: VpsProgressStage): boolean {
+  if (current === 'failed') {
+    return false;
+  }
+  return vpsProgressRank(current) > vpsProgressRank(step);
+}
+
+function vpsProgressStepActive(step: VpsProgressStage, current: VpsProgressStage): boolean {
+  return step === current;
+}
+
 function hardwareActivityLabel(capability: string | null | undefined): string {
   const normalized = String(capability || '').trim();
   if (!normalized) {
@@ -794,6 +970,18 @@ export function WorkstationHardwarePane() {
   const [sshAuthMode, setSshAuthMode] = useState<SshAuthMode>('password');
   const [sshPassword, setSshPassword] = useState('');
   const [sshKey, setSshKey] = useState('');
+  const [vpsStep, setVpsStep] = useState<VpsStep>('provider');
+  const [vpsSelectedProvider, setVpsSelectedProvider] = useState<VpsProviderId | null>(null);
+  const [vpsRegions, setVpsRegions] = useState<VpsRegion[]>([]);
+  const [vpsSelectedRegion, setVpsSelectedRegion] = useState('');
+  const [vpsToken, setVpsToken] = useState('');
+  const [vpsLoadingRegions, setVpsLoadingRegions] = useState(false);
+  const [vpsBusy, setVpsBusy] = useState(false);
+  const [vpsError, setVpsError] = useState<string | null>(null);
+  const [vpsProvisionId, setVpsProvisionId] = useState<string | null>(null);
+  const [vpsProviderResourceId, setVpsProviderResourceId] = useState<string | null>(null);
+  const [vpsProgressStage, setVpsProgressStage] = useState<VpsProgressStage>('idle');
+  const [vpsCleanupBusy, setVpsCleanupBusy] = useState(false);
   const workspaceRecord = readRecord(bootstrap.workspace);
   const workspaceId = readString(workspaceRecord, 'id', 'workspace_id') || 'ws-1';
   const workspaceLabel = workspaceId || readString(workspaceRecord, 'label', 'name') || 'this workspace';
@@ -1229,6 +1417,208 @@ export function WorkstationHardwarePane() {
     }
   }
 
+  function resetVpsFlow() {
+    setVpsStep('provider');
+    setVpsSelectedProvider(null);
+    setVpsRegions([]);
+    setVpsSelectedRegion('');
+    setVpsToken('');
+    setVpsLoadingRegions(false);
+    setVpsBusy(false);
+    setVpsError(null);
+    setVpsProvisionId(null);
+    setVpsProviderResourceId(null);
+    setVpsProgressStage('idle');
+    setVpsCleanupBusy(false);
+  }
+
+  async function loadVpsRegions(providerId: VpsProviderId): Promise<VpsRegion[]> {
+    const provider = VPS_PROVIDER_CARDS[providerId];
+    setVpsLoadingRegions(true);
+    setVpsError(null);
+    try {
+      const payload = await services.client.requestJson<VpsProviderRegionsPayload>({
+        path: `/api/hardware/vps/regions?provider=${encodeURIComponent(providerId)}`,
+      });
+      const regions = normalizeVpsRegionsPayload(payload);
+      if (!regions.length) {
+        throw new Error('Regions are unavailable for this provider.');
+      }
+      const fallbackRegion = String(payload?.default_region || provider.regionFallback);
+      const selectedRegion = preferredVpsRegion(providerId, regions, fallbackRegion);
+      setVpsRegions(regions);
+      setVpsSelectedRegion(selectedRegion);
+      return regions;
+    } catch (regionError) {
+      setVpsError(regionError instanceof Error ? regionError.message : 'Could not load VPS regions.');
+      setVpsRegions([]);
+      setVpsSelectedRegion('');
+      return [];
+    } finally {
+      setVpsLoadingRegions(false);
+    }
+  }
+
+  async function selectVpsProvider(providerId: VpsProviderId) {
+    setSelectedConnectOption('cloud_vps');
+    setVpsSelectedProvider(providerId);
+    setVpsToken('');
+    setVpsProvisionId(null);
+    setVpsProviderResourceId(null);
+    setVpsProgressStage('idle');
+    setVpsStep('credentials');
+    void loadVpsRegions(providerId);
+  }
+
+  async function continueVpsCredentials() {
+    if (!vpsSelectedProvider) {
+      setVpsError('Choose a cloud provider first.');
+      return;
+    }
+    if (!vpsToken.trim()) {
+      setVpsError('Enter an API token to continue.');
+      return;
+    }
+    setVpsError(null);
+    if (!vpsRegions.length) {
+      const regions = await loadVpsRegions(vpsSelectedProvider);
+      if (!regions.length) {
+        return;
+      }
+    }
+    setVpsStep('region');
+  }
+
+  function continueVpsRegion() {
+    if (!vpsSelectedProvider) {
+      setVpsError('Choose a cloud provider first.');
+      return;
+    }
+    if (!vpsSelectedRegion) {
+      setVpsError('Choose a region to continue.');
+      return;
+    }
+    setVpsError(null);
+    setVpsStep('confirm');
+  }
+
+  async function pollVpsProvisionStatus(vpsId: string) {
+    const deadline = Date.now() + 300_000;
+    while (Date.now() < deadline) {
+      await wait(5_000);
+      try {
+        const payload = await services.client.requestJson<VpsProvisionStatusPayload>({
+          path: `/api/hardware/vps/${encodeURIComponent(vpsId)}/status`,
+        });
+        const status = String(payload?.status || '').toLowerCase();
+        if (status === 'connected') {
+          setVpsProgressStage('connected');
+          await refreshHardwareAttachments();
+          await refreshSageAgentComputerState();
+          window.setTimeout(() => {
+            closeConnect();
+          }, 900);
+          return;
+        }
+        if (status === 'failed') {
+          setVpsProgressStage('failed');
+          setVpsError('Setup failed — server was created but could not connect. Check your API token and try again.');
+          return;
+        }
+        setVpsProgressStage(status === 'registering' ? 'connecting' : 'installing');
+      } catch (pollError) {
+        setVpsError(pollError instanceof Error ? pollError.message : 'Could not check VPS setup status.');
+      }
+    }
+    setVpsProgressStage('failed');
+    setVpsError('Setup failed — server was created but could not connect. Check your API token and try again.');
+  }
+
+  async function createCloudVps() {
+    const provider = vpsProviderCard(vpsSelectedProvider);
+    if (!vpsSelectedProvider || !provider) {
+      setVpsError('Choose a cloud provider first.');
+      setVpsStep('provider');
+      return;
+    }
+    if (!vpsToken.trim()) {
+      setVpsError('Enter an API token to continue.');
+      setVpsStep('credentials');
+      return;
+    }
+    if (!vpsSelectedRegion) {
+      setVpsError('Choose a region to continue.');
+      setVpsStep('region');
+      return;
+    }
+    setVpsBusy(true);
+    setVpsError(null);
+    setVpsProgressStage('creating');
+    setVpsStep('progress');
+    try {
+      const payload = await services.client.requestJson<VpsProvisionResponse>({
+        path: '/api/hardware/vps/provision',
+        init: {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            provider: vpsSelectedProvider,
+            credentials: vpsCredentialPayload(vpsSelectedProvider, vpsToken),
+            region: vpsSelectedRegion,
+            size: provider.size,
+            runtime_access_mode: 'full_access',
+            autonomous_agent_setup_warning_acknowledged: true,
+            metadata: {
+              autonomous_agent_setup_warning_version: AGENT_COMPUTER_FULL_ACCESS_WARNING_VERSION,
+            },
+          }),
+        },
+      });
+      const vpsId = String(payload?.vps_id || '').trim();
+      if (!vpsId) {
+        throw new Error('VPS provisioning id was not returned.');
+      }
+      setVpsProvisionId(vpsId);
+      setVpsProviderResourceId(String(payload?.provider_resource_id || '').trim() || null);
+      setVpsProgressStage('installing');
+      void pollVpsProvisionStatus(vpsId);
+    } catch (provisionError) {
+      setVpsProgressStage('failed');
+      setVpsError(provisionError instanceof Error ? provisionError.message : 'Could not create Agent Computer.');
+    } finally {
+      setVpsBusy(false);
+    }
+  }
+
+  async function deleteFailedCloudVps() {
+    if (!vpsProvisionId) {
+      return;
+    }
+    setVpsCleanupBusy(true);
+    setVpsError(null);
+    try {
+      await services.client.requestJson<Record<string, unknown>>({
+        path: `/api/hardware/vps/${encodeURIComponent(vpsProvisionId)}`,
+        init: {
+          method: 'DELETE',
+          headers: {
+            accept: 'application/json',
+          },
+        },
+      });
+      setVpsError('Server deleted.');
+      setVpsProviderResourceId(null);
+    } catch (cleanupError) {
+      setVpsError(cleanupError instanceof Error ? cleanupError.message : 'Could not delete the server.');
+    } finally {
+      setVpsCleanupBusy(false);
+    }
+  }
+
   async function createOtherComputerSetupLink(acknowledgedFullAccessWarning = false) {
     if (!acknowledgedFullAccessWarning) {
       setPendingFullAccessPairingOption('other_computer');
@@ -1275,11 +1665,13 @@ export function WorkstationHardwarePane() {
     setCopiedTarget(null);
     setRemoteExpanded(option === 'ssh_server');
     setManualCommandOpen(false);
+    resetVpsFlow();
   }
 
   function closeConnect() {
     setConnectOpen(false);
     setPendingFullAccessPairingOption(null);
+    resetVpsFlow();
   }
 
   function handleCardAction(card: HardwareCard) {
@@ -1331,14 +1723,19 @@ export function WorkstationHardwarePane() {
     ? 'Connect via Empyralis Agent'
     : connectContext === 'this_device'
       ? 'Connect this Mac'
-      : connectContext === 'ssh_server'
-        ? 'Connect a remote server'
-        : connectContext === 'other_computer'
-          ? 'Connect another computer'
-          : 'Connect a computer';
+    : connectContext === 'ssh_server'
+      ? 'Connect a remote server'
+      : connectContext === 'cloud_vps'
+        ? 'Create a cloud Agent Computer'
+      : connectContext === 'other_computer'
+        ? 'Connect another computer'
+        : 'Connect a computer';
   const showThisMacCard = connectContext === 'all' || connectContext === 'this_device';
+  const showCloudVpsCard = connectContext === 'all' || connectContext === 'cloud_vps';
   const showRemoteServerCard = connectContext === 'all' || connectContext === 'ssh_server';
   const showOtherComputerCard = connectContext === 'all' || connectContext === 'other_computer';
+  const selectedVpsProviderCard = vpsProviderCard(vpsSelectedProvider);
+  const selectedVpsRegion = vpsRegions.find((region) => region.id === vpsSelectedRegion) ?? null;
 
   return (
     <section className="workstation-hardware-pane" aria-label="Hardware">
@@ -1572,6 +1969,234 @@ export function WorkstationHardwarePane() {
 	                {trayProcessConnected(trayStatus) && !trayStatusConnected(trayStatus) ? (
 	                  <p className="workstation-hardware-connect-card__note">{localTrayConnectionNote(trayStatus)}</p>
 	                ) : null}
+	              </article>
+	              ) : null}
+
+	              {showCloudVpsCard ? (
+	              <article className={joinClassNames('workstation-hardware-connect-card workstation-hardware-vps-card', selectedConnectOption === 'cloud_vps' && 'is-active')}>
+	                <div className="workstation-hardware-connect-card__main">
+	                  <div>
+	                    <h3>Cloud VPS</h3>
+                    <p>Create a dedicated Linux Agent Computer in a cloud provider</p>
+                  </div>
+                  <AppButton
+                    tone="secondary"
+                    type="button"
+                    onClick={() => {
+                      setSelectedConnectOption('cloud_vps');
+                      setVpsStep('provider');
+                    }}
+                  >
+                    Choose provider
+                  </AppButton>
+                </div>
+
+                {selectedConnectOption === 'cloud_vps' ? (
+                  <div className="workstation-hardware-vps-flow">
+                    <div className="workstation-hardware-vps-steps" aria-label="Cloud VPS setup steps">
+                      {['Provider', 'Credentials', 'Region', 'Confirm'].map((label, index) => {
+                        const stepOrder: VpsStep[] = ['provider', 'credentials', 'region', 'confirm'];
+                        const activeIndex = stepOrder.indexOf(vpsStep === 'progress' ? 'confirm' : vpsStep);
+                        return (
+                          <span
+                            key={label}
+                            className={joinClassNames(
+                              'workstation-hardware-vps-steps__item',
+                              index <= activeIndex && 'is-active',
+                            )}
+                          >
+                            {label}
+                          </span>
+                        );
+                      })}
+                    </div>
+
+                    {vpsStep === 'provider' ? (
+                      <div className="workstation-hardware-vps-provider-picker">
+                        <div className="workstation-hardware-vps-provider-grid">
+                          {VPS_MAIN_PROVIDER_IDS.map((providerId) => {
+                            const provider = VPS_PROVIDER_CARDS[providerId];
+                            const selected = vpsSelectedProvider === providerId;
+                            return (
+                              <button
+                                key={provider.id}
+                                className={joinClassNames('workstation-hardware-vps-provider-card', selected && 'is-selected')}
+                                type="button"
+                                onClick={() => void selectVpsProvider(provider.id)}
+                              >
+                                <span className="workstation-hardware-vps-provider-card__top">
+                                  <span className="workstation-hardware-vps-provider-card__logo">
+                                    <img src={provider.logoSrc} alt="" aria-hidden="true" />
+                                  </span>
+                                  <span className="workstation-hardware-vps-provider-card__price">{provider.price}</span>
+                                </span>
+                                <strong>{provider.label}</strong>
+                                <span className="workstation-hardware-vps-provider-card__specs">{`${provider.specs} · ${provider.tagline}`}</span>
+                                <span className="workstation-hardware-vps-provider-card__features">
+                                  {provider.features.map((feature) => (
+                                    <span key={feature}>
+                                      <Check size={13} strokeWidth={2} aria-hidden="true" />
+                                      {feature}
+                                    </span>
+                                  ))}
+                                </span>
+                                <span className="workstation-hardware-vps-provider-card__cta">Set up</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="workstation-hardware-vps-advanced-row" aria-label="Advanced VPS setup options">
+                          {VPS_ADVANCED_OPTIONS.map((option) => (
+                            <button
+                              key={option.id}
+                              type="button"
+                              className="workstation-hardware-vps-advanced-card"
+                              disabled={option.id !== 'custom_ssh'}
+                              onClick={() => {
+                                if (option.id === 'custom_ssh') {
+                                  setSelectedConnectOption('ssh_server');
+                                  setRemoteExpanded(true);
+                                }
+                              }}
+                            >
+                              <span>{option.label}</span>
+                              <small>{option.detail}</small>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {vpsStep === 'credentials' && selectedVpsProviderCard ? (
+                      <div className="workstation-hardware-vps-step-panel">
+                        <label className="app-form-field">
+                          <span className="app-form-field__label">{selectedVpsProviderCard.tokenLabel}</span>
+                          <input
+                            className="app-field"
+                            type="password"
+                            value={vpsToken}
+                            onChange={(event) => setVpsToken(event.target.value)}
+                            placeholder="Paste API token"
+                          />
+                        </label>
+                        <a
+                          className="workstation-hardware-vps-token-link"
+                          href={selectedVpsProviderCard.tokenUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <span>{`Get your ${selectedVpsProviderCard.label} API token`}</span>
+                          <ExternalLink size={13} strokeWidth={2} aria-hidden="true" />
+                        </a>
+                        <div className="workstation-hardware-vps-actions">
+                          <AppButton tone="secondary" type="button" onClick={() => setVpsStep('provider')}>
+                            Back
+                          </AppButton>
+                          <AppButton tone="primary" type="button" onClick={() => void continueVpsCredentials()}>
+                            Next
+                          </AppButton>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {vpsStep === 'region' && selectedVpsProviderCard ? (
+                      <div className="workstation-hardware-vps-step-panel">
+                        <label className="app-form-field">
+                          <span className="app-form-field__label">Region</span>
+                          <select
+                            className="app-field"
+                            value={vpsSelectedRegion}
+                            onChange={(event) => setVpsSelectedRegion(event.target.value)}
+                            disabled={vpsLoadingRegions}
+                          >
+                            {vpsRegions.map((region) => (
+                              <option key={region.id} value={region.id}>
+                                {`${region.label} · ${region.id}`}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="workstation-hardware-vps-actions">
+                          <AppButton tone="secondary" type="button" onClick={() => setVpsStep('credentials')}>
+                            Back
+                          </AppButton>
+                          <AppButton tone="primary" type="button" onClick={continueVpsRegion} disabled={vpsLoadingRegions || !vpsSelectedRegion}>
+                            {vpsLoadingRegions ? 'Loading regions' : 'Next'}
+                          </AppButton>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {vpsStep === 'confirm' && selectedVpsProviderCard ? (
+                      <div className="workstation-hardware-vps-step-panel">
+                        <div className="workstation-hardware-vps-summary">
+                          <div>
+                            <span>Provider</span>
+                            <strong>{selectedVpsProviderCard.label}</strong>
+                          </div>
+                          <div>
+                            <span>Region</span>
+                            <strong>{selectedVpsRegion ? `${selectedVpsRegion.label} · ${selectedVpsRegion.id}` : vpsSelectedRegion}</strong>
+                          </div>
+                          <div>
+                            <span>Size</span>
+                            <strong>{selectedVpsProviderCard.specs}</strong>
+                          </div>
+                          <div>
+                            <span>Est. cost/mo</span>
+                            <strong>{selectedVpsProviderCard.price}</strong>
+                          </div>
+                        </div>
+                        <p className="workstation-hardware-vps-warning">
+                          Sage will have Full Access on this dedicated Agent Computer.
+                        </p>
+                        <div className="workstation-hardware-vps-actions">
+                          <AppButton tone="secondary" type="button" onClick={() => setVpsStep('region')}>
+                            Back
+                          </AppButton>
+                          <AppButton tone="primary" type="button" onClick={() => void createCloudVps()} disabled={vpsBusy}>
+                            {vpsBusy ? 'Creating server' : 'Create Agent Computer'}
+                          </AppButton>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {vpsStep === 'progress' ? (
+                      <div className="workstation-hardware-vps-step-panel">
+                        <div className="workstation-hardware-vps-progress" aria-live="polite">
+                          {VPS_PROGRESS_STEPS.map((step) => (
+                            <div
+                              key={step.id}
+                              className={joinClassNames(
+                                'workstation-hardware-vps-progress__item',
+                                vpsProgressStepActive(step.id, vpsProgressStage) && 'is-active',
+                                vpsProgressStepDone(step.id, vpsProgressStage) && 'is-done',
+                                vpsProgressStage === 'failed' && 'is-failed',
+                              )}
+                            >
+                              <span className="workstation-hardware-vps-progress__dot">
+                                {vpsProgressStepDone(step.id, vpsProgressStage) || step.id === 'connected' && vpsProgressStage === 'connected' ? (
+                                  <Check size={12} strokeWidth={2.4} aria-hidden="true" />
+                                ) : null}
+                              </span>
+                              <span>{step.label}</span>
+                            </div>
+                          ))}
+                        </div>
+                        {vpsProviderResourceId ? (
+                          <p className="workstation-hardware-vps-resource">{`Provider server: ${vpsProviderResourceId}`}</p>
+                        ) : null}
+                        {vpsProgressStage === 'failed' ? (
+                          <AppButton tone="secondary" type="button" onClick={() => void deleteFailedCloudVps()} disabled={!vpsProvisionId || vpsCleanupBusy}>
+                            {vpsCleanupBusy ? 'Deleting server' : 'Delete server'}
+                          </AppButton>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {vpsError ? <p className="workstation-hardware-connect-card__error">{vpsError}</p> : null}
+                  </div>
+                ) : null}
 	              </article>
 	              ) : null}
 

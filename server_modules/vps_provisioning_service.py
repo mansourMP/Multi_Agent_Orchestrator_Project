@@ -265,6 +265,30 @@ def get_vps_provision_status(vps_id: str) -> Dict[str, Any]:
     return _public_record(record)
 
 
+def delete_recorded_vps(vps_id: str) -> Dict[str, Any]:
+    clean_vps_id = _clean_identifier(vps_id, field_name="vps_id")
+    with _STATE_LOCK:
+        state = _load_state()
+        record = dict((state.get("vps") or {}).get(clean_vps_id) or {})
+        if not record:
+            raise KeyError(clean_vps_id)
+    credentials = _decrypt_secret(str(record.get("credentials_ciphertext") or ""))
+    provider_id = _normalize_provider(str(record.get("provider") or ""))
+    resource_id = str(record.get("provider_resource_id") or "").strip()
+    if not resource_id:
+        raise VPSProvisioningError("VPS provider resource id is missing.")
+    token = _provider_token(PROVIDER_CONFIGS[provider_id], credentials)
+    _delete_provider_resource(provider_id, token, resource_id)
+    with _STATE_LOCK:
+        state = _load_state()
+        latest = dict((state.get("vps") or {}).get(clean_vps_id) or record)
+        latest["status"] = "deleted"
+        latest["updated_at"] = _utc_now_iso()
+        state.setdefault("vps", {})[clean_vps_id] = latest
+        _write_state(state)
+    return _public_record(latest)
+
+
 def load_vps_record(vps_id: str) -> Dict[str, Any]:
     clean_vps_id = _clean_identifier(vps_id, field_name="vps_id")
     with _STATE_LOCK:
@@ -429,6 +453,60 @@ def _http_json(
     return parsed
 
 
+def _http_empty(
+    method: str,
+    url: str,
+    *,
+    token: str,
+    provider: str,
+) -> None:
+    request = urlrequest.Request(
+        url,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": "Empyralis-VPS-Provisioner/1.0",
+        },
+    )
+    try:
+        with urlrequest.urlopen(request, timeout=30) as response:
+            response.read()
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:500]
+        raise VPSProvisioningError(f"{provider} cleanup failed: HTTP {exc.code} {detail}") from exc
+    except urlerror.URLError as exc:
+        raise VPSProvisioningError(f"{provider} cleanup failed: {exc.reason}") from exc
+
+
+def _delete_provider_resource(provider_id: str, token: str, resource_id: str) -> None:
+    if provider_id == "digitalocean":
+        _http_empty(
+            "DELETE",
+            f"https://api.digitalocean.com/v2/droplets/{resource_id}",
+            token=token,
+            provider=provider_id,
+        )
+        return
+    if provider_id == "hetzner":
+        _http_empty(
+            "DELETE",
+            f"https://api.hetzner.cloud/v1/servers/{resource_id}",
+            token=token,
+            provider=provider_id,
+        )
+        return
+    if provider_id == "vultr":
+        _http_empty(
+            "DELETE",
+            f"https://api.vultr.com/v2/instances/{resource_id}",
+            token=token,
+            provider=provider_id,
+        )
+        return
+    raise VPSProvisioningError(f"Unsupported VPS provider: {provider_id}")
+
+
 def _resolved_record_status(record: Mapping[str, Any]) -> str:
     workspace_id = str(record.get("workspace_id") or "").strip()
     tenant_id = str(record.get("tenant_id") or "").strip() or None
@@ -489,12 +567,16 @@ def _encrypt_secret(value: Mapping[str, Any]) -> str:
     return vault_store._openssl_encrypt(json.dumps(dict(value), separators=(",", ":"), sort_keys=True))
 
 
-def _decrypt_pairing_token(ciphertext: str) -> str:
+def _decrypt_secret(ciphertext: str) -> Dict[str, Any]:
     plaintext = vault_store._openssl_decrypt(ciphertext)
     parsed = json.loads(plaintext) if plaintext else {}
     if not isinstance(parsed, dict):
-        return ""
-    return str(parsed.get("pairing_token") or "").strip()
+        return {}
+    return parsed
+
+
+def _decrypt_pairing_token(ciphertext: str) -> str:
+    return str(_decrypt_secret(ciphertext).get("pairing_token") or "").strip()
 
 
 def _public_record(record: Mapping[str, Any]) -> Dict[str, Any]:
@@ -546,7 +628,7 @@ def _validate_region(config: ProviderConfig, region: Optional[str]) -> str:
 
 def _normalize_status(status: str) -> str:
     token = str(status or "").strip().lower()
-    if token in {"provisioning", "registering", "connected", "failed"}:
+    if token in {"provisioning", "registering", "connected", "failed", "deleted"}:
         return token
     return "provisioning"
 

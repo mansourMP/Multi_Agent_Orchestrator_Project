@@ -26574,6 +26574,334 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   font-size: 0.82rem;
 }
 
+.workstation-hardware-vps-flow {
+  display: grid;
+  gap: var(--space-3, 12px);
+  margin-top: var(--space-3, 12px);
+}
+
+.workstation-hardware-vps-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.workstation-hardware-vps-steps__item {
+  min-width: 0;
+  border-radius: var(--radius);
+  padding: 7px 8px;
+  color: var(--app-text-tertiary);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 55%, var(--app-bg-panel) 45%);
+  font-size: var(--app-font-11);
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.15;
+  text-align: center;
+}
+
+.workstation-hardware-vps-steps__item.is-active {
+  color: var(--app-text-primary);
+  background: var(--workstation-shell-row-selected);
+}
+
+.workstation-hardware-vps-provider-picker {
+  display: grid;
+  gap: var(--space-3, 12px);
+}
+
+.workstation-hardware-vps-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3, 12px);
+}
+
+.workstation-hardware-vps-provider-card {
+  display: grid;
+  align-content: stretch;
+  gap: var(--space-3, 12px);
+  min-height: 252px;
+  border: 1px solid color-mix(in srgb, var(--app-border-default) 44%, transparent);
+  border-radius: var(--app-radius-lg);
+  padding: var(--space-4, 16px);
+  color: rgba(255, 255, 255, 0.72);
+  background: #253235;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  text-align: left;
+}
+
+.workstation-hardware-vps-provider-card:hover,
+.workstation-hardware-vps-provider-card.is-selected {
+  border-color: color-mix(in srgb, var(--app-accent) 72%, #ffffff 28%);
+  background: #2b393c;
+}
+
+.workstation-hardware-vps-provider-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3, 12px);
+}
+
+.workstation-hardware-vps-provider-card__logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius);
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+}
+
+.workstation-hardware-vps-provider-card__logo img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.workstation-hardware-vps-provider-card__price {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+}
+
+.workstation-hardware-vps-provider-card strong {
+  color: #ffffff;
+  font-size: var(--app-font-17);
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.2;
+}
+
+.workstation-hardware-vps-provider-card__specs {
+  min-height: 38px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: var(--app-font-13);
+  line-height: 1.35;
+}
+
+.workstation-hardware-vps-provider-card__features {
+  display: grid;
+  gap: 8px;
+  min-height: 76px;
+}
+
+.workstation-hardware-vps-provider-card__features span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: var(--app-font-12);
+  line-height: 1.25;
+}
+
+.workstation-hardware-vps-provider-card__features svg {
+  color: #76d19a;
+}
+
+.workstation-hardware-vps-provider-card__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  margin-top: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: var(--space-3, 12px);
+  color: rgba(255, 255, 255, 0.84);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-semibold);
+  text-transform: uppercase;
+}
+
+.workstation-hardware-vps-advanced-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2, 8px);
+}
+
+.workstation-hardware-vps-advanced-card {
+  display: grid;
+  gap: 4px;
+  min-height: 66px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: var(--app-radius-md);
+  padding: 10px 12px;
+  color: var(--app-text-secondary);
+  background: var(--app-bg-panel-elevated);
+  cursor: pointer;
+  text-align: left;
+}
+
+.workstation-hardware-vps-advanced-card:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.workstation-hardware-vps-advanced-card span {
+  color: var(--app-text-primary);
+  font-size: var(--app-font-13);
+  font-weight: var(--app-weight-semibold);
+}
+
+.workstation-hardware-vps-advanced-card small {
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-11);
+}
+
+.workstation-hardware-vps-step-panel {
+  display: grid;
+  gap: var(--space-3, 12px);
+  border: 1px solid var(--app-border-subtle);
+  border-radius: var(--app-radius-lg);
+  padding: var(--space-3, 12px);
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 64%, var(--app-bg-panel) 36%);
+}
+
+.workstation-hardware-vps-token-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-12);
+  text-decoration: none;
+}
+
+.workstation-hardware-vps-token-link:hover {
+  color: var(--app-text-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.workstation-hardware-vps-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2, 8px);
+}
+
+.workstation-hardware-vps-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: var(--app-radius-md);
+  background: var(--app-bg-panel);
+}
+
+.workstation-hardware-vps-summary div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border-right: 1px solid var(--app-border-subtle);
+}
+
+.workstation-hardware-vps-summary div:last-child {
+  border-right: 0;
+}
+
+.workstation-hardware-vps-summary span {
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-11);
+  font-weight: var(--app-weight-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.workstation-hardware-vps-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text-primary);
+  font-size: var(--app-font-13);
+  font-weight: var(--app-weight-semibold);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workstation-hardware-vps-warning,
+.workstation-hardware-vps-resource {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-12);
+  line-height: 1.4;
+}
+
+.workstation-hardware-vps-progress {
+  display: grid;
+  gap: 0;
+}
+
+.workstation-hardware-vps-progress__item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-height: 38px;
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-13);
+  line-height: 1.35;
+}
+
+.workstation-hardware-vps-progress__item.is-active {
+  color: var(--app-text-primary);
+}
+
+.workstation-hardware-vps-progress__item.is-done {
+  color: var(--app-success);
+}
+
+.workstation-hardware-vps-progress__item.is-failed {
+  color: var(--app-text-tertiary);
+}
+
+.workstation-hardware-vps-progress__dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-full);
+}
+
+.workstation-hardware-vps-progress__item.is-active .workstation-hardware-vps-progress__dot {
+  border-color: var(--app-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-accent) 16%, transparent);
+}
+
+.workstation-hardware-vps-progress__item.is-done .workstation-hardware-vps-progress__dot {
+  border-color: var(--app-success);
+  background: color-mix(in srgb, var(--app-success) 14%, transparent);
+}
+
+@media (max-width: 760px) {
+  .workstation-hardware-vps-steps,
+  .workstation-hardware-vps-provider-grid,
+  .workstation-hardware-vps-advanced-row,
+  .workstation-hardware-vps-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .workstation-hardware-vps-summary div {
+    border-right: 0;
+    border-bottom: 1px solid var(--app-border-subtle);
+  }
+
+  .workstation-hardware-vps-summary div:last-child {
+    border-bottom: 0;
+  }
+
+  .workstation-hardware-vps-actions {
+    justify-content: stretch;
+  }
+
+  .workstation-hardware-vps-actions .app-button {
+    flex: 1;
+  }
+}
+
 .workstation-hardware-inline-link {
   border: 0;
   padding: 0;

@@ -136,6 +136,44 @@ def test_vps_status_becomes_connected_when_gateway_registration_has_vps_metadata
     assert "pairing_token_ciphertext" not in status
 
 
+def test_delete_recorded_vps_calls_provider_cleanup(tmp_path, monkeypatch):
+    deleted = []
+    monkeypatch.setattr(vps, "VPS_STATE_FILE", tmp_path / "vps.json")
+    monkeypatch.setattr(vps.vault_store, "_openssl_encrypt", lambda text: f"enc:{text}")
+    monkeypatch.setattr(vps.vault_store, "_openssl_decrypt", lambda text: text.removeprefix("enc:"))
+    monkeypatch.setattr(vps, "_http_empty", lambda method, url, *, token, provider: deleted.append((method, url, token, provider)))
+
+    vps.record_vps_provision(
+        vps_id="vps_2",
+        workspace_id="ws-1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        provider="digitalocean",
+        provider_resource_id="12345",
+        public_ip=None,
+        region="nyc3",
+        size="s-1vcpu-2gb",
+        status="failed",
+        pairing_token="pair_do",
+        credentials={"api_token": "do_secret"},
+    )
+
+    result = vps.delete_recorded_vps("vps_2")
+
+    assert result["status"] == "deleted"
+    assert deleted == [("DELETE", "https://api.digitalocean.com/v2/droplets/12345", "do_secret", "digitalocean")]
+
+
+@pytest.mark.asyncio
+async def test_hardware_vps_regions_route_returns_curated_provider_list():
+    response = await routes_gateway.get_hardware_vps_regions("vultr", current_user={"user_id": "user-1"})
+
+    assert response["provider"] == "vultr"
+    assert response["default_region"] == "ewr"
+    assert response["default_size"] == "vc2-1c-2gb"
+    assert [item["id"] for item in response["regions"]] == ["ewr", "lhr", "fra", "sgp", "syd"]
+
+
 @pytest.mark.asyncio
 async def test_provision_hardware_vps_route_creates_pairing_then_records_vps():
     result = vps.VPSResult(
@@ -152,6 +190,9 @@ async def test_provision_hardware_vps_route_creates_pairing_then_records_vps():
         credentials={"api_token": "do_secret"},
         region="nyc3",
         size=None,
+        runtime_access_mode="full_access",
+        autonomous_agent_setup_warning_acknowledged=True,
+        metadata={"autonomous_agent_setup_warning_version": "2026-06-06"},
     )
     current_user = {"user_id": "user-1"}
 
@@ -174,6 +215,9 @@ async def test_provision_hardware_vps_route_creates_pairing_then_records_vps():
     access_mock.assert_called_once_with(current_user, "ws-1", minimum_role="owner")
     assert pairing_mock.call_args.kwargs["metadata"]["setup_source"] == "vps"
     assert pairing_mock.call_args.kwargs["metadata"]["vps_id"] == response["vps_id"]
+    assert pairing_mock.call_args.kwargs["metadata"]["autonomous_agent_setup_warning_version"] == "2026-06-06"
+    assert pairing_mock.call_args.kwargs["runtime_access_mode"] == "full_access"
+    assert pairing_mock.call_args.kwargs["autonomous_agent_setup_warning_acknowledged"] is True
     assert provision_mock.call_args.args == (
         "digitalocean",
         {"api_token": "do_secret"},
@@ -221,3 +265,36 @@ async def test_hardware_vps_status_route_enforces_workspace_access():
 
     assert response["status"] == "connected"
     access_mock.assert_called_once_with({"user_id": "user-1"}, "ws-1", minimum_role="viewer")
+
+
+@pytest.mark.asyncio
+async def test_hardware_vps_delete_route_enforces_owner_access():
+    with (
+        patch.object(
+            routes_gateway.vps_provisioning_service,
+            "load_vps_record",
+            return_value={
+                "vps_id": "vps_1",
+                "workspace_id": "ws-1",
+                "provider": "vultr",
+                "provider_resource_id": "instance-1",
+                "status": "failed",
+            },
+        ),
+        patch.object(routes_gateway, "enforce_workspace_access", return_value="ws-1") as access_mock,
+        patch.object(
+            routes_gateway.vps_provisioning_service,
+            "delete_recorded_vps",
+            return_value={
+                "vps_id": "vps_1",
+                "provider": "vultr",
+                "provider_resource_id": "instance-1",
+                "status": "deleted",
+            },
+        ) as delete_mock,
+    ):
+        response = await routes_gateway.delete_hardware_vps("vps_1", current_user={"user_id": "user-1"})
+
+    assert response["status"] == "deleted"
+    access_mock.assert_called_once_with({"user_id": "user-1"}, "ws-1", minimum_role="owner")
+    delete_mock.assert_called_once_with("vps_1")

@@ -191,6 +191,7 @@ type PersonalChannelSurfacesPayload = Record<string, unknown> & {
 
 type PersonalCardStatusTone = 'neutral' | 'connected' | 'warning' | 'danger';
 type PersonalCommunicationChannel = 'telegram' | 'whatsapp';
+type ChannelRouteMode = 'cloud' | 'hardware';
 type GatewayRuntimeDependency = 'cloud_only' | 'gateway_optional' | 'gateway_required';
 type ConsumerSetupState = 'oauth_ready' | 'oauth_not_wired' | 'advanced_only';
 
@@ -728,7 +729,7 @@ const CONNECTOR_AUTH_FIELD_FALLBACKS: Record<string, string[]> = {
   smtp: ['host', 'port', 'username', 'password', 'use_tls'],
   telegram_bot: ['bot_token', 'chat_id'],
   slack: ['bot_token', 'user_token', 'team_id', 'team_name'],
-  discord_bot: ['bot_token', 'channel_id', 'guild_id', 'application_id', 'public_key', 'application_public_key'],
+  discord_bot: ['bot_token'],
   whatsapp_twilio: ['account_sid', 'auth_token', 'from_number', 'to_number'],
   wechat_work: ['webhook_url'],
   instagram_business: ['access_token', 'instagram_account_id', 'page_id'],
@@ -2178,6 +2179,7 @@ export function WorkstationSageConnectorsPane({
   const [, setStatus] = useState<string | null>(null);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [telegramChannelMode, setTelegramChannelMode] = useState<'bot' | 'personal'>('bot');
+  const [whatsappChannelMode, setWhatsappChannelMode] = useState<ChannelRouteMode>('cloud');
   const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => (
     normalizeIntegrationCategoryId(searchParams.get('section') ?? searchParams.get('connection'))
     ?? (showProviders ? 'apps' : 'channels')
@@ -2938,8 +2940,10 @@ export function WorkstationSageConnectorsPane({
     () => {
       const telegramBotRecord = connectorCards.find((card) => card.id === 'telegram_bot') ?? null;
       const telegramPersonalRecord = communicationPersonalCards.find((card) => card.id === 'telegram_personal') ?? null;
+      const whatsappPersonalRecord = communicationPersonalCards.find((card) => card.id === 'whatsapp_personal') ?? null;
       const telegramBot = telegramBotRecord ? connectorAsExternalCard(telegramBotRecord) : null;
       const telegramPersonal = telegramPersonalRecord ? personalAsExternalCard(telegramPersonalRecord) : null;
+      const whatsappPersonal = whatsappPersonalRecord ? personalAsExternalCard(whatsappPersonalRecord) : null;
       const telegramConnected = telegramBot?.statusTone === 'connected' || telegramPersonal?.statusTone === 'connected';
       const telegramCard: ExternalIntegrationCardRecord | null = telegramBot || telegramPersonal
         ? {
@@ -2959,16 +2963,32 @@ export function WorkstationSageConnectorsPane({
             runtimeDependency: 'gateway_optional',
           }
         : null;
-      const cloudChannelOrder = ['slack', 'discord_bot', 'whatsapp_twilio'];
+      const whatsappCard: ExternalIntegrationCardRecord | null = showPersonalSurface && whatsappPersonal
+        ? {
+            id: 'whatsapp',
+            label: 'WhatsApp',
+            image: whatsappPersonal.image,
+            detail: 'Use WhatsApp Business or your personal WhatsApp account.',
+            statusLabel: whatsappPersonal.statusTone === 'connected' ? 'Personal connected' : 'Choose setup',
+            statusTone: whatsappPersonal.statusTone === 'connected' ? 'connected' : 'neutral',
+            summary: 'Choose WhatsApp Business for cloud setup, or Personal WhatsApp when Sage must use your logged-in account through Agent Computer.',
+            nextStep: null,
+            actionTarget: 'close',
+            runtimeDependency: 'gateway_optional',
+          }
+        : null;
+      const cloudChannelOrder = showPersonalSurface ? ['slack', 'discord_bot'] : ['slack', 'discord_bot', 'whatsapp_twilio'];
       const cloudCards = cloudChannelOrder
         .map((id) => connectorCards.find((card) => card.id === id) ?? null)
         .filter((card): card is ConnectorCardRecord => Boolean(card))
         .map((card) => withRuntimeDependency(connectorAsExternalCard(card), 'cloud_only'));
       const personalCards = communicationPersonalCards
         .filter((card) => card.id !== 'telegram_personal')
+        .filter((card) => card.id !== 'whatsapp_personal' || !showPersonalSurface)
         .map((card) => withRuntimeDependency(personalAsExternalCard(card), 'gateway_required'));
       return [
         ...(telegramCard ? [telegramCard] : []),
+        ...(whatsappCard ? [whatsappCard] : []),
         ...cloudCards,
         ...(showPersonalSurface ? personalCards : []),
       ];
@@ -4260,6 +4280,11 @@ export function WorkstationSageConnectorsPane({
           if (record.id === 'telegram' && !isExpanded) {
             setTelegramChannelMode('bot');
           }
+          if (record.id === 'whatsapp' && !isExpanded) {
+            setWhatsappChannelMode('cloud');
+            setConfigChannelId(null);
+            setPersonalChannelError(null);
+          }
           setExpandedCardId(isExpanded ? null : record.id);
         }}
       >
@@ -4917,6 +4942,155 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function renderWhatsappChannelExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
+    const showClose = options.showClose !== false;
+    const businessSetupRecord: ExternalIntegrationCardRecord = {
+      id: 'whatsapp_business',
+      label: 'WhatsApp',
+      image: record.image,
+      detail: 'WhatsApp Business API cloud channel.',
+      statusLabel: 'Not connected',
+      statusTone: 'neutral',
+      summary: 'WhatsApp Business API cloud channel.',
+      nextStep: null,
+      actionTarget: 'connection',
+      connectionId: 'whatsapp_twilio',
+      connectionProvider: 'whatsapp_twilio',
+      connectionAuthFields: ['account_sid', 'auth_token', 'from_number', 'to_number'],
+      locked: false,
+    };
+    const channelDraft = channelDrafts.whatsapp;
+    const channelBusy = busyCardId === 'whatsapp_personal' || busyCardId === 'whatsapp_personal:test';
+    const channelComputerIssue = !selectedGateway || !selectedGatewayOnline;
+
+    return (
+      <div className="sage-unified-expand sage-channel-expand">
+        <div className="sage-unified-expand__header">
+          <div className="sage-channel-expand__identity">
+            <BrandLogo
+              id={record.id}
+              label={record.label}
+              src={record.image}
+              failedLogos={failedLogos}
+              onError={markLogoFailed}
+            />
+            <strong className="sage-unified-expand__title">{record.label}</strong>
+          </div>
+          {showClose ? (
+            <button
+              type="button"
+              className="sage-unified-expand__close"
+              onClick={() => setExpandedCardId(null)}
+              aria-label="Close WhatsApp"
+            >
+              <X size={14} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        <div className="sage-channel-route-tabs" role="tablist" aria-label="WhatsApp setup type">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={whatsappChannelMode === 'cloud'}
+            className={joinClassNames('sage-channel-route-tab', whatsappChannelMode === 'cloud' && 'sage-channel-route-tab--active')}
+            onClick={() => {
+              setWhatsappChannelMode('cloud');
+              setConfigChannelId(null);
+              setPersonalChannelError(null);
+            }}
+          >
+            Cloud
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={whatsappChannelMode === 'hardware'}
+            className={joinClassNames('sage-channel-route-tab', whatsappChannelMode === 'hardware' && 'sage-channel-route-tab--active')}
+            onClick={() => {
+              setWhatsappChannelMode('hardware');
+              setConfigChannelId('whatsapp');
+              setPersonalChannelError(null);
+            }}
+          >
+            Hardware
+          </button>
+        </div>
+        {whatsappChannelMode === 'cloud' ? (
+          renderFlatConnectorCredentialForm(businessSetupRecord)
+        ) : (
+          <>
+            {channelComputerIssue ? (
+              <>
+                <AppNotice tone="warning">Agent Computer offline — connect Hardware first.</AppNotice>
+                <div className="sage-unified-expand__actions">
+                  <button type="button" className="app-button app-button--primary" onClick={openGatewaySurface}>
+                    Go to Hardware
+                  </button>
+                </div>
+              </>
+            ) : renderPersonalChannelConfig('whatsapp', channelDraft, channelBusy)}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  function renderBridgeChannelExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
+    const showClose = options.showClose !== false;
+    const gatewayReady = Boolean(selectedGateway && selectedGatewayOnline);
+    const instruction = record.id === 'imessage_personal'
+      ? 'Set up the iMessage bridge on the selected Mac Agent Computer.'
+      : record.id === 'signal_personal'
+        ? 'Set up the Signal bridge on the selected Agent Computer.'
+        : 'Set up the WeChat bridge on the selected Agent Computer.';
+    return (
+      <div className="sage-unified-expand sage-channel-expand">
+        <div className="sage-unified-expand__header">
+          <div className="sage-channel-expand__identity">
+            <BrandLogo
+              id={record.id}
+              label={record.label}
+              src={record.image}
+              failedLogos={failedLogos}
+              onError={markLogoFailed}
+            />
+            <strong className="sage-unified-expand__title">{record.label}</strong>
+          </div>
+          {showClose ? (
+            <button
+              type="button"
+              className="sage-unified-expand__close"
+              onClick={() => setExpandedCardId(null)}
+              aria-label={`Close ${record.label}`}
+            >
+              <X size={14} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        {gatewayReady ? (
+          <>
+            <div className="sage-unified-expand__text">Set up bridge on Agent Computer.</div>
+            <div className="sage-unified-expand__text">{instruction}</div>
+            <div className="sage-unified-expand__actions">
+              <button type="button" className="app-button app-button--primary" onClick={openGatewaySurface}>
+                Go to Hardware
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <AppNotice tone="warning">Agent Computer offline — connect Hardware first.</AppNotice>
+            <div className="sage-unified-expand__actions">
+              <button type="button" className="app-button app-button--primary" onClick={openGatewaySurface}>
+                Go to Hardware
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
   function renderConnectorModeSetup(record: ExternalIntegrationCardRecord) {
     const sourceConnector = record.connectorCardId
       ? connectorCards.find((card) => card.id === record.connectorCardId) ?? null
@@ -4993,9 +5167,9 @@ export function WorkstationSageConnectorsPane({
             </FormField>
           ))}
         </div>
-        <AppButton type="submit" disabled={busy}>
+        <button type="submit" className="app-button app-button--primary" disabled={busy}>
           {busy ? 'Saving...' : connectorCredentialSaveLabel(record)}
-        </AppButton>
+        </button>
       </form>
     );
   }
@@ -5003,6 +5177,12 @@ export function WorkstationSageConnectorsPane({
   function renderExternalExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
     if (record.id === 'telegram') {
       return renderTelegramChannelExpand(record, options);
+    }
+    if (record.id === 'whatsapp') {
+      return renderWhatsappChannelExpand(record, options);
+    }
+    if (record.id === 'signal_personal' || record.id === 'imessage_personal' || record.id === 'wechat_personal') {
+      return renderBridgeChannelExpand(record, options);
     }
     const channel = record.channel ?? null;
     const channelDraft = channel ? channelDrafts[channel] : null;
@@ -5109,8 +5289,9 @@ export function WorkstationSageConnectorsPane({
             </AppButton>
           ) : null}
           {record.actionLabel && !channel && !showConnectorCredentialForm ? (
-            <AppButton
+            <button
               type="button"
+              className="app-button app-button--primary"
               onClick={() => {
                 if (record.actionTarget === 'computer') {
                   openComputerConnectSheet();
@@ -5137,7 +5318,7 @@ export function WorkstationSageConnectorsPane({
               }}
             >
               {record.actionLabel}
-            </AppButton>
+            </button>
           ) : null}
           {record.secondaryActionLabel && !channelComputerIssue ? (
             <AppButton
@@ -5149,15 +5330,6 @@ export function WorkstationSageConnectorsPane({
             >
               {record.secondaryActionLabel}
             </AppButton>
-          ) : null}
-          {showClose ? (
-            <button
-              type="button"
-              className="sage-unified-expand__link"
-              onClick={() => setExpandedCardId(null)}
-            >
-              Close
-            </button>
           ) : null}
         </div>
         {channel && channelDraft && configOpen && !channelComputerIssue ? renderPersonalChannelConfig(channel, channelDraft, channelBusy) : null}

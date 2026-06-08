@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shlex
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -68,6 +69,7 @@ from server_modules import (
     rust_runtime_kernel_client,
     safe_mode_service,
     security_audit_service,
+    vps_provisioning_service,
 )
 
 
@@ -681,6 +683,14 @@ class GatewaySshPairingRequest(BaseModel):
     runtime_access_mode: Optional[str] = None
     autonomous_agent_setup_warning_acknowledged: bool = False
     expected_host_fingerprint: Optional[str] = None
+
+
+class HardwareVPSProvisionRequest(BaseModel):
+    workspace_id: Optional[str] = None
+    provider: str = Field(min_length=1, max_length=64)
+    credentials: Dict[str, Any] = Field(default_factory=dict)
+    region: Optional[str] = Field(default=None, max_length=64)
+    size: Optional[str] = Field(default=None, max_length=128)
 
 
 def _gateway_api_url_for_remote_setup() -> str:
@@ -1561,6 +1571,118 @@ async def create_gateway_ssh_pairing(
             "created": pairing is not None,
             "expires_at": pairing.get("expires_at") if isinstance(pairing, dict) else None,
         },
+    }
+
+
+@router.post("/hardware/vps/provision")
+async def provision_hardware_vps(
+    body: HardwareVPSProvisionRequest,
+    current_user=Depends(require_api_key),
+):
+    workspace_id = enforce_workspace_access(
+        current_user,
+        body.workspace_id or "default",
+        minimum_role="owner",
+    )
+    tenant_id = workspace_tenant_id(current_user, workspace_id)
+    user_id = str((current_user or {}).get("user_id") or "").strip() or "unknown-user"
+    try:
+        resolved = vps_provisioning_service.resolve_provider_options(body.provider, body.region, body.size)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    vps_id = f"vps_{uuid.uuid4().hex}"
+    try:
+        pairing = gateway_pairing_service.create_gateway_pairing_intent(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            ttl_seconds=None,
+            display_name=f"{vps_provisioning_service.PROVIDER_CONFIGS[resolved['provider']].label} Agent Computer",
+            platform="linux",
+            metadata={
+                "setup_source": "vps",
+                "vps_id": vps_id,
+                "provider": resolved["provider"],
+                "region": resolved["region"],
+                "size": resolved["size"],
+                "agent_scope": "sage",
+            },
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 429 if "too many pending gateway pairing requests" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    pairing_token = str(pairing.get("pairing_token") or "").strip()
+    if not pairing_token:
+        raise HTTPException(status_code=500, detail="Gateway pairing token was not created.")
+    try:
+        result = vps_provisioning_service.provision_vps(
+            resolved["provider"],
+            body.credentials,
+            resolved["region"],
+            resolved["size"],
+            pairing_token,
+        )
+        vps_provisioning_service.record_vps_provision(
+            vps_id=vps_id,
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            provider=result.provider,
+            provider_resource_id=result.provider_resource_id,
+            public_ip=result.public_ip,
+            region=result.region,
+            size=result.size,
+            status=result.status,
+            pairing_token=pairing_token,
+            credentials=body.credentials,
+            pairing_id=str(pairing.get("pairing_id") or "").strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except vps_provisioning_service.VPSProvisioningError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "pairing_token": pairing_token,
+        "vps_id": vps_id,
+        "provider_resource_id": result.provider_resource_id,
+        "public_ip": result.public_ip,
+        "status": "provisioning",
+    }
+
+
+@router.get("/hardware/vps/{vps_id}/status")
+async def get_hardware_vps_status(
+    vps_id: str,
+    current_user=Depends(require_api_key),
+):
+    try:
+        record = vps_provisioning_service.load_vps_record(vps_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="VPS provisioning record was not found.") from exc
+    workspace_id = enforce_workspace_access(
+        current_user,
+        record.get("workspace_id") or "default",
+        minimum_role="viewer",
+    )
+    if workspace_id != str(record.get("workspace_id") or "").strip():
+        raise HTTPException(status_code=404, detail="VPS provisioning record was not found.")
+    try:
+        status_record = vps_provisioning_service.get_vps_provision_status(vps_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="VPS provisioning record was not found.") from exc
+    return {
+        "vps_id": status_record["vps_id"],
+        "provider": status_record["provider"],
+        "provider_resource_id": status_record["provider_resource_id"],
+        "public_ip": status_record["public_ip"],
+        "region": status_record["region"],
+        "size": status_record["size"],
+        "status": status_record["status"],
     }
 
 

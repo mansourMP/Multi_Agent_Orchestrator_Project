@@ -102,6 +102,11 @@ def _connector_public_metadata(connector: str, credentials: Dict[str, Any]) -> D
             value = str(credentials.get(key) or "").strip()
             if value:
                 public[key] = value
+    elif connector_id in {"figma", "todoist", "airtable", "canva"}:
+        for key in ("auth_mode", "id", "user_id", "user_id_string", "email", "handle", "name", "display_name"):
+            value = str(credentials.get(key) or "").strip()
+            if value:
+                public[key] = value
     elif connector_id == "s3":
         for key in ("auth_mode", "region", "access_key_hint", "bucket_count"):
             value = str(credentials.get(key) or "").strip()
@@ -221,6 +226,19 @@ def _connector_identity_signature(connector: str, credentials: Dict[str, Any]) -
             return f"dropbox:{account_id}"
         if token:
             return f"dropbox:{token}"
+    if connector_id in {"figma", "todoist", "airtable", "canva"}:
+        account_id = str(
+            credentials.get("id")
+            or credentials.get("user_id_string")
+            or credentials.get("user_id")
+            or credentials.get("email")
+            or ""
+        ).strip()
+        token = str(credentials.get("access_token") or credentials.get("oauth_access_token") or credentials.get("token") or "").strip()
+        if account_id:
+            return f"{connector_id}:{account_id}"
+        if token:
+            return f"{connector_id}:{token}"
     if connector_id == "s3":
         access_key_id = str(
             credentials.get("aws_access_key_id")

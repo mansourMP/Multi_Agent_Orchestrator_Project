@@ -676,6 +676,46 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     surfaceScope: 'all',
   },
   {
+    id: 'figma',
+    label: 'Figma',
+    image: '/brand-assets/generic/api.svg?v=3',
+    connectorIds: ['figma'],
+    capabilityTags: ['Design files', 'Comments'],
+    summary: 'Figma lets Sage use design files, metadata, and comments for product work.',
+    setupHint: 'Connect Figma when Sage should read design context and comments.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'todoist',
+    label: 'Todoist',
+    image: '/brand-assets/generic/api.svg?v=3',
+    connectorIds: ['todoist'],
+    capabilityTags: ['Tasks', 'Projects'],
+    summary: 'Todoist lets Sage read and update personal tasks and project lists.',
+    setupHint: 'Connect Todoist when Sage should manage personal tasks.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'airtable',
+    label: 'Airtable',
+    image: '/brand-assets/generic/api.svg?v=3',
+    connectorIds: ['airtable'],
+    capabilityTags: ['Bases', 'Records'],
+    summary: 'Airtable lets Sage read bases, inspect schema, and update records with approval.',
+    setupHint: 'Connect Airtable when Sage should work with structured records and bases.',
+    surfaceScope: 'all',
+  },
+  {
+    id: 'canva',
+    label: 'Canva',
+    image: '/brand-assets/generic/api.svg?v=3',
+    connectorIds: ['canva'],
+    capabilityTags: ['Designs', 'Assets'],
+    summary: 'Canva lets Sage use design metadata, folders, and assets in creative workflows.',
+    setupHint: 'Connect Canva when Sage should work with Canva designs and brand assets.',
+    surfaceScope: 'all',
+  },
+  {
     id: 's3',
     label: 'Amazon S3',
     image: '/brand-assets/apps/aws-s3.svg?v=3',
@@ -725,6 +765,10 @@ const CONNECTOR_AUTH_FIELD_FALLBACKS: Record<string, string[]> = {
   notion: ['integration_token'],
   linear: ['api_key'],
   dropbox: ['access_token'],
+  figma: ['access_token'],
+  todoist: ['access_token'],
+  airtable: ['access_token'],
+  canva: ['access_token'],
   s3: ['aws_access_key_id', 'aws_secret_access_key', 'region'],
   smtp: ['host', 'port', 'username', 'password', 'use_tls'],
   telegram_bot: ['bot_token', 'chat_id'],
@@ -746,6 +790,10 @@ const CONSUMER_APP_CARD_IDS = new Set([
   'notion',
   'linear',
   'dropbox',
+  'figma',
+  'todoist',
+  'airtable',
+  'canva',
   'instagram_business',
 ]);
 
@@ -765,6 +813,10 @@ const OAUTH_READY_APP_CARD_IDS = new Set([
   'notion',
   'linear',
   'dropbox',
+  'figma',
+  'todoist',
+  'airtable',
+  'canva',
   'slack',
 ]);
 
@@ -2906,6 +2958,9 @@ export function WorkstationSageConnectorsPane({
       || card.id === 'websites'
       || card.id === 'github'
       || card.id === 'dropbox'
+      || card.id === 'figma'
+      || card.id === 'airtable'
+      || card.id === 'canva'
       || card.id === 's3',
     ),
     [connectorCards],
@@ -2927,6 +2982,10 @@ export function WorkstationSageConnectorsPane({
         || card.id === 'notion'
         || card.id === 'webhook'
         || card.id === 'dropbox'
+        || card.id === 'figma'
+        || card.id === 'todoist'
+        || card.id === 'airtable'
+        || card.id === 'canva'
         || card.id === 's3'
         || card.id === 'smtp'
         || card.id === 'wechat_work'

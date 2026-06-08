@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import time
+from dataclasses import dataclass, field
 from typing import Any, Dict
 from urllib import parse as urlparse
 from urllib import request as urlrequest
@@ -18,25 +19,223 @@ from server_modules.schemas import ConnectorCreate
 
 
 _STATE_TTL_SECONDS = 600
-_GOOGLE_SCOPES = [
-    "openid",
-    "email",
-    "profile",
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/drive.file",
-]
-_GITHUB_SCOPES = ["repo", "read:user", "user:email"]
-_LINEAR_SCOPES = ["read", "write"]
-_DROPBOX_SCOPES = ["files.metadata.read", "files.content.read", "files.content.write", "sharing.read", "sharing.write"]
-_MICROSOFT_SCOPES = [
-    "offline_access",
-    "User.Read",
-    "Mail.ReadWrite",
-    "Mail.Send",
-    "Calendars.ReadWrite",
-    "Files.ReadWrite.All",
-]
+
+
+@dataclass(frozen=True)
+class OAuthProviderConfig:
+    label: str
+    env_vars: Dict[str, tuple[str, ...]]
+    scopes: tuple[str, ...]
+    auth_url: str
+    token_url: str
+    auth_method: str
+    token_parser: str
+    profile_probe: str | None
+    scope_separator: str = " "
+    auth_params: Dict[str, str] = field(default_factory=dict)
+    include_response_type: bool = True
+    slack_authorize_helper: bool = False
+    token_auth: str = "client_secret_post"
+    include_client_id_in_token_body: bool = True
+    include_client_secret_in_token_body: bool = True
+
+
+OAUTH_PROVIDER_CONFIGS: Dict[str, OAuthProviderConfig] = {
+    "google_workspace": OAuthProviderConfig(
+        label="Google Workspace",
+        env_vars={
+            "client_id": ("GOOGLE_WORKSPACE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_CLIENT_ID"),
+            "client_secret": ("GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"),
+        },
+        scopes=(
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/calendar",
+            "https://www.googleapis.com/auth/drive.file",
+        ),
+        auth_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://www.googleapis.com/oauth2/v3/userinfo",
+        auth_params={"access_type": "offline", "prompt": "consent select_account"},
+    ),
+    "github": OAuthProviderConfig(
+        label="GitHub",
+        env_vars={
+            "client_id": ("GITHUB_OAUTH_CLIENT_ID", "GITHUB_CLIENT_ID"),
+            "client_secret": ("GITHUB_OAUTH_CLIENT_SECRET", "GITHUB_CLIENT_SECRET"),
+        },
+        scopes=("repo", "read:user", "user:email"),
+        auth_url="https://github.com/login/oauth/authorize",
+        token_url="https://github.com/login/oauth/access_token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.github.com/user",
+        include_response_type=False,
+    ),
+    "microsoft_365": OAuthProviderConfig(
+        label="Microsoft 365",
+        env_vars={
+            "client_id": ("MICROSOFT_365_OAUTH_CLIENT_ID", "MICROSOFT_OAUTH_CLIENT_ID", "MICROSOFT_CLIENT_ID"),
+            "client_secret": ("MICROSOFT_365_OAUTH_CLIENT_SECRET", "MICROSOFT_OAUTH_CLIENT_SECRET", "MICROSOFT_CLIENT_SECRET"),
+        },
+        scopes=(
+            "offline_access",
+            "User.Read",
+            "Mail.ReadWrite",
+            "Mail.Send",
+            "Calendars.ReadWrite",
+            "Files.ReadWrite.All",
+        ),
+        auth_url="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize",
+        token_url="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://graph.microsoft.com/v1.0/me",
+        auth_params={"prompt": "select_account"},
+    ),
+    "slack": OAuthProviderConfig(
+        label="Slack",
+        env_vars={
+            "client_id": ("SLACK_CLIENT_ID",),
+            "client_secret": ("SLACK_CLIENT_SECRET",),
+        },
+        scopes=tuple(slack_connector.DEFAULT_SLACK_BOT_SCOPES),
+        auth_url="https://slack.com/oauth/v2/authorize",
+        token_url="https://slack.com/api/oauth.v2.access",
+        auth_method="authorization_code",
+        token_parser="custom",
+        profile_probe="https://slack.com/api/auth.test",
+        scope_separator=",",
+        slack_authorize_helper=True,
+    ),
+    "notion": OAuthProviderConfig(
+        label="Notion",
+        env_vars={
+            "client_id": ("NOTION_OAUTH_CLIENT_ID", "NOTION_CLIENT_ID"),
+            "client_secret": ("NOTION_OAUTH_CLIENT_SECRET", "NOTION_CLIENT_SECRET"),
+        },
+        scopes=(),
+        auth_url="https://api.notion.com/v1/oauth/authorize",
+        token_url="https://api.notion.com/v1/oauth/token",
+        auth_method="authorization_code",
+        token_parser="custom",
+        profile_probe="https://api.notion.com/v1/users/me",
+        auth_params={"owner": "user"},
+    ),
+    "linear": OAuthProviderConfig(
+        label="Linear",
+        env_vars={
+            "client_id": ("LINEAR_OAUTH_CLIENT_ID", "LINEAR_CLIENT_ID"),
+            "client_secret": ("LINEAR_OAUTH_CLIENT_SECRET", "LINEAR_CLIENT_SECRET"),
+        },
+        scopes=("read", "write"),
+        auth_url="https://linear.app/oauth/authorize",
+        token_url="https://api.linear.app/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.linear.app/graphql",
+        scope_separator=",",
+    ),
+    "dropbox": OAuthProviderConfig(
+        label="Dropbox",
+        env_vars={
+            "client_id": ("DROPBOX_OAUTH_CLIENT_ID", "DROPBOX_CLIENT_ID", "DROPBOX_APP_KEY"),
+            "client_secret": ("DROPBOX_OAUTH_CLIENT_SECRET", "DROPBOX_CLIENT_SECRET", "DROPBOX_APP_SECRET"),
+        },
+        scopes=("files.metadata.read", "files.content.read", "files.content.write", "sharing.read", "sharing.write"),
+        auth_url="https://www.dropbox.com/oauth2/authorize",
+        token_url="https://api.dropboxapi.com/oauth2/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.dropboxapi.com/2/users/get_current_account",
+        auth_params={"token_access_type": "offline"},
+    ),
+    "figma": OAuthProviderConfig(
+        label="Figma",
+        env_vars={
+            "client_id": ("FIGMA_CLIENT_ID",),
+            "client_secret": ("FIGMA_CLIENT_SECRET",),
+        },
+        scopes=("current_user:read", "file_metadata:read", "file_content:read", "file_comments:read"),
+        auth_url="https://www.figma.com/oauth",
+        token_url="https://api.figma.com/v1/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.figma.com/v1/me",
+        token_auth="basic",
+        include_client_id_in_token_body=False,
+        include_client_secret_in_token_body=False,
+    ),
+    "todoist": OAuthProviderConfig(
+        label="Todoist",
+        env_vars={
+            "client_id": ("TODOIST_CLIENT_ID",),
+            "client_secret": ("TODOIST_CLIENT_SECRET",),
+        },
+        scopes=("data:read_write",),
+        auth_url="https://todoist.com/oauth/authorize",
+        token_url="https://todoist.com/oauth/access_token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.todoist.com/api/v1/projects?limit=1",
+    ),
+    "airtable": OAuthProviderConfig(
+        label="Airtable",
+        env_vars={
+            "client_id": ("AIRTABLE_CLIENT_ID",),
+            "client_secret": ("AIRTABLE_CLIENT_SECRET",),
+        },
+        scopes=("data.records:read", "data.records:write", "schema.bases:read"),
+        auth_url="https://airtable.com/oauth2/v1/authorize",
+        token_url="https://airtable.com/oauth2/v1/token",
+        auth_method="pkce",
+        token_parser="standard",
+        profile_probe="https://api.airtable.com/v0/meta/whoami",
+        token_auth="basic",
+        include_client_id_in_token_body=True,
+        include_client_secret_in_token_body=False,
+    ),
+    "canva": OAuthProviderConfig(
+        label="Canva",
+        env_vars={
+            "client_id": ("CANVA_CLIENT_ID",),
+            "client_secret": ("CANVA_CLIENT_SECRET",),
+        },
+        scopes=("profile:read", "design:meta:read", "design:content:read", "folder:read", "asset:read"),
+        auth_url="https://www.canva.com/api/oauth/authorize",
+        token_url="https://api.canva.com/rest/v1/oauth/token",
+        auth_method="pkce",
+        token_parser="standard",
+        profile_probe="https://api.canva.com/rest/v1/users/me/profile",
+        token_auth="basic",
+        include_client_id_in_token_body=False,
+        include_client_secret_in_token_body=False,
+    ),
+}
+
+_CONNECTION_PROVIDER_ALIASES = {
+    "google_workspace": "google_workspace",
+    "gmail": "google_workspace",
+    "google_calendar": "google_workspace",
+    "google_drive": "google_workspace",
+    "drive": "google_workspace",
+    "github": "github",
+    "microsoft_365": "microsoft_365",
+    "outlook": "microsoft_365",
+    "outlook_calendar": "microsoft_365",
+    "slack": "slack",
+    "notion": "notion",
+    "linear": "linear",
+    "dropbox": "dropbox",
+    "figma": "figma",
+    "todoist": "todoist",
+    "airtable": "airtable",
+    "canva": "canva",
+}
 
 
 def _env_first(*names: str) -> str:
@@ -117,69 +316,31 @@ def callback_url(request: Request, provider: str) -> str:
     return f"{request_origin(request)}/api/connections/oauth/{urlparse.quote(provider)}/callback"
 
 
+def _provider_config(provider: str) -> OAuthProviderConfig:
+    normalized = str(provider or "").strip().lower()
+    config = OAUTH_PROVIDER_CONFIGS.get(normalized)
+    if config is None:
+        raise HTTPException(status_code=409, detail=f"{_connector_label(normalized)} OAuth is not wired yet.")
+    return config
+
+
 def _connector_label(provider: str) -> str:
-    return {
-        "google_workspace": "Google Workspace",
-        "github": "GitHub",
-        "microsoft_365": "Microsoft 365",
-        "slack": "Slack",
-        "notion": "Notion",
-        "linear": "Linear",
-        "dropbox": "Dropbox",
-    }.get(provider, provider.replace("_", " ").title())
+    config = OAUTH_PROVIDER_CONFIGS.get(str(provider or "").strip().lower())
+    if config is not None:
+        return config.label
+    return provider.replace("_", " ").title()
 
 
 def _provider_env(provider: str) -> tuple[str, str, tuple[str, ...], tuple[str, ...]]:
-    if provider == "google_workspace":
-        return (
-            _env_first("GOOGLE_WORKSPACE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_CLIENT_ID"),
-            _env_first("GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"),
-            ("GOOGLE_WORKSPACE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_CLIENT_ID"),
-            ("GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"),
-        )
-    if provider == "github":
-        return (
-            _env_first("GITHUB_OAUTH_CLIENT_ID", "GITHUB_CLIENT_ID"),
-            _env_first("GITHUB_OAUTH_CLIENT_SECRET", "GITHUB_CLIENT_SECRET"),
-            ("GITHUB_OAUTH_CLIENT_ID", "GITHUB_CLIENT_ID"),
-            ("GITHUB_OAUTH_CLIENT_SECRET", "GITHUB_CLIENT_SECRET"),
-        )
-    if provider == "microsoft_365":
-        return (
-            _env_first("MICROSOFT_365_OAUTH_CLIENT_ID", "MICROSOFT_OAUTH_CLIENT_ID", "MICROSOFT_CLIENT_ID"),
-            _env_first("MICROSOFT_365_OAUTH_CLIENT_SECRET", "MICROSOFT_OAUTH_CLIENT_SECRET", "MICROSOFT_CLIENT_SECRET"),
-            ("MICROSOFT_365_OAUTH_CLIENT_ID", "MICROSOFT_OAUTH_CLIENT_ID", "MICROSOFT_CLIENT_ID"),
-            ("MICROSOFT_365_OAUTH_CLIENT_SECRET", "MICROSOFT_OAUTH_CLIENT_SECRET", "MICROSOFT_CLIENT_SECRET"),
-        )
-    if provider == "slack":
-        return (
-            _env_first("SLACK_CLIENT_ID"),
-            _env_first("SLACK_CLIENT_SECRET"),
-            ("SLACK_CLIENT_ID",),
-            ("SLACK_CLIENT_SECRET",),
-        )
-    if provider == "notion":
-        return (
-            _env_first("NOTION_OAUTH_CLIENT_ID", "NOTION_CLIENT_ID"),
-            _env_first("NOTION_OAUTH_CLIENT_SECRET", "NOTION_CLIENT_SECRET"),
-            ("NOTION_OAUTH_CLIENT_ID", "NOTION_CLIENT_ID"),
-            ("NOTION_OAUTH_CLIENT_SECRET", "NOTION_CLIENT_SECRET"),
-        )
-    if provider == "linear":
-        return (
-            _env_first("LINEAR_OAUTH_CLIENT_ID", "LINEAR_CLIENT_ID"),
-            _env_first("LINEAR_OAUTH_CLIENT_SECRET", "LINEAR_CLIENT_SECRET"),
-            ("LINEAR_OAUTH_CLIENT_ID", "LINEAR_CLIENT_ID"),
-            ("LINEAR_OAUTH_CLIENT_SECRET", "LINEAR_CLIENT_SECRET"),
-        )
-    if provider == "dropbox":
-        return (
-            _env_first("DROPBOX_OAUTH_CLIENT_ID", "DROPBOX_CLIENT_ID", "DROPBOX_APP_KEY"),
-            _env_first("DROPBOX_OAUTH_CLIENT_SECRET", "DROPBOX_CLIENT_SECRET", "DROPBOX_APP_SECRET"),
-            ("DROPBOX_OAUTH_CLIENT_ID", "DROPBOX_CLIENT_ID", "DROPBOX_APP_KEY"),
-            ("DROPBOX_OAUTH_CLIENT_SECRET", "DROPBOX_CLIENT_SECRET", "DROPBOX_APP_SECRET"),
-        )
-    raise HTTPException(status_code=409, detail=f"{_connector_label(provider)} OAuth is not wired yet.")
+    config = _provider_config(provider)
+    client_names = tuple(config.env_vars.get("client_id") or ())
+    secret_names = tuple(config.env_vars.get("client_secret") or ())
+    return (
+        _env_first(*client_names),
+        _env_first(*secret_names),
+        client_names,
+        secret_names,
+    )
 
 
 def ensure_oauth_configured(provider: str) -> tuple[str, str]:
@@ -202,20 +363,9 @@ def oauth_provider_configured(provider: str) -> bool:
 
 def provider_from_connection_id(connection_id: str) -> str:
     normalized = str(connection_id or "").strip().lower()
-    if normalized in {"google_workspace", "gmail", "google_calendar", "google_drive", "drive"}:
-        return "google_workspace"
-    if normalized == "github":
-        return "github"
-    if normalized in {"microsoft_365", "outlook", "outlook_calendar"}:
-        return "microsoft_365"
-    if normalized == "slack":
-        return "slack"
-    if normalized == "notion":
-        return "notion"
-    if normalized == "linear":
-        return "linear"
-    if normalized == "dropbox":
-        return "dropbox"
+    provider = _CONNECTION_PROVIDER_ALIASES.get(normalized)
+    if provider is not None:
+        return provider
     raise HTTPException(status_code=409, detail="This connection does not have a one-click OAuth setup yet.")
 
 
@@ -231,6 +381,30 @@ def _microsoft_tenant() -> str:
     ) or "common"
 
 
+def _provider_url(provider: str, url_template: str) -> str:
+    if provider == "microsoft_365":
+        tenant = urlparse.quote(_microsoft_tenant().strip() or "common")
+        return url_template.format(tenant=tenant)
+    return url_template
+
+
+def _joined_scopes(config: OAuthProviderConfig) -> str:
+    return config.scope_separator.join(config.scopes)
+
+
+def _new_pkce_nonce() -> str:
+    return _b64url_encode(os.urandom(32))
+
+
+def _pkce_verifier(*, provider: str, workspace_id: str, nonce: str) -> str:
+    payload = f"pkce:v1:{provider}:{workspace_id}:{nonce}".encode("utf-8")
+    return _b64url_encode(hmac.new(_state_secret().encode("utf-8"), payload, hashlib.sha256).digest())
+
+
+def _pkce_challenge(code_verifier: str) -> str:
+    return _b64url_encode(hashlib.sha256(code_verifier.encode("ascii")).digest())
+
+
 def start_oauth(
     *,
     provider: str,
@@ -238,73 +412,44 @@ def start_oauth(
     surface: str | None,
     request: Request,
 ) -> Dict[str, Any]:
+    config = _provider_config(provider)
     client_id, _client_secret = ensure_oauth_configured(provider)
     redirect_uri = callback_url(request, provider)
-    state = _encode_state({
+    state_payload: Dict[str, Any] = {
         "provider": provider,
         "workspace_id": workspace_id,
         "surface": str(surface or "sage").strip() or "sage",
-    })
-    if provider == "google_workspace":
-        authorization_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlparse.urlencode({
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(_GOOGLE_SCOPES),
-            "access_type": "offline",
-            "prompt": "consent select_account",
-            "state": state,
-        })
-    elif provider == "github":
-        authorization_url = "https://github.com/login/oauth/authorize?" + urlparse.urlencode({
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "scope": " ".join(_GITHUB_SCOPES),
-            "state": state,
-        })
-    elif provider == "microsoft_365":
-        tenant = urlparse.quote(_microsoft_tenant().strip() or "common")
-        authorization_url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?" + urlparse.urlencode({
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(_MICROSOFT_SCOPES),
-            "prompt": "select_account",
-            "state": state,
-        })
-    elif provider == "slack":
+    }
+    code_verifier = ""
+    if config.auth_method == "pkce":
+        state_payload["pkce_nonce"] = _new_pkce_nonce()
+        code_verifier = _pkce_verifier(
+            provider=provider,
+            workspace_id=workspace_id,
+            nonce=str(state_payload["pkce_nonce"]),
+        )
+    state = _encode_state(state_payload)
+    if config.slack_authorize_helper:
         authorization_url = slack_connector.oauth_authorize_url(
             redirect_uri,
             state=state,
             client_id=client_id,
         )
-    elif provider == "notion":
-        authorization_url = "https://api.notion.com/v1/oauth/authorize?" + urlparse.urlencode({
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "owner": "user",
-            "state": state,
-        })
-    elif provider == "linear":
-        authorization_url = "https://linear.app/oauth/authorize?" + urlparse.urlencode({
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": ",".join(_LINEAR_SCOPES),
-            "state": state,
-        })
-    elif provider == "dropbox":
-        authorization_url = "https://www.dropbox.com/oauth2/authorize?" + urlparse.urlencode({
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "token_access_type": "offline",
-            "scope": " ".join(_DROPBOX_SCOPES),
-            "state": state,
-        })
     else:
-        raise HTTPException(status_code=409, detail="This connection does not have a one-click OAuth setup yet.")
+        query = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "state": state,
+        }
+        if config.include_response_type:
+            query["response_type"] = "code"
+        if config.scopes:
+            query["scope"] = _joined_scopes(config)
+        if config.auth_method == "pkce":
+            query["code_challenge"] = _pkce_challenge(code_verifier)
+            query["code_challenge_method"] = "S256"
+        query.update(config.auth_params)
+        authorization_url = _provider_url(provider, config.auth_url) + "?" + urlparse.urlencode(query)
     return {
         "ok": True,
         "next_action": "oauth_redirect",
@@ -355,10 +500,64 @@ def _post_json(url: str, payload: Dict[str, Any], *, headers: Dict[str, str] | N
     return parsed
 
 
+def _oauth_basic_header(client_id: str, client_secret: str) -> str:
+    auth = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+    return f"Basic {auth}"
+
+
+def _credentials_from_standard_token_response(provider: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    access_token = str(payload.get("access_token") or "").strip()
+    if not access_token:
+        raise RuntimeError(str(payload.get("error_description") or payload.get("error") or f"{_connector_label(provider)} token exchange failed."))
+    expires_in = int(payload.get("expires_in") or 0)
+    credentials: Dict[str, Any] = {
+        "auth_mode": "oauth",
+        "access_token": access_token,
+        "token_type": str(payload.get("token_type") or "Bearer").strip() or "Bearer",
+        "scope": str(payload.get("scope") or "").strip(),
+    }
+    refresh_token = str(payload.get("refresh_token") or "").strip()
+    if refresh_token:
+        credentials["refresh_token"] = refresh_token
+    if expires_in > 0:
+        credentials["access_token_expires_at"] = int(time.time()) + expires_in
+    for key in ("user_id", "user_id_string", "account_id", "workspace_id"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            credentials[key] = value
+    return credentials
+
+
+def _exchange_standard_oauth(provider: str, code: str, redirect_uri: str, *, code_verifier: str = "") -> Dict[str, Any]:
+    config = _provider_config(provider)
+    client_id, client_secret = ensure_oauth_configured(provider)
+    body: Dict[str, Any] = {
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    if config.include_client_id_in_token_body:
+        body["client_id"] = client_id
+    if config.include_client_secret_in_token_body:
+        body["client_secret"] = client_secret
+    if code_verifier:
+        body["code_verifier"] = code_verifier
+    headers: Dict[str, str] = {}
+    if config.token_auth == "basic":
+        headers["Authorization"] = _oauth_basic_header(client_id, client_secret)
+    payload = _post_form_json(
+        _provider_url(provider, config.token_url),
+        body,
+        headers=headers,
+    )
+    return _credentials_from_standard_token_response(provider, payload)
+
+
 def _exchange_google(code: str, redirect_uri: str) -> Dict[str, Any]:
+    config = _provider_config("google_workspace")
     client_id, client_secret = ensure_oauth_configured("google_workspace")
     payload = _post_form_json(
-        "https://oauth2.googleapis.com/token",
+        _provider_url("google_workspace", config.token_url),
         {
             "code": code,
             "client_id": client_id,
@@ -386,9 +585,10 @@ def _exchange_google(code: str, redirect_uri: str) -> Dict[str, Any]:
 
 
 def _exchange_github(code: str, redirect_uri: str) -> Dict[str, Any]:
+    config = _provider_config("github")
     client_id, client_secret = ensure_oauth_configured("github")
     payload = _post_form_json(
-        "https://github.com/login/oauth/access_token",
+        _provider_url("github", config.token_url),
         {
             "code": code,
             "client_id": client_id,
@@ -408,17 +608,17 @@ def _exchange_github(code: str, redirect_uri: str) -> Dict[str, Any]:
 
 
 def _exchange_microsoft(code: str, redirect_uri: str) -> Dict[str, Any]:
+    config = _provider_config("microsoft_365")
     client_id, client_secret = ensure_oauth_configured("microsoft_365")
-    tenant = urlparse.quote(_microsoft_tenant().strip() or "common")
     payload = _post_form_json(
-        f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+        _provider_url("microsoft_365", config.token_url),
         {
             "code": code,
             "client_id": client_id,
             "client_secret": client_secret,
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
-            "scope": " ".join(_MICROSOFT_SCOPES),
+            "scope": _joined_scopes(config),
         },
     )
     access_token = str(payload.get("access_token") or "").strip()
@@ -440,7 +640,8 @@ def _exchange_microsoft(code: str, redirect_uri: str) -> Dict[str, Any]:
 
 
 def _exchange_slack(code: str, redirect_uri: str) -> Dict[str, Any]:
-    exchange = slack_connector.exchange_oauth_code(code, redirect_uri)
+    client_id, client_secret = ensure_oauth_configured("slack")
+    exchange = slack_connector.exchange_oauth_code(code, redirect_uri, client_id=client_id, client_secret=client_secret)
     credentials = exchange.get("credentials") if isinstance(exchange.get("credentials"), dict) else {}
     if not credentials.get("bot_token"):
         raise RuntimeError("Slack OAuth did not return a bot token.")
@@ -448,10 +649,11 @@ def _exchange_slack(code: str, redirect_uri: str) -> Dict[str, Any]:
 
 
 def _exchange_notion(code: str, redirect_uri: str) -> Dict[str, Any]:
+    config = _provider_config("notion")
     client_id, client_secret = ensure_oauth_configured("notion")
     auth = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
     payload = _post_json(
-        "https://api.notion.com/v1/oauth/token",
+        _provider_url("notion", config.token_url),
         {
             "grant_type": "authorization_code",
             "code": code,
@@ -473,9 +675,10 @@ def _exchange_notion(code: str, redirect_uri: str) -> Dict[str, Any]:
 
 
 def _exchange_linear(code: str, redirect_uri: str) -> Dict[str, Any]:
+    config = _provider_config("linear")
     client_id, client_secret = ensure_oauth_configured("linear")
     payload = _post_form_json(
-        "https://api.linear.app/oauth/token",
+        _provider_url("linear", config.token_url),
         {
             "code": code,
             "client_id": client_id,
@@ -496,9 +699,10 @@ def _exchange_linear(code: str, redirect_uri: str) -> Dict[str, Any]:
 
 
 def _exchange_dropbox(code: str, redirect_uri: str) -> Dict[str, Any]:
+    config = _provider_config("dropbox")
     client_id, client_secret = ensure_oauth_configured("dropbox")
     payload = _post_form_json(
-        "https://api.dropboxapi.com/oauth2/token",
+        _provider_url("dropbox", config.token_url),
         {
             "code": code,
             "client_id": client_id,
@@ -544,6 +748,17 @@ async def complete_oauth_callback(
     if not normalized_code:
         raise HTTPException(status_code=400, detail="OAuth code is missing.")
     redirect_uri = callback_url(request, normalized_provider)
+    provider_config = _provider_config(normalized_provider)
+    code_verifier = ""
+    if provider_config.auth_method == "pkce":
+        pkce_nonce = str(payload.get("pkce_nonce") or "").strip()
+        if not pkce_nonce:
+            raise HTTPException(status_code=400, detail="OAuth PKCE state is missing.")
+        code_verifier = _pkce_verifier(
+            provider=normalized_provider,
+            workspace_id=workspace_id,
+            nonce=pkce_nonce,
+        )
     try:
         if normalized_provider == "google_workspace":
             credentials = _exchange_google(normalized_code, redirect_uri)
@@ -559,6 +774,8 @@ async def complete_oauth_callback(
             credentials = _exchange_linear(normalized_code, redirect_uri)
         elif normalized_provider == "dropbox":
             credentials = _exchange_dropbox(normalized_code, redirect_uri)
+        elif provider_config.token_parser == "standard":
+            credentials = _exchange_standard_oauth(normalized_provider, normalized_code, redirect_uri, code_verifier=code_verifier)
         else:
             raise HTTPException(status_code=409, detail="This connection does not have a one-click OAuth setup yet.")
         result = await connectors_actions.create_connector_vault(

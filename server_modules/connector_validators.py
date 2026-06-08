@@ -43,6 +43,77 @@ def validate_dropbox_connector(credentials: Dict[str, Any], http_json_request: H
     return validate_dropbox_credentials(credentials)
 
 
+def validate_oauth_bearer_connector(
+    credentials: Dict[str, Any],
+    http_json_request: HttpJsonRequest,
+    *,
+    provider: str,
+    label: str,
+    profile_probe: str,
+) -> Dict[str, Any]:
+    access_token = str(credentials.get("access_token") or credentials.get("oauth_access_token") or credentials.get("token") or "").strip()
+    if not access_token:
+        raise RuntimeError(f"{label} access_token is required.")
+    response = http_json_request(profile_probe, headers={"Authorization": f"Bearer {access_token}"})
+    status = int(response.get("status") or 0)
+    if status < 200 or status >= 300:
+        raise RuntimeError(f"{label} token is invalid.")
+    profile = response.get("json") if isinstance(response.get("json"), dict) else {}
+    return {
+        "ok": True,
+        "status": status,
+        "message": f"{label} connector is valid.",
+        "profile": profile,
+        "provider": provider,
+        "auth_mode": str(credentials.get("auth_mode") or "oauth").strip().lower() or "oauth",
+        "credentials": {
+            **credentials,
+            "access_token": access_token,
+            "auth_mode": str(credentials.get("auth_mode") or "oauth").strip().lower() or "oauth",
+        },
+    }
+
+
+def validate_figma_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="figma",
+        label="Figma",
+        profile_probe="https://api.figma.com/v1/me",
+    )
+
+
+def validate_todoist_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="todoist",
+        label="Todoist",
+        profile_probe="https://api.todoist.com/api/v1/projects?limit=1",
+    )
+
+
+def validate_airtable_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="airtable",
+        label="Airtable",
+        profile_probe="https://api.airtable.com/v0/meta/whoami",
+    )
+
+
+def validate_canva_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="canva",
+        label="Canva",
+        profile_probe="https://api.canva.com/rest/v1/users/me/profile",
+    )
+
+
 def validate_s3_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest | None = None) -> Dict[str, Any]:
     return validate_s3_credentials(credentials)
 

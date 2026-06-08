@@ -1516,6 +1516,18 @@ async def create_connector_vault(body: ConnectorCreate):
         elif connector == "dropbox":
             test = validate_dropbox_connector(credentials)
             credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "figma":
+            test = validate_figma_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "todoist":
+            test = validate_todoist_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "airtable":
+            test = validate_airtable_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "canva":
+            test = validate_canva_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
         elif connector == "s3":
             test = validate_s3_connector(credentials)
             credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
@@ -1659,6 +1671,18 @@ async def create_connector_vault(body: ConnectorCreate):
             connector_metadata["account_id"] = account_id
         if auth_mode:
             connector_metadata["auth_mode"] = auth_mode
+        merged_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else {}
+        if merged_credentials:
+            credentials = {**credentials, **merged_credentials}
+    if connector in {"figma", "todoist", "airtable", "canva"} and isinstance(test, dict):
+        profile = test.get("profile") if isinstance(test.get("profile"), dict) else {}
+        auth_mode = str(test.get("auth_mode") or credentials.get("auth_mode") or "").strip().lower()
+        if auth_mode:
+            connector_metadata["auth_mode"] = auth_mode
+        for key in ("id", "user_id", "user_id_string", "email", "handle", "name", "display_name"):
+            value = str(profile.get(key) or credentials.get(key) or "").strip()
+            if value:
+                connector_metadata[key] = value
         merged_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else {}
         if merged_credentials:
             credentials = {**credentials, **merged_credentials}
@@ -1937,6 +1961,30 @@ async def test_connector_vault(credential_id: str, workspace_id: Optional[str] =
     elif connector == "dropbox":
         try:
             test_result = validate_dropbox_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "figma":
+        try:
+            test_result = validate_figma_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "todoist":
+        try:
+            test_result = validate_todoist_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "airtable":
+        try:
+            test_result = validate_airtable_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "canva":
+        try:
+            test_result = validate_canva_connector(credentials)
         except Exception as exc:
             _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
             raise HTTPException(status_code=400, detail=str(exc))

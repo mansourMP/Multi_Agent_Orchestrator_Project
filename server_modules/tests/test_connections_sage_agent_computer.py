@@ -1,10 +1,11 @@
 import json
 from types import SimpleNamespace
+from urllib import parse as urlparse
 
 import pytest
 from fastapi import HTTPException
 
-from server_modules import connection_catalog_service, connectors_actions, gateway_state_repository, routes_connections
+from server_modules import connection_catalog_service, connection_oauth_service, connectors_actions, gateway_state_repository, routes_connections
 
 
 def _install_auth(monkeypatch):
@@ -963,6 +964,138 @@ async def test_launchable_oauth_app_setup_starts_provider_oauth(
     assert payload["provider"] == expected_provider
     assert payload["redirect_uri"] == f"http://localhost:3000/api/connections/oauth/{expected_provider}/callback"
     assert payload["authorization_url"].startswith(expected_prefix)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("connection_id", "client_env", "secret_env", "expected_provider", "expected_prefix", "uses_pkce"),
+    [
+        ("figma", "FIGMA_CLIENT_ID", "FIGMA_CLIENT_SECRET", "figma", "https://www.figma.com/oauth?", False),
+        ("todoist", "TODOIST_CLIENT_ID", "TODOIST_CLIENT_SECRET", "todoist", "https://todoist.com/oauth/authorize?", False),
+        ("airtable", "AIRTABLE_CLIENT_ID", "AIRTABLE_CLIENT_SECRET", "airtable", "https://airtable.com/oauth2/v1/authorize?", True),
+        ("canva", "CANVA_CLIENT_ID", "CANVA_CLIENT_SECRET", "canva", "https://www.canva.com/api/oauth/authorize?", True),
+    ],
+)
+async def test_new_oauth_app_setup_callback_and_status(
+    monkeypatch,
+    connection_id,
+    client_env,
+    secret_env,
+    expected_provider,
+    expected_prefix,
+    uses_pkce,
+):
+    _install_auth(monkeypatch)
+    monkeypatch.setenv(client_env, f"{expected_provider}-client-id")
+    monkeypatch.setenv(secret_env, f"{expected_provider}-client-secret")
+
+    payload = await routes_connections.start_connection_setup(
+        connection_id,
+        body=routes_connections.ConnectionActionRequest(
+            workspace_id="ws-1",
+            surface="sage",
+        ),
+        request=SimpleNamespace(
+            headers={"x-forwarded-proto": "http", "x-forwarded-host": "localhost:3000"},
+            base_url="http://127.0.0.1:8001/",
+        ),
+        current_user={"user_id": "user-1", "role": "owner"},
+    )
+
+    assert payload["next_action"] == "oauth_redirect"
+    assert payload["provider"] == expected_provider
+    assert payload["redirect_uri"] == f"http://localhost:3000/api/connections/oauth/{expected_provider}/callback"
+    assert payload["authorization_url"].startswith(expected_prefix)
+    query = urlparse.parse_qs(urlparse.urlparse(payload["authorization_url"]).query)
+    assert query["client_id"] == [f"{expected_provider}-client-id"]
+    assert query["redirect_uri"] == [payload["redirect_uri"]]
+    assert query["state"]
+    if uses_pkce:
+        assert query["code_challenge_method"] == ["S256"]
+        assert len(query["code_challenge"][0]) == 43
+    else:
+        assert "code_challenge" not in query
+
+    token_requests = []
+
+    def fake_post_form_json(url, form_payload, *, headers=None):
+        token_requests.append({"url": url, "payload": dict(form_payload), "headers": dict(headers or {})})
+        return {
+            "access_token": f"{expected_provider}-access-token",
+            "refresh_token": f"{expected_provider}-refresh-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": " ".join(connection_oauth_service.OAUTH_PROVIDER_CONFIGS[expected_provider].scopes),
+            "user_id_string": f"{expected_provider}-user",
+        }
+
+    created = {}
+
+    async def fake_create_connector_vault(body):
+        created["body"] = body
+        return {
+            "id": f"{expected_provider}-connector-id",
+            "provider": body.connector,
+            "workspace_id": body.workspace_id,
+            "metadata": body.metadata,
+        }
+
+    monkeypatch.setattr(connection_oauth_service, "_post_form_json", fake_post_form_json)
+    monkeypatch.setattr(connectors_actions, "create_connector_vault", fake_create_connector_vault)
+
+    callback_payload = await connection_oauth_service.complete_oauth_callback(
+        provider=expected_provider,
+        code="provider-code",
+        state=query["state"][0],
+        request=SimpleNamespace(
+            headers={"x-forwarded-proto": "http", "x-forwarded-host": "localhost:3000"},
+            base_url="http://127.0.0.1:8001/",
+        ),
+    )
+
+    assert callback_payload["ok"] is True
+    assert callback_payload["provider"] == expected_provider
+    assert created["body"].connector == expected_provider
+    assert created["body"].workspace_id == "ws-1"
+    assert created["body"].credentials["access_token"] == f"{expected_provider}-access-token"
+    assert created["body"].metadata["oauth_provider"] == expected_provider
+    assert token_requests
+    assert token_requests[0]["payload"]["code"] == "provider-code"
+    assert token_requests[0]["payload"]["redirect_uri"] == payload["redirect_uri"]
+    if uses_pkce:
+        assert len(token_requests[0]["payload"]["code_verifier"]) == 43
+    else:
+        assert "code_verifier" not in token_requests[0]["payload"]
+    if expected_provider in {"figma", "airtable", "canva"}:
+        assert token_requests[0]["headers"]["Authorization"].startswith("Basic ")
+    if expected_provider in {"figma", "canva"}:
+        assert "client_secret" not in token_requests[0]["payload"]
+
+    monkeypatch.setattr(
+        connection_catalog_service.runtime_common,
+        "list_vault_connectors",
+        lambda workspace_id: [{"connector": expected_provider, "provider": expected_provider}],
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.sage_agent_computer_selection_service,
+        "get_selection",
+        lambda **_kwargs: None,
+    )
+
+    status_payload = await routes_connections.list_connection_status(
+        workspace_id="ws-1",
+        surface="sage",
+        selected_gateway_id=None,
+        current_user={"user_id": "user-1", "role": "owner"},
+    )
+    by_id = {item["id"]: item for item in status_payload["items"]}
+    assert by_id[expected_provider]["connected"] is True
+    assert by_id[expected_provider]["health_status"] == "healthy"
 
 
 @pytest.mark.anyio

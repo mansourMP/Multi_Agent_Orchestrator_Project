@@ -109,7 +109,10 @@ from server_modules.connectors.autopilot_runtime_exports import (
     handle_telegram_autopilot_test_message,
 )
 from server_modules.connector_validators import (
+    validate_airtable_connector as _validate_airtable_connector,
+    validate_canva_connector as _validate_canva_connector,
     validate_dropbox_connector as _validate_dropbox_connector,
+    validate_figma_connector as _validate_figma_connector,
     validate_github_connector as _validate_github_connector,
     validate_linear_connector as _validate_linear_connector,
     validate_notion_connector as _validate_notion_connector,
@@ -122,6 +125,7 @@ from server_modules.connector_validators import (
     validate_whatsapp_twilio_connector as _validate_whatsapp_twilio_connector,
     validate_discord_bot_connector as _validate_discord_bot_connector,
     validate_slack_connector as _validate_slack_connector,
+    validate_todoist_connector as _validate_todoist_connector,
     validate_instagram_business_connector as _validate_instagram_business_connector,
     validate_irc_connector as _validate_irc_connector,
 )
@@ -821,6 +825,22 @@ CONNECTOR_CATALOG = {
     },
     "dropbox": {
         "label": "Dropbox",
+        "auth": ["access_token"],
+    },
+    "figma": {
+        "label": "Figma",
+        "auth": ["access_token"],
+    },
+    "todoist": {
+        "label": "Todoist",
+        "auth": ["access_token"],
+    },
+    "airtable": {
+        "label": "Airtable",
+        "auth": ["access_token"],
+    },
+    "canva": {
+        "label": "Canva",
         "auth": ["access_token"],
     },
     "s3": {

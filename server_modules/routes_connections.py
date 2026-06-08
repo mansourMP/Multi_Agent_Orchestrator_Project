@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib import parse as urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from server_modules import auth as auth_module
 from server_modules import (
     connection_catalog_service,
+    connection_oauth_service,
     execution_mode_policy,
     gateway_registry_service,
     gateway_state_repository,
@@ -202,6 +205,19 @@ def _raise_catalog_error(error: Exception) -> None:
     raise HTTPException(status_code=500, detail="Connection operation failed.") from error
 
 
+def _oauth_completion_url(request: Request, *, workspace_id: str, provider: str, error: Optional[str] = None) -> str:
+    query: Dict[str, str] = {"section": "apps"}
+    if error:
+        query["connection_error"] = error
+    else:
+        query["connected"] = provider
+    return (
+        f"{connection_oauth_service.request_origin(request)}"
+        f"/w/{urlparse.quote(str(workspace_id or 'ws-1').strip() or 'ws-1')}/integrations?"
+        f"{urlparse.urlencode(query)}"
+    )
+
+
 @router.get("/connections/catalog")
 async def list_connection_catalog(
     workspace_id: Optional[str] = Query(default=None, min_length=1),
@@ -310,7 +326,7 @@ async def start_connection_setup(
         )
         public_registration = gateway_registry_service.gateway_registration_public_payload(registration)
         if not _gateway_public_payload_online(public_registration):
-            raise HTTPException(status_code=409, detail="Selected Sage Agent Computer is offline.")
+            raise HTTPException(status_code=409, detail="Agent Computer offline — connect Hardware first.")
         if item.get("id") in {"telegram_personal", "whatsapp_personal"}:
             channel = "telegram" if item.get("id") == "telegram_personal" else "whatsapp"
             return {
@@ -352,6 +368,37 @@ async def start_connection_setup(
         connection_catalog_service.LANE_STUDIO_BUSINESS_CHANNEL,
     }:
         provider = str(item.get("vault_provider") or item.get("account_provider") or item.get("connector_id") or item.get("id") or "").strip()
+        setup_kind = str(item.get("setup_kind") or "").strip().lower()
+        if setup_kind in {"advanced_custom_api", "custom_api", "webhook"}:
+            return {
+                "ok": True,
+                "connection": item,
+                "setup_endpoint": "/webhooks/register",
+                "next_action": "advanced_custom_api_setup",
+                "provider": provider,
+                "connector_id": item.get("connector_id") or item.get("id"),
+            }
+        if setup_kind in {"oauth", "oauth_or_app_install"}:
+            try:
+                oauth_provider = connection_oauth_service.provider_from_connection_id(provider)
+            except HTTPException:
+                oauth_provider = ""
+            if oauth_provider:
+                auth_module.enforce_workspace_access(
+                    current_user,
+                    resolved_workspace_id,
+                    minimum_role="owner",
+                    capability_id="connectors.manage",
+                )
+                return {
+                    "connection": item,
+                    **connection_oauth_service.start_oauth(
+                        provider=oauth_provider,
+                        workspace_id=resolved_workspace_id,
+                        surface=body.surface,
+                        request=request,
+                    ),
+                }
         return {
             "ok": True,
             "connection": item,
@@ -404,6 +451,45 @@ async def start_connection_setup(
         "setup_session": (session_payload or {}).get("session") if isinstance(session_payload, dict) else None,
         "next_action": "setup_session",
     }
+
+
+@router.get("/connections/oauth/{provider}/callback")
+async def complete_connection_oauth_callback(
+    provider: str,
+    request: Request,
+    code: str = Query(default=""),
+    state: str = Query(default=""),
+    error: str = Query(default=""),
+    current_user=Depends(get_current_user),
+):
+    workspace_id = "ws-1"
+    try:
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        state_payload = connection_oauth_service.decode_state(state)
+        workspace_id = str(state_payload.get("workspace_id") or "").strip() or workspace_id
+        _workspace_scope(current_user, workspace_id, minimum_role="owner")
+        payload = await connection_oauth_service.complete_oauth_callback(
+            provider=provider,
+            code=code,
+            state=state,
+            request=request,
+        )
+        provider_id = str(payload.get("provider") or provider).strip() or provider
+        return RedirectResponse(
+            _oauth_completion_url(request, workspace_id=workspace_id, provider=provider_id),
+            status_code=303,
+        )
+    except HTTPException as exc:
+        return RedirectResponse(
+            _oauth_completion_url(
+                request,
+                workspace_id=workspace_id,
+                provider=provider,
+                error=str(exc.detail or "oauth_failed"),
+            ),
+            status_code=303,
+        )
 
 
 @router.post("/connections/{connection_id}/test")

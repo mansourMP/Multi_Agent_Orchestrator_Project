@@ -11,7 +11,7 @@ def _install_auth(monkeypatch):
     monkeypatch.setattr(
         routes_connections.auth_module,
         "enforce_workspace_access",
-        lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
+        lambda current_user, workspace_id, minimum_role="viewer", **_kwargs: workspace_id,
     )
     monkeypatch.setattr(
         routes_connections.auth_module,
@@ -786,8 +786,10 @@ def test_connection_catalog_exposes_launch_contract_without_ui_side_lock_lists()
 
 
 @pytest.mark.anyio
-async def test_work_app_connection_setup_points_to_connector_vault_not_fake_session(monkeypatch):
+async def test_google_workspace_connection_setup_starts_oauth_not_fake_session(monkeypatch):
     _install_auth(monkeypatch)
+    monkeypatch.setenv("GOOGLE_WORKSPACE_OAUTH_CLIENT_ID", "google-client-id")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET", "google-client-secret")
 
     async def fail_create_setup_session(*_args, **_kwargs):
         raise AssertionError("generic setup session should not be used for launchable app connectors")
@@ -800,40 +802,92 @@ async def test_work_app_connection_setup_points_to_connector_vault_not_fake_sess
             workspace_id="ws-1",
             surface="sage",
         ),
-        request=SimpleNamespace(),
+        request=SimpleNamespace(
+            headers={"x-forwarded-proto": "http", "x-forwarded-host": "localhost:3000"},
+            base_url="http://127.0.0.1:8001/",
+        ),
         current_user={"user_id": "user-1", "role": "member"},
     )
 
-    assert payload["next_action"] == "connector_vault_setup"
-    assert payload["setup_endpoint"] == "/api/connectors/vault"
+    assert payload["next_action"] == "oauth_redirect"
     assert payload["provider"] == "google_workspace"
-    assert payload["auth_required_fields"] == ["access_token"]
+    assert payload["redirect_uri"] == "http://localhost:3000/api/connections/oauth/google_workspace/callback"
+    assert payload["authorization_url"].startswith("https://accounts.google.com/o/oauth2/v2/auth?")
 
 
 @pytest.mark.anyio
-async def test_launchable_notion_and_linear_setup_points_to_connector_vault(monkeypatch):
+async def test_microsoft_365_connection_setup_starts_oauth_not_fake_session(monkeypatch):
     _install_auth(monkeypatch)
+    monkeypatch.setenv("MICROSOFT_365_OAUTH_CLIENT_ID", "microsoft-client-id")
+    monkeypatch.setenv("MICROSOFT_365_OAUTH_CLIENT_SECRET", "microsoft-client-secret")
+
+    async def fail_create_setup_session(*_args, **_kwargs):
+        raise AssertionError("generic setup session should not be used for Microsoft 365 app connector")
+
+    monkeypatch.setattr(routes_connections.setup_sessions, "handle_create_setup_session", fail_create_setup_session)
+
+    payload = await routes_connections.start_connection_setup(
+        "microsoft_365",
+        body=routes_connections.ConnectionActionRequest(
+            workspace_id="ws-1",
+            surface="sage",
+        ),
+        request=SimpleNamespace(
+            headers={"x-forwarded-proto": "http", "x-forwarded-host": "localhost:3000"},
+            base_url="http://127.0.0.1:8001/",
+        ),
+        current_user={"user_id": "user-1", "role": "member"},
+    )
+
+    assert payload["next_action"] == "oauth_redirect"
+    assert payload["provider"] == "microsoft_365"
+    assert payload["redirect_uri"] == "http://localhost:3000/api/connections/oauth/microsoft_365/callback"
+    assert payload["authorization_url"].startswith("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("connection_id", "client_env", "secret_env", "expected_provider", "expected_prefix"),
+    [
+        ("notion", "NOTION_OAUTH_CLIENT_ID", "NOTION_OAUTH_CLIENT_SECRET", "notion", "https://api.notion.com/v1/oauth/authorize?"),
+        ("linear", "LINEAR_OAUTH_CLIENT_ID", "LINEAR_OAUTH_CLIENT_SECRET", "linear", "https://linear.app/oauth/authorize?"),
+        ("dropbox", "DROPBOX_OAUTH_CLIENT_ID", "DROPBOX_OAUTH_CLIENT_SECRET", "dropbox", "https://www.dropbox.com/oauth2/authorize?"),
+    ],
+)
+async def test_launchable_oauth_app_setup_starts_provider_oauth(
+    monkeypatch,
+    connection_id,
+    client_env,
+    secret_env,
+    expected_provider,
+    expected_prefix,
+):
+    _install_auth(monkeypatch)
+    monkeypatch.setenv(client_env, f"{expected_provider}-client-id")
+    monkeypatch.setenv(secret_env, f"{expected_provider}-client-secret")
 
     async def fail_create_setup_session(*_args, **_kwargs):
         raise AssertionError("generic setup session should not be used for launchable app connectors")
 
     monkeypatch.setattr(routes_connections.setup_sessions, "handle_create_setup_session", fail_create_setup_session)
 
-    for connection_id in ("notion", "linear"):
-        payload = await routes_connections.start_connection_setup(
-            connection_id,
-            body=routes_connections.ConnectionActionRequest(
-                workspace_id="ws-1",
-                surface="sage",
-            ),
-            request=SimpleNamespace(),
-            current_user={"user_id": "user-1", "role": "member"},
-        )
+    payload = await routes_connections.start_connection_setup(
+        connection_id,
+        body=routes_connections.ConnectionActionRequest(
+            workspace_id="ws-1",
+            surface="sage",
+        ),
+        request=SimpleNamespace(
+            headers={"x-forwarded-proto": "http", "x-forwarded-host": "localhost:3000"},
+            base_url="http://127.0.0.1:8001/",
+        ),
+        current_user={"user_id": "user-1", "role": "member"},
+    )
 
-        assert payload["next_action"] == "connector_vault_setup"
-        assert payload["setup_endpoint"] == "/api/connectors/vault"
-        assert payload["provider"] == connection_id
-        assert payload["auth_required_fields"]
+    assert payload["next_action"] == "oauth_redirect"
+    assert payload["provider"] == expected_provider
+    assert payload["redirect_uri"] == f"http://localhost:3000/api/connections/oauth/{expected_provider}/callback"
+    assert payload["authorization_url"].startswith(expected_prefix)
 
 
 @pytest.mark.anyio

@@ -318,7 +318,7 @@ type ExternalIntegrationCardRecord = {
   nextStep: string | null;
   actionLabel?: string | null;
   secondaryActionLabel?: string | null;
-  actionTarget?: 'gateway' | 'computer' | 'ai' | 'connection' | 'close';
+  actionTarget?: 'gateway' | 'computer' | 'ai' | 'connection' | 'advanced' | 'close';
   connectionId?: string | null;
   connectionProvider?: string | null;
   connectionAuthFields?: string[];
@@ -735,7 +735,7 @@ const CONNECTOR_AUTH_FIELD_FALLBACKS: Record<string, string[]> = {
   instagram_business: ['access_token', 'instagram_account_id', 'page_id'],
 };
 
-const CONNECTOR_STATIC_LOCKED_IDS = new Set(['microsoft_365', 'webhook']);
+const CONNECTOR_STATIC_LOCKED_IDS = new Set<string>();
 
 const CONSUMER_APP_CARD_IDS = new Set([
   'gmail',
@@ -756,7 +756,17 @@ const TECHNICAL_APP_CARD_IDS = new Set([
   'webhook',
 ]);
 
-const OAUTH_READY_APP_CARD_IDS = new Set<string>([]);
+const OAUTH_READY_APP_CARD_IDS = new Set([
+  'gmail',
+  'google_calendar',
+  'drive',
+  'microsoft_365',
+  'github',
+  'notion',
+  'linear',
+  'dropbox',
+  'slack',
+]);
 
 const CLOUD_CHANNEL_INSTALL_CARD_IDS = new Set([
   'slack',
@@ -1015,7 +1025,7 @@ function gatewayDisplayName(gateway: GatewayRegistrationRecord | null): string {
 function describeGatewaySelectionRepair(summary: GatewaySelectionSummary): string {
   if (!summary.selectedGatewayMissing) {
     if (summary.selectedGatewayOffline && summary.repairGateway) {
-      return `Sage is selected to an offline Agent Computer, but ${gatewayDisplayName(summary.repairGateway)} is online.`;
+      return `Agent Computer offline — connect Hardware first.`;
     }
     return '';
   }
@@ -2084,13 +2094,14 @@ function summarizePlannedSignalPersonalState(surface?: PersonalChannelSurfaceRec
   summary: string;
   nextStep: string | null;
 } {
-  return summarizePersonalSurfaceState(surface, {
-    statusLabel: 'Bridge required',
+  const state = summarizePersonalSurfaceState(surface, {
+    statusLabel: 'Requires Agent Computer',
     statusTone: 'neutral',
     detail: 'Signal runs through Agent Computer.',
     summary: 'Signal is a Sage personal channel. It needs a local bridge on the selected Agent Computer and stays separate from Studio business channels.',
     nextStep: 'Connect an Agent Computer with a Signal bridge to enable Sage messaging.',
   });
+  return { ...state, statusLabel: 'Requires Agent Computer' };
 }
 
 function summarizePlannedIMessagePersonalState(surface?: PersonalChannelSurfaceRecord | null): {
@@ -2100,13 +2111,14 @@ function summarizePlannedIMessagePersonalState(surface?: PersonalChannelSurfaceR
   summary: string;
   nextStep: string | null;
 } {
-  return summarizePersonalSurfaceState(surface, {
-    statusLabel: 'Mac bridge required',
+  const state = summarizePersonalSurfaceState(surface, {
+    statusLabel: 'Requires Agent Computer',
     statusTone: 'neutral',
     detail: 'iMessage runs through a Mac Agent Computer.',
     summary: 'iMessage is a Sage personal channel. It needs a local Mac bridge and stays separate from Studio business channels.',
     nextStep: 'Connect a Mac Agent Computer with an iMessage bridge to enable Sage messaging.',
   });
+  return { ...state, statusLabel: 'Requires Agent Computer' };
 }
 
 function summarizeWeChatPersonalState(surface?: PersonalChannelSurfaceRecord | null): {
@@ -2116,13 +2128,14 @@ function summarizeWeChatPersonalState(surface?: PersonalChannelSurfaceRecord | n
   summary: string;
   nextStep: string | null;
 } {
-  return summarizePersonalSurfaceState(surface, {
-    statusLabel: 'Bridge required',
+  const state = summarizePersonalSurfaceState(surface, {
+    statusLabel: 'Requires Agent Computer',
     statusTone: 'neutral',
     detail: 'WeChat personal runs through Agent Computer.',
     summary: 'WeChat is a Sage personal channel. It needs a local bridge on the selected Agent Computer and stays separate from Studio business channels.',
     nextStep: 'Connect an Agent Computer with a WeChat bridge to enable Sage messaging.',
   });
+  return { ...state, statusLabel: 'Requires Agent Computer' };
 }
 
 export function WorkstationSageConnectorsPane({
@@ -2713,12 +2726,15 @@ export function WorkstationSageConnectorsPane({
   }
 
   function connectionLockedLabel(item: ConnectionStatusItem | null, fallback: string): string {
+    if (item?.requires_gateway) {
+      return 'Requires Agent Computer';
+    }
     const launchStatus = readString(item?.launch_status).toLowerCase();
     if (launchStatus === 'partial') {
-      return 'Not ready';
+      return 'Requires setup';
     }
     if (launchStatus === 'planned') {
-      return 'Planned';
+      return 'Requires setup';
     }
     return fallback;
   }
@@ -2739,34 +2755,18 @@ export function WorkstationSageConnectorsPane({
     if (record.connected || statusItem?.connected === true) {
       return null;
     }
-    if (TECHNICAL_APP_CARD_IDS.has(record.id)) {
-      return 'advanced_only';
-    }
-    if (PROVIDER_MANAGED_CHANNEL_CARD_IDS.has(record.id)) {
-      return 'advanced_only';
-    }
     if (CONSUMER_APP_CARD_IDS.has(record.id)) {
-      return OAUTH_READY_APP_CARD_IDS.has(record.id) ? 'oauth_ready' : 'oauth_not_wired';
+      return OAUTH_READY_APP_CARD_IDS.has(record.id) ? 'oauth_ready' : null;
     }
     if (CLOUD_CHANNEL_INSTALL_CARD_IDS.has(record.id)) {
-      return 'oauth_not_wired';
+      return OAUTH_READY_APP_CARD_IDS.has(record.id) ? 'oauth_ready' : null;
     }
     return null;
   }
 
   function consumerSetupMessage(record: ConnectorCardRecord, setupState: ConsumerSetupState | null): string | null {
-    if (CLOUD_CHANNEL_INSTALL_CARD_IDS.has(record.id) && setupState === 'oauth_not_wired') {
-      return `${record.label} needs a real one-click install flow before this channel can connect. Manual token setup is hidden from this product surface.`;
-    }
-    if (PROVIDER_MANAGED_CHANNEL_CARD_IDS.has(record.id) && setupState === 'advanced_only') {
-      return `${record.label} needs provider-managed business onboarding before it belongs in this setup surface.`;
-    }
-    if (setupState === 'oauth_not_wired') {
-      return `${record.label} needs a real one-click sign-in flow before it belongs in Apps. Manual token setup is hidden from this product surface.`;
-    }
-    if (setupState === 'advanced_only') {
-      return `${record.label} is a technical credential connector. It belongs in Advanced setup, not the one-click Apps login flow.`;
-    }
+    void record;
+    void setupState;
     return null;
   }
 
@@ -2775,7 +2775,7 @@ export function WorkstationSageConnectorsPane({
       return 'Ready to connect';
     }
     if (setupState === 'oauth_not_wired') {
-      return 'Sign-in not ready';
+      return 'Connect';
     }
     if (setupState === 'advanced_only') {
       return 'Advanced setup';
@@ -2808,6 +2808,7 @@ export function WorkstationSageConnectorsPane({
     const connected = statusItem ? statusItem.connected === true : record.connected;
     const fallbackConnectionId = readString(record.definition.connectorIds?.[0]) || record.id;
     const connectionId = readString(statusItem?.id) || fallbackConnectionId || null;
+    const opensAdvancedSetup = record.id === 'webhook';
     const locked = connectionLaunchLocked(statusItem)
       || CONNECTOR_STATIC_LOCKED_IDS.has(record.id)
       || CONNECTOR_STATIC_LOCKED_IDS.has(fallbackConnectionId);
@@ -2822,12 +2823,14 @@ export function WorkstationSageConnectorsPane({
       ?? CONNECTOR_AUTH_FIELD_FALLBACKS[fallbackConnectionId]
       ?? [];
     const setupState = consumerSetupState(record, statusItem);
-    const hideCredentialFields = setupState === 'oauth_not_wired' || setupState === 'advanced_only';
+    const hideCredentialFields = setupState === 'oauth_ready';
     const effectiveAuthFields = hideCredentialFields
       ? []
       : fallbackAuthFields.length > 0 ? fallbackAuthFields : connectionAuthFields;
     const canCredentialSetup = !locked && readString(connectionProvider) !== '' && effectiveAuthFields.length > 0;
-    const actionLabel = setupState === 'oauth_ready'
+    const actionLabel = opensAdvancedSetup
+      ? 'Open Advanced'
+      : setupState === 'oauth_ready'
       ? 'Connect'
       : setupState
         ? null
@@ -2836,13 +2839,17 @@ export function WorkstationSageConnectorsPane({
       id: `connector_${record.id}`,
       label: record.label,
       image: record.image,
-      detail: locked ? readString(statusItem?.description, 'Planned · Coming soon.') : describeConnectorCard(record, connected),
-      statusLabel: locked ? connectionLockedLabel(statusItem, 'Planned') : connected ? 'Connected' : consumerSetupStatusLabel(setupState) ?? 'Not connected',
+      detail: locked ? readString(statusItem?.description, 'Connection setup is not available yet.') : describeConnectorCard(record, connected),
+      statusLabel: opensAdvancedSetup
+        ? 'Advanced setup'
+        : locked ? connectionLockedLabel(statusItem, 'Requires setup') : connected ? 'Connected' : consumerSetupStatusLabel(setupState) ?? 'Not connected',
       statusTone: locked ? 'neutral' : connected ? 'connected' : setupState ? 'warning' : 'neutral',
       summary: record.definition.summary,
       nextStep: locked ? null : connected ? null : record.definition.setupHint,
       actionLabel: locked ? null : actionLabel,
-      actionTarget: canCredentialSetup || (connectionId && nextAction === 'connect') ? 'connection' : 'close',
+      actionTarget: opensAdvancedSetup
+        ? 'advanced'
+        : setupState === 'oauth_ready' || canCredentialSetup || (connectionId && nextAction === 'connect') ? 'connection' : 'close',
       connectionId,
       connectionProvider,
       connectionAuthFields: effectiveAuthFields,
@@ -2869,8 +2876,8 @@ export function WorkstationSageConnectorsPane({
       id: record.id,
       label: record.label,
       image: record.image,
-      detail: locked && !bridgePersonalChannel ? readString(statusItem?.description, 'Requires Agent Computer bridge · Coming soon.') : record.detail,
-      statusLabel: locked && !bridgePersonalChannel ? connectionLockedLabel(statusItem, 'Coming soon') : record.statusLabel,
+      detail: locked && !bridgePersonalChannel ? readString(statusItem?.description, 'Requires Agent Computer bridge.') : record.detail,
+      statusLabel: locked && !bridgePersonalChannel ? connectionLockedLabel(statusItem, 'Requires setup') : record.statusLabel,
       statusTone: locked && !bridgePersonalChannel ? 'neutral' : record.statusTone,
       summary: record.summary,
       nextStep: bridgeLocked ? null : record.nextStep,
@@ -3087,6 +3094,17 @@ export function WorkstationSageConnectorsPane({
     setError(null);
   }
 
+  function openIntegrationSection(sectionId: IntegrationWorkbenchCategoryId) {
+    setSelectedIntegrationId(sectionId);
+    setExpandedCardId(null);
+    if (typeof window !== 'undefined') {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set('section', sectionId);
+      nextUrl.searchParams.delete('connection');
+      window.history.replaceState(window.history.state, '', nextUrl.toString());
+    }
+  }
+
   async function handleMcpServerSave() {
     const serverId = readString(mcpServerDraft.serverId);
     const endpoint = readString(mcpServerDraft.endpoint);
@@ -3135,6 +3153,17 @@ export function WorkstationSageConnectorsPane({
       const nextAction = response && typeof response === 'object'
         ? readString(response.next_action).toLowerCase()
         : '';
+      if (nextAction === 'oauth_redirect') {
+        const authorizationUrl = response && typeof response === 'object'
+          ? readString(response.authorization_url)
+          : '';
+        if (!authorizationUrl) {
+          throw new Error('Provider login did not return a redirect URL.');
+        }
+        setStatus('Opening provider sign-in...');
+        window.location.assign(authorizationUrl);
+        return;
+      }
       if (nextAction === 'connector_vault_setup') {
         setStatus('Enter the connection details and save credentials from this card.');
         setExpandedCardId(record.id);
@@ -3837,7 +3866,7 @@ export function WorkstationSageConnectorsPane({
       return;
     }
     if (!selectedGatewayOnline) {
-      setPersonalChannelError('Selected Sage Agent Computer is offline. Reconnect it in Hardware first.');
+      setPersonalChannelError('Agent Computer offline — connect Hardware first.');
       return;
     }
     const draft = channelDrafts[channel];
@@ -4240,6 +4269,10 @@ export function WorkstationSageConnectorsPane({
             setProviderPickerDraftId(null);
             return;
           }
+          if (record.actionTarget === 'advanced') {
+            openIntegrationSection('advanced');
+            return;
+          }
           if (record.id === 'telegram' && !isExpanded) {
             setTelegramChannelMode('bot');
           }
@@ -4469,30 +4502,15 @@ export function WorkstationSageConnectorsPane({
       );
     }
     if (!selectedGatewayOnline) {
-      const repairGatewayId = readString(gatewaySelectionSummary.repairGateway?.gateway_id);
-      const repairGatewayName = gatewayDisplayName(gatewaySelectionSummary.repairGateway);
       return (
         <div className="sage-unified-expand__config app-stack-3">
-          <AppNotice tone="warning">
-            {repairGatewayId
-              ? `Sage is selected to an offline Agent Computer. ${repairGatewayName} is online; use it before pairing personal channels.`
-              : 'Selected Sage Agent Computer is offline. Reconnect it in Hardware before pairing personal channels.'}
-          </AppNotice>
+          <AppNotice tone="warning">Agent Computer offline — connect Hardware first.</AppNotice>
           <div className="sage-unified-expand__actions">
             <AppButton
               type="button"
-              disabled={Boolean(repairGatewayId) && busyCardId === `gateway:${repairGatewayId}`}
-              onClick={() => {
-                if (repairGatewayId) {
-                  void chooseSageAgentComputer(repairGatewayId);
-                  return;
-                }
-                openGatewaySurface();
-              }}
+              onClick={openGatewaySurface}
             >
-              {repairGatewayId
-                ? busyCardId === `gateway:${repairGatewayId}` ? 'Choosing...' : `Use ${repairGatewayName}`
-                : 'Open Hardware'}
+              Go to Hardware
             </AppButton>
           </div>
         </div>
@@ -4807,11 +4825,9 @@ export function WorkstationSageConnectorsPane({
           }
         : !selectedGatewayOnline
           ? {
-              message: repairGatewayId
-                ? `Sage is selected to an offline Agent Computer. ${repairGatewayName} is online; use it before setting up personal channels.`
-                : 'Selected Sage Agent Computer is offline. Reconnect it before setting up personal channels.',
-              actionLabel: repairGatewayId ? `Use ${repairGatewayName}` : 'Open Hardware',
-              action: repairGatewayId ? 'repair' : 'hardware',
+              message: 'Agent Computer offline — connect Hardware first.',
+              actionLabel: 'Go to Hardware',
+              action: 'hardware',
             }
           : null;
     const showBotCredentialForm = Boolean(
@@ -4898,9 +4914,11 @@ export function WorkstationSageConnectorsPane({
                     : channelComputerIssue.actionLabel}
                 </AppButton>
               ) : null}
-              <AppButton type="button" tone="ghost" onClick={openGatewaySurface}>
-                Agent Computer settings
-              </AppButton>
+              {!channelComputerIssue ? (
+                <AppButton type="button" tone="ghost" onClick={openGatewaySurface}>
+                  Agent Computer settings
+                </AppButton>
+              ) : null}
               {showClose ? (
                 <button
                   type="button"
@@ -5108,11 +5126,9 @@ export function WorkstationSageConnectorsPane({
             }
           : !selectedGatewayOnline
             ? {
-                message: repairGatewayId
-                  ? `Sage is selected to an offline Agent Computer. ${repairGatewayName} is online; use it before setting up personal channels.`
-                  : 'Selected Sage Agent Computer is offline. Reconnect it before setting up personal channels.',
-                actionLabel: repairGatewayId ? `Use ${repairGatewayName}` : 'Open Hardware',
-                action: repairGatewayId ? 'repair' : 'hardware',
+                message: 'Agent Computer offline — connect Hardware first.',
+                actionLabel: 'Go to Hardware',
+                action: 'hardware',
               }
             : null
       : null;
@@ -5209,6 +5225,10 @@ export function WorkstationSageConnectorsPane({
                   void handleConnectionSetupStart(record);
                   return;
                 }
+                if (record.actionTarget === 'advanced') {
+                  openIntegrationSection('advanced');
+                  return;
+                }
                 if (record.actionTarget === 'close') {
                   setExpandedCardId(null);
                   return;
@@ -5219,7 +5239,7 @@ export function WorkstationSageConnectorsPane({
               {record.actionLabel}
             </AppButton>
           ) : null}
-          {record.secondaryActionLabel ? (
+          {record.secondaryActionLabel && !channelComputerIssue ? (
             <AppButton
               type="button"
               tone="ghost"

@@ -274,4 +274,25 @@ test.describe('Agent Computer policy settings', () => {
       },
     });
   });
+
+  test('Cloud VPS advanced providers route to the SSH setup path', async ({ page }) => {
+    await mockAgentComputerSettings(page);
+    await loginAsOwner(page);
+
+    await page.goto('/w/ws-1/hardware');
+    await page.getByRole('button', { name: /^Connect$/ }).first().click();
+    await page.getByRole('button', { name: /^Choose provider$/ }).click();
+
+    await expect(page.getByText('Automatic cloud setup')).toBeVisible();
+    await expect(page.getByText('Advanced cloud accounts')).toBeVisible();
+    await expect(page.getByRole('button', { name: /AWS Lightsail/ })).toBeEnabled();
+    await expect(page.getByRole('button', { name: /Google Cloud/ })).toBeEnabled();
+
+    await page.getByRole('button', { name: /AWS Lightsail/ }).click();
+    await expect(page.getByText('Create a Ubuntu server in AWS, then connect it as an Agent Computer with SSH.')).toBeVisible();
+    await page.getByRole('button', { name: /^Connect with SSH$/ }).click();
+
+    await expect(page.getByRole('heading', { name: /^Remote server$/ })).toBeVisible();
+    await expect(page.getByLabel('Host')).toBeVisible();
+  });
 });

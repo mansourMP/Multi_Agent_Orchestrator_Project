@@ -16,6 +16,7 @@ type HardwareTab = 'this_device' | 'other_computers' | 'ssh_server';
 type ConnectOptionId = 'this_device' | 'other_computer' | 'ssh_server' | 'cloud_vps';
 type ConnectModalContext = ConnectOptionId | 'all';
 type VpsProviderId = 'digitalocean' | 'hetzner' | 'vultr';
+type VpsAdvancedOptionId = 'aws_lightsail' | 'google_cloud' | 'custom_ssh';
 type VpsStep = 'provider' | 'credentials' | 'plans' | 'region' | 'confirm' | 'progress';
 type VpsProgressStage = 'idle' | 'creating' | 'installing' | 'connecting' | 'connected' | 'failed';
 
@@ -190,6 +191,14 @@ type VpsProviderCard = {
   features: string[];
 };
 
+type VpsAdvancedOption = {
+  id: VpsAdvancedOptionId;
+  label: string;
+  detail: string;
+  description: string;
+  href?: string;
+};
+
 const TRAY_STATUS_URL = 'http://127.0.0.1:7790/status';
 const TRAY_CONNECT_URL = 'http://127.0.0.1:7790/connect';
 const AGENT_DOWNLOAD_URL = 'https://empyralis.io/downloads/empyralis-agent/macos/Empyralis-Agent.dmg';
@@ -272,10 +281,27 @@ const VPS_PROVIDER_CARDS: Record<VpsProviderId, VpsProviderCard> = {
 
 const VPS_MAIN_PROVIDER_IDS: VpsProviderId[] = ['digitalocean', 'hetzner', 'vultr'];
 
-const VPS_ADVANCED_OPTIONS: Array<{ id: 'aws_lightsail' | 'google_cloud' | 'custom_ssh'; label: string; detail: string }> = [
-  { id: 'aws_lightsail', label: 'AWS Lightsail', detail: 'Later' },
-  { id: 'google_cloud', label: 'Google Cloud', detail: 'Later' },
-  { id: 'custom_ssh', label: 'Custom SSH', detail: 'Existing flow' },
+const VPS_ADVANCED_OPTIONS: VpsAdvancedOption[] = [
+  {
+    id: 'aws_lightsail',
+    label: 'AWS Lightsail',
+    detail: 'Guided setup',
+    description: 'Create a Ubuntu server in AWS, then connect it as an Agent Computer with SSH.',
+    href: 'https://lightsail.aws.amazon.com/ls/webapp/home/instances',
+  },
+  {
+    id: 'google_cloud',
+    label: 'Google Cloud',
+    detail: 'Guided setup',
+    description: 'Create a Compute Engine VM, then connect it as an Agent Computer with SSH.',
+    href: 'https://console.cloud.google.com/compute/instances',
+  },
+  {
+    id: 'custom_ssh',
+    label: 'Custom SSH',
+    detail: 'Any VPS',
+    description: 'Connect any existing Linux VPS or server with SSH.',
+  },
 ];
 
 const VPS_PROGRESS_STEPS: Array<{ id: VpsProgressStage; label: string }> = [
@@ -1030,6 +1056,7 @@ export function WorkstationHardwarePane() {
   const [vpsProviderResourceId, setVpsProviderResourceId] = useState<string | null>(null);
   const [vpsProgressStage, setVpsProgressStage] = useState<VpsProgressStage>('idle');
   const [vpsCleanupBusy, setVpsCleanupBusy] = useState(false);
+  const [vpsAdvancedOption, setVpsAdvancedOption] = useState<VpsAdvancedOptionId | null>(null);
   const workspaceRecord = readRecord(bootstrap.workspace);
   const workspaceId = readString(workspaceRecord, 'id', 'workspace_id') || 'ws-1';
   const workspaceLabel = workspaceId || readString(workspaceRecord, 'label', 'name') || 'this workspace';
@@ -1509,6 +1536,7 @@ export function WorkstationHardwarePane() {
     setVpsProviderResourceId(null);
     setVpsProgressStage('idle');
     setVpsCleanupBusy(false);
+    setVpsAdvancedOption(null);
   }
 
   async function loadVpsRegions(providerId: VpsProviderId): Promise<VpsRegion[]> {
@@ -1541,6 +1569,7 @@ export function WorkstationHardwarePane() {
   async function selectVpsProvider(providerId: VpsProviderId) {
     setSelectedConnectOption('cloud_vps');
     setVpsSelectedProvider(providerId);
+    setVpsAdvancedOption(null);
     setVpsToken('');
     setVpsTokenId('');
     setVpsPlans([]);
@@ -1550,6 +1579,24 @@ export function WorkstationHardwarePane() {
     setVpsProgressStage('idle');
     setVpsStep('credentials');
     void loadVpsRegions(providerId);
+  }
+
+  function selectVpsAdvancedOption(option: VpsAdvancedOption) {
+    if (option.id === 'custom_ssh') {
+      setSelectedConnectOption('ssh_server');
+      setRemoteExpanded(true);
+      setVpsAdvancedOption(null);
+      return;
+    }
+    setSelectedConnectOption('cloud_vps');
+    setVpsSelectedProvider(null);
+    setVpsAdvancedOption(option.id);
+    setVpsToken('');
+    setVpsTokenId('');
+    setVpsPlans([]);
+    setVpsSelectedPlanId('');
+    setVpsError(null);
+    setVpsStep('provider');
   }
 
   async function loadVpsPlans(providerId: VpsProviderId, tokenId: string): Promise<VpsPlan[]> {
@@ -2188,6 +2235,10 @@ export function WorkstationHardwarePane() {
 
                     {vpsStep === 'provider' ? (
                       <div className="workstation-hardware-vps-provider-picker">
+                        <div className="workstation-hardware-vps-provider-copy">
+                          <strong>Automatic cloud setup</strong>
+                          <span>Empyralis creates the server, installs Agent Computer, and connects it here.</span>
+                        </div>
                         <div className="workstation-hardware-vps-provider-grid">
                           {VPS_MAIN_PROVIDER_IDS.map((providerId) => {
                             const provider = VPS_PROVIDER_CARDS[providerId];
@@ -2220,25 +2271,55 @@ export function WorkstationHardwarePane() {
                             );
                           })}
                         </div>
+                        <div className="workstation-hardware-vps-advanced-copy">
+                          <strong>Advanced cloud accounts</strong>
+                          <span>AWS, Google Cloud, or any existing VPS can still become a dedicated Agent Computer.</span>
+                        </div>
                         <div className="workstation-hardware-vps-advanced-row" aria-label="Advanced VPS setup options">
                           {VPS_ADVANCED_OPTIONS.map((option) => (
                             <button
                               key={option.id}
                               type="button"
-                              className="workstation-hardware-vps-advanced-card"
-                              disabled={option.id !== 'custom_ssh'}
-                              onClick={() => {
-                                if (option.id === 'custom_ssh') {
-                                  setSelectedConnectOption('ssh_server');
-                                  setRemoteExpanded(true);
-                                }
-                              }}
+                              className={joinClassNames('workstation-hardware-vps-advanced-card', vpsAdvancedOption === option.id && 'is-selected')}
+                              onClick={() => selectVpsAdvancedOption(option)}
                             >
                               <span>{option.label}</span>
                               <small>{option.detail}</small>
                             </button>
                           ))}
                         </div>
+                        {vpsAdvancedOption ? (() => {
+                          const option = VPS_ADVANCED_OPTIONS.find((item) => item.id === vpsAdvancedOption);
+                          if (!option) {
+                            return null;
+                          }
+                          return (
+                            <div className="workstation-hardware-vps-advanced-panel">
+                              <div>
+                                <strong>{option.label}</strong>
+                                <p>{option.description}</p>
+                              </div>
+                              <div className="workstation-hardware-vps-actions">
+                                {option.href ? (
+                                  <AppButton tone="secondary" type="button" onClick={() => window.open(option.href, '_blank', 'noopener,noreferrer')}>
+                                    <span>{`Open ${option.label}`}</span>
+                                    <ExternalLink size={13} strokeWidth={2} aria-hidden="true" />
+                                  </AppButton>
+                                ) : null}
+                                <AppButton
+                                  tone="primary"
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedConnectOption('ssh_server');
+                                    setRemoteExpanded(true);
+                                  }}
+                                >
+                                  Connect with SSH
+                                </AppButton>
+                              </div>
+                            </div>
+                          );
+                        })() : null}
                       </div>
                     ) : null}
 
@@ -2303,7 +2384,7 @@ export function WorkstationHardwarePane() {
                           ))}
                         </div>
                         <div className="workstation-hardware-vps-actions">
-                          <AppButton tone="secondary" type="button" onClick={() => setVpsStep('plans')}>
+                          <AppButton tone="secondary" type="button" onClick={() => setVpsStep('credentials')}>
                             Back
                           </AppButton>
                           <AppButton tone="primary" type="button" onClick={continueVpsPlans} disabled={!vpsSelectedPlanId || vpsLoadingPlans}>
@@ -2331,7 +2412,7 @@ export function WorkstationHardwarePane() {
                           </select>
                         </label>
                         <div className="workstation-hardware-vps-actions">
-                          <AppButton tone="secondary" type="button" onClick={() => setVpsStep('credentials')}>
+                          <AppButton tone="secondary" type="button" onClick={() => setVpsStep('plans')}>
                             Back
                           </AppButton>
                           <AppButton tone="primary" type="button" onClick={continueVpsRegion} disabled={vpsLoadingRegions || !vpsSelectedRegion}>

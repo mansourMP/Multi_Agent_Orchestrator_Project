@@ -114,6 +114,311 @@ def validate_canva_connector(credentials: Dict[str, Any], http_json_request: Htt
     )
 
 
+def validate_asana_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="asana",
+        label="Asana",
+        profile_probe="https://app.asana.com/api/1.0/users/me",
+    )
+
+
+def validate_hubspot_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="hubspot",
+        label="HubSpot",
+        profile_probe="https://api.hubapi.com/crm/v3/objects/contacts?limit=1",
+    )
+
+
+def validate_zoom_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="zoom",
+        label="Zoom",
+        profile_probe="https://api.zoom.us/v2/users/me",
+    )
+
+
+def validate_calendly_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="calendly",
+        label="Calendly",
+        profile_probe="https://api.calendly.com/users/me",
+    )
+
+
+def validate_clickup_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="clickup",
+        label="ClickUp",
+        profile_probe="https://api.clickup.com/api/v2/user",
+    )
+
+
+def validate_jira_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="jira",
+        label="Jira",
+        profile_probe="https://api.atlassian.com/me",
+    )
+
+
+def validate_stripe_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="stripe",
+        label="Stripe",
+        profile_probe="https://api.stripe.com/v1/account",
+    )
+
+
+def validate_salesforce_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="salesforce",
+        label="Salesforce",
+        profile_probe="https://login.salesforce.com/services/oauth2/userinfo",
+    )
+
+
+def validate_webflow_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="webflow",
+        label="Webflow",
+        profile_probe="https://api.webflow.com/v2/token/authorized_by",
+    )
+
+
+def validate_monday_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    access_token = str(credentials.get("access_token") or credentials.get("oauth_access_token") or credentials.get("token") or "").strip()
+    if not access_token:
+        raise RuntimeError("monday.com access_token is required.")
+    response = http_json_request(
+        "https://api.monday.com/v2",
+        headers={"Authorization": access_token, "Content-Type": "application/json"},
+        payload={"query": "query { me { id name email } }"},
+        method="POST",
+    )
+    status = int(response.get("status") or 0)
+    if status < 200 or status >= 300:
+        raise RuntimeError("monday.com token is invalid.")
+    body = response.get("json") if isinstance(response.get("json"), dict) else {}
+    profile = body.get("data", {}).get("me") if isinstance(body.get("data"), dict) else {}
+    if not isinstance(profile, dict):
+        profile = {}
+    return {
+        "ok": True,
+        "status": status,
+        "message": "monday.com connector is valid.",
+        "profile": profile,
+        "provider": "monday",
+        "auth_mode": str(credentials.get("auth_mode") or "oauth").strip().lower() or "oauth",
+        "credentials": {
+            **credentials,
+            "access_token": access_token,
+            "auth_mode": str(credentials.get("auth_mode") or "oauth").strip().lower() or "oauth",
+        },
+    }
+
+
+def validate_box_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="box",
+        label="Box",
+        profile_probe="https://api.box.com/2.0/users/me",
+    )
+
+
+def validate_gitlab_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="gitlab",
+        label="GitLab",
+        profile_probe="https://gitlab.com/api/v4/user",
+    )
+
+
+def validate_bitbucket_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="bitbucket",
+        label="Bitbucket",
+        profile_probe="https://api.bitbucket.org/2.0/user",
+    )
+
+
+def validate_confluence_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="confluence",
+        label="Confluence",
+        profile_probe="https://api.atlassian.com/me",
+    )
+
+
+def validate_miro_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="miro",
+        label="Miro",
+        profile_probe="https://api.miro.com/v2/users/me",
+    )
+
+
+def validate_mailchimp_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    access_token = str(credentials.get("access_token") or credentials.get("oauth_access_token") or credentials.get("token") or "").strip()
+    if not access_token:
+        raise RuntimeError("Mailchimp access_token is required.")
+    response = http_json_request("https://login.mailchimp.com/oauth2/metadata", headers={"Authorization": f"OAuth {access_token}"})
+    status = int(response.get("status") or 0)
+    if status < 200 or status >= 300:
+        raise RuntimeError("Mailchimp token is invalid.")
+    profile = response.get("json") if isinstance(response.get("json"), dict) else {}
+    return {
+        "ok": True,
+        "status": status,
+        "message": "Mailchimp connector is valid.",
+        "profile": profile,
+        "provider": "mailchimp",
+        "auth_mode": str(credentials.get("auth_mode") or "oauth").strip().lower() or "oauth",
+        "credentials": {
+            **credentials,
+            "access_token": access_token,
+            "auth_mode": str(credentials.get("auth_mode") or "oauth").strip().lower() or "oauth",
+        },
+    }
+
+
+def validate_pipedrive_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="pipedrive",
+        label="Pipedrive",
+        profile_probe="https://api.pipedrive.com/v1/users/me",
+    )
+
+
+def validate_intercom_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="intercom",
+        label="Intercom",
+        profile_probe="https://api.intercom.io/me",
+    )
+
+
+def validate_docusign_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="docusign",
+        label="Docusign",
+        profile_probe="https://account.docusign.com/oauth/userinfo",
+    )
+
+
+def validate_square_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    access_token = str(credentials.get("access_token") or credentials.get("oauth_access_token") or credentials.get("token") or "").strip()
+    if not access_token:
+        raise RuntimeError("Square access_token is required.")
+    response = http_json_request(
+        "https://connect.squareup.com/oauth2/token/status",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        payload={},
+        method="POST",
+    )
+    status = int(response.get("status") or 0)
+    if status < 200 or status >= 300:
+        raise RuntimeError("Square token is invalid.")
+    profile = response.get("json") if isinstance(response.get("json"), dict) else {}
+    return {
+        "ok": True,
+        "status": status,
+        "message": "Square connector is valid.",
+        "profile": profile,
+        "provider": "square",
+        "auth_mode": str(credentials.get("auth_mode") or "oauth").strip().lower() or "oauth",
+        "credentials": {
+            **credentials,
+            "access_token": access_token,
+            "auth_mode": str(credentials.get("auth_mode") or "oauth").strip().lower() or "oauth",
+        },
+    }
+
+
+def validate_typeform_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="typeform",
+        label="Typeform",
+        profile_probe="https://api.typeform.com/me",
+    )
+
+
+def validate_quickbooks_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="quickbooks",
+        label="QuickBooks",
+        profile_probe="https://accounts.platform.intuit.com/v1/openid_connect/userinfo",
+    )
+
+
+def validate_xero_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="xero",
+        label="Xero",
+        profile_probe="https://api.xero.com/connections",
+    )
+
+
+def validate_freshbooks_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="freshbooks",
+        label="FreshBooks",
+        profile_probe="https://api.freshbooks.com/auth/api/v1/users/me",
+    )
+
+
+def validate_vercel_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+    return validate_oauth_bearer_connector(
+        credentials,
+        http_json_request,
+        provider="vercel",
+        label="Vercel",
+        profile_probe="https://api.vercel.com/login/oauth/userinfo",
+    )
+
+
 def validate_s3_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest | None = None) -> Dict[str, Any]:
     return validate_s3_credentials(credentials)
 

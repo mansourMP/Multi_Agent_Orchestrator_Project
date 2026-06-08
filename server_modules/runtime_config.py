@@ -110,11 +110,26 @@ from server_modules.connectors.autopilot_runtime_exports import (
 )
 from server_modules.connector_validators import (
     validate_airtable_connector as _validate_airtable_connector,
+    validate_asana_connector as _validate_asana_connector,
+    validate_bitbucket_connector as _validate_bitbucket_connector,
+    validate_box_connector as _validate_box_connector,
+    validate_calendly_connector as _validate_calendly_connector,
     validate_canva_connector as _validate_canva_connector,
+    validate_clickup_connector as _validate_clickup_connector,
+    validate_confluence_connector as _validate_confluence_connector,
+    validate_docusign_connector as _validate_docusign_connector,
     validate_dropbox_connector as _validate_dropbox_connector,
     validate_figma_connector as _validate_figma_connector,
+    validate_freshbooks_connector as _validate_freshbooks_connector,
     validate_github_connector as _validate_github_connector,
+    validate_gitlab_connector as _validate_gitlab_connector,
+    validate_hubspot_connector as _validate_hubspot_connector,
+    validate_intercom_connector as _validate_intercom_connector,
+    validate_jira_connector as _validate_jira_connector,
     validate_linear_connector as _validate_linear_connector,
+    validate_mailchimp_connector as _validate_mailchimp_connector,
+    validate_miro_connector as _validate_miro_connector,
+    validate_monday_connector as _validate_monday_connector,
     validate_notion_connector as _validate_notion_connector,
     validate_google_workspace_connector as _validate_google_workspace_connector,
     validate_microsoft_365_connector as _validate_microsoft_365_connector,
@@ -125,7 +140,17 @@ from server_modules.connector_validators import (
     validate_whatsapp_twilio_connector as _validate_whatsapp_twilio_connector,
     validate_discord_bot_connector as _validate_discord_bot_connector,
     validate_slack_connector as _validate_slack_connector,
+    validate_pipedrive_connector as _validate_pipedrive_connector,
+    validate_quickbooks_connector as _validate_quickbooks_connector,
+    validate_salesforce_connector as _validate_salesforce_connector,
+    validate_square_connector as _validate_square_connector,
+    validate_stripe_connector as _validate_stripe_connector,
     validate_todoist_connector as _validate_todoist_connector,
+    validate_typeform_connector as _validate_typeform_connector,
+    validate_vercel_connector as _validate_vercel_connector,
+    validate_webflow_connector as _validate_webflow_connector,
+    validate_xero_connector as _validate_xero_connector,
+    validate_zoom_connector as _validate_zoom_connector,
     validate_instagram_business_connector as _validate_instagram_business_connector,
     validate_irc_connector as _validate_irc_connector,
 )
@@ -841,6 +866,106 @@ CONNECTOR_CATALOG = {
     },
     "canva": {
         "label": "Canva",
+        "auth": ["access_token"],
+    },
+    "asana": {
+        "label": "Asana",
+        "auth": ["access_token"],
+    },
+    "hubspot": {
+        "label": "HubSpot",
+        "auth": ["access_token"],
+    },
+    "zoom": {
+        "label": "Zoom",
+        "auth": ["access_token"],
+    },
+    "calendly": {
+        "label": "Calendly",
+        "auth": ["access_token"],
+    },
+    "clickup": {
+        "label": "ClickUp",
+        "auth": ["access_token"],
+    },
+    "jira": {
+        "label": "Jira",
+        "auth": ["access_token"],
+    },
+    "stripe": {
+        "label": "Stripe",
+        "auth": ["access_token"],
+    },
+    "salesforce": {
+        "label": "Salesforce",
+        "auth": ["access_token"],
+    },
+    "webflow": {
+        "label": "Webflow",
+        "auth": ["access_token"],
+    },
+    "monday": {
+        "label": "monday.com",
+        "auth": ["access_token"],
+    },
+    "box": {
+        "label": "Box",
+        "auth": ["access_token"],
+    },
+    "gitlab": {
+        "label": "GitLab",
+        "auth": ["access_token"],
+    },
+    "bitbucket": {
+        "label": "Bitbucket",
+        "auth": ["access_token"],
+    },
+    "confluence": {
+        "label": "Confluence",
+        "auth": ["access_token"],
+    },
+    "miro": {
+        "label": "Miro",
+        "auth": ["access_token"],
+    },
+    "mailchimp": {
+        "label": "Mailchimp",
+        "auth": ["access_token"],
+    },
+    "pipedrive": {
+        "label": "Pipedrive",
+        "auth": ["access_token"],
+    },
+    "intercom": {
+        "label": "Intercom",
+        "auth": ["access_token"],
+    },
+    "docusign": {
+        "label": "Docusign",
+        "auth": ["access_token"],
+    },
+    "square": {
+        "label": "Square",
+        "auth": ["access_token"],
+    },
+    "typeform": {
+        "label": "Typeform",
+        "auth": ["access_token"],
+    },
+    "quickbooks": {
+        "label": "QuickBooks",
+        "auth": ["access_token"],
+    },
+    "xero": {
+        "label": "Xero",
+        "auth": ["access_token"],
+    },
+    "freshbooks": {
+        "label": "FreshBooks",
+        "auth": ["access_token"],
+    },
+    "vercel": {
+        "label": "Vercel",
         "auth": ["access_token"],
     },
     "s3": {

@@ -34,10 +34,14 @@ class OAuthProviderConfig:
     scope_separator: str = " "
     auth_params: Dict[str, str] = field(default_factory=dict)
     include_response_type: bool = True
+    include_redirect_uri_in_authorization_url: bool = True
     slack_authorize_helper: bool = False
     token_auth: str = "client_secret_post"
     include_client_id_in_token_body: bool = True
     include_client_secret_in_token_body: bool = True
+    include_redirect_uri_in_token_body: bool = True
+    token_grant_type: str | None = "authorization_code"
+    token_request_format: str = "form"
 
 
 OAUTH_PROVIDER_CONFIGS: Dict[str, OAuthProviderConfig] = {
@@ -177,7 +181,7 @@ OAUTH_PROVIDER_CONFIGS: Dict[str, OAuthProviderConfig] = {
             "client_secret": ("TODOIST_CLIENT_SECRET",),
         },
         scopes=("data:read_write",),
-        auth_url="https://todoist.com/oauth/authorize",
+        auth_url="https://app.todoist.com/oauth/authorize",
         token_url="https://todoist.com/oauth/access_token",
         auth_method="authorization_code",
         token_parser="standard",
@@ -215,6 +219,378 @@ OAUTH_PROVIDER_CONFIGS: Dict[str, OAuthProviderConfig] = {
         include_client_id_in_token_body=False,
         include_client_secret_in_token_body=False,
     ),
+    "asana": OAuthProviderConfig(
+        label="Asana",
+        env_vars={
+            "client_id": ("ASANA_CLIENT_ID",),
+            "client_secret": ("ASANA_CLIENT_SECRET",),
+        },
+        scopes=("tasks:read", "tasks:write", "projects:read", "users:read", "workspaces:read"),
+        auth_url="https://app.asana.com/-/oauth_authorize",
+        token_url="https://app.asana.com/-/oauth_token",
+        auth_method="pkce",
+        token_parser="standard",
+        profile_probe="https://app.asana.com/api/1.0/users/me",
+    ),
+    "hubspot": OAuthProviderConfig(
+        label="HubSpot",
+        env_vars={
+            "client_id": ("HUBSPOT_CLIENT_ID",),
+            "client_secret": ("HUBSPOT_CLIENT_SECRET",),
+        },
+        scopes=(
+            "oauth",
+            "crm.objects.contacts.read",
+            "crm.objects.contacts.write",
+            "crm.objects.companies.read",
+            "crm.objects.deals.read",
+        ),
+        auth_url="https://app.hubspot.com/oauth/authorize",
+        token_url="https://api.hubapi.com/oauth/v3/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.hubapi.com/crm/v3/objects/contacts?limit=1",
+    ),
+    "zoom": OAuthProviderConfig(
+        label="Zoom",
+        env_vars={
+            "client_id": ("ZOOM_CLIENT_ID",),
+            "client_secret": ("ZOOM_CLIENT_SECRET",),
+        },
+        scopes=(),
+        auth_url="https://zoom.us/oauth/authorize",
+        token_url="https://zoom.us/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.zoom.us/v2/users/me",
+        token_auth="basic",
+        include_client_id_in_token_body=False,
+        include_client_secret_in_token_body=False,
+    ),
+    "calendly": OAuthProviderConfig(
+        label="Calendly",
+        env_vars={
+            "client_id": ("CALENDLY_CLIENT_ID",),
+            "client_secret": ("CALENDLY_CLIENT_SECRET",),
+        },
+        scopes=(),
+        auth_url="https://auth.calendly.com/oauth/authorize",
+        token_url="https://auth.calendly.com/oauth/token",
+        auth_method="pkce",
+        token_parser="standard",
+        profile_probe="https://api.calendly.com/users/me",
+    ),
+    "clickup": OAuthProviderConfig(
+        label="ClickUp",
+        env_vars={
+            "client_id": ("CLICKUP_CLIENT_ID",),
+            "client_secret": ("CLICKUP_CLIENT_SECRET",),
+        },
+        scopes=(),
+        auth_url="https://app.clickup.com/api",
+        token_url="https://api.clickup.com/api/v2/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.clickup.com/api/v2/user",
+        include_response_type=False,
+        include_redirect_uri_in_token_body=False,
+        token_grant_type=None,
+    ),
+    "jira": OAuthProviderConfig(
+        label="Jira",
+        env_vars={
+            "client_id": ("ATLASSIAN_CLIENT_ID", "JIRA_CLIENT_ID"),
+            "client_secret": ("ATLASSIAN_CLIENT_SECRET", "JIRA_CLIENT_SECRET"),
+        },
+        scopes=("read:me", "read:jira-user", "read:jira-work", "write:jira-work", "offline_access"),
+        auth_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.atlassian.com/me",
+        auth_params={"audience": "api.atlassian.com", "prompt": "consent"},
+        token_request_format="json",
+    ),
+    "stripe": OAuthProviderConfig(
+        label="Stripe",
+        env_vars={
+            "client_id": ("STRIPE_CLIENT_ID",),
+            "client_secret": ("STRIPE_CLIENT_SECRET", "STRIPE_SECRET_KEY"),
+        },
+        scopes=("read_write",),
+        auth_url="https://connect.stripe.com/oauth/authorize",
+        token_url="https://connect.stripe.com/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.stripe.com/v1/account",
+        include_client_id_in_token_body=False,
+        include_redirect_uri_in_token_body=False,
+    ),
+    "salesforce": OAuthProviderConfig(
+        label="Salesforce",
+        env_vars={
+            "client_id": ("SALESFORCE_CLIENT_ID",),
+            "client_secret": ("SALESFORCE_CLIENT_SECRET",),
+        },
+        scopes=("openid", "api", "refresh_token"),
+        auth_url="https://login.salesforce.com/services/oauth2/authorize",
+        token_url="https://login.salesforce.com/services/oauth2/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://login.salesforce.com/services/oauth2/userinfo",
+    ),
+    "webflow": OAuthProviderConfig(
+        label="Webflow",
+        env_vars={
+            "client_id": ("WEBFLOW_CLIENT_ID",),
+            "client_secret": ("WEBFLOW_CLIENT_SECRET",),
+        },
+        scopes=("sites:read", "pages:read", "cms:read", "assets:read", "forms:read"),
+        auth_url="https://webflow.com/oauth/authorize",
+        token_url="https://api.webflow.com/oauth/access_token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.webflow.com/v2/token/authorized_by",
+    ),
+    "monday": OAuthProviderConfig(
+        label="monday.com",
+        env_vars={
+            "client_id": ("MONDAY_CLIENT_ID",),
+            "client_secret": ("MONDAY_CLIENT_SECRET",),
+        },
+        scopes=("me:read", "account:read", "boards:read", "boards:write", "updates:read", "updates:write", "workspaces:read"),
+        auth_url="https://auth.monday.com/oauth2/authorize",
+        token_url="https://auth.monday.com/oauth2/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.monday.com/v2",
+        token_grant_type=None,
+    ),
+    "box": OAuthProviderConfig(
+        label="Box",
+        env_vars={
+            "client_id": ("BOX_CLIENT_ID",),
+            "client_secret": ("BOX_CLIENT_SECRET",),
+        },
+        scopes=(),
+        auth_url="https://account.box.com/api/oauth2/authorize",
+        token_url="https://api.box.com/oauth2/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.box.com/2.0/users/me",
+    ),
+    "gitlab": OAuthProviderConfig(
+        label="GitLab",
+        env_vars={
+            "client_id": ("GITLAB_CLIENT_ID",),
+            "client_secret": ("GITLAB_CLIENT_SECRET",),
+        },
+        scopes=("read_user", "read_api", "api"),
+        auth_url="https://gitlab.com/oauth/authorize",
+        token_url="https://gitlab.com/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://gitlab.com/api/v4/user",
+    ),
+    "bitbucket": OAuthProviderConfig(
+        label="Bitbucket",
+        env_vars={
+            "client_id": ("BITBUCKET_CLIENT_ID",),
+            "client_secret": ("BITBUCKET_CLIENT_SECRET",),
+        },
+        scopes=("account", "repository", "pullrequest", "issue"),
+        auth_url="https://bitbucket.org/site/oauth2/authorize",
+        token_url="https://bitbucket.org/site/oauth2/access_token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.bitbucket.org/2.0/user",
+        token_auth="basic",
+        include_client_id_in_token_body=False,
+        include_client_secret_in_token_body=False,
+    ),
+    "confluence": OAuthProviderConfig(
+        label="Confluence",
+        env_vars={
+            "client_id": ("ATLASSIAN_CLIENT_ID", "CONFLUENCE_CLIENT_ID"),
+            "client_secret": ("ATLASSIAN_CLIENT_SECRET", "CONFLUENCE_CLIENT_SECRET"),
+        },
+        scopes=(
+            "read:me",
+            "read:confluence-user",
+            "read:confluence-content.summary",
+            "read:confluence-space.summary",
+            "write:confluence-content",
+            "offline_access",
+        ),
+        auth_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.atlassian.com/me",
+        auth_params={"audience": "api.atlassian.com", "prompt": "consent"},
+        token_request_format="json",
+    ),
+    "miro": OAuthProviderConfig(
+        label="Miro",
+        env_vars={
+            "client_id": ("MIRO_CLIENT_ID",),
+            "client_secret": ("MIRO_CLIENT_SECRET",),
+        },
+        scopes=("identity:read", "boards:read", "boards:write"),
+        auth_url="https://miro.com/oauth/authorize",
+        token_url="https://api.miro.com/v1/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.miro.com/v2/users/me",
+    ),
+    "mailchimp": OAuthProviderConfig(
+        label="Mailchimp",
+        env_vars={
+            "client_id": ("MAILCHIMP_CLIENT_ID",),
+            "client_secret": ("MAILCHIMP_CLIENT_SECRET",),
+        },
+        scopes=(),
+        auth_url="https://login.mailchimp.com/oauth2/authorize",
+        token_url="https://login.mailchimp.com/oauth2/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://login.mailchimp.com/oauth2/metadata",
+    ),
+    "pipedrive": OAuthProviderConfig(
+        label="Pipedrive",
+        env_vars={
+            "client_id": ("PIPEDRIVE_CLIENT_ID",),
+            "client_secret": ("PIPEDRIVE_CLIENT_SECRET",),
+        },
+        scopes=("deals:read", "deals:write", "contacts:read", "contacts:write", "activities:read", "activities:write"),
+        auth_url="https://oauth.pipedrive.com/oauth/authorize",
+        token_url="https://oauth.pipedrive.com/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.pipedrive.com/v1/users/me",
+        token_auth="basic",
+        include_client_id_in_token_body=False,
+        include_client_secret_in_token_body=False,
+    ),
+    "intercom": OAuthProviderConfig(
+        label="Intercom",
+        env_vars={
+            "client_id": ("INTERCOM_CLIENT_ID",),
+            "client_secret": ("INTERCOM_CLIENT_SECRET",),
+        },
+        scopes=(),
+        auth_url="https://app.intercom.com/oauth",
+        token_url="https://api.intercom.io/auth/eagle/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.intercom.io/me",
+        include_response_type=False,
+        include_redirect_uri_in_authorization_url=False,
+        include_redirect_uri_in_token_body=False,
+        token_grant_type=None,
+    ),
+    "docusign": OAuthProviderConfig(
+        label="Docusign",
+        env_vars={
+            "client_id": ("DOCUSIGN_CLIENT_ID",),
+            "client_secret": ("DOCUSIGN_CLIENT_SECRET",),
+        },
+        scopes=("signature", "extended"),
+        auth_url="https://account.docusign.com/oauth/auth",
+        token_url="https://account.docusign.com/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://account.docusign.com/oauth/userinfo",
+        token_auth="basic",
+        include_client_id_in_token_body=False,
+        include_client_secret_in_token_body=False,
+    ),
+    "square": OAuthProviderConfig(
+        label="Square",
+        env_vars={
+            "client_id": ("SQUARE_APPLICATION_ID", "SQUARE_CLIENT_ID"),
+            "client_secret": ("SQUARE_APPLICATION_SECRET", "SQUARE_CLIENT_SECRET"),
+        },
+        scopes=("MERCHANT_PROFILE_READ", "CUSTOMERS_READ", "ORDERS_READ", "PAYMENTS_READ", "INVOICES_READ"),
+        auth_url="https://connect.squareup.com/oauth2/authorize",
+        token_url="https://connect.squareup.com/oauth2/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://connect.squareup.com/oauth2/token/status",
+        scope_separator=",",
+        token_request_format="json",
+    ),
+    "typeform": OAuthProviderConfig(
+        label="Typeform",
+        env_vars={
+            "client_id": ("TYPEFORM_CLIENT_ID",),
+            "client_secret": ("TYPEFORM_CLIENT_SECRET",),
+        },
+        scopes=("offline", "forms:read", "forms:write", "responses:read", "accounts:read"),
+        auth_url="https://api.typeform.com/oauth/authorize",
+        token_url="https://api.typeform.com/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.typeform.com/me",
+    ),
+    "quickbooks": OAuthProviderConfig(
+        label="QuickBooks",
+        env_vars={
+            "client_id": ("QUICKBOOKS_CLIENT_ID", "INTUIT_CLIENT_ID"),
+            "client_secret": ("QUICKBOOKS_CLIENT_SECRET", "INTUIT_CLIENT_SECRET"),
+        },
+        scopes=("openid", "profile", "email", "com.intuit.quickbooks.accounting"),
+        auth_url="https://appcenter.intuit.com/connect/oauth2",
+        token_url="https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://accounts.platform.intuit.com/v1/openid_connect/userinfo",
+        token_auth="basic",
+        include_client_id_in_token_body=False,
+        include_client_secret_in_token_body=False,
+    ),
+    "xero": OAuthProviderConfig(
+        label="Xero",
+        env_vars={
+            "client_id": ("XERO_CLIENT_ID",),
+            "client_secret": ("XERO_CLIENT_SECRET",),
+        },
+        scopes=("openid", "profile", "email", "offline_access", "accounting.contacts.read", "accounting.invoices.read", "accounting.settings.read"),
+        auth_url="https://login.xero.com/identity/connect/authorize",
+        token_url="https://identity.xero.com/connect/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.xero.com/connections",
+        token_auth="basic",
+        include_client_id_in_token_body=False,
+        include_client_secret_in_token_body=False,
+    ),
+    "freshbooks": OAuthProviderConfig(
+        label="FreshBooks",
+        env_vars={
+            "client_id": ("FRESHBOOKS_CLIENT_ID",),
+            "client_secret": ("FRESHBOOKS_CLIENT_SECRET",),
+        },
+        scopes=("user:profile:read", "user:clients:read", "user:invoices:read", "user:expenses:read"),
+        auth_url="https://my.freshbooks.com/service/auth/oauth/authorize",
+        token_url="https://api.freshbooks.com/auth/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.freshbooks.com/auth/api/v1/users/me",
+    ),
+    "vercel": OAuthProviderConfig(
+        label="Vercel",
+        env_vars={
+            "client_id": ("VERCEL_CLIENT_ID",),
+            "client_secret": ("VERCEL_CLIENT_SECRET",),
+        },
+        scopes=("openid", "profile", "email"),
+        auth_url="https://vercel.com/oauth/authorize",
+        token_url="https://api.vercel.com/login/oauth/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://api.vercel.com/login/oauth/userinfo",
+    ),
 }
 
 _CONNECTION_PROVIDER_ALIASES = {
@@ -235,6 +611,37 @@ _CONNECTION_PROVIDER_ALIASES = {
     "todoist": "todoist",
     "airtable": "airtable",
     "canva": "canva",
+    "asana": "asana",
+    "hubspot": "hubspot",
+    "zoom": "zoom",
+    "calendly": "calendly",
+    "clickup": "clickup",
+    "jira": "jira",
+    "atlassian": "jira",
+    "stripe": "stripe",
+    "salesforce": "salesforce",
+    "webflow": "webflow",
+    "monday": "monday",
+    "monday_com": "monday",
+    "monday.com": "monday",
+    "box": "box",
+    "gitlab": "gitlab",
+    "bitbucket": "bitbucket",
+    "confluence": "confluence",
+    "miro": "miro",
+    "mailchimp": "mailchimp",
+    "pipedrive": "pipedrive",
+    "intercom": "intercom",
+    "docusign": "docusign",
+    "docu_sign": "docusign",
+    "square": "square",
+    "typeform": "typeform",
+    "quickbooks": "quickbooks",
+    "quick_books": "quickbooks",
+    "xero": "xero",
+    "freshbooks": "freshbooks",
+    "fresh_books": "freshbooks",
+    "vercel": "vercel",
 }
 
 
@@ -438,9 +845,10 @@ def start_oauth(
     else:
         query = {
             "client_id": client_id,
-            "redirect_uri": redirect_uri,
             "state": state,
         }
+        if config.include_redirect_uri_in_authorization_url:
+            query["redirect_uri"] = redirect_uri
         if config.include_response_type:
             query["response_type"] = "code"
         if config.scopes:
@@ -521,10 +929,23 @@ def _credentials_from_standard_token_response(provider: str, payload: Dict[str, 
         credentials["refresh_token"] = refresh_token
     if expires_in > 0:
         credentials["access_token_expires_at"] = int(time.time()) + expires_in
-    for key in ("user_id", "user_id_string", "account_id", "workspace_id"):
+    for key in (
+        "user_id",
+        "user_id_string",
+        "account_id",
+        "workspace_id",
+        "stripe_user_id",
+        "stripe_publishable_key",
+        "instance_url",
+        "id",
+        "organization_id",
+        "team_id",
+    ):
         value = str(payload.get(key) or "").strip()
         if value:
             credentials[key] = value
+    if "livemode" in payload:
+        credentials["livemode"] = bool(payload.get("livemode"))
     return credentials
 
 
@@ -533,9 +954,11 @@ def _exchange_standard_oauth(provider: str, code: str, redirect_uri: str, *, cod
     client_id, client_secret = ensure_oauth_configured(provider)
     body: Dict[str, Any] = {
         "code": code,
-        "redirect_uri": redirect_uri,
-        "grant_type": "authorization_code",
     }
+    if config.include_redirect_uri_in_token_body:
+        body["redirect_uri"] = redirect_uri
+    if config.token_grant_type:
+        body["grant_type"] = config.token_grant_type
     if config.include_client_id_in_token_body:
         body["client_id"] = client_id
     if config.include_client_secret_in_token_body:
@@ -545,11 +968,11 @@ def _exchange_standard_oauth(provider: str, code: str, redirect_uri: str, *, cod
     headers: Dict[str, str] = {}
     if config.token_auth == "basic":
         headers["Authorization"] = _oauth_basic_header(client_id, client_secret)
-    payload = _post_form_json(
-        _provider_url(provider, config.token_url),
-        body,
-        headers=headers,
-    )
+    token_url = _provider_url(provider, config.token_url)
+    if config.token_request_format == "json":
+        payload = _post_json(token_url, body, headers=headers)
+    else:
+        payload = _post_form_json(token_url, body, headers=headers)
     return _credentials_from_standard_token_response(provider, payload)
 
 

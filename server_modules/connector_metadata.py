@@ -102,8 +102,53 @@ def _connector_public_metadata(connector: str, credentials: Dict[str, Any]) -> D
             value = str(credentials.get(key) or "").strip()
             if value:
                 public[key] = value
-    elif connector_id in {"figma", "todoist", "airtable", "canva"}:
-        for key in ("auth_mode", "id", "user_id", "user_id_string", "email", "handle", "name", "display_name"):
+    elif connector_id in {
+        "figma",
+        "todoist",
+        "airtable",
+        "canva",
+        "asana",
+        "hubspot",
+        "zoom",
+        "calendly",
+        "clickup",
+        "jira",
+        "stripe",
+        "salesforce",
+        "webflow",
+        "monday",
+        "box",
+        "gitlab",
+        "bitbucket",
+        "confluence",
+        "miro",
+        "mailchimp",
+        "pipedrive",
+        "intercom",
+        "docusign",
+        "square",
+        "typeform",
+        "quickbooks",
+        "xero",
+        "freshbooks",
+        "vercel",
+    }:
+        for key in (
+            "auth_mode",
+            "id",
+            "user_id",
+            "user_id_string",
+            "email",
+            "handle",
+            "name",
+            "display_name",
+            "stripe_user_id",
+            "instance_url",
+            "account_id",
+            "workspace_id",
+            "team_id",
+            "organization_id",
+        ):
             value = str(credentials.get(key) or "").strip()
             if value:
                 public[key] = value
@@ -226,9 +271,44 @@ def _connector_identity_signature(connector: str, credentials: Dict[str, Any]) -
             return f"dropbox:{account_id}"
         if token:
             return f"dropbox:{token}"
-    if connector_id in {"figma", "todoist", "airtable", "canva"}:
+    if connector_id in {
+        "figma",
+        "todoist",
+        "airtable",
+        "canva",
+        "asana",
+        "hubspot",
+        "zoom",
+        "calendly",
+        "clickup",
+        "jira",
+        "stripe",
+        "salesforce",
+        "webflow",
+        "monday",
+        "box",
+        "gitlab",
+        "bitbucket",
+        "confluence",
+        "miro",
+        "mailchimp",
+        "pipedrive",
+        "intercom",
+        "docusign",
+        "square",
+        "typeform",
+        "quickbooks",
+        "xero",
+        "freshbooks",
+        "vercel",
+    }:
         account_id = str(
             credentials.get("id")
+            or credentials.get("stripe_user_id")
+            or credentials.get("account_id")
+            or credentials.get("workspace_id")
+            or credentials.get("team_id")
+            or credentials.get("organization_id")
             or credentials.get("user_id_string")
             or credentials.get("user_id")
             or credentials.get("email")

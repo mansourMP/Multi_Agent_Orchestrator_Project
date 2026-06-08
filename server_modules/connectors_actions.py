@@ -1528,6 +1528,81 @@ async def create_connector_vault(body: ConnectorCreate):
         elif connector == "canva":
             test = validate_canva_connector(credentials)
             credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "asana":
+            test = validate_asana_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "hubspot":
+            test = validate_hubspot_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "zoom":
+            test = validate_zoom_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "calendly":
+            test = validate_calendly_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "clickup":
+            test = validate_clickup_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "jira":
+            test = validate_jira_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "stripe":
+            test = validate_stripe_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "salesforce":
+            test = validate_salesforce_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "webflow":
+            test = validate_webflow_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "monday":
+            test = validate_monday_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "box":
+            test = validate_box_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "gitlab":
+            test = validate_gitlab_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "bitbucket":
+            test = validate_bitbucket_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "confluence":
+            test = validate_confluence_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "miro":
+            test = validate_miro_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "mailchimp":
+            test = validate_mailchimp_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "pipedrive":
+            test = validate_pipedrive_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "intercom":
+            test = validate_intercom_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "docusign":
+            test = validate_docusign_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "square":
+            test = validate_square_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "typeform":
+            test = validate_typeform_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "quickbooks":
+            test = validate_quickbooks_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "xero":
+            test = validate_xero_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "freshbooks":
+            test = validate_freshbooks_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "vercel":
+            test = validate_vercel_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
         elif connector == "s3":
             test = validate_s3_connector(credentials)
             credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
@@ -1674,7 +1749,37 @@ async def create_connector_vault(body: ConnectorCreate):
         merged_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else {}
         if merged_credentials:
             credentials = {**credentials, **merged_credentials}
-    if connector in {"figma", "todoist", "airtable", "canva"} and isinstance(test, dict):
+    if connector in {
+        "figma",
+        "todoist",
+        "airtable",
+        "canva",
+        "asana",
+        "hubspot",
+        "zoom",
+        "calendly",
+        "clickup",
+        "jira",
+        "stripe",
+        "salesforce",
+        "webflow",
+        "monday",
+        "box",
+        "gitlab",
+        "bitbucket",
+        "confluence",
+        "miro",
+        "mailchimp",
+        "pipedrive",
+        "intercom",
+        "docusign",
+        "square",
+        "typeform",
+        "quickbooks",
+        "xero",
+        "freshbooks",
+        "vercel",
+    } and isinstance(test, dict):
         profile = test.get("profile") if isinstance(test.get("profile"), dict) else {}
         auth_mode = str(test.get("auth_mode") or credentials.get("auth_mode") or "").strip().lower()
         if auth_mode:
@@ -1985,6 +2090,156 @@ async def test_connector_vault(credential_id: str, workspace_id: Optional[str] =
     elif connector == "canva":
         try:
             test_result = validate_canva_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "asana":
+        try:
+            test_result = validate_asana_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "hubspot":
+        try:
+            test_result = validate_hubspot_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "zoom":
+        try:
+            test_result = validate_zoom_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "calendly":
+        try:
+            test_result = validate_calendly_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "clickup":
+        try:
+            test_result = validate_clickup_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "jira":
+        try:
+            test_result = validate_jira_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "stripe":
+        try:
+            test_result = validate_stripe_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "salesforce":
+        try:
+            test_result = validate_salesforce_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "webflow":
+        try:
+            test_result = validate_webflow_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "monday":
+        try:
+            test_result = validate_monday_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "box":
+        try:
+            test_result = validate_box_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "gitlab":
+        try:
+            test_result = validate_gitlab_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "bitbucket":
+        try:
+            test_result = validate_bitbucket_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "confluence":
+        try:
+            test_result = validate_confluence_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "miro":
+        try:
+            test_result = validate_miro_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "mailchimp":
+        try:
+            test_result = validate_mailchimp_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "pipedrive":
+        try:
+            test_result = validate_pipedrive_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "intercom":
+        try:
+            test_result = validate_intercom_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "docusign":
+        try:
+            test_result = validate_docusign_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "square":
+        try:
+            test_result = validate_square_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "typeform":
+        try:
+            test_result = validate_typeform_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "quickbooks":
+        try:
+            test_result = validate_quickbooks_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "xero":
+        try:
+            test_result = validate_xero_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "freshbooks":
+        try:
+            test_result = validate_freshbooks_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "vercel":
+        try:
+            test_result = validate_vercel_connector(credentials)
         except Exception as exc:
             _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
             raise HTTPException(status_code=400, detail=str(exc))

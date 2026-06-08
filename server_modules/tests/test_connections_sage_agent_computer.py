@@ -968,12 +968,53 @@ async def test_launchable_oauth_app_setup_starts_provider_oauth(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("connection_id", "client_env", "secret_env", "expected_provider", "expected_prefix", "uses_pkce"),
+    (
+        "connection_id",
+        "client_env",
+        "secret_env",
+        "expected_provider",
+        "expected_prefix",
+        "expected_token_url",
+        "uses_pkce",
+        "uses_basic_auth",
+        "includes_client_id_in_body",
+        "includes_client_secret_in_body",
+        "includes_redirect_uri_in_token_body",
+        "includes_grant_type_in_token_body",
+        "includes_redirect_uri_in_authorization_url",
+        "includes_response_type",
+        "token_request_format",
+    ),
     [
-        ("figma", "FIGMA_CLIENT_ID", "FIGMA_CLIENT_SECRET", "figma", "https://www.figma.com/oauth?", False),
-        ("todoist", "TODOIST_CLIENT_ID", "TODOIST_CLIENT_SECRET", "todoist", "https://todoist.com/oauth/authorize?", False),
-        ("airtable", "AIRTABLE_CLIENT_ID", "AIRTABLE_CLIENT_SECRET", "airtable", "https://airtable.com/oauth2/v1/authorize?", True),
-        ("canva", "CANVA_CLIENT_ID", "CANVA_CLIENT_SECRET", "canva", "https://www.canva.com/api/oauth/authorize?", True),
+        ("figma", "FIGMA_CLIENT_ID", "FIGMA_CLIENT_SECRET", "figma", "https://www.figma.com/oauth?", "https://api.figma.com/v1/oauth/token", False, True, False, False, True, True, True, True, "form"),
+        ("todoist", "TODOIST_CLIENT_ID", "TODOIST_CLIENT_SECRET", "todoist", "https://app.todoist.com/oauth/authorize?", "https://todoist.com/oauth/access_token", False, False, True, True, True, True, True, True, "form"),
+        ("airtable", "AIRTABLE_CLIENT_ID", "AIRTABLE_CLIENT_SECRET", "airtable", "https://airtable.com/oauth2/v1/authorize?", "https://airtable.com/oauth2/v1/token", True, True, True, False, True, True, True, True, "form"),
+        ("canva", "CANVA_CLIENT_ID", "CANVA_CLIENT_SECRET", "canva", "https://www.canva.com/api/oauth/authorize?", "https://api.canva.com/rest/v1/oauth/token", True, True, False, False, True, True, True, True, "form"),
+        ("asana", "ASANA_CLIENT_ID", "ASANA_CLIENT_SECRET", "asana", "https://app.asana.com/-/oauth_authorize?", "https://app.asana.com/-/oauth_token", True, False, True, True, True, True, True, True, "form"),
+        ("hubspot", "HUBSPOT_CLIENT_ID", "HUBSPOT_CLIENT_SECRET", "hubspot", "https://app.hubspot.com/oauth/authorize?", "https://api.hubapi.com/oauth/v3/token", False, False, True, True, True, True, True, True, "form"),
+        ("zoom", "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET", "zoom", "https://zoom.us/oauth/authorize?", "https://zoom.us/oauth/token", False, True, False, False, True, True, True, True, "form"),
+        ("calendly", "CALENDLY_CLIENT_ID", "CALENDLY_CLIENT_SECRET", "calendly", "https://auth.calendly.com/oauth/authorize?", "https://auth.calendly.com/oauth/token", True, False, True, True, True, True, True, True, "form"),
+        ("clickup", "CLICKUP_CLIENT_ID", "CLICKUP_CLIENT_SECRET", "clickup", "https://app.clickup.com/api?", "https://api.clickup.com/api/v2/oauth/token", False, False, True, True, False, False, True, False, "form"),
+        ("jira", "ATLASSIAN_CLIENT_ID", "ATLASSIAN_CLIENT_SECRET", "jira", "https://auth.atlassian.com/authorize?", "https://auth.atlassian.com/oauth/token", False, False, True, True, True, True, True, True, "json"),
+        ("stripe", "STRIPE_CLIENT_ID", "STRIPE_CLIENT_SECRET", "stripe", "https://connect.stripe.com/oauth/authorize?", "https://connect.stripe.com/oauth/token", False, False, False, True, False, True, True, True, "form"),
+        ("salesforce", "SALESFORCE_CLIENT_ID", "SALESFORCE_CLIENT_SECRET", "salesforce", "https://login.salesforce.com/services/oauth2/authorize?", "https://login.salesforce.com/services/oauth2/token", False, False, True, True, True, True, True, True, "form"),
+        ("webflow", "WEBFLOW_CLIENT_ID", "WEBFLOW_CLIENT_SECRET", "webflow", "https://webflow.com/oauth/authorize?", "https://api.webflow.com/oauth/access_token", False, False, True, True, True, True, True, True, "form"),
+        ("monday", "MONDAY_CLIENT_ID", "MONDAY_CLIENT_SECRET", "monday", "https://auth.monday.com/oauth2/authorize?", "https://auth.monday.com/oauth2/token", False, False, True, True, True, False, True, True, "form"),
+        ("box", "BOX_CLIENT_ID", "BOX_CLIENT_SECRET", "box", "https://account.box.com/api/oauth2/authorize?", "https://api.box.com/oauth2/token", False, False, True, True, True, True, True, True, "form"),
+        ("gitlab", "GITLAB_CLIENT_ID", "GITLAB_CLIENT_SECRET", "gitlab", "https://gitlab.com/oauth/authorize?", "https://gitlab.com/oauth/token", False, False, True, True, True, True, True, True, "form"),
+        ("bitbucket", "BITBUCKET_CLIENT_ID", "BITBUCKET_CLIENT_SECRET", "bitbucket", "https://bitbucket.org/site/oauth2/authorize?", "https://bitbucket.org/site/oauth2/access_token", False, True, False, False, True, True, True, True, "form"),
+        ("confluence", "ATLASSIAN_CLIENT_ID", "ATLASSIAN_CLIENT_SECRET", "confluence", "https://auth.atlassian.com/authorize?", "https://auth.atlassian.com/oauth/token", False, False, True, True, True, True, True, True, "json"),
+        ("miro", "MIRO_CLIENT_ID", "MIRO_CLIENT_SECRET", "miro", "https://miro.com/oauth/authorize?", "https://api.miro.com/v1/oauth/token", False, False, True, True, True, True, True, True, "form"),
+        ("mailchimp", "MAILCHIMP_CLIENT_ID", "MAILCHIMP_CLIENT_SECRET", "mailchimp", "https://login.mailchimp.com/oauth2/authorize?", "https://login.mailchimp.com/oauth2/token", False, False, True, True, True, True, True, True, "form"),
+        ("pipedrive", "PIPEDRIVE_CLIENT_ID", "PIPEDRIVE_CLIENT_SECRET", "pipedrive", "https://oauth.pipedrive.com/oauth/authorize?", "https://oauth.pipedrive.com/oauth/token", False, True, False, False, True, True, True, True, "form"),
+        ("intercom", "INTERCOM_CLIENT_ID", "INTERCOM_CLIENT_SECRET", "intercom", "https://app.intercom.com/oauth?", "https://api.intercom.io/auth/eagle/token", False, False, True, True, False, False, False, False, "form"),
+        ("docusign", "DOCUSIGN_CLIENT_ID", "DOCUSIGN_CLIENT_SECRET", "docusign", "https://account.docusign.com/oauth/auth?", "https://account.docusign.com/oauth/token", False, True, False, False, True, True, True, True, "form"),
+        ("square", "SQUARE_CLIENT_ID", "SQUARE_CLIENT_SECRET", "square", "https://connect.squareup.com/oauth2/authorize?", "https://connect.squareup.com/oauth2/token", False, False, True, True, True, True, True, True, "json"),
+        ("typeform", "TYPEFORM_CLIENT_ID", "TYPEFORM_CLIENT_SECRET", "typeform", "https://api.typeform.com/oauth/authorize?", "https://api.typeform.com/oauth/token", False, False, True, True, True, True, True, True, "form"),
+        ("quickbooks", "QUICKBOOKS_CLIENT_ID", "QUICKBOOKS_CLIENT_SECRET", "quickbooks", "https://appcenter.intuit.com/connect/oauth2?", "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", False, True, False, False, True, True, True, True, "form"),
+        ("xero", "XERO_CLIENT_ID", "XERO_CLIENT_SECRET", "xero", "https://login.xero.com/identity/connect/authorize?", "https://identity.xero.com/connect/token", False, True, False, False, True, True, True, True, "form"),
+        ("freshbooks", "FRESHBOOKS_CLIENT_ID", "FRESHBOOKS_CLIENT_SECRET", "freshbooks", "https://my.freshbooks.com/service/auth/oauth/authorize?", "https://api.freshbooks.com/auth/oauth/token", False, False, True, True, True, True, True, True, "form"),
+        ("vercel", "VERCEL_CLIENT_ID", "VERCEL_CLIENT_SECRET", "vercel", "https://vercel.com/oauth/authorize?", "https://api.vercel.com/login/oauth/token", False, False, True, True, True, True, True, True, "form"),
     ],
 )
 async def test_new_oauth_app_setup_callback_and_status(
@@ -983,7 +1024,16 @@ async def test_new_oauth_app_setup_callback_and_status(
     secret_env,
     expected_provider,
     expected_prefix,
+    expected_token_url,
     uses_pkce,
+    uses_basic_auth,
+    includes_client_id_in_body,
+    includes_client_secret_in_body,
+    includes_redirect_uri_in_token_body,
+    includes_grant_type_in_token_body,
+    includes_redirect_uri_in_authorization_url,
+    includes_response_type,
+    token_request_format,
 ):
     _install_auth(monkeypatch)
     monkeypatch.setenv(client_env, f"{expected_provider}-client-id")
@@ -1008,8 +1058,15 @@ async def test_new_oauth_app_setup_callback_and_status(
     assert payload["authorization_url"].startswith(expected_prefix)
     query = urlparse.parse_qs(urlparse.urlparse(payload["authorization_url"]).query)
     assert query["client_id"] == [f"{expected_provider}-client-id"]
-    assert query["redirect_uri"] == [payload["redirect_uri"]]
+    if includes_redirect_uri_in_authorization_url:
+        assert query["redirect_uri"] == [payload["redirect_uri"]]
+    else:
+        assert "redirect_uri" not in query
     assert query["state"]
+    if includes_response_type:
+        assert query["response_type"] == ["code"]
+    else:
+        assert "response_type" not in query
     if uses_pkce:
         assert query["code_challenge_method"] == ["S256"]
         assert len(query["code_challenge"][0]) == 43
@@ -1019,7 +1076,18 @@ async def test_new_oauth_app_setup_callback_and_status(
     token_requests = []
 
     def fake_post_form_json(url, form_payload, *, headers=None):
-        token_requests.append({"url": url, "payload": dict(form_payload), "headers": dict(headers or {})})
+        token_requests.append({"url": url, "payload": dict(form_payload), "headers": dict(headers or {}), "format": "form"})
+        return {
+            "access_token": f"{expected_provider}-access-token",
+            "refresh_token": f"{expected_provider}-refresh-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": " ".join(connection_oauth_service.OAUTH_PROVIDER_CONFIGS[expected_provider].scopes),
+            "user_id_string": f"{expected_provider}-user",
+        }
+
+    def fake_post_json(url, json_payload, *, headers=None):
+        token_requests.append({"url": url, "payload": dict(json_payload), "headers": dict(headers or {}), "format": "json"})
         return {
             "access_token": f"{expected_provider}-access-token",
             "refresh_token": f"{expected_provider}-refresh-token",
@@ -1041,6 +1109,7 @@ async def test_new_oauth_app_setup_callback_and_status(
         }
 
     monkeypatch.setattr(connection_oauth_service, "_post_form_json", fake_post_form_json)
+    monkeypatch.setattr(connection_oauth_service, "_post_json", fake_post_json)
     monkeypatch.setattr(connectors_actions, "create_connector_vault", fake_create_connector_vault)
 
     callback_payload = await connection_oauth_service.complete_oauth_callback(
@@ -1060,15 +1129,32 @@ async def test_new_oauth_app_setup_callback_and_status(
     assert created["body"].credentials["access_token"] == f"{expected_provider}-access-token"
     assert created["body"].metadata["oauth_provider"] == expected_provider
     assert token_requests
+    assert token_requests[0]["url"] == expected_token_url
+    assert token_requests[0]["format"] == token_request_format
     assert token_requests[0]["payload"]["code"] == "provider-code"
-    assert token_requests[0]["payload"]["redirect_uri"] == payload["redirect_uri"]
+    if includes_redirect_uri_in_token_body:
+        assert token_requests[0]["payload"]["redirect_uri"] == payload["redirect_uri"]
+    else:
+        assert "redirect_uri" not in token_requests[0]["payload"]
+    if includes_grant_type_in_token_body:
+        assert token_requests[0]["payload"]["grant_type"] == "authorization_code"
+    else:
+        assert "grant_type" not in token_requests[0]["payload"]
     if uses_pkce:
         assert len(token_requests[0]["payload"]["code_verifier"]) == 43
     else:
         assert "code_verifier" not in token_requests[0]["payload"]
-    if expected_provider in {"figma", "airtable", "canva"}:
+    if uses_basic_auth:
         assert token_requests[0]["headers"]["Authorization"].startswith("Basic ")
-    if expected_provider in {"figma", "canva"}:
+    else:
+        assert "Authorization" not in token_requests[0]["headers"]
+    if includes_client_id_in_body:
+        assert token_requests[0]["payload"]["client_id"] == f"{expected_provider}-client-id"
+    else:
+        assert "client_id" not in token_requests[0]["payload"]
+    if includes_client_secret_in_body:
+        assert token_requests[0]["payload"]["client_secret"] == f"{expected_provider}-client-secret"
+    else:
         assert "client_secret" not in token_requests[0]["payload"]
 
     monkeypatch.setattr(

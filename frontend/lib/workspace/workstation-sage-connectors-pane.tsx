@@ -192,6 +192,8 @@ type PersonalChannelSurfacesPayload = Record<string, unknown> & {
 type PersonalCardStatusTone = 'neutral' | 'connected' | 'warning' | 'danger';
 type PersonalCommunicationChannel = 'telegram' | 'whatsapp';
 type EmailChannelMode = 'gmail' | 'smtp';
+type GatewayRuntimeDependency = 'cloud_only' | 'gateway_optional' | 'gateway_required';
+type ConsumerSetupState = 'oauth_ready' | 'oauth_not_wired' | 'advanced_only';
 
 type PersonalCardRecord = {
   id:
@@ -320,8 +322,12 @@ type ExternalIntegrationCardRecord = {
   connectionId?: string | null;
   connectionProvider?: string | null;
   connectionAuthFields?: string[];
+  connectorCardId?: string | null;
   channel?: PersonalCommunicationChannel | null;
   locked?: boolean;
+  runtimeDependency?: GatewayRuntimeDependency | null;
+  consumerSetupState?: ConsumerSetupState | null;
+  consumerSetupMessage?: string | null;
 };
 
 type IntegrationWorkbenchCategoryId = 'ai_runtime' | 'apps' | 'recipes' | 'channels' | 'advanced';
@@ -532,7 +538,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'email',
     label: 'Email',
-    image: '/brand-assets/generic/api.svg?v=3',
+    image: '/brand-assets/generic/email.svg?v=3',
     connectorIds: ['google_workspace', 'microsoft_365', 'smtp'],
     capabilityTags: ['Inbox', 'Send email'],
     summary: 'Email is where Sage can reach people across Gmail, Outlook, or a custom mailbox.',
@@ -662,7 +668,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'dropbox',
     label: 'Dropbox',
-    image: '/brand-assets/generic/uploads.svg?v=3',
+    image: '/brand-assets/apps/dropbox.svg?v=3',
     connectorIds: ['dropbox'],
     capabilityTags: ['Files', 'Folders'],
     summary: 'Dropbox lets Sage list folders, search files, create shared links, and run approved storage actions.',
@@ -672,7 +678,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 's3',
     label: 'Amazon S3',
-    image: '/brand-assets/generic/api.svg?v=3',
+    image: '/brand-assets/apps/aws-s3.svg?v=3',
     connectorIds: ['s3'],
     capabilityTags: ['Buckets', 'Objects'],
     summary: 'Amazon S3 lets Sage inspect buckets, work with objects, and run approved storage actions.',
@@ -682,7 +688,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'smtp',
     label: 'SMTP / IMAP Email',
-    image: '/brand-assets/generic/api.svg?v=3',
+    image: '/brand-assets/generic/email.svg?v=3',
     connectorIds: ['smtp'],
     capabilityTags: ['Send email', 'Fetch inbox'],
     summary: 'SMTP / IMAP gives Sage direct mailbox send and fetch actions without turning email into a live inbound channel.',
@@ -702,7 +708,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
   {
     id: 'instagram_business',
     label: 'Instagram Business',
-    image: '/brand-assets/generic/api.svg?v=3',
+    image: '/brand-assets/apps/instagram.svg?v=3',
     connectorIds: ['instagram_business'],
     capabilityTags: ['Comments', 'DMs'],
     summary: 'Instagram Business lets Sage send approved comment replies and direct messages through the Graph API.',
@@ -730,6 +736,36 @@ const CONNECTOR_AUTH_FIELD_FALLBACKS: Record<string, string[]> = {
 };
 
 const CONNECTOR_STATIC_LOCKED_IDS = new Set(['microsoft_365', 'webhook']);
+
+const CONSUMER_APP_CARD_IDS = new Set([
+  'gmail',
+  'google_calendar',
+  'drive',
+  'microsoft_365',
+  'github',
+  'notion',
+  'linear',
+  'dropbox',
+  'instagram_business',
+]);
+
+const TECHNICAL_APP_CARD_IDS = new Set([
+  's3',
+  'smtp',
+  'wechat_work',
+  'webhook',
+]);
+
+const OAUTH_READY_APP_CARD_IDS = new Set<string>([]);
+
+const CLOUD_CHANNEL_INSTALL_CARD_IDS = new Set([
+  'slack',
+  'discord_bot',
+]);
+
+const PROVIDER_MANAGED_CHANNEL_CARD_IDS = new Set([
+  'whatsapp_twilio',
+]);
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -1385,6 +1421,22 @@ function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
     return null;
   }
   return readOptionalString((credential.metadata as Record<string, unknown>).credential_last4);
+}
+
+function connectorAccountLabel(credential: VaultCredentialRecord | null): string | null {
+  if (!credential || typeof credential.metadata !== 'object' || !credential.metadata) {
+    return null;
+  }
+  const metadata = credential.metadata as Record<string, unknown>;
+  return readOptionalString(metadata.email)
+    ?? readOptionalString(metadata.account_email)
+    ?? readOptionalString(metadata.account_name)
+    ?? readOptionalString(metadata.account_label)
+    ?? readOptionalString(metadata.team_name)
+    ?? readOptionalString(metadata.workspace_name)
+    ?? readOptionalString(metadata.username)
+    ?? readOptionalString(metadata.handle)
+    ?? maskKeyTail(credential);
 }
 
 function BrandLogo({
@@ -2683,6 +2735,74 @@ export function WorkstationSageConnectorsPane({
     return null;
   }
 
+  function consumerSetupState(record: ConnectorCardRecord, statusItem: ConnectionStatusItem | null): ConsumerSetupState | null {
+    if (record.connected || statusItem?.connected === true) {
+      return null;
+    }
+    if (TECHNICAL_APP_CARD_IDS.has(record.id)) {
+      return 'advanced_only';
+    }
+    if (PROVIDER_MANAGED_CHANNEL_CARD_IDS.has(record.id)) {
+      return 'advanced_only';
+    }
+    if (CONSUMER_APP_CARD_IDS.has(record.id)) {
+      return OAUTH_READY_APP_CARD_IDS.has(record.id) ? 'oauth_ready' : 'oauth_not_wired';
+    }
+    if (CLOUD_CHANNEL_INSTALL_CARD_IDS.has(record.id)) {
+      return 'oauth_not_wired';
+    }
+    return null;
+  }
+
+  function consumerSetupMessage(record: ConnectorCardRecord, setupState: ConsumerSetupState | null): string | null {
+    if (CLOUD_CHANNEL_INSTALL_CARD_IDS.has(record.id) && setupState === 'oauth_not_wired') {
+      return `${record.label} needs a real one-click install flow before this channel can connect. Manual token setup is hidden from this product surface.`;
+    }
+    if (PROVIDER_MANAGED_CHANNEL_CARD_IDS.has(record.id) && setupState === 'advanced_only') {
+      return `${record.label} needs provider-managed business onboarding before it belongs in this setup surface.`;
+    }
+    if (setupState === 'oauth_not_wired') {
+      return `${record.label} needs a real one-click sign-in flow before it belongs in Apps. Manual token setup is hidden from this product surface.`;
+    }
+    if (setupState === 'advanced_only') {
+      return `${record.label} is a technical credential connector. It belongs in Advanced setup, not the one-click Apps login flow.`;
+    }
+    return null;
+  }
+
+  function consumerSetupStatusLabel(setupState: ConsumerSetupState | null): string | null {
+    if (setupState === 'oauth_ready') {
+      return 'Ready to connect';
+    }
+    if (setupState === 'oauth_not_wired') {
+      return 'Sign-in not ready';
+    }
+    if (setupState === 'advanced_only') {
+      return 'Advanced setup';
+    }
+    return null;
+  }
+
+  function runtimeDependencyLabel(value: GatewayRuntimeDependency): string {
+    if (value === 'gateway_required') {
+      return 'Gateway required';
+    }
+    if (value === 'gateway_optional') {
+      return 'Gateway optional';
+    }
+    return 'Cloud only';
+  }
+
+  function withRuntimeDependency(
+    record: ExternalIntegrationCardRecord,
+    runtimeDependency: GatewayRuntimeDependency,
+  ): ExternalIntegrationCardRecord {
+    return {
+      ...record,
+      runtimeDependency,
+    };
+  }
+
   function connectorAsExternalCard(record: ConnectorCardRecord): ExternalIntegrationCardRecord {
     const statusItem = connectionStatusForConnector(record);
     const connected = statusItem ? statusItem.connected === true : record.connected;
@@ -2701,16 +2821,24 @@ export function WorkstationSageConnectorsPane({
     const fallbackAuthFields = CONNECTOR_AUTH_FIELD_FALLBACKS[connectionProvider]
       ?? CONNECTOR_AUTH_FIELD_FALLBACKS[fallbackConnectionId]
       ?? [];
-    const effectiveAuthFields = fallbackAuthFields.length > 0 ? fallbackAuthFields : connectionAuthFields;
+    const setupState = consumerSetupState(record, statusItem);
+    const hideCredentialFields = setupState === 'oauth_not_wired' || setupState === 'advanced_only';
+    const effectiveAuthFields = hideCredentialFields
+      ? []
+      : fallbackAuthFields.length > 0 ? fallbackAuthFields : connectionAuthFields;
     const canCredentialSetup = !locked && readString(connectionProvider) !== '' && effectiveAuthFields.length > 0;
-    const actionLabel = connectorActionLabel(record) ?? (canCredentialSetup ? 'Connect' : null);
+    const actionLabel = setupState === 'oauth_ready'
+      ? 'Connect'
+      : setupState
+        ? null
+        : connectorActionLabel(record) ?? (canCredentialSetup ? 'Connect' : null);
     return {
       id: `connector_${record.id}`,
       label: record.label,
       image: record.image,
       detail: locked ? readString(statusItem?.description, 'Planned · Coming soon.') : describeConnectorCard(record, connected),
-      statusLabel: locked ? connectionLockedLabel(statusItem, 'Planned') : connected ? 'Connected' : 'Not connected',
-      statusTone: locked ? 'neutral' : connected ? 'connected' : 'neutral',
+      statusLabel: locked ? connectionLockedLabel(statusItem, 'Planned') : connected ? 'Connected' : consumerSetupStatusLabel(setupState) ?? 'Not connected',
+      statusTone: locked ? 'neutral' : connected ? 'connected' : setupState ? 'warning' : 'neutral',
       summary: record.definition.summary,
       nextStep: locked ? null : connected ? null : record.definition.setupHint,
       actionLabel: locked ? null : actionLabel,
@@ -2718,7 +2846,10 @@ export function WorkstationSageConnectorsPane({
       connectionId,
       connectionProvider,
       connectionAuthFields: effectiveAuthFields,
+      connectorCardId: record.id,
       locked,
+      consumerSetupState: setupState,
+      consumerSetupMessage: consumerSetupMessage(record, setupState),
     };
   }
 
@@ -2749,6 +2880,7 @@ export function WorkstationSageConnectorsPane({
       connectionId: readString(statusItem?.id) || null,
       channel: record.channel ?? null,
       locked: bridgeLocked,
+      runtimeDependency: 'gateway_required',
     };
   }
 
@@ -2812,6 +2944,7 @@ export function WorkstationSageConnectorsPane({
             summary: 'Choose Telegram Bot for cloud setup, or Personal Telegram when Sage must use your logged-in account through Agent Computer.',
             nextStep: null,
             actionTarget: 'close',
+            runtimeDependency: 'gateway_optional',
           }
         : null;
       const gmailRecord = connectorCards.find((card) => card.id === 'gmail') ?? null;
@@ -2834,16 +2967,17 @@ export function WorkstationSageConnectorsPane({
             summary: 'Choose Gmail for Google Workspace mail, or SMTP for a custom mailbox.',
             nextStep: null,
             actionTarget: 'close',
+            runtimeDependency: 'cloud_only',
           }
         : null;
       const cloudChannelOrder = ['slack', 'discord_bot', 'whatsapp_twilio'];
       const cloudCards = cloudChannelOrder
         .map((id) => connectorCards.find((card) => card.id === id) ?? null)
         .filter((card): card is ConnectorCardRecord => Boolean(card))
-        .map(connectorAsExternalCard);
+        .map((card) => withRuntimeDependency(connectorAsExternalCard(card), 'cloud_only'));
       const personalCards = communicationPersonalCards
         .filter((card) => card.id !== 'telegram_personal')
-        .map(personalAsExternalCard);
+        .map((card) => withRuntimeDependency(personalAsExternalCard(card), 'gateway_required'));
       return [
         ...(telegramCard ? [telegramCard] : []),
         ...(emailCard ? [emailCard] : []),
@@ -4122,7 +4256,21 @@ export function WorkstationSageConnectorsPane({
           failedLogos={failedLogos}
           onError={markLogoFailed}
         />
-        <strong className="sage-unified-card__title">{record.label}</strong>
+        <span className="sage-unified-card__title-row">
+          <strong className="sage-unified-card__title">{record.label}</strong>
+          {record.runtimeDependency ? (
+            <span
+              className={joinClassNames(
+                'sage-unified-card__badge',
+                record.runtimeDependency === 'cloud_only' && 'sage-unified-card__badge--cloud',
+                record.runtimeDependency === 'gateway_optional' && 'sage-unified-card__badge--gateway-optional',
+                record.runtimeDependency === 'gateway_required' && 'sage-unified-card__badge--gateway-required',
+              )}
+            >
+              {runtimeDependencyLabel(record.runtimeDependency)}
+            </span>
+          ) : null}
+        </span>
         <span className="sage-unified-card__detail">{record.detail}</span>
         <span className={joinClassNames('sage-unified-card__status', personalStatusClassName(record))}>
           {record.statusTone === 'connected' ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
@@ -4641,7 +4789,6 @@ export function WorkstationSageConnectorsPane({
         : ['bot_token', 'chat_id'],
       locked: false,
     };
-    const personalRecord = telegramPersonalRecord ? personalAsExternalCard(telegramPersonalRecord) : null;
     const channelDraft = channelDrafts.telegram;
     const channelBusy = busyCardId === 'telegram_personal' || busyCardId === 'telegram_personal:test';
     const repairGatewayId = readString(gatewaySelectionSummary.repairGateway?.gateway_id);
@@ -4732,15 +4879,6 @@ export function WorkstationSageConnectorsPane({
           </>
         ) : (
           <>
-            <div className="sage-unified-expand__text">
-              Personal Telegram uses your logged-in Telegram account on the selected Agent Computer. Use this only when Sage needs your personal account lane.
-            </div>
-            {personalRecord?.nextStep ? <div className="sage-unified-expand__text">{personalRecord.nextStep}</div> : null}
-            <div className="sage-unified-expand__tag-row">
-              <span className="sage-unified-expand__tag">Agent Computer</span>
-              <span className="sage-unified-expand__tag">Personal account</span>
-              <span className="sage-unified-expand__tag">Sage only</span>
-            </div>
             {channelComputerIssue ? <AppNotice tone="warning">{channelComputerIssue.message}</AppNotice> : null}
             <div className="sage-unified-expand__actions">
               {channelComputerIssue ? (
@@ -4780,6 +4918,44 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function renderConnectorModeSetup(record: ExternalIntegrationCardRecord) {
+    const sourceConnector = record.connectorCardId
+      ? connectorCards.find((card) => card.id === record.connectorCardId) ?? null
+      : null;
+    const connectedConnector = Boolean(sourceConnector?.connected && sourceConnector.credential);
+    const accountLabel = connectorAccountLabel(sourceConnector?.credential ?? null);
+    const hasFields = (record.connectionAuthFields ?? []).filter(Boolean).length > 0;
+
+    if (connectedConnector && sourceConnector) {
+      return (
+        <>
+          <div className="sage-unified-expand__text">
+            {`${record.label} is connected${accountLabel ? ` as ${accountLabel}` : ''}.`}
+          </div>
+          <div className="sage-unified-expand__actions">
+            <AppButton
+              type="button"
+              tone="ghost"
+              disabled={busyCardId === sourceConnector.id}
+              onClick={() => {
+                void handleConnectorDisconnect(sourceConnector);
+              }}
+            >
+              {busyCardId === sourceConnector.id ? 'Disconnecting...' : 'Disconnect'}
+            </AppButton>
+          </div>
+        </>
+      );
+    }
+    if (record.consumerSetupMessage) {
+      return <AppNotice tone="warning">{record.consumerSetupMessage}</AppNotice>;
+    }
+    if (hasFields) {
+      return renderFlatConnectorCredentialForm(record);
+    }
+    return <AppNotice tone="warning">This connection is not ready for setup yet.</AppNotice>;
+  }
+
   function renderEmailChannelExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
     const showClose = options.showClose !== false;
     const gmailRecord = connectorCards.find((card) => card.id === 'gmail') ?? null;
@@ -4792,11 +4968,6 @@ export function WorkstationSageConnectorsPane({
           label: 'Gmail',
           connectionId: gmailBase.connectionId ?? 'google_workspace',
           connectionProvider: gmailBase.connectionProvider ?? 'google_workspace',
-          connectionAuthFields: (gmailBase.connectionAuthFields ?? []).length > 0
-            ? gmailBase.connectionAuthFields
-            : ['access_token'],
-          actionTarget: 'connection',
-          locked: false,
         }
       : null;
     const smtpSetupRecord: ExternalIntegrationCardRecord | null = smtpBase
@@ -4805,11 +4976,6 @@ export function WorkstationSageConnectorsPane({
           label: 'SMTP / IMAP Email',
           connectionId: smtpBase.connectionId ?? 'smtp',
           connectionProvider: smtpBase.connectionProvider ?? 'smtp',
-          connectionAuthFields: (smtpBase.connectionAuthFields ?? []).length > 0
-            ? smtpBase.connectionAuthFields
-            : ['host', 'port', 'username', 'password', 'use_tls'],
-          actionTarget: 'connection',
-          locked: false,
         }
       : null;
     const activeRecord = emailChannelMode === 'gmail' ? gmailSetupRecord : smtpSetupRecord;
@@ -4864,7 +5030,7 @@ export function WorkstationSageConnectorsPane({
             SMTP
           </button>
         </div>
-        {activeRecord ? renderFlatConnectorCredentialForm(activeRecord) : (
+        {activeRecord ? renderConnectorModeSetup(activeRecord) : (
           <AppNotice tone="warning">This email setup path is not available on this surface.</AppNotice>
         )}
       </div>
@@ -4955,6 +5121,11 @@ export function WorkstationSageConnectorsPane({
       && !channel
       && readString(record.connectionProvider) !== ''
       && (record.connectionAuthFields ?? []).length > 0;
+    const sourceConnector = record.connectorCardId
+      ? connectorCards.find((card) => card.id === record.connectorCardId) ?? null
+      : null;
+    const accountLabel = connectorAccountLabel(sourceConnector?.credential ?? null);
+    const connectedConnector = Boolean(sourceConnector?.connected && sourceConnector.credential);
     return (
       <div className="sage-unified-expand sage-channel-expand">
         <div className="sage-unified-expand__header">
@@ -4979,11 +5150,31 @@ export function WorkstationSageConnectorsPane({
             </button>
           ) : null}
         </div>
-        {!showConnectorCredentialForm ? <div className="sage-unified-expand__text">{record.summary}</div> : null}
-        {!showConnectorCredentialForm && record.nextStep ? <div className="sage-unified-expand__text">{record.nextStep}</div> : null}
+        {connectedConnector ? (
+          <div className="sage-unified-expand__text">
+            {`${record.label} is connected${accountLabel ? ` as ${accountLabel}` : ''}.`}
+          </div>
+        ) : null}
+        {!showConnectorCredentialForm && !connectedConnector ? <div className="sage-unified-expand__text">{record.summary}</div> : null}
+        {!showConnectorCredentialForm && !connectedConnector && record.nextStep ? <div className="sage-unified-expand__text">{record.nextStep}</div> : null}
+        {record.consumerSetupMessage && !connectedConnector ? (
+          <AppNotice tone="warning">{record.consumerSetupMessage}</AppNotice>
+        ) : null}
         {channelComputerIssue ? <AppNotice tone="warning">{channelComputerIssue.message}</AppNotice> : null}
         {showConnectorCredentialForm ? renderConnectorCredentialForm(record) : null}
         <div className="sage-unified-expand__actions">
+          {connectedConnector && sourceConnector ? (
+            <AppButton
+              type="button"
+              tone="ghost"
+              disabled={busyCardId === sourceConnector.id}
+              onClick={() => {
+                void handleConnectorDisconnect(sourceConnector);
+              }}
+            >
+              {busyCardId === sourceConnector.id ? 'Disconnecting...' : 'Disconnect'}
+            </AppButton>
+          ) : null}
           {channelComputerIssue ? (
             <AppButton
               type="button"

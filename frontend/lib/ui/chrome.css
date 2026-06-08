@@ -22561,8 +22561,7 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   color: var(--text-secondary);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0;
 }
 
 .sage-unified-card__badge--hosted {
@@ -22573,6 +22572,21 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
 .sage-unified-card__badge--local {
   background: color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-panel) 18%);
   color: var(--text-primary);
+}
+
+.sage-unified-card__badge--cloud {
+  background: color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-panel) 20%);
+  color: var(--text-secondary);
+}
+
+.sage-unified-card__badge--gateway-optional {
+  background: color-mix(in srgb, var(--app-accent-muted) 42%, var(--app-bg-panel-elevated) 58%);
+  color: var(--app-accent);
+}
+
+.sage-unified-card__badge--gateway-required {
+  background: color-mix(in srgb, var(--app-warning-muted) 48%, var(--app-bg-panel-elevated) 52%);
+  color: var(--app-warning);
 }
 
 .sage-unified-card__detail {

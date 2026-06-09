@@ -26089,7 +26089,7 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   grid-template-columns: auto minmax(0, 1fr);
   gap: var(--app-space-3);
   align-items: start;
-  min-height: 190px;
+  min-height: 176px;
   border: 1px solid color-mix(in srgb, var(--app-border-default) 76%, transparent);
   border-radius: var(--app-radius-lg);
   padding: var(--app-space-4);
@@ -26116,7 +26116,7 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
 
 .workstation-hardware-provider-card__copy {
   display: grid;
-  gap: var(--app-space-3);
+  gap: var(--app-space-2);
   min-width: 0;
 }
 
@@ -26138,21 +26138,12 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   line-height: 1.35;
 }
 
-.workstation-hardware-provider-card__features {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.workstation-hardware-provider-card__meta {
   grid-column: 1 / -1;
-}
-
-.workstation-hardware-provider-card__features span {
-  border-radius: var(--radius-full);
-  padding: 4px 8px;
-  color: color-mix(in srgb, var(--app-success) 72%, var(--app-text-primary) 28%);
-  background: color-mix(in srgb, var(--app-success) 11%, transparent);
-  font-size: var(--app-font-11);
-  font-weight: var(--app-weight-semibold);
-  line-height: 1.2;
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-12);
+  font-weight: var(--app-weight-medium);
+  line-height: 1.4;
 }
 
 .workstation-hardware-provider-card__side {
@@ -26161,7 +26152,7 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   align-items: center;
   justify-content: space-between;
   gap: var(--app-space-3);
-  margin-top: auto;
+  margin-top: var(--app-space-1);
 }
 
 .workstation-hardware-provider-card__side strong {
@@ -26328,6 +26319,13 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   color: var(--app-text-secondary);
   font-size: var(--app-font-12);
   line-height: 1.35;
+}
+
+.workstation-hardware-connect-card__main p {
+  margin: 4px 0 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  line-height: 1.4;
 }
 
 .workstation-hardware-permission-grid {

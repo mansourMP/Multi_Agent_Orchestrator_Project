@@ -154,7 +154,7 @@ const HARDWARE_KINDS: Array<{
 const HARDWARE_TABS: Array<{ id: HardwareTab; label: string }> = [
   { id: 'this_device', label: 'This device' },
   { id: 'other_computers', label: 'Other computers' },
-  { id: 'ssh_server', label: 'SSH / Server' },
+  { id: 'ssh_server', label: 'Servers' },
 ];
 
 const KIND_ID_ALIASES: Record<HardwareKind, string[]> = {
@@ -986,14 +986,8 @@ export function WorkstationHardwarePane() {
       && card.status !== 'Unavailable'
     ));
   }, [activeTab, displayCards, localCard, serverCard]);
-  const cloudEnabled = Boolean(cloudCard && cloudCard.known && cloudCard.status !== 'Unavailable');
   const command = otherSetupIntent ? pairingCommand(otherSetupIntent, workspaceId, 'other_computer') : pairingIntentState ? pairingCommand(pairingIntentState, workspaceId, selectedConnectOption) : '';
   const generatedSetupLink = otherSetupIntent ? setupLink(otherSetupIntent, workspaceId) : '';
-  const activeSectionTitle = activeTab === 'this_device'
-    ? 'This device'
-    : activeTab === 'ssh_server'
-      ? 'SSH / Server'
-      : 'Other computers';
   const showGatewayRegistrationRows = activeTab === 'this_device' && visibleGatewayRegistrations.length > 0;
 
   useEffect(() => {
@@ -1381,14 +1375,7 @@ export function WorkstationHardwarePane() {
           ))}
         </nav>
 
-        <section className="workstation-hardware-section" aria-label={activeSectionTitle}>
-	          <header className="workstation-hardware-section__header">
-	            <div>
-	              <h2>{activeSectionTitle}</h2>
-	            </div>
-	            {cloudEnabled ? <span className="workstation-hardware-section__badge">Cloud enabled</span> : null}
-	          </header>
-
+        <section className="workstation-hardware-section" aria-label={HARDWARE_TABS.find((tab) => tab.id === activeTab)?.label ?? 'Hardware'}>
           {selectionError ? <p className="workstation-hardware-section__notice">{selectionError}</p> : null}
           {error ? <p className="workstation-hardware-section__notice">{error}</p> : null}
           {statusMessage ? <p className="workstation-hardware-section__notice">{statusMessage}</p> : null}
@@ -1408,11 +1395,7 @@ export function WorkstationHardwarePane() {
                           <h3>{provider.label}</h3>
                           <p>{provider.tagline}</p>
                         </div>
-                        <div className="workstation-hardware-provider-card__features">
-                          {provider.features.map((feature) => (
-                            <span key={feature}>{feature}</span>
-                          ))}
-                        </div>
+                        <p className="workstation-hardware-provider-card__meta">{provider.features.join(' · ')}</p>
                       </div>
                       <div className="workstation-hardware-provider-card__side">
                         <strong>{provider.price}</strong>
@@ -1429,6 +1412,7 @@ export function WorkstationHardwarePane() {
                 <div className="workstation-hardware-connect-card__main">
                   <div>
                     <h3>Remote server</h3>
+                    <p>Connect an existing server with SSH.</p>
                   </div>
                   <AppButton tone="secondary" type="button" onClick={() => setRemoteExpanded((expanded) => !expanded)}>
                     Configure

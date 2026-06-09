@@ -635,9 +635,7 @@ function localCompanionCardFromLiveStatus(
   return {
     ...baseCard,
     name: trayStatus?.device_name || readString(selectedGateway, 'display_name', 'device_id', 'gateway_id') || baseCard.name,
-    description: trayConnected
-      ? 'Gateway and local runner are connected for this workspace.'
-      : 'Gateway is online for this workspace.',
+    description: '',
     status: 'Connected',
     actionLabel: 'Manage',
     reason: '',
@@ -1351,7 +1349,6 @@ export function WorkstationHardwarePane() {
         <header className="workstation-hardware-page__header">
           <div>
             <h1>Hardware</h1>
-            <p>The computers Empyralis can use.</p>
           </div>
           <AppButton
             tone="secondary"
@@ -1384,7 +1381,6 @@ export function WorkstationHardwarePane() {
           <header className="workstation-hardware-section__header">
             <div>
               <h2>Sage Agent Computer</h2>
-              <p>Choose the one computer Sage uses for hardware and personal channels.</p>
             </div>
           </header>
           {selectionError ? <p className="workstation-hardware-section__notice">{selectionError}</p> : null}
@@ -1451,7 +1447,7 @@ export function WorkstationHardwarePane() {
                   </span>
                   <div className="workstation-hardware-row__copy">
                     <h3>{card.name}</h3>
-                    <p>{card.description}</p>
+                    {card.description ? <p>{card.description}</p> : null}
                     {card.kind === 'local_companion' && trayStatusConnected(trayStatus) && capabilityChecks.length ? (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', color: 'var(--color-text-muted)', fontSize: '0.78rem' }}>
                         {capabilityChecks.map((check) => {
@@ -1471,24 +1467,19 @@ export function WorkstationHardwarePane() {
                         })}
                       </div>
                     ) : null}
-                    {card.kind === 'local_companion' && trayStatusConnected(trayStatus) ? (
+                    {card.kind === 'local_companion' && trayStatusConnected(trayStatus) && hardwareActivity.length ? (
                       <div className="workstation-hardware-activity" aria-live="polite">
-                        <div className="workstation-hardware-activity__header">Recent activity</div>
-                        {hardwareActivity.length ? (
-                          <div className="workstation-hardware-activity__list">
-                            {hardwareActivity.map((item) => (
-                              <div key={String(item.id || `${item.capability}:${item.timestamp}`)} className="workstation-hardware-activity__item">
-                                <span>{hardwareActivityLabel(item.capability)}</span>
-                                <span className={joinClassNames('workstation-hardware-activity__status', item.status === 'failed' && 'is-failed')}>
-                                  {item.status === 'failed' ? 'failed' : 'completed'}
-                                </span>
-                                <span>{timeAgo(item.timestamp)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="workstation-hardware-activity__empty">No activity yet</p>
-                        )}
+                        <div className="workstation-hardware-activity__list">
+                          {hardwareActivity.map((item) => (
+                            <div key={String(item.id || `${item.capability}:${item.timestamp}`)} className="workstation-hardware-activity__item">
+                              <span>{hardwareActivityLabel(item.capability)}</span>
+                              <span className={joinClassNames('workstation-hardware-activity__status', item.status === 'failed' && 'is-failed')}>
+                                {item.status === 'failed' ? 'failed' : 'completed'}
+                              </span>
+                              <span>{timeAgo(item.timestamp)}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     ) : null}
                     {expanded ? (
@@ -1533,7 +1524,6 @@ export function WorkstationHardwarePane() {
 	            <header className="workstation-hardware-sheet__header">
 	              <div>
 	                <h2>{connectModalTitle}</h2>
-	                <p>Empyralis controls the paired computer through Agent Computer.</p>
 	              </div>
               <button className="workstation-hardware-sheet__close" type="button" onClick={closeConnect} aria-label="Close">
                 <X size={17} strokeWidth={2} />
@@ -1715,14 +1705,6 @@ export function WorkstationHardwarePane() {
           setCloudVpsOpen(false);
           await refreshHardwareAttachments();
           await refreshSageAgentComputerState();
-        }}
-        onOpenSshSetup={() => {
-          setCloudVpsOpen(false);
-          setConnectContext('ssh_server');
-          setSelectedConnectOption('ssh_server');
-          setConnectOpen(true);
-          setRemoteExpanded(true);
-          setRemoteError(null);
         }}
       />
       <ConfirmDialog

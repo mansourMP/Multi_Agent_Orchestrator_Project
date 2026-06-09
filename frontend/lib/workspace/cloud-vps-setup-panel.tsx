@@ -80,7 +80,6 @@ type CloudVpsSetupPanelProps = {
   workspaceId: string;
   onClose: () => void;
   onConnected: () => Promise<void> | void;
-  onOpenSshSetup: () => void;
 };
 
 const FULL_ACCESS_WARNING_VERSION = '2026-06-06';
@@ -219,7 +218,7 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected, onOpenSshSetup }: CloudVpsSetupPanelProps) {
+export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected }: CloudVpsSetupPanelProps) {
   const services = useWorkspaceServices();
   const [step, setStep] = useState<VpsStep>('provider');
   const [connections, setConnections] = useState<Partial<Record<VpsProviderId, VpsConnection>>>({});
@@ -599,16 +598,6 @@ export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected, on
     }
   }
 
-  function openAdvanced(option: 'aws' | 'gcp' | 'ssh') {
-    if (option === 'aws') {
-      window.open('https://lightsail.aws.amazon.com/ls/webapp/home/instances', '_blank', 'noopener,noreferrer');
-    }
-    if (option === 'gcp') {
-      window.open('https://console.cloud.google.com/compute/instances', '_blank', 'noopener,noreferrer');
-    }
-    onOpenSshSetup();
-  }
-
   if (!open) {
     return null;
   }
@@ -633,7 +622,6 @@ export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected, on
           <section className="cloud-vps-panel__content">
             <div className="cloud-vps-panel__heading">
               <h2>Choose your cloud provider</h2>
-              <p>Empyralis will create a server, install Agent Computer, and connect it automatically.</p>
             </div>
 
             <div className="cloud-vps-provider-list">
@@ -683,14 +671,6 @@ export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected, on
               })}
             </div>
 
-            <div className="cloud-vps-panel__advanced" aria-label="Advanced cloud provider setup">
-              <span>Advanced:</span>
-              <button type="button" onClick={() => openAdvanced('aws')}>AWS Lightsail</button>
-              <span>·</span>
-              <button type="button" onClick={() => openAdvanced('gcp')}>Google Cloud</button>
-              <span>·</span>
-              <button type="button" onClick={() => openAdvanced('ssh')}>Custom SSH</button>
-            </div>
           </section>
         ) : null}
 
@@ -698,7 +678,6 @@ export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected, on
           <section className="cloud-vps-panel__content cloud-vps-panel__content--narrow">
             <div className="cloud-vps-panel__heading">
               <h2>{`Connect your ${provider.label} account`}</h2>
-              <p>{provider.id === 'digitalocean' ? 'Log in once, then create servers from your own DigitalOcean account.' : 'Save this account once, then create servers from it later.'}</p>
             </div>
             {provider.id === 'digitalocean' ? (
               <AppButton tone="primary" type="button" onClick={() => void startDigitalOceanOAuth()} disabled={busy}>
@@ -733,7 +712,6 @@ export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected, on
           <section className="cloud-vps-panel__content cloud-vps-panel__content--narrow">
             <div className="cloud-vps-panel__heading">
               <h2>Choose your server plan</h2>
-              <p>More RAM lets your agent handle larger tasks.</p>
             </div>
             {loadingPlans ? <p className="cloud-vps-panel__muted">Loading plans...</p> : null}
             <div className="cloud-vps-plan-list">
@@ -765,7 +743,6 @@ export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected, on
           <section className="cloud-vps-panel__content cloud-vps-panel__content--narrow">
             <div className="cloud-vps-panel__heading">
               <h2>Choose region</h2>
-              <p>{`This server will be created in your ${provider.label} account.`}</p>
             </div>
             <label className="app-form-field">
               <span className="app-form-field__label">Region</span>

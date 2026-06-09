@@ -26829,16 +26829,6 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   color: var(--app-text-primary);
 }
 
-.cloud-vps-panel__advanced {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  color: var(--app-text-secondary);
-  font-size: var(--app-font-13);
-}
-
-.cloud-vps-panel__advanced button,
 .cloud-vps-token-link {
   border: 0;
   padding: 0;

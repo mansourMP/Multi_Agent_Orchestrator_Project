@@ -681,24 +681,34 @@ export function CloudVpsSetupPanel({ open, workspaceId, initialProviderId = null
   }
 
   return (
-    <div className="cloud-vps-panel" role="dialog" aria-modal="true" aria-label="Cloud VPS setup">
-      <div className="cloud-vps-panel__shell">
-        <header className="cloud-vps-panel__topbar">
+    <div className="cloud-vps-flow-modal" role="dialog" aria-modal="true" aria-label="Cloud VPS setup">
+      <button
+        className="cloud-vps-flow-modal__scrim"
+        type="button"
+        aria-label="Close Cloud VPS setup"
+        onClick={onClose}
+        disabled={step === 'progress'}
+      />
+      <section className="cloud-vps-flow-modal__panel">
+        <header className="cloud-vps-flow-modal__header">
           {step !== 'progress' ? (
-            <button className="cloud-vps-panel__icon-button" type="button" onClick={goBack} aria-label="Back">
+            <button className="cloud-vps-flow-modal__icon-button" type="button" onClick={goBack} aria-label="Back">
               <ArrowLeft size={18} strokeWidth={2} />
             </button>
-          ) : <span className="cloud-vps-panel__icon-spacer" aria-hidden="true" />}
+          ) : <span className="cloud-vps-flow-modal__icon-spacer" aria-hidden="true" />}
           {step !== 'progress' ? (
-            <button className="cloud-vps-panel__icon-button" type="button" onClick={onClose} aria-label="Close">
+            <button className="cloud-vps-flow-modal__icon-button" type="button" onClick={onClose} aria-label="Close">
               <X size={18} strokeWidth={2} />
             </button>
-          ) : <span className="cloud-vps-panel__icon-spacer" aria-hidden="true" />}
+          ) : <span className="cloud-vps-flow-modal__icon-spacer" aria-hidden="true" />}
         </header>
 
         {step === 'access' && provider ? (
-          <section className="cloud-vps-panel__content cloud-vps-panel__content--narrow">
-            <div className="cloud-vps-panel__heading">
+          <section className="cloud-vps-flow-modal__content">
+            <div className="cloud-vps-flow-modal__title">
+              <span className="cloud-vps-flow-modal__logo" aria-hidden="true">
+                <img src={provider.logoSrc} alt="" />
+              </span>
               <h2>{`Connect your ${provider.label} account`}</h2>
             </div>
             {provider.id === 'digitalocean' ? (
@@ -731,7 +741,7 @@ export function CloudVpsSetupPanel({ open, workspaceId, initialProviderId = null
         ) : null}
 
         {step === 'plans' && provider ? (
-          <section className="cloud-vps-panel__content cloud-vps-panel__content--narrow">
+          <section className="cloud-vps-flow-modal__content">
             <div className="cloud-vps-panel__heading">
               <h2>Choose your server plan</h2>
             </div>
@@ -762,7 +772,7 @@ export function CloudVpsSetupPanel({ open, workspaceId, initialProviderId = null
         ) : null}
 
         {step === 'region' && provider ? (
-          <section className="cloud-vps-panel__content cloud-vps-panel__content--narrow">
+          <section className="cloud-vps-flow-modal__content">
             <div className="cloud-vps-panel__heading">
               <h2>Choose region</h2>
             </div>
@@ -794,7 +804,7 @@ export function CloudVpsSetupPanel({ open, workspaceId, initialProviderId = null
         ) : null}
 
         {step === 'progress' ? (
-          <section className="cloud-vps-panel__content cloud-vps-panel__content--narrow">
+          <section className="cloud-vps-flow-modal__content">
             <div className="cloud-vps-panel__heading">
               <h2>Creating Agent Computer</h2>
               <p>Leave this open while Empyralis installs and connects the server.</p>
@@ -830,7 +840,7 @@ export function CloudVpsSetupPanel({ open, workspaceId, initialProviderId = null
             ) : null}
           </section>
         ) : null}
-      </div>
+      </section>
     </div>
   );
 }

@@ -7,7 +7,12 @@ import { toDataURL } from 'qrcode';
 
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
-import { CloudVpsSetupPanel } from '@/lib/workspace/cloud-vps-setup-panel';
+import {
+  CLOUD_VPS_PROVIDER_IDS,
+  CLOUD_VPS_PROVIDERS,
+  CloudVpsSetupPanel,
+  type VpsProviderId,
+} from '@/lib/workspace/cloud-vps-setup-panel';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 
@@ -794,6 +799,7 @@ export function WorkstationHardwarePane() {
   const [sshPassword, setSshPassword] = useState('');
   const [sshKey, setSshKey] = useState('');
   const [cloudVpsOpen, setCloudVpsOpen] = useState(false);
+  const [cloudVpsInitialProvider, setCloudVpsInitialProvider] = useState<VpsProviderId | null>(null);
   const workspaceRecord = readRecord(bootstrap.workspace);
   const workspaceId = readString(workspaceRecord, 'id', 'workspace_id') || 'ws-1';
   const workspaceLabel = workspaceId || readString(workspaceRecord, 'label', 'name') || 'this workspace';
@@ -983,21 +989,6 @@ export function WorkstationHardwarePane() {
   const cloudEnabled = Boolean(cloudCard && cloudCard.known && cloudCard.status !== 'Unavailable');
   const command = otherSetupIntent ? pairingCommand(otherSetupIntent, workspaceId, 'other_computer') : pairingIntentState ? pairingCommand(pairingIntentState, workspaceId, selectedConnectOption) : '';
   const generatedSetupLink = otherSetupIntent ? setupLink(otherSetupIntent, workspaceId) : '';
-  const otherComputerCount = displayCards.filter((card) => (
-    card.kind !== 'local_companion'
-    && card.kind !== 'self_hosted_business_node'
-    && card.known
-    && card.status !== 'Unavailable'
-  )).length;
-  const tabMeta = (tabId: HardwareTab): string => {
-    if (tabId === 'this_device') {
-      return localCard?.status ?? 'Offline';
-    }
-    if (tabId === 'ssh_server') {
-      return serverCard && serverCard.known && serverCard.status !== 'Unavailable' ? serverCard.status : 'No server';
-    }
-    return otherComputerCount ? `${otherComputerCount} connected` : 'No computers';
-  };
   const activeSectionTitle = activeTab === 'this_device'
     ? 'This device'
     : activeTab === 'ssh_server'
@@ -1302,6 +1293,11 @@ export function WorkstationHardwarePane() {
     setPendingFullAccessPairingOption(null);
   }
 
+  function openCloudVps(providerId: VpsProviderId | null = null) {
+    setCloudVpsInitialProvider(providerId);
+    setCloudVpsOpen(true);
+  }
+
   function handleCardAction(card: HardwareCard) {
     if (card.status === 'Connected') {
       setExpandedKind(expandedKind === card.kind ? null : card.kind);
@@ -1381,26 +1377,17 @@ export function WorkstationHardwarePane() {
         </header>
 
         <nav className="workstation-hardware-tabs" aria-label="Hardware connection type">
-          {HARDWARE_TABS.map((tab) => {
-            const Icon = tab.id === 'this_device' ? Monitor : tab.id === 'ssh_server' ? Server : Cloud;
-            return (
-              <button
-                key={tab.id}
-                className={joinClassNames('workstation-hardware-tab-node', activeTab === tab.id && 'is-active')}
-                aria-current={activeTab === tab.id ? 'page' : undefined}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-              >
-                <span className="workstation-hardware-tab-node__icon" aria-hidden="true">
-                  <Icon size={17} strokeWidth={1.9} />
-                </span>
-                <span className="workstation-hardware-tab-node__copy">
-                  <strong>{tab.label}</strong>
-                  <span>{tabMeta(tab.id)}</span>
-                </span>
-              </button>
-            );
-          })}
+          {HARDWARE_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              className={joinClassNames('workstation-hardware-tab-pill', activeTab === tab.id && 'is-active')}
+              aria-current={activeTab === tab.id ? 'page' : undefined}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </nav>
 
         <section className="workstation-hardware-section" aria-label={activeSectionTitle}>
@@ -1413,6 +1400,38 @@ export function WorkstationHardwarePane() {
 
           {selectionError ? <p className="workstation-hardware-section__notice">{selectionError}</p> : null}
           {error ? <p className="workstation-hardware-section__notice">{error}</p> : null}
+
+          {activeTab === 'ssh_server' ? (
+            <div className="workstation-hardware-provider-grid" aria-label="Cloud VPS providers">
+              {CLOUD_VPS_PROVIDER_IDS.map((providerId) => {
+                const provider = CLOUD_VPS_PROVIDERS[providerId];
+                return (
+                  <article key={providerId} className="workstation-hardware-provider-card">
+                    <span className="workstation-hardware-provider-card__logo" aria-hidden="true">
+                      <img src={provider.logoSrc} alt="" />
+                    </span>
+                    <div className="workstation-hardware-provider-card__copy">
+                      <div>
+                        <h3>{provider.label}</h3>
+                        <p>{provider.tagline}</p>
+                      </div>
+                      <div className="workstation-hardware-provider-card__features">
+                        {provider.features.map((feature) => (
+                          <span key={feature}>{feature}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="workstation-hardware-provider-card__side">
+                      <strong>{provider.price}</strong>
+                      <AppButton tone="secondary" type="button" onClick={() => openCloudVps(providerId)}>
+                        Connect
+                      </AppButton>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
 
           <div className="workstation-hardware-list">
             {showGatewayRegistrationRows ? visibleGatewayRegistrations.map((gateway) => {
@@ -1590,7 +1609,7 @@ export function WorkstationHardwarePane() {
                     type="button"
                     onClick={() => {
                       closeConnect();
-                      setCloudVpsOpen(true);
+                      openCloudVps();
                     }}
                   >
                     Choose
@@ -1706,9 +1725,14 @@ export function WorkstationHardwarePane() {
       <CloudVpsSetupPanel
         open={cloudVpsOpen}
         workspaceId={workspaceId}
-        onClose={() => setCloudVpsOpen(false)}
+        initialProviderId={cloudVpsInitialProvider}
+        onClose={() => {
+          setCloudVpsOpen(false);
+          setCloudVpsInitialProvider(null);
+        }}
         onConnected={async () => {
           setCloudVpsOpen(false);
+          setCloudVpsInitialProvider(null);
           await refreshHardwareAttachments();
           await refreshSageAgentComputerState();
         }}

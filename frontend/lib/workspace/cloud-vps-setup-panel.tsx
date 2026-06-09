@@ -6,11 +6,11 @@ import { ArrowLeft, Check, ExternalLink, X } from 'lucide-react';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 
-type VpsProviderId = 'digitalocean' | 'hetzner' | 'vultr';
+export type VpsProviderId = 'digitalocean' | 'hetzner' | 'vultr';
 type VpsStep = 'provider' | 'access' | 'plans' | 'region' | 'progress';
 type VpsProgressStage = 'idle' | 'creating' | 'installing' | 'connecting' | 'connected' | 'failed';
 
-type VpsProviderCard = {
+export type VpsProviderCard = {
   id: VpsProviderId;
   label: string;
   price: string;
@@ -78,13 +78,14 @@ type VpsProvisionStatusPayload = {
 type CloudVpsSetupPanelProps = {
   open: boolean;
   workspaceId: string;
+  initialProviderId?: VpsProviderId | null;
   onClose: () => void;
   onConnected: () => Promise<void> | void;
 };
 
 const FULL_ACCESS_WARNING_VERSION = '2026-06-06';
 
-const PROVIDERS: Record<VpsProviderId, VpsProviderCard> = {
+export const CLOUD_VPS_PROVIDERS: Record<VpsProviderId, VpsProviderCard> = {
   digitalocean: {
     id: 'digitalocean',
     label: 'DigitalOcean',
@@ -117,7 +118,10 @@ const PROVIDERS: Record<VpsProviderId, VpsProviderCard> = {
   },
 };
 
-const PROVIDER_IDS: VpsProviderId[] = ['digitalocean', 'hetzner', 'vultr'];
+export const CLOUD_VPS_PROVIDER_IDS: VpsProviderId[] = ['digitalocean', 'hetzner', 'vultr'];
+
+const PROVIDERS = CLOUD_VPS_PROVIDERS;
+const PROVIDER_IDS = CLOUD_VPS_PROVIDER_IDS;
 
 const PROGRESS_STEPS: Array<{ id: VpsProgressStage; label: string }> = [
   { id: 'creating', label: 'Creating server...' },
@@ -218,7 +222,7 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected }: CloudVpsSetupPanelProps) {
+export function CloudVpsSetupPanel({ open, workspaceId, initialProviderId = null, onClose, onConnected }: CloudVpsSetupPanelProps) {
   const services = useWorkspaceServices();
   const [step, setStep] = useState<VpsStep>('provider');
   const [connections, setConnections] = useState<Partial<Record<VpsProviderId, VpsConnection>>>({});
@@ -248,7 +252,9 @@ export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected }: 
     if (!open) {
       return;
     }
-    setConnections(loadStoredConnections(workspaceId));
+    const storedConnections = loadStoredConnections(workspaceId);
+    const requestedProvider = initialProviderId && PROVIDERS[initialProviderId] ? initialProviderId : null;
+    setConnections(storedConnections);
     setStep('provider');
     setSelectedProvider(null);
     setApiToken('');
@@ -263,7 +269,16 @@ export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected }: 
     setVpsId(null);
     setProviderResourceId(null);
     setCleanupBusy(false);
-  }, [open, workspaceId]);
+    if (requestedProvider) {
+      setSelectedProvider(requestedProvider);
+      const connection = storedConnections[requestedProvider];
+      if (connection?.tokenId) {
+        void prepareServerChoices(requestedProvider, connection.tokenId);
+      } else {
+        setStep('access');
+      }
+    }
+  }, [initialProviderId, open, workspaceId]);
 
   useEffect(() => {
     function handleVpsOAuthMessage(event: MessageEvent) {

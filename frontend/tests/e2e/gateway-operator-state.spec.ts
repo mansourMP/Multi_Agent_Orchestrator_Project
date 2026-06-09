@@ -231,6 +231,7 @@ test.describe('Agent Computer policy settings', () => {
     await page.goto('/w/ws-1/hardware');
     await page.getByRole('button', { name: /^Connect$/ }).first().click();
     await page.getByRole('button', { name: /^Choose provider$/ }).click();
+    await expect(page.getByRole('heading', { name: /^Choose your cloud provider$/ })).toBeVisible();
     await page.getByRole('button', { name: /DigitalOcean/ }).click();
     await expect(page.getByRole('button', { name: /^Log in with DigitalOcean$/ })).toBeVisible();
 
@@ -243,24 +244,22 @@ test.describe('Agent Computer policy settings', () => {
           type: 'empyralis:vps-oauth',
           provider: 'digitalocean',
           token_id: 'vps_token_do_1',
+          account_email: 'owner@example.com',
         },
         '*',
       );
     });
+    await expect(page.getByRole('heading', { name: /^Choose your server plan$/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /2 CPU · 4GB · 80GB SSD/ })).toBeVisible();
     await page.getByRole('button', { name: /2 CPU · 4GB · 80GB SSD/ }).click();
-    await page.getByRole('button', { name: /^Next$/ }).click();
+    await page.getByRole('button', { name: /^Continue/ }).click();
+    await expect(page.getByRole('heading', { name: /^Choose region$/ })).toBeVisible();
     await expect(page.getByLabel('Region')).toHaveValue('nyc3');
     await page.getByLabel('Region').selectOption('sfo3');
-    await page.getByRole('button', { name: /^Next$/ }).click();
+    await page.getByRole('button', { name: /^Create server/ }).click();
 
-    await expect(page.getByText('DigitalOcean')).toBeVisible();
-    await expect(page.getByText('San Francisco 3 · sfo3')).toBeVisible();
-    await expect(page.getByText('2 CPU · 4GB · 80GB SSD')).toBeVisible();
-    await expect(page.getByText('Sage will have Full Access on this dedicated Agent Computer.')).toBeVisible();
-    await page.getByRole('button', { name: /^Create Agent Computer$/ }).click();
-
-    await expect(page.getByText('Installing software...')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Creating Agent Computer$/ })).toBeVisible();
+    await expect(page.getByText('Installing Agent Computer...')).toBeVisible();
     expect(provisionBody).toMatchObject({
       workspace_id: 'ws-1',
       provider: 'digitalocean',
@@ -275,6 +274,63 @@ test.describe('Agent Computer policy settings', () => {
     });
   });
 
+  test('Cloud VPS skips provider access when account is already connected', async ({ page }) => {
+    await mockAgentComputerSettings(page);
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'empyralis:vps-provider-connections:ws-1',
+        JSON.stringify({
+          digitalocean: {
+            provider: 'digitalocean',
+            tokenId: 'vps_token_do_saved',
+            accountLabel: 'owner@example.com',
+            connectedAt: '2026-06-09T00:00:00.000Z',
+          },
+        }),
+      );
+    });
+    await page.route('**/api/hardware/vps/plans?provider=digitalocean&**', async (route) => {
+      await expect(route.request().url()).toContain('token_id=vps_token_do_saved');
+      await route.fulfill({
+        json: {
+          provider: 'digitalocean',
+          plans: [
+            {
+              id: 's-2vcpu-4gb',
+              slug: 's-2vcpu-4gb',
+              label: '2 CPU · 4GB · 80GB SSD',
+              vcpus: 2,
+              memory_mb: 4096,
+              disk_gb: 80,
+              price_monthly: 24,
+              price_label: '$24/mo',
+              recommended: true,
+            },
+          ],
+        },
+      });
+    });
+    await page.route('**/api/hardware/vps/regions?provider=digitalocean', async (route) => {
+      await route.fulfill({
+        json: {
+          provider: 'digitalocean',
+          default_region: 'nyc3',
+          regions: [{ id: 'nyc3', label: 'New York 3' }],
+        },
+      });
+    });
+    await loginAsOwner(page);
+
+    await page.goto('/w/ws-1/hardware');
+    await page.getByRole('button', { name: /^Connect$/ }).first().click();
+    await page.getByRole('button', { name: /^Choose provider$/ }).click();
+
+    await expect(page.getByText('connected · owner@example.com')).toBeVisible();
+    await page.getByRole('button', { name: /DigitalOcean/ }).click();
+    await expect(page.getByRole('heading', { name: /^Choose your server plan$/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Log in with DigitalOcean$/ })).toHaveCount(0);
+  });
+
   test('Cloud VPS advanced providers route to the SSH setup path', async ({ page }) => {
     await mockAgentComputerSettings(page);
     await loginAsOwner(page);
@@ -283,14 +339,12 @@ test.describe('Agent Computer policy settings', () => {
     await page.getByRole('button', { name: /^Connect$/ }).first().click();
     await page.getByRole('button', { name: /^Choose provider$/ }).click();
 
-    await expect(page.getByText('Automatic cloud setup')).toBeVisible();
-    await expect(page.getByText('Advanced cloud accounts')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Choose your cloud provider$/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /AWS Lightsail/ })).toBeEnabled();
     await expect(page.getByRole('button', { name: /Google Cloud/ })).toBeEnabled();
+    await expect(page.getByRole('button', { name: /Custom SSH/ })).toBeEnabled();
 
-    await page.getByRole('button', { name: /AWS Lightsail/ }).click();
-    await expect(page.getByText('Create a Ubuntu server in AWS, then connect it as an Agent Computer with SSH.')).toBeVisible();
-    await page.getByRole('button', { name: /^Connect with SSH$/ }).click();
+    await page.getByRole('button', { name: /Custom SSH/ }).click();
 
     await expect(page.getByRole('heading', { name: /^Remote server$/ })).toBeVisible();
     await expect(page.getByLabel('Host')).toBeVisible();

@@ -1536,7 +1536,6 @@ export function WorkstationHardwarePane() {
 	                <div className="workstation-hardware-connect-card__main">
 	                  <div>
 	                    <h3>This Mac</h3>
-                    <p>Install Agent Computer and connect automatically</p>
                   </div>
                   <div className="workstation-hardware-connect-card__actions">
                     {trayDetected ? (
@@ -1575,7 +1574,6 @@ export function WorkstationHardwarePane() {
 	                <div className="workstation-hardware-connect-card__main">
 	                  <div>
 	                    <h3>Cloud VPS</h3>
-                    <p>Create a dedicated Linux Agent Computer in a cloud provider</p>
                   </div>
                   <AppButton
                     tone="secondary"
@@ -1585,7 +1583,7 @@ export function WorkstationHardwarePane() {
                       setCloudVpsOpen(true);
                     }}
                   >
-                    Choose provider
+                    Choose
                   </AppButton>
                 </div>
 	              </article>
@@ -1596,7 +1594,6 @@ export function WorkstationHardwarePane() {
 	                <div className="workstation-hardware-connect-card__main">
 	                  <div>
 	                    <h3>Remote server</h3>
-                    <p>Linux VPS or cloud machine via SSH</p>
                   </div>
                   <AppButton tone="secondary" type="button" onClick={() => setRemoteExpanded((expanded) => !expanded)}>
                     Configure
@@ -1650,7 +1647,6 @@ export function WorkstationHardwarePane() {
 	                <div className="workstation-hardware-connect-card__main">
 	                  <div>
 	                    <h3>Another computer</h3>
-                    <p>Any Mac, Windows, or Linux machine on your network</p>
                   </div>
                   <AppButton tone="secondary" type="button" onClick={() => void createOtherComputerSetupLink()} disabled={busy}>
                     {busy ? 'Creating…' : 'Get setup link'}

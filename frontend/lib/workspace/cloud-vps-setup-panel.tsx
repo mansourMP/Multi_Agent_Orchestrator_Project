@@ -602,11 +602,74 @@ export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected }: 
     return null;
   }
 
+  if (step === 'provider') {
+    return (
+      <div className="cloud-vps-provider-modal" role="dialog" aria-modal="true" aria-label="Choose cloud provider">
+        <button className="cloud-vps-provider-modal__scrim" type="button" aria-label="Close cloud provider setup" onClick={onClose} />
+        <section className="cloud-vps-provider-modal__panel">
+          <header className="cloud-vps-provider-modal__header">
+            <h2>Choose your cloud provider</h2>
+            <button className="cloud-vps-provider-modal__close" type="button" onClick={onClose} aria-label="Close">
+              <X size={18} strokeWidth={2} />
+            </button>
+          </header>
+
+          <div className="cloud-vps-provider-list">
+            {PROVIDER_IDS.map((providerId) => {
+              const item = PROVIDERS[providerId];
+              const connection = connections[providerId];
+              return (
+                <article key={providerId} className="cloud-vps-provider-row">
+                  <button className="cloud-vps-provider-row__button" type="button" onClick={() => void selectProvider(providerId)}>
+                    <span className="cloud-vps-provider-row__logo" aria-hidden="true">
+                      <img src={item.logoSrc} alt="" />
+                    </span>
+                    <span className="cloud-vps-provider-row__copy">
+                      <span className="cloud-vps-provider-row__title">
+                        <strong>{item.label}</strong>
+                        <span>{`· ${item.tagline}`}</span>
+                        {connection ? <em>{`connected · ${connection.accountLabel}`}</em> : null}
+                      </span>
+                      <span className="cloud-vps-provider-row__features">
+                        {item.features.map((feature) => (
+                          <span key={feature}>
+                            <Check size={13} strokeWidth={2} aria-hidden="true" />
+                            {feature}
+                          </span>
+                        ))}
+                      </span>
+                    </span>
+                    <span className="cloud-vps-provider-row__side">
+                      <strong>{item.price}</strong>
+                      <span>{connection ? 'Add server →' : 'Connect →'}</span>
+                    </span>
+                  </button>
+                  {connection ? (
+                    <button
+                      className="cloud-vps-provider-row__disconnect"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        disconnectProvider(providerId);
+                      }}
+                    >
+                      Disconnect
+                    </button>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="cloud-vps-panel" role="dialog" aria-modal="true" aria-label="Cloud VPS setup">
       <div className="cloud-vps-panel__shell">
         <header className="cloud-vps-panel__topbar">
-          {step !== 'provider' && step !== 'progress' ? (
+          {step !== 'progress' ? (
             <button className="cloud-vps-panel__icon-button" type="button" onClick={goBack} aria-label="Back">
               <ArrowLeft size={18} strokeWidth={2} />
             </button>
@@ -617,62 +680,6 @@ export function CloudVpsSetupPanel({ open, workspaceId, onClose, onConnected }: 
             </button>
           ) : <span className="cloud-vps-panel__icon-spacer" aria-hidden="true" />}
         </header>
-
-        {step === 'provider' ? (
-          <section className="cloud-vps-panel__content">
-            <div className="cloud-vps-panel__heading">
-              <h2>Choose your cloud provider</h2>
-            </div>
-
-            <div className="cloud-vps-provider-list">
-              {PROVIDER_IDS.map((providerId) => {
-                const item = PROVIDERS[providerId];
-                const connection = connections[providerId];
-                return (
-                  <article key={providerId} className="cloud-vps-provider-row">
-                    <button className="cloud-vps-provider-row__button" type="button" onClick={() => void selectProvider(providerId)}>
-                      <span className="cloud-vps-provider-row__logo" aria-hidden="true">
-                        <img src={item.logoSrc} alt="" />
-                      </span>
-                      <span className="cloud-vps-provider-row__copy">
-                        <span className="cloud-vps-provider-row__title">
-                          <strong>{item.label}</strong>
-                          <span>{`· ${item.tagline}`}</span>
-                          {connection ? <em>{`connected · ${connection.accountLabel}`}</em> : null}
-                        </span>
-                        <span className="cloud-vps-provider-row__features">
-                          {item.features.map((feature) => (
-                            <span key={feature}>
-                              <Check size={13} strokeWidth={2} aria-hidden="true" />
-                              {feature}
-                            </span>
-                          ))}
-                        </span>
-                      </span>
-                      <span className="cloud-vps-provider-row__side">
-                        <strong>{item.price}</strong>
-                        <span>{connection ? 'Add server →' : 'Connect →'}</span>
-                      </span>
-                    </button>
-                    {connection ? (
-                      <button
-                        className="cloud-vps-provider-row__disconnect"
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          disconnectProvider(providerId);
-                        }}
-                      >
-                        Disconnect
-                      </button>
-                    ) : null}
-                  </article>
-                );
-              })}
-            </div>
-
-          </section>
-        ) : null}
 
         {step === 'access' && provider ? (
           <section className="cloud-vps-panel__content cloud-vps-panel__content--narrow">

@@ -26590,6 +26590,74 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   color: var(--app-text-primary);
 }
 
+.cloud-vps-provider-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 24px;
+}
+
+.cloud-vps-provider-modal__scrim {
+  position: fixed;
+  inset: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--app-bg-page) 70%, transparent);
+  backdrop-filter: blur(20px);
+  cursor: default;
+}
+
+.cloud-vps-provider-modal__panel {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 18px;
+  width: min(620px, calc(100vw - 48px));
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--app-border-strong) 72%, transparent);
+  border-radius: calc(var(--app-radius-xl) + 4px);
+  padding: 20px;
+  background: var(--app-bg-panel);
+  box-shadow: 0 34px 110px -52px color-mix(in srgb, black 72%, transparent);
+}
+
+.cloud-vps-provider-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cloud-vps-provider-modal__header h2 {
+  margin: 0;
+  color: var(--app-text-primary);
+  font-size: var(--app-font-18);
+  font-weight: var(--app-weight-bold);
+  letter-spacing: 0;
+  line-height: 1.18;
+}
+
+.cloud-vps-provider-modal__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: var(--app-radius-md);
+  color: var(--app-text-secondary);
+  background: var(--app-bg-panel-elevated);
+  cursor: pointer;
+}
+
+.cloud-vps-provider-modal__close:hover {
+  color: var(--app-text-primary);
+  background: var(--workstation-shell-row-selected);
+}
+
 .cloud-vps-panel {
   position: fixed;
   inset: 0;
@@ -26971,6 +27039,16 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
 }
 
 @media (max-width: 760px) {
+  .cloud-vps-provider-modal {
+    padding: 16px;
+  }
+
+  .cloud-vps-provider-modal__panel {
+    width: min(100vw - 32px, 620px);
+    max-height: min(720px, calc(100vh - 32px));
+    padding: 16px;
+  }
+
   .cloud-vps-panel__content,
   .cloud-vps-panel__content--narrow {
     width: min(100vw - 32px, 680px);

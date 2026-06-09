@@ -20134,8 +20134,8 @@ body.theme-light .studio-agents-nav__agent[aria-selected='true'] {
   background: var(--app-bg-panel);
   color: var(--app-text-primary);
   box-shadow:
-    0 1px 0 color-mix(in srgb, white 72%, transparent),
-    0 10px 24px -18px color-mix(in srgb, black 42%, transparent);
+    inset 0 0 0 1px color-mix(in srgb, var(--app-border-strong) 52%, transparent),
+    0 10px 24px -18px color-mix(in srgb, black 32%, transparent);
 }
 
 .app-memory-document-edit {
@@ -21649,8 +21649,8 @@ body.theme-light .sage-integrations-nav__bucket--active {
   color: var(--app-text-primary);
   background: var(--app-bg-panel);
   box-shadow:
-    0 1px 0 color-mix(in srgb, white 72%, transparent),
-    0 8px 18px -15px color-mix(in srgb, black 42%, transparent);
+    inset 0 0 0 1px color-mix(in srgb, var(--app-border-strong) 52%, transparent),
+    0 8px 18px -15px color-mix(in srgb, black 32%, transparent);
 }
 
 :root[data-emp-theme='light'] .sage-integrations-topnav .sage-integrations-nav__bucket--active,
@@ -21658,7 +21658,7 @@ body[data-emp-theme='light'] .sage-integrations-topnav .sage-integrations-nav__b
 body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--active {
   background: var(--app-bg-panel);
   box-shadow:
-    0 1px 0 color-mix(in srgb, white 72%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--app-border-muted) 54%, transparent),
     0 10px 24px -18px color-mix(in srgb, black 42%, transparent);
 }
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Cloud, Copy, Monitor, Plus, Server, X } from 'lucide-react';
+import { Cloud, Copy, Monitor, Server, X } from 'lucide-react';
 import { toDataURL } from 'qrcode';
 
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
@@ -1303,7 +1303,12 @@ export function WorkstationHardwarePane() {
       setExpandedKind(expandedKind === card.kind ? null : card.kind);
       return;
     }
-    openConnect(card.kind === 'self_hosted_business_node' ? 'ssh_server' : 'this_device');
+    if (card.kind === 'self_hosted_business_node') {
+      setActiveTab('ssh_server');
+      setRemoteExpanded(true);
+      return;
+    }
+    openConnect('this_device');
   }
 
   function confirmFullAccessPairing() {
@@ -1366,14 +1371,6 @@ export function WorkstationHardwarePane() {
           <div>
             <h1>Hardware</h1>
           </div>
-          <AppButton
-            tone="secondary"
-            type="button"
-            onClick={() => openConnect('all')}
-          >
-            <Plus size={15} strokeWidth={2} aria-hidden="true" />
-            <span>Connect</span>
-          </AppButton>
         </header>
 
         <nav className="workstation-hardware-tabs" aria-label="Hardware connection type">
@@ -1400,36 +1397,138 @@ export function WorkstationHardwarePane() {
 
           {selectionError ? <p className="workstation-hardware-section__notice">{selectionError}</p> : null}
           {error ? <p className="workstation-hardware-section__notice">{error}</p> : null}
+          {statusMessage ? <p className="workstation-hardware-section__notice">{statusMessage}</p> : null}
 
           {activeTab === 'ssh_server' ? (
-            <div className="workstation-hardware-provider-grid" aria-label="Cloud VPS providers">
-              {CLOUD_VPS_PROVIDER_IDS.map((providerId) => {
-                const provider = CLOUD_VPS_PROVIDERS[providerId];
-                return (
-                  <article key={providerId} className="workstation-hardware-provider-card">
-                    <span className="workstation-hardware-provider-card__logo" aria-hidden="true">
-                      <img src={provider.logoSrc} alt="" />
-                    </span>
-                    <div className="workstation-hardware-provider-card__copy">
-                      <div>
-                        <h3>{provider.label}</h3>
-                        <p>{provider.tagline}</p>
+            <div className="workstation-hardware-connect-stack">
+              <div className="workstation-hardware-provider-grid" aria-label="Cloud VPS providers">
+                {CLOUD_VPS_PROVIDER_IDS.map((providerId) => {
+                  const provider = CLOUD_VPS_PROVIDERS[providerId];
+                  return (
+                    <article key={providerId} className="workstation-hardware-provider-card">
+                      <span className="workstation-hardware-provider-card__logo" aria-hidden="true">
+                        <img src={provider.logoSrc} alt="" />
+                      </span>
+                      <div className="workstation-hardware-provider-card__copy">
+                        <div>
+                          <h3>{provider.label}</h3>
+                          <p>{provider.tagline}</p>
+                        </div>
+                        <div className="workstation-hardware-provider-card__features">
+                          {provider.features.map((feature) => (
+                            <span key={feature}>{feature}</span>
+                          ))}
+                        </div>
                       </div>
-                      <div className="workstation-hardware-provider-card__features">
-                        {provider.features.map((feature) => (
-                          <span key={feature}>{feature}</span>
-                        ))}
+                      <div className="workstation-hardware-provider-card__side">
+                        <strong>{provider.price}</strong>
+                        <AppButton tone="secondary" type="button" onClick={() => openCloudVps(providerId)}>
+                          Connect
+                        </AppButton>
                       </div>
+                    </article>
+                  );
+                })}
+              </div>
+
+              <article className={joinClassNames('workstation-hardware-connect-card', remoteExpanded && 'is-active')}>
+                <div className="workstation-hardware-connect-card__main">
+                  <div>
+                    <h3>Remote server</h3>
+                  </div>
+                  <AppButton tone="secondary" type="button" onClick={() => setRemoteExpanded((expanded) => !expanded)}>
+                    Configure
+                  </AppButton>
+                </div>
+                {remoteExpanded ? (
+                  <div className="workstation-hardware-ssh-form">
+                    <label className="app-form-field">
+                      <span className="app-form-field__label">Host</span>
+                      <input className="app-field" type="text" value={sshHost} onChange={(event) => setSshHost(event.target.value)} placeholder="server.example.com" />
+                    </label>
+                    <label className="app-form-field">
+                      <span className="app-form-field__label">Port</span>
+                      <input className="app-field" type="number" min="1" max="65535" value={sshPort} onChange={(event) => setSshPort(event.target.value)} />
+                    </label>
+                    <label className="app-form-field">
+                      <span className="app-form-field__label">Username</span>
+                      <input className="app-field" type="text" value={sshUsername} onChange={(event) => setSshUsername(event.target.value)} placeholder="ubuntu" />
+                    </label>
+                    <div className="workstation-hardware-auth-toggle" role="group" aria-label="SSH authentication">
+                      <button className={joinClassNames(sshAuthMode === 'password' && 'is-active')} type="button" onClick={() => setSshAuthMode('password')}>
+                        Password
+                      </button>
+                      <button className={joinClassNames(sshAuthMode === 'ssh_key' && 'is-active')} type="button" onClick={() => setSshAuthMode('ssh_key')}>
+                        SSH Key
+                      </button>
                     </div>
-                    <div className="workstation-hardware-provider-card__side">
-                      <strong>{provider.price}</strong>
-                      <AppButton tone="secondary" type="button" onClick={() => openCloudVps(providerId)}>
-                        Connect
+                    {sshAuthMode === 'password' ? (
+                      <label className="app-form-field">
+                        <span className="app-form-field__label">Password</span>
+                        <input className="app-field" type="password" value={sshPassword} onChange={(event) => setSshPassword(event.target.value)} />
+                      </label>
+                    ) : (
+                      <label className="app-form-field">
+                        <span className="app-form-field__label">SSH key</span>
+                        <textarea className="app-textarea" value={sshKey} onChange={(event) => setSshKey(event.target.value)} rows={5} />
+                      </label>
+                    )}
+                    <AppButton tone="secondary" type="button" onClick={() => void connectRemoteServer()} disabled={remoteConnectBusy}>
+                      {remoteConnectBusy ? <span className="workstation-hardware-spinner" aria-hidden="true" /> : null}
+                      {remoteConnectBusy ? 'Connecting' : 'Connect'}
+                    </AppButton>
+                    {remoteError ? <p className="workstation-hardware-connect-card__error">{remoteError}</p> : null}
+                  </div>
+                ) : null}
+              </article>
+            </div>
+          ) : null}
+
+          {activeTab === 'other_computers' ? (
+            <div className="workstation-hardware-connect-stack">
+              <article className={joinClassNames('workstation-hardware-connect-card', otherSetupIntent && 'is-active')}>
+                <div className="workstation-hardware-connect-card__main">
+                  <div>
+                    <h3>Another computer</h3>
+                  </div>
+                  <AppButton tone="secondary" type="button" onClick={() => void createOtherComputerSetupLink()} disabled={busy}>
+                    {busy ? 'Creating…' : 'Get setup link'}
+                  </AppButton>
+                </div>
+                {generatedSetupLink ? (
+                  <div className="workstation-hardware-setup-link">
+                    <div className="workstation-hardware-setup-link__row">
+                      <code>{generatedSetupLink}</code>
+                      <AppButton tone="secondary" type="button" onClick={() => void copySetupLink()}>
+                        <Copy size={14} strokeWidth={2} aria-hidden="true" />
+                        {copiedTarget === 'setup' ? 'Copied' : 'Copy'}
                       </AppButton>
                     </div>
-                  </article>
-                );
-              })}
+                    <div className="workstation-hardware-qr-placeholder">
+                      {setupQrDataUrl ? (
+                        <img src={setupQrDataUrl} alt="Setup QR code" />
+                      ) : (
+                        <span>QR code unavailable</span>
+                      )}
+                    </div>
+                    <button className="workstation-hardware-inline-link" type="button" onClick={() => setManualCommandOpen((open) => !open)}>
+                      {manualCommandOpen ? 'Hide manual command ↑' : 'Show manual command ↓'}
+                    </button>
+                    {manualCommandOpen && command ? (
+                      <div className="workstation-hardware-command">
+                        <div className="workstation-hardware-command__header">
+                          <span>Manual command</span>
+                          <button type="button" onClick={() => void copyCommand()}>
+                            <Copy size={14} strokeWidth={2} aria-hidden="true" />
+                            {copiedTarget === 'command' ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+                        <pre><code>{command}</code></pre>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </article>
             </div>
           ) : null}
 
@@ -1717,8 +1816,6 @@ export function WorkstationHardwarePane() {
 	              </article>
 	              ) : null}
 	            </div>
-
-            {statusMessage ? <p className="workstation-hardware-section__notice">{statusMessage}</p> : null}
           </section>
         </div>
       ) : null}

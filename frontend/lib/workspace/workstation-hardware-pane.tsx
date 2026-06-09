@@ -121,7 +121,7 @@ type SshAuthMode = 'password' | 'ssh_key';
 
 const TRAY_STATUS_URL = 'http://127.0.0.1:7790/status';
 const TRAY_CONNECT_URL = 'http://127.0.0.1:7790/connect';
-const AGENT_DOWNLOAD_URL = 'https://empyralis.io/downloads/empyralis-agent/macos/Empyralis-Agent.dmg';
+const AGENT_DOWNLOAD_URL = 'https://empyralis.ai/downloads/empyralis-agent/macos/Empyralis-Agent.dmg';
 const AGENT_COMPUTER_FULL_ACCESS_WARNING_VERSION = '2026-06-06';
 const AGENT_COMPUTER_FULL_ACCESS_WARNING_COPY = 'Full Access lets Sage run commands, read, write, delete files, and access secrets, browser data, tokens, SSH keys, and connected accounts on this Agent Computer; dedicated hardware is recommended.';
 
@@ -447,7 +447,7 @@ function setupLink(intent: PairingIntentRecord, workspaceId: string): string {
     return '';
   }
   const params = new URLSearchParams({ token: pairingToken, ws: workspaceId });
-  return `https://empyralis.io/setup?${params.toString()}`;
+  return `https://empyralis.ai/setup?${params.toString()}`;
 }
 
 function trayStatusConnected(status: TrayLocalStatus | null): boolean {
@@ -1367,12 +1367,6 @@ export function WorkstationHardwarePane() {
   return (
     <section className="workstation-hardware-pane" aria-label="Hardware">
       <div className="workstation-hardware-page">
-        <header className="workstation-hardware-page__header">
-          <div>
-            <h1>Hardware</h1>
-          </div>
-        </header>
-
         <nav className="workstation-hardware-tabs" aria-label="Hardware connection type">
           {HARDWARE_TABS.map((tab) => (
             <button

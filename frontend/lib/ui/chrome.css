@@ -20018,7 +20018,7 @@ body.theme-light .studio-agents-nav__agent[aria-selected='true'] {
       color-mix(in srgb, var(--app-bg-panel) 98%, var(--app-surface-inset) 2%) 0%,
       color-mix(in srgb, var(--app-bg-panel) 93%, var(--app-surface-inset) 7%) 100%);
   box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 58%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--app-border-strong) 46%, transparent),
     0 18px 42px -36px color-mix(in srgb, black 42%, transparent);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -25974,7 +25974,7 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
 /* Hardware surface: Codex-style compact connection UI */
 .workstation-hardware-pane {
   min-height: 100%;
-  padding: 72px var(--app-space-6) var(--app-space-10);
+  padding: 40px var(--app-space-6) var(--app-space-10);
   background: var(--app-bg-page);
   color: var(--app-text-primary);
 }

@@ -304,31 +304,31 @@ body[data-emp-theme='light'],
 body.theme-light {
   color-scheme: light;
 
-  --app-bg-page: #faf8f4;
-  --app-surface-1: #ffffff;
-  --app-surface-2: #f5f2ec;
-  --app-surface-hover: #f5f2ec;
-  --app-surface-inset: #f2efe9;
+  --app-bg-page: #FFFFFF;
+  --app-surface-1: #F7F7F7;
+  --app-surface-2: #F0F0F0;
+  --app-surface-hover: #F0F0F0;
+  --app-surface-inset: #EEEEEE;
 
-  --app-bg-app: #faf8f4;
-  --app-bg-canvas: #faf8f4;
-  --app-bg-shell: #f2efe9;
-  --app-bg-panel: #ffffff;
-  --app-bg-panel-elevated: #f5f2ec;
-  --app-bg-overlay: #f5f2ec;
+  --app-bg-app: #FFFFFF;
+  --app-bg-canvas: #FFFFFF;
+  --app-bg-shell: #F5F5F5;
+  --app-bg-panel: #FFFFFF;
+  --app-bg-panel-elevated: #F5F5F5;
+  --app-bg-overlay: #F5F5F5;
 
-  --app-border-subtle: rgba(26, 22, 18, 0.08);
-  --app-border-strong: #dbd6ce;
-  --app-border-muted: rgba(26, 22, 18, 0.08);
-  --app-border-default: #dbd6ce;
+  --app-border-subtle: rgba(0, 0, 0, 0.06);
+  --app-border-strong: rgba(0, 0, 0, 0.15);
+  --app-border-muted: rgba(0, 0, 0, 0.06);
+  --app-border-default: rgba(0, 0, 0, 0.10);
   --app-border-accent: #202020;
   --interactive-accent: #60737C;
   --interactive-accent-hover: #122026;
 
-  --app-text-primary: #1a1612;
-  --app-text-secondary: #78726a;
-  --app-text-tertiary: rgba(96, 115, 124, 0.72);
-  --app-text-inverse: #FBFCFC;
+  --app-text-primary: #171717;
+  --app-text-secondary: #666666;
+  --app-text-tertiary: rgba(0, 0, 0, 0.48);
+  --app-text-inverse: #FFFFFF;
 
   --app-accent: #202020;
   --app-accent-primary: #202020;
@@ -349,15 +349,15 @@ body.theme-light {
   --app-shadow-focus: 0 0 0 2px rgba(32, 32, 32, 0.14);
 
   /* Premium UI Direction A Tokens */
-  --premium-shell-bg: #E9EFF1;
+  --premium-shell-bg: #F2F2F2;
   --premium-glass-bg: rgba(255, 255, 255, 0.72);
-  --premium-glass-border: rgba(16, 31, 37, 0.08);
-  --premium-glass-shadow: 0 12px 40px -12px rgba(16, 31, 37, 0.08);
+  --premium-glass-border: rgba(0, 0, 0, 0.08);
+  --premium-glass-shadow: 0 12px 40px -12px rgba(0, 0, 0, 0.08);
   --premium-glass-hover: rgba(255, 255, 255, 0.82);
   --premium-graphite-bg: linear-gradient(180deg, #626262 0%, #2f2f2f 100%);
   --premium-graphite-text: #ffffff;
   --premium-card-bg: rgba(255, 255, 255, 0.64);
-  --premium-card-border: rgba(16, 31, 37, 0.06);
+  --premium-card-border: rgba(0, 0, 0, 0.06);
 }
 
 :root[data-emp-theme='light'] .app-shell-frame__sidebar,
@@ -22534,6 +22534,36 @@ body.theme-light .sage-integrations-topnav .sage-integrations-nav__bucket--activ
   object-fit: contain;
   border-radius: 9px;
   opacity: 0.96;
+}
+
+:root[data-emp-theme='dark'] .sage-unified-card,
+body[data-emp-theme='dark'] .sage-unified-card {
+  background: #1E1E1E;
+}
+
+:root[data-emp-theme='dark'] .sage-unified-card:hover,
+body[data-emp-theme='dark'] .sage-unified-card:hover {
+  background: #232323;
+}
+
+:root[data-emp-theme='dark'] .sage-unified-card:disabled:hover,
+body[data-emp-theme='dark'] .sage-unified-card:disabled:hover {
+  background: #1E1E1E;
+}
+
+:root[data-emp-theme='dark'] .sage-integration-brand__image[src*='/brand-assets/generic/'],
+body[data-emp-theme='dark'] .sage-integration-brand__image[src*='/brand-assets/generic/'] {
+  filter: brightness(1.4);
+}
+
+:root[data-emp-theme='dark'] .sage-integration-brand__image[src*='github.svg'],
+body[data-emp-theme='dark'] .sage-integration-brand__image[src*='github.svg'] {
+  filter: invert(1);
+}
+
+:root[data-emp-theme='dark'] .sage-integration-brand__image[src*='notion.svg'],
+body[data-emp-theme='dark'] .sage-integration-brand__image[src*='notion.svg'] {
+  filter: invert(0.9);
 }
 
 .sage-unified-card__title-row {

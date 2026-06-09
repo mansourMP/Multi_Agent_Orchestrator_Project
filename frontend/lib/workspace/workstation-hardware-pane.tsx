@@ -966,7 +966,6 @@ export function WorkstationHardwarePane() {
   );
   const serverCard = displayCards.find((card) => card.kind === 'self_hosted_business_node') ?? null;
   const cloudCard = displayCards.find((card) => card.kind === 'cloud_computer') ?? null;
-  const connectedCount = displayCards.filter((card) => card.status === 'Connected').length;
   const visibleCards = useMemo(() => {
     if (activeTab === 'this_device') {
       return localCard ? [localCard] : [];
@@ -984,6 +983,27 @@ export function WorkstationHardwarePane() {
   const cloudEnabled = Boolean(cloudCard && cloudCard.known && cloudCard.status !== 'Unavailable');
   const command = otherSetupIntent ? pairingCommand(otherSetupIntent, workspaceId, 'other_computer') : pairingIntentState ? pairingCommand(pairingIntentState, workspaceId, selectedConnectOption) : '';
   const generatedSetupLink = otherSetupIntent ? setupLink(otherSetupIntent, workspaceId) : '';
+  const otherComputerCount = displayCards.filter((card) => (
+    card.kind !== 'local_companion'
+    && card.kind !== 'self_hosted_business_node'
+    && card.known
+    && card.status !== 'Unavailable'
+  )).length;
+  const tabMeta = (tabId: HardwareTab): string => {
+    if (tabId === 'this_device') {
+      return localCard?.status ?? 'Offline';
+    }
+    if (tabId === 'ssh_server') {
+      return serverCard && serverCard.known && serverCard.status !== 'Unavailable' ? serverCard.status : 'No server';
+    }
+    return otherComputerCount ? `${otherComputerCount} connected` : 'No computers';
+  };
+  const activeSectionTitle = activeTab === 'this_device'
+    ? 'This device'
+    : activeTab === 'ssh_server'
+      ? 'SSH / Server'
+      : 'Other computers';
+  const showGatewayRegistrationRows = activeTab === 'this_device' && visibleGatewayRegistrations.length > 0;
 
   useEffect(() => {
     let active = true;
@@ -1361,31 +1381,41 @@ export function WorkstationHardwarePane() {
         </header>
 
         <nav className="workstation-hardware-tabs" aria-label="Hardware connection type">
-          {HARDWARE_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              className={joinClassNames(
-                'workstation-shell-panel__nav-row',
-                activeTab === tab.id && 'workstation-shell-panel__nav-row--active',
-              )}
-              aria-current={activeTab === tab.id ? 'page' : undefined}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
+          {HARDWARE_TABS.map((tab) => {
+            const Icon = tab.id === 'this_device' ? Monitor : tab.id === 'ssh_server' ? Server : Cloud;
+            return (
+              <button
+                key={tab.id}
+                className={joinClassNames('workstation-hardware-tab-node', activeTab === tab.id && 'is-active')}
+                aria-current={activeTab === tab.id ? 'page' : undefined}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <span className="workstation-hardware-tab-node__icon" aria-hidden="true">
+                  <Icon size={17} strokeWidth={1.9} />
+                </span>
+                <span className="workstation-hardware-tab-node__copy">
+                  <strong>{tab.label}</strong>
+                  <span>{tabMeta(tab.id)}</span>
+                </span>
+              </button>
+            );
+          })}
         </nav>
 
-        <section className="workstation-hardware-section" aria-label="Sage Agent Computer">
-          <header className="workstation-hardware-section__header">
-            <div>
-              <h2>Sage Agent Computer</h2>
-            </div>
-          </header>
+        <section className="workstation-hardware-section" aria-label={activeSectionTitle}>
+	          <header className="workstation-hardware-section__header">
+	            <div>
+	              <h2>{activeSectionTitle}</h2>
+	            </div>
+	            {cloudEnabled ? <span className="workstation-hardware-section__badge">Cloud enabled</span> : null}
+	          </header>
+
           {selectionError ? <p className="workstation-hardware-section__notice">{selectionError}</p> : null}
+          {error ? <p className="workstation-hardware-section__notice">{error}</p> : null}
+
           <div className="workstation-hardware-list">
-            {visibleGatewayRegistrations.length ? visibleGatewayRegistrations.map((gateway) => {
+            {showGatewayRegistrationRows ? visibleGatewayRegistrations.map((gateway) => {
               const gatewayId = readString(gateway, 'gateway_id');
               const selected = Boolean(gatewayId && gatewayId === selectedSageGatewayId);
               const connectionStatus = selected && (trayStatusConnected(trayStatus) || localCard?.status === 'Connected')
@@ -1417,27 +1447,7 @@ export function WorkstationHardwarePane() {
                   </AppButton>
                 </article>
               );
-            }) : (
-              <div className="workstation-hardware-empty">
-                <p>No Agent Computer has registered yet.</p>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section className="workstation-hardware-section" aria-label="Computers Empyralis can use">
-	          <header className="workstation-hardware-section__header">
-	            <div>
-	              <h2>Computers Empyralis can use</h2>
-	              <p>{connectedCount ? `${connectedCount} connected` : 'Connect a computer to this workspace.'}</p>
-	            </div>
-	            {cloudEnabled ? <span className="workstation-hardware-section__badge">Cloud enabled</span> : null}
-	          </header>
-
-          {error ? <p className="workstation-hardware-section__notice">{error}</p> : null}
-
-          <div className="workstation-hardware-list">
-            {visibleCards.length ? visibleCards.map((card) => {
+            }) : visibleCards.length ? visibleCards.map((card) => {
               const Icon = card.kind === 'local_companion' ? Monitor : card.kind === 'cloud_computer' ? Cloud : Server;
               const expanded = expandedKind === card.kind;
               return (

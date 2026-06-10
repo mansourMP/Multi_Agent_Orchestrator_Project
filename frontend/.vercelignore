@@ -1,0 +1,8 @@
+.next
+.next-e2e
+.vercel
+node_modules
+test-results
+tsconfig.tsbuildinfo
+.DS_Store
+/frontend

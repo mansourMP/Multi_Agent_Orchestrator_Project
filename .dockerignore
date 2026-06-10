@@ -5,7 +5,14 @@
 venv
 node_modules
 frontend/node_modules
+frontend/.next
+frontend/.next-e2e
+frontend/.vercel
+frontend/test-results
+frontend/tsconfig.tsbuildinfo
 mobile/node_modules
+apps
+_archive
 dist
 build
 test-results
@@ -16,6 +23,8 @@ references
 backend
 mobile
 src-tauri
+empyralis-supervisor
+empyralis-gateway/node_modules
 tmp
 __pycache__
 *.pyc
@@ -30,4 +39,3 @@ __pycache__
 *.sqlite
 *.sqlite3
 *.log
-

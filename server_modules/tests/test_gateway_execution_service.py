@@ -145,6 +145,149 @@ class GatewayExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         hardware_event_mock.assert_not_called()
 
+    async def test_execute_tool_via_gateway_does_not_mask_success_when_activity_ledger_fails(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["shell.execute"],
+            "metadata": {
+                "runtime_access_mode": "full_access",
+                "agent_scope": "sage",
+                "autonomous_agent_setup_warning_acknowledged": True,
+                "capability_readiness": {"ready": ["shell.execute"]},
+            },
+        }
+        dispatch_mock = AsyncMock(
+            return_value={
+                "request_id": "req-1",
+                "capability_id": "shell.execute",
+                "run_id": "run-1",
+                "result": {
+                    "command": "echo hello from hardware",
+                    "exit_code": 0,
+                    "stdout": "hello from hardware",
+                    "stderr": "",
+                },
+            }
+        )
+
+        def rust_side_effect(command, payload):
+            if payload.get("operation") == "quota_check":
+                return {"ok": True, "decision": "allow", "next_action": "allow_gateway_service_operation"}
+            return {"ok": True, "decision": "allow", "next_action": "dispatch_gateway_operation"}
+
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live", return_value=True),
+            patch(
+                "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "online",
+                    "heartbeat_fresh": True,
+                    "reported_health_state": "online",
+                    "capability_readiness": {"ready": ["shell.execute"]},
+                },
+            ),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
+            patch(
+                "server_modules.gateway_execution_service.gateway_activity_service.append_gateway_activity",
+                AsyncMock(side_effect=RuntimeError("activity ledger unavailable")),
+            ),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                side_effect=rust_side_effect,
+            ),
+        ):
+            response = await gateway_execution_service.execute_tool_via_gateway(
+                gateway_id="gw-1",
+                capability_id="shell.execute",
+                arguments={"command": "echo hello from hardware"},
+                run_id="run-1",
+                trace_id="trace-1",
+                workspace_id="ws-1",
+                request_id="req-1",
+                runtime_access_mode="full_access",
+                empyralis_approved=True,
+                agent_scope="sage",
+            )
+
+        self.assertEqual(response["result"]["stdout"], "hello from hardware")
+        self.assertEqual(response["result"]["exit_code"], 0)
+
+    async def test_execute_tool_via_gateway_normalizes_wrapped_shell_params_for_gateway(self) -> None:
+        registration = {
+            "gateway_id": "gw-1",
+            "device_id": "dev-1",
+            "workspace_id": "ws-1",
+            "status": "active",
+            "device_trust_state": "trusted",
+            "capabilities": ["shell.execute"],
+            "metadata": {
+                "runtime_access_mode": "full_access",
+                "agent_scope": "sage",
+                "autonomous_agent_setup_warning_acknowledged": True,
+                "capability_readiness": {"ready": ["shell.execute"]},
+            },
+        }
+        dispatch_mock = AsyncMock(
+            return_value={
+                "request_id": "req-1",
+                "capability_id": "shell.execute",
+                "run_id": "run-1",
+                "result": {
+                    "command": "echo hello from hardware",
+                    "exit_code": 0,
+                    "stdout": "hello from hardware",
+                    "stderr": "",
+                },
+            }
+        )
+
+        def rust_side_effect(command, payload):
+            if payload.get("operation") == "quota_check":
+                return {"ok": True, "decision": "allow", "next_action": "allow_gateway_service_operation"}
+            return {"ok": True, "decision": "allow", "next_action": "dispatch_gateway_operation"}
+
+        with (
+            patch("server_modules.gateway_execution_service.gateway_state_repository.get_gateway_registration", return_value=registration),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.gateway_connection_is_live", return_value=True),
+            patch(
+                "server_modules.gateway_execution_service.gateway_registry_service.gateway_registration_public_payload",
+                return_value={
+                    "connection_status": "online",
+                    "heartbeat_fresh": True,
+                    "reported_health_state": "online",
+                    "capability_readiness": {"ready": ["shell.execute"]},
+                },
+            ),
+            patch("server_modules.gateway_execution_service.gateway_protocol_service.dispatch_tool_invoke", dispatch_mock),
+            patch("server_modules.gateway_execution_service.gateway_activity_service.append_gateway_activity", AsyncMock()),
+            patch(
+                "server_modules.gateway_execution_service.rust_runtime_kernel_client.run_runtime_kernel_enforced",
+                side_effect=rust_side_effect,
+            ),
+        ):
+            await gateway_execution_service.execute_tool_via_gateway(
+                gateway_id="gw-1",
+                capability_id="shell.execute",
+                arguments={"params": {"command": "echo hello from hardware"}},
+                run_id="run-1",
+                trace_id="trace-1",
+                workspace_id="ws-1",
+                request_id="req-1",
+                runtime_access_mode="full_access",
+                empyralis_approved=True,
+                agent_scope="sage",
+            )
+
+        self.assertEqual(
+            dispatch_mock.await_args.kwargs["arguments"],
+            {"command": "echo hello from hardware"},
+        )
+
     async def test_execute_tool_via_gateway_forwards_agent_scope_and_policy(self) -> None:
         registration = {
             "gateway_id": "gw-1",

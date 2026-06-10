@@ -465,7 +465,7 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         services.clear_direct_tool_loop_state = lambda session_key: cleared.append(session_key)
 
         with self.assertRaisesRegex(RuntimeError, "insufficient_credits"):
-            list(
+            events = list(
                 direct_chat_generation_service.stream_provider_backed_direct_chat(
                     services=services,
                     context={"provider": "deepseek"},
@@ -938,6 +938,129 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         self.assertLess(event_types.index("plan.started"), event_types.index("tool.started"))
         self.assertEqual(events[-1]["type"], "final")
         self.assertEqual(events[-1]["payload"]["reply"], "Here you go")
+
+    def test_stream_provider_backed_direct_chat_marks_local_gateway_activity(self) -> None:
+        trace_context = agent_trace_service.TraceContext(
+            trace_id="trace-hardware",
+            workspace_id="default",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            run_id=None,
+            root_agent_id="sage",
+        )
+        emitted: list[dict[str, object]] = []
+
+        async def _emit_with_envelope(trace_ctx, event_type, data, **kwargs):
+            envelope = {
+                "id": f"tevent-{trace_ctx.next_seq()}",
+                "trace_id": trace_ctx.trace_id,
+                "event_type": event_type,
+                "data": dict(data or {}),
+                "tool_call_id": kwargs.get("tool_call_id"),
+            }
+            emitted.append(envelope)
+            return envelope
+
+        stream_rounds = iter(
+            [
+                [
+                    {
+                        "type": "result",
+                        "reply": "",
+                        "usage_masked": {"provider": "openai"},
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "openai",
+                        "error": "",
+                        "tool_calls": [
+                            {
+                                "id": "tool-call-hardware",
+                                "name": "hardware__action",
+                                "arguments": {
+                                    "action": "shell",
+                                    "command": "echo hello from hardware",
+                                    "runtime_target": "user_device_gateway",
+                                },
+                            }
+                        ],
+                    }
+                ],
+                [
+                    {
+                        "type": "result",
+                        "reply": "Done",
+                        "usage_masked": {"provider": "openai"},
+                        "provider": "openai",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "openai",
+                        "error": "",
+                        "tool_calls": [],
+                    },
+                ],
+            ]
+        )
+
+        def _stream_events(**kwargs):
+            return iter(next(stream_rounds))
+
+        services = self._services(stream_events=[])
+        services.generate_chat_reply_stream_with_provider_fallback = _stream_events
+        services.execute_single_direct_tool_call = lambda **_kwargs: "shell completed."
+
+        with mock.patch.object(
+            direct_chat_generation_service.agent_trace_service,
+            "emit_with_envelope",
+            side_effect=_emit_with_envelope,
+        ), mock.patch.object(
+            direct_chat_generation_service.agent_trace_service,
+            "finish_trace",
+            new=mock.AsyncMock(return_value={}),
+        ):
+            events = list(
+                direct_chat_generation_service.stream_provider_backed_direct_chat(
+                    services=services,
+                    context={"provider": "openai"},
+                    metadata={"provider": "openai", "model": "gpt-5.4"},
+                    system_prompt="System prompt",
+                    normalized_workspace_id="default",
+                    normalized_requested_provider="openai",
+                    normalized_requested_model="gpt-5.4",
+                    normalized_reasoning_effort="medium",
+                    normalized_thread_id="thread-1",
+                    normalized_message="run: echo hello from hardware",
+                    compacted_prior_messages=[],
+                    prior_messages_used=False,
+                    history_mode="none",
+                    connected_systems=[],
+                    tool_capabilities=[],
+                    availability_payload={"ai_ready": True},
+                    tools=[{"name": "hardware__action"}],
+                    direct_chat_credentials={},
+                    proactive_suggestions=[],
+                    tool_loop_session_key="session-hardware",
+                    fallback_reason=None,
+                    session_ctx=None,
+                    trace_context=trace_context,
+                    resolved_chat_max_iterations=3,
+                    direct_tool_result_summary_system_message="Summarize tool results.",
+                )
+            )
+
+        started = next(item for item in emitted if item["event_type"] == "tool.started")
+        progress = next(
+            item["payload"]
+            for item in events
+            if item.get("type") == "trace" and item.get("payload", {}).get("event_type") == "tool.progress"
+        )
+        result = next(item for item in emitted if item["event_type"] == "tool.result")
+        self.assertEqual(started["data"]["connector_id"], "hardware_runtime")
+        self.assertEqual(started["data"]["execution_environment"], "local_gateway")
+        self.assertEqual(started["data"]["agent_activity"]["label"], "Running on your Mac")
+        self.assertEqual(started["data"]["agent_activity"]["status"], "active")
+        self.assertEqual(progress["data"]["message"], "Running on your Mac")
+        self.assertEqual(result["data"]["connector_id"], "hardware_runtime")
+        self.assertEqual(result["data"]["agent_activity"]["label"], "Done")
+        self.assertEqual(result["data"]["agent_activity"]["status"], "completed")
 
     def test_stream_provider_backed_direct_chat_sanitizes_tool_result_before_cloud_followup_prompt(self) -> None:
         captured_messages: list[list[dict[str, object]]] = []

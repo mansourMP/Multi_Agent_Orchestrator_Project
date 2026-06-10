@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -694,6 +695,56 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         self.assertEqual(stream_kwargs["session_ctx"]["agent_turn_request"]["policy_context"]["agent_scope"], "sage")
         self.assertEqual(stream_kwargs["session_ctx"]["agent_turn_request"]["policy_context"]["agent_id"], "sage_main_agent")
 
+    def test_main_sage_chat_operator_loop_does_not_block_backend_event_loop(self):
+        stream_events = [
+            {"type": "final", "payload": {"reply": "done", "actions": [], "error": ""}},
+        ]
+        timeline: List[tuple[str, float]] = []
+
+        def blocking_stream(*_args, **_kwargs):
+            timeline.append(("stream_start", time.monotonic()))
+            time.sleep(0.15)
+            timeline.append(("stream_end", time.monotonic()))
+            return iter(stream_events)
+
+        async def run_scenario():
+            async def ticker():
+                await asyncio.sleep(0.02)
+                timeline.append(("tick", time.monotonic()))
+
+            chat_task = asyncio.create_task(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1",
+                message="run: echo hello from hardware",
+            ))
+            tick_task = asyncio.create_task(ticker())
+            result = await chat_task
+            await tick_task
+            return result
+
+        with (
+            patch("server_modules.sage_agent_runtime_service.sage_profile_service.list_sage_profile", return_value={"profile": {}}),
+            patch("server_modules.sage_agent_runtime_service.workspace_context.read_workspace_context_files", return_value={}),
+            patch("server_modules.sage_agent_runtime_service.sage_memory_service.build_sage_memory_context_block", return_value=""),
+            patch("server_modules.sage_agent_runtime_service.sage_heartbeat_service.build_sage_heartbeat_snapshot", new=AsyncMock(return_value={})),
+            patch("server_modules.sage_agent_runtime_service.list_skill_definitions", return_value=[]),
+            patch("server_modules.sage_agent_runtime_service._resolve_cloud_provider", return_value=("openai", {"api_key": "test-key"})),
+            patch("server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback") as mock_generate,
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports.resolve_workspace_tool_capabilities", return_value=[{"name": "hardware__action"}]),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_runtime_exports._resolve_direct_chat_availability", return_value={"runtime_ok": True, "local_gateway_online": True}),
+            patch("server_modules.sage_agent_runtime_service.direct_chat_generation_service.stream_provider_backed_direct_chat", side_effect=blocking_stream) as mock_stream,
+            patch("server_modules.sage_agent_runtime_service.persist_interaction"),
+            patch("server_modules.sage_agent_runtime_service.activity_ledger_service.append_activity_event", new=AsyncMock()),
+            patch("server_modules.sage_agent_runtime_service.security_audit_service.emit_security_audit_event"),
+        ):
+            result = _run(run_scenario())
+
+        self.assertEqual(result["message"], "done")
+        self.assertFalse(mock_generate.called)
+        self.assertTrue(mock_stream.called)
+        marks = {name: timestamp for name, timestamp in timeline}
+        self.assertLess(marks["stream_start"], marks["tick"])
+        self.assertLess(marks["tick"], marks["stream_end"])
+
     def test_main_sage_chat_executes_web_fetch_tool_for_url_fetch(self):
         stream_events = [
             self._trace(
@@ -1161,6 +1212,13 @@ class SageTaskRouteDecisionTests(unittest.TestCase):
         self.assertTrue(
             sage_agent_runtime_service._message_might_need_sage_action_loop(
                 "Check my Google Calendar and create a meeting prep note."
+            )
+        )
+
+    def test_run_colon_requests_enter_sage_action_loop(self):
+        self.assertTrue(
+            sage_agent_runtime_service._message_might_need_sage_action_loop(
+                "run: echo hello from hardware"
             )
         )
 

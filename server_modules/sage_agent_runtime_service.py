@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -831,6 +832,8 @@ def _message_might_need_sage_action_loop(message: str) -> bool:
         return True
     if direct_chat_tool_catalog_service.message_has_browser_automation_intent(message):
         return True
+    if compact.startswith(("run:", "execute:")):
+        return True
     if any(
         token in compact
         for token in (
@@ -1168,57 +1171,60 @@ async def _run_sage_action_loop_v3(
         run_id=None,
         root_agent_id=SAGE_MAIN_AGENT_ID,
     )
-    stream_events = list(
-        direct_chat_generation_service.stream_provider_backed_direct_chat(
-            services=generation_services,
-            context={
-                "workspace_id": workspace_id,
-                "provider": provider,
-                "model": model or None,
-                "source": "sage_chat",
-                "surface": "sage",
-                "thread_id": trace_id,
-                "tools": tools,
-                "disable_provider_fallback": True,
-            },
-            metadata={
-                "workspace_id": workspace_id,
-                "provider": provider,
-                "model": model or None,
-                "source": "sage_chat",
-                "surface": "sage",
-                "thread_id": trace_id,
-                "tools": tools,
-                "credentials": credentials,
-                "disable_provider_fallback": True,
-                "action_loop_version": _SAGE_OPERATOR_LOOP_VERSION,
-                "channel_context": normalized_channel_context or None,
-            },
-            system_prompt=system_prompt,
-            normalized_workspace_id=workspace_id,
-            normalized_requested_provider=provider,
-            normalized_requested_model=model,
-            normalized_reasoning_effort="",
-            normalized_thread_id=trace_id,
-            normalized_message=message,
-            compacted_prior_messages=prior_messages,
-            prior_messages_used=bool(prior_messages),
-            history_mode="raw_messages" if prior_messages else "none",
-            connected_systems=connected_systems,
-            tool_capabilities=tool_capabilities,
-            availability_payload=availability_payload,
-            tools=tools,
-            direct_chat_credentials=credentials,
-            proactive_suggestions=[],
-            tool_loop_session_key=f"sage:{workspace_id}:{trace_id}",
-            fallback_reason=None,
-            session_ctx=session_ctx,
-            trace_context=trace_context,
-            resolved_chat_max_iterations=_SAGE_OPERATOR_LOOP_MAX_ITERATIONS,
-            direct_tool_result_summary_system_message="Use the Sage tool results to answer the user's request. Do not paste raw tool output.",
-            assistant_plan_tools=tools,
+    def _collect_stream_events() -> List[Dict[str, Any]]:
+        return list(
+            direct_chat_generation_service.stream_provider_backed_direct_chat(
+                services=generation_services,
+                context={
+                    "workspace_id": workspace_id,
+                    "provider": provider,
+                    "model": model or None,
+                    "source": "sage_chat",
+                    "surface": "sage",
+                    "thread_id": trace_id,
+                    "tools": tools,
+                    "disable_provider_fallback": True,
+                },
+                metadata={
+                    "workspace_id": workspace_id,
+                    "provider": provider,
+                    "model": model or None,
+                    "source": "sage_chat",
+                    "surface": "sage",
+                    "thread_id": trace_id,
+                    "tools": tools,
+                    "credentials": credentials,
+                    "disable_provider_fallback": True,
+                    "action_loop_version": _SAGE_OPERATOR_LOOP_VERSION,
+                    "channel_context": normalized_channel_context or None,
+                },
+                system_prompt=system_prompt,
+                normalized_workspace_id=workspace_id,
+                normalized_requested_provider=provider,
+                normalized_requested_model=model,
+                normalized_reasoning_effort="",
+                normalized_thread_id=trace_id,
+                normalized_message=message,
+                compacted_prior_messages=prior_messages,
+                prior_messages_used=bool(prior_messages),
+                history_mode="raw_messages" if prior_messages else "none",
+                connected_systems=connected_systems,
+                tool_capabilities=tool_capabilities,
+                availability_payload=availability_payload,
+                tools=tools,
+                direct_chat_credentials=credentials,
+                proactive_suggestions=[],
+                tool_loop_session_key=f"sage:{workspace_id}:{trace_id}",
+                fallback_reason=None,
+                session_ctx=session_ctx,
+                trace_context=trace_context,
+                resolved_chat_max_iterations=_SAGE_OPERATOR_LOOP_MAX_ITERATIONS,
+                direct_tool_result_summary_system_message="Use the Sage tool results to answer the user's request. Do not paste raw tool output.",
+                assistant_plan_tools=tools,
+            )
         )
-    )
+
+    stream_events = await asyncio.to_thread(_collect_stream_events)
     collected = _collect_sage_operator_loop_v3_events(stream_events)
     final_payload = collected["final_payload"]
     reply = _coerce_text(final_payload.get("reply"))

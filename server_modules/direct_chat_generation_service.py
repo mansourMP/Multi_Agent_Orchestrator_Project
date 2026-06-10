@@ -31,6 +31,30 @@ from server_modules.plugin_system import (
 )
 
 
+def _local_gateway_activity_payload(
+    *,
+    tool_call_id: str,
+    activity_type: str,
+    label: str,
+    status: str,
+    detail: Optional[str] = None,
+) -> Dict[str, Any]:
+    now_ms = int(time.time() * 1000)
+    payload: Dict[str, Any] = {
+        "id": str(tool_call_id or "").strip() or f"hardware:{now_ms}",
+        "type": activity_type,
+        "label": label,
+        "startedAt": now_ms,
+        "status": status,
+    }
+    if status != "active":
+        payload["completedAt"] = now_ms
+    clean_detail = " ".join(str(detail or "").split())
+    if clean_detail:
+        payload["detail"] = clean_detail[:500]
+    return payload
+
+
 @dataclass(slots=True)
 class DirectChatGenerationServices:
     thinking_step_payload: Callable[[int, str, Optional[str]], Dict[str, Any]]
@@ -935,16 +959,30 @@ def stream_provider_backed_direct_chat(
                             )
                             if tool_plan_running is not None:
                                 yield tool_plan_running
+                            tool_execution_environment = tool_trace_metadata.get("execution_environment")
+                            hardware_local_gateway = (
+                                connector_id == "hardware"
+                                and tool_execution_environment == "local_gateway"
+                            )
+                            tool_started_data = {
+                                "tool_name": tool_name,
+                                "capability_id": tool_trace_metadata.get("capability_id"),
+                                "connector_id": "hardware_runtime" if hardware_local_gateway else (connector_id or None),
+                                "execution_environment": tool_execution_environment,
+                                "args_preview": secret_redaction_service.sanitize_mapping(argument_payload),
+                            }
+                            if hardware_local_gateway:
+                                tool_started_data["agent_activity"] = _local_gateway_activity_payload(
+                                    tool_call_id=tool_call_id,
+                                    activity_type="hardware_running",
+                                    label="Running on your Mac",
+                                    status="active",
+                                    detail=str(tool_trace_metadata.get("capability_id") or tool_name or "").strip(),
+                                )
                             tool_started = _emit_trace_event(
                                 trace_context,
                                 event_type="tool.started",
-                                data={
-                                    "tool_name": tool_name,
-                                    "capability_id": tool_trace_metadata.get("capability_id"),
-                                    "connector_id": connector_id or None,
-                                    "execution_environment": tool_trace_metadata.get("execution_environment"),
-                                    "args_preview": secret_redaction_service.sanitize_mapping(argument_payload),
-                                },
+                                data=tool_started_data,
                                 persisted=True,
                                 item_id=tool_item_id,
                                 tool_call_id=tool_call_id,
@@ -955,7 +993,7 @@ def stream_provider_backed_direct_chat(
                                 trace_context,
                                 event_type="tool.progress",
                                 data={
-                                    "message": f"Running {tool_name}",
+                                    "message": "Running on your Mac" if hardware_local_gateway else f"Running {tool_name}",
                                     "percent": 0,
                                 },
                                 persisted=False,
@@ -1048,20 +1086,37 @@ def stream_provider_backed_direct_chat(
                                 )
                                 if trace_browser_screenshot is not None:
                                     yield trace_browser_screenshot
+                            completed_execution_environment = completed_trace_metadata.get("execution_environment")
+                            completed_hardware_local_gateway = (
+                                connector_id == "hardware"
+                                and completed_execution_environment == "local_gateway"
+                            )
+                            result_summary = str(completed_trace_metadata.get("result_summary") or tool_result_for_context or "").strip()
+                            tool_result_data = {
+                                "status": "ok",
+                                "summary": result_summary,
+                                "execution_environment": completed_execution_environment,
+                                "artifact_ids": (
+                                    [str((completed_trace_metadata.get("browser_screenshot") or {}).get("artifact_id") or "").strip()]
+                                    if isinstance(completed_trace_metadata.get("browser_screenshot"), dict)
+                                    and str((completed_trace_metadata.get("browser_screenshot") or {}).get("artifact_id") or "").strip()
+                                    else []
+                                ),
+                            }
+                            if completed_hardware_local_gateway:
+                                tool_result_data["connector_id"] = "hardware_runtime"
+                                tool_result_data["state"] = "completed"
+                                tool_result_data["agent_activity"] = _local_gateway_activity_payload(
+                                    tool_call_id=tool_call_id,
+                                    activity_type="done",
+                                    label="Done",
+                                    status="completed",
+                                    detail=result_summary,
+                                )
                             tool_result_event = _emit_trace_event(
                                 trace_context,
                                 event_type="tool.result",
-                                data={
-                                    "status": "ok",
-                                    "summary": str(completed_trace_metadata.get("result_summary") or tool_result_for_context or "").strip(),
-                                    "execution_environment": completed_trace_metadata.get("execution_environment"),
-                                    "artifact_ids": (
-                                        [str((completed_trace_metadata.get("browser_screenshot") or {}).get("artifact_id") or "").strip()]
-                                        if isinstance(completed_trace_metadata.get("browser_screenshot"), dict)
-                                        and str((completed_trace_metadata.get("browser_screenshot") or {}).get("artifact_id") or "").strip()
-                                        else []
-                                    ),
-                                },
+                                data=tool_result_data,
                                 persisted=True,
                                 tool_call_id=tool_call_id,
                             )

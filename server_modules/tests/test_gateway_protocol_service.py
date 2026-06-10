@@ -1,5 +1,8 @@
 import json
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+import threading
 
 from server_modules import gateway_protocol_service
 
@@ -138,6 +141,260 @@ class GatewayProtocolServiceTests(unittest.TestCase):
         with self.assertRaises(gateway_protocol_service.GatewayFrameValidationError) as raised:
             gateway_protocol_service._parse_frame("")
         self.assertEqual(raised.exception.error_code, "gateway_frame_invalid_json")
+
+    def test_connection_ready_probes_before_tool_dispatch(self) -> None:
+        connection = SimpleNamespace(
+            session_id="session-1",
+            is_stale=lambda: False,
+            send_request=AsyncMock(return_value={"ok": True, "payload": {"status": "ready"}}),
+        )
+
+        async def run_test() -> None:
+            ready = await gateway_protocol_service._connection_ready_for_tool_dispatch(
+                gateway_id="gateway-1",
+                connection=connection,
+            )
+
+            self.assertIs(ready, connection)
+            connection.send_request.assert_awaited_once()
+            kwargs = connection.send_request.await_args.kwargs
+            self.assertEqual(kwargs["message_type"], "gateway.probe")
+            self.assertEqual(kwargs["payload"], {"purpose": "pre_dispatch"})
+
+        import asyncio
+
+        asyncio.run(run_test())
+
+    def test_fresh_live_connection_waits_for_recent_inbound_frame(self) -> None:
+        calls = {"recent": 0}
+
+        def has_recent_inbound_frame() -> bool:
+            calls["recent"] += 1
+            return calls["recent"] >= 2
+
+        connection = SimpleNamespace(
+            session_id="session-1",
+            is_stale=lambda: False,
+            has_recent_inbound_frame=has_recent_inbound_frame,
+        )
+
+        async def run_test() -> None:
+            with (
+                patch(
+                    "server_modules.gateway_protocol_service._get_live_connection",
+                    return_value=connection,
+                ),
+                patch(
+                    "server_modules.gateway_protocol_service.asyncio.sleep",
+                    new=AsyncMock(),
+                ) as sleep_mock,
+            ):
+                ready = await gateway_protocol_service._fresh_live_connection(
+                    "gateway-1",
+                    require_recent_inbound=True,
+                )
+
+            self.assertIs(ready, connection)
+            self.assertGreaterEqual(calls["recent"], 2)
+            sleep_mock.assert_awaited()
+
+        import asyncio
+
+        asyncio.run(run_test())
+
+    def test_live_connection_send_frame_marshals_to_owner_loop(self) -> None:
+        import asyncio
+
+        class FakeWebSocket:
+            def __init__(self) -> None:
+                self.frames: list[str] = []
+                self.sent = threading.Event()
+
+            async def send_text(self, frame: str) -> None:
+                self.frames.append(str(frame))
+                self.sent.set()
+
+        websocket = FakeWebSocket()
+        ready = threading.Event()
+        stop = threading.Event()
+        holder: dict[str, gateway_protocol_service._LiveGatewayConnection] = {}
+
+        async def owner_loop() -> None:
+            connection = gateway_protocol_service._LiveGatewayConnection(
+                websocket=websocket,
+                gateway_id="gateway-1",
+                session_id="session-1",
+                scope={"tenant_id": "tenant-1", "workspace_id": "workspace-1"},
+            )
+            connection.start_writer()
+            holder["connection"] = connection
+            ready.set()
+            try:
+                while not stop.is_set():
+                    await asyncio.sleep(0.01)
+            finally:
+                connection.fail_pending("test complete")
+
+        thread = threading.Thread(target=lambda: asyncio.run(owner_loop()), daemon=True)
+        thread.start()
+        self.assertTrue(ready.wait(timeout=2))
+        connection = holder["connection"]
+
+        async def send_from_caller_loop() -> None:
+            await connection.send_frame({"kind": "request", "id": "frame-1", "type": "tool.invoke"})
+
+        try:
+            asyncio.run(send_from_caller_loop())
+            self.assertTrue(websocket.sent.wait(timeout=2))
+            self.assertEqual(json.loads(websocket.frames[-1])["id"], "frame-1")
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+
+    def test_dispatch_tool_invoke_receives_cross_loop_response(self) -> None:
+        import asyncio
+
+        class FakeWebSocket:
+            def __init__(self) -> None:
+                self.frames: list[str] = []
+                self.sent = threading.Event()
+                self.connection: gateway_protocol_service._LiveGatewayConnection | None = None
+
+            async def send_text(self, frame: str) -> None:
+                self.frames.append(str(frame))
+                self.sent.set()
+                payload = json.loads(frame)
+                if payload.get("type") != "tool.invoke" or self.connection is None:
+                    return
+
+                async def respond() -> None:
+                    await asyncio.sleep(0.01)
+                    assert self.connection is not None
+                    self.connection.resolve_response(
+                        {
+                            "kind": "response",
+                            "id": payload.get("id"),
+                            "ok": True,
+                            "payload": {
+                                "request_id": payload.get("id"),
+                                "run_id": "run-1",
+                                "capability_id": "shell.execute",
+                                "result": {"stdout": "hello from hardware\n"},
+                            },
+                        }
+                    )
+
+                asyncio.create_task(respond())
+
+        websocket = FakeWebSocket()
+        ready = threading.Event()
+        stop = threading.Event()
+        holder: dict[str, gateway_protocol_service._LiveGatewayConnection] = {}
+
+        async def owner_loop() -> None:
+            connection = gateway_protocol_service._LiveGatewayConnection(
+                websocket=websocket,
+                gateway_id="gateway-1",
+                session_id="session-1",
+                scope={"tenant_id": "tenant-1", "workspace_id": "workspace-1"},
+            )
+            connection.start_writer()
+            websocket.connection = connection
+            holder["connection"] = connection
+            ready.set()
+            try:
+                while not stop.is_set():
+                    await asyncio.sleep(0.01)
+            finally:
+                connection.fail_pending("test complete")
+
+        thread = threading.Thread(target=lambda: asyncio.run(owner_loop()), daemon=True)
+        thread.start()
+        self.assertTrue(ready.wait(timeout=2))
+        connection = holder["connection"]
+
+        async def dispatch_from_caller_loop() -> dict:
+            with (
+                patch(
+                    "server_modules.gateway_protocol_service._fresh_live_connection",
+                    new=AsyncMock(return_value=connection),
+                ),
+                patch(
+                    "server_modules.gateway_protocol_service.gateway_state_repository.get_gateway_registration",
+                    return_value={
+                        "tenant_id": "tenant-1",
+                        "workspace_id": "workspace-1",
+                        "device_id": "device-1",
+                    },
+                ),
+                patch("server_modules.gateway_protocol_service.assert_not_killed"),
+                patch("server_modules.gateway_protocol_service._enforce_gateway_quota_check"),
+                patch("server_modules.gateway_protocol_service._enforce_gateway_tool_execute_protocol_route"),
+                patch("server_modules.gateway_protocol_service._enforce_gateway_protocol_message_decision"),
+                patch("server_modules.gateway_protocol_service._enforce_gateway_protocol_request_frame"),
+                patch("server_modules.gateway_protocol_service.gateway_state_repository.record_gateway_event"),
+            ):
+                return await gateway_protocol_service.dispatch_tool_invoke(
+                    gateway_id="gateway-1",
+                    capability_id="shell.execute",
+                    arguments={"command": "echo hello from hardware"},
+                    run_id="run-1",
+                    trace_id="trace-1",
+                    workspace_id="workspace-1",
+                    timeout_seconds=2,
+                    request_id="request-1",
+                    runtime_access_mode="full_access",
+                    empyralis_approved=True,
+                    agent_scope="sage",
+                )
+
+        try:
+            result = asyncio.run(dispatch_from_caller_loop())
+            self.assertTrue(websocket.sent.wait(timeout=2))
+            self.assertEqual(json.loads(websocket.frames[-1])["type"], "tool.invoke")
+            self.assertEqual(result["result"]["stdout"], "hello from hardware\n")
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+
+    def test_unregister_live_connection_fails_pending_requests(self) -> None:
+        import asyncio
+
+        class FakeWebSocket:
+            async def send_text(self, frame: str) -> None:
+                return None
+
+        async def run_test() -> None:
+            loop = asyncio.get_running_loop()
+            connection = gateway_protocol_service._LiveGatewayConnection(
+                websocket=FakeWebSocket(),
+                gateway_id="gateway-1",
+                session_id="session-1",
+                scope={"tenant_id": "tenant-1", "workspace_id": "workspace-1"},
+            )
+            future: asyncio.Future[dict] = loop.create_future()
+            connection._pending_requests["request-1"] = gateway_protocol_service._PendingGatewayRequest(
+                message_type="tool.invoke",
+                future=future,
+                loop=loop,
+            )
+            gateway_protocol_service._register_live_connection(connection)
+            try:
+                gateway_protocol_service._unregister_live_connection(
+                    gateway_id="gateway-1",
+                    session_id="session-1",
+                    reason="gateway stale",
+                )
+                with self.assertRaisesRegex(RuntimeError, "gateway stale"):
+                    await asyncio.wait_for(future, timeout=1)
+                self.assertFalse(connection._pending_requests)
+                self.assertIsNone(gateway_protocol_service._get_live_connection("gateway-1"))
+            finally:
+                with gateway_protocol_service._LIVE_GATEWAY_CONNECTIONS_LOCK:
+                    gateway_protocol_service._LIVE_GATEWAY_CONNECTIONS_BY_GATEWAY.pop("gateway-1", None)
+                    gateway_protocol_service._LIVE_GATEWAY_CONNECTIONS_BY_SESSION.pop("session-1", None)
+
+        asyncio.run(run_test())
 
 
 if __name__ == "__main__":

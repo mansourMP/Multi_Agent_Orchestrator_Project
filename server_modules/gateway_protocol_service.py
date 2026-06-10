@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -13,7 +15,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 PROTOCOL_VERSION = "v1alpha2"
 SUPPORTED_PROTOCOL_VERSIONS = {"v1alpha2"}
-DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS = 15
+DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS = 120
 MAX_GATEWAY_FRAME_BYTES = 16 * 1024 * 1024
 MAX_GATEWAY_JSON_DEPTH = 32
 
@@ -37,6 +39,17 @@ from server_modules.gateway_quota_enforcement import (
 _LIVE_GATEWAY_CONNECTIONS_BY_GATEWAY: Dict[str, "_LiveGatewayConnection"] = {}
 _LIVE_GATEWAY_CONNECTIONS_BY_SESSION: Dict[str, "_LiveGatewayConnection"] = {}
 _LIVE_GATEWAY_CONNECTIONS_LOCK = threading.Lock()
+_LIVE_GATEWAY_STALE_SECONDS = (
+    gateway_registry_service.DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_SECONDS * 4
+) + 10
+_LIVE_GATEWAY_FRESH_INBOUND_MAX_AGE_SECONDS = float(
+    gateway_registry_service.DEFAULT_GATEWAY_FRESH_HEARTBEAT_SECONDS
+)
+_LIVE_GATEWAY_FRESH_INBOUND_WAIT_SECONDS = 130.0
+_LIVE_GATEWAY_RECONNECT_WAIT_SECONDS = 30.0
+_LIVE_GATEWAY_PROBE_TIMEOUT_SECONDS = 30
+_LIVE_GATEWAY_SEND_TIMEOUT_SECONDS = 90.0
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,6 +57,29 @@ class _PendingGatewayRequest:
     message_type: str
     future: asyncio.Future[Dict[str, Any]]
     loop: asyncio.AbstractEventLoop
+
+
+@dataclass
+class _QueuedGatewaySend:
+    frame: Dict[str, Any]
+    future: asyncio.Future[None]
+    loop: asyncio.AbstractEventLoop
+
+
+def _future_set_result_threadsafe(future: asyncio.Future[Any], loop: asyncio.AbstractEventLoop, value: Any) -> None:
+    if future.done() or loop.is_closed():
+        return
+    loop.call_soon_threadsafe(future.set_result, value)
+
+
+def _future_set_exception_threadsafe(
+    future: asyncio.Future[Any],
+    loop: asyncio.AbstractEventLoop,
+    exception: BaseException,
+) -> None:
+    if future.done() or loop.is_closed():
+        return
+    loop.call_soon_threadsafe(future.set_exception, exception)
 
 
 class GatewayFrameValidationError(ValueError):
@@ -272,7 +308,18 @@ class _LiveGatewayConnection:
         self._seen_inbound_frame_ids: set[str] = set()
         self._frame_response_cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self._send_lock = asyncio.Lock()
+        self._outbound_queue: Optional[asyncio.Queue[_QueuedGatewaySend]] = None
+        self._owner_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._owner_task: Optional[asyncio.Task[Any]] = None
+        self._writer_task: Optional[asyncio.Task[Any]] = None
         self._closed = False
+        self._last_inbound_monotonic = time.monotonic()
+
+    def start_writer(self) -> None:
+        self._owner_loop = asyncio.get_running_loop()
+        self._owner_task = asyncio.current_task()
+        self._outbound_queue = asyncio.Queue(maxsize=256)
+        self._writer_task = asyncio.create_task(self._outbound_writer_loop())
 
     async def send_request(
         self,
@@ -284,6 +331,8 @@ class _LiveGatewayConnection:
     ) -> Dict[str, Any]:
         if self._closed:
             raise RuntimeError("Gateway connection is no longer active.")
+        if self.is_stale():
+            raise RuntimeError("Gateway connection heartbeat is stale.")
         resolved_request_id = str(request_id or f"greq_{uuid.uuid4().hex}").strip()
         frame = {
             "kind": "request",
@@ -314,23 +363,172 @@ class _LiveGatewayConnection:
             message_type=str(message_type or "").strip() or "unknown",
             payload=frame,
         )
-        async with self._send_lock:
-            await self.websocket.send_json(frame)
+        await self.send_frame(frame)
         try:
             return await asyncio.wait_for(future, timeout=max(int(timeout_seconds or 0), 1))
         finally:
             self._pending_requests.pop(resolved_request_id, None)
 
+    async def send_frame(self, frame: Dict[str, Any]) -> None:
+        if self._closed:
+            raise RuntimeError("Gateway connection is no longer active.")
+        owner_loop = self._owner_loop
+        try:
+            caller_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            caller_loop = None
+        if owner_loop is None or caller_loop is owner_loop:
+            await self._write_frame_direct(frame)
+            return
+
+        if owner_loop is None or not owner_loop.is_running():
+            raise RuntimeError("Gateway websocket owner loop is not active.")
+        if caller_loop is None:
+            raise RuntimeError("Gateway websocket send requires an active caller event loop.")
+        future: asyncio.Future[None] = caller_loop.create_future()
+        item = _QueuedGatewaySend(frame=dict(frame or {}), future=future, loop=caller_loop)
+
+        def enqueue() -> None:
+            if self._closed:
+                _future_set_exception_threadsafe(
+                    item.future,
+                    item.loop,
+                    RuntimeError("Gateway connection is no longer active."),
+                )
+                return
+            if self._outbound_queue is None:
+                _future_set_exception_threadsafe(
+                    item.future,
+                    item.loop,
+                    RuntimeError("Gateway websocket outbound queue is not active."),
+                )
+                return
+            try:
+                self._outbound_queue.put_nowait(item)
+                _future_set_result_threadsafe(item.future, item.loop, None)
+            except asyncio.QueueFull:
+                _future_set_exception_threadsafe(
+                    item.future,
+                    item.loop,
+                    RuntimeError("Gateway websocket outbound queue is full."),
+                )
+
+        owner_loop.call_soon_threadsafe(enqueue)
+        try:
+            await asyncio.wait_for(future, timeout=_LIVE_GATEWAY_SEND_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError as exc:
+            self._fail_pending_threadsafe("Gateway websocket send timed out.")
+            raise RuntimeError("Gateway websocket send timed out.") from exc
+
+    async def wait_for_queued_send(self) -> _QueuedGatewaySend:
+        if self._outbound_queue is None:
+            raise RuntimeError("Gateway websocket outbound queue is not active.")
+        return await self._outbound_queue.get()
+
+    async def drain_queued_sends(self) -> None:
+        if self._outbound_queue is None:
+            return
+        while True:
+            try:
+                item = self._outbound_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            await self.write_queued_frame(item)
+            self._outbound_queue.task_done()
+
+    async def _outbound_writer_loop(self) -> None:
+        queue = self._outbound_queue
+        if queue is None:
+            return
+        try:
+            while not self._closed:
+                item = await queue.get()
+                try:
+                    await self.write_queued_frame(item)
+                finally:
+                    queue.task_done()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.fail_pending(str(exc) or "Gateway socket writer failed.")
+
+    async def write_queued_frame(self, item: _QueuedGatewaySend) -> None:
+        if self._closed:
+            _future_set_exception_threadsafe(
+                item.future,
+                item.loop,
+                RuntimeError("Gateway connection is no longer active."),
+            )
+            return
+        try:
+            await self._write_frame_direct(item.frame)
+        except Exception as exc:
+            message = str(exc) or "Gateway socket write failed."
+            _future_set_exception_threadsafe(item.future, item.loop, RuntimeError(message))
+            self.fail_pending(message)
+            raise
+        _future_set_result_threadsafe(item.future, item.loop, None)
+
+    def _fail_pending_threadsafe(self, reason: str) -> None:
+        owner_loop = self._owner_loop
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if owner_loop is not None and owner_loop is not current_loop:
+            owner_loop.call_soon_threadsafe(self.fail_pending, reason)
+            return
+        self.fail_pending(reason)
+
+    async def _write_frame_direct(self, frame: Dict[str, Any]) -> None:
+        frame_type = str(frame.get("type") or frame.get("kind") or "unknown")
+        frame_id = str(frame.get("id") or "")
+        lock_acquired = False
+        try:
+            encoded = json.dumps(dict(frame or {}), ensure_ascii=False, separators=(",", ":"), default=str)
+            await asyncio.wait_for(self._send_lock.acquire(), timeout=5.0)
+            lock_acquired = True
+            await asyncio.wait_for(
+                self.websocket.send_text(encoded),
+                timeout=_LIVE_GATEWAY_SEND_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            _LOGGER.warning(
+                "Gateway websocket send timeout gateway_id=%s session_id=%s frame_type=%s frame_id=%s lock_acquired=%s",
+                self.gateway_id,
+                self.session_id,
+                frame_type,
+                frame_id,
+                lock_acquired,
+            )
+            self.fail_pending("Gateway websocket send timed out.")
+            raise
+        except Exception as exc:
+            _LOGGER.warning(
+                "Gateway websocket send failed gateway_id=%s session_id=%s frame_type=%s frame_id=%s error=%s",
+                self.gateway_id,
+                self.session_id,
+                frame_type,
+                frame_id,
+                str(exc) or type(exc).__name__,
+            )
+            self.fail_pending(str(exc) or "Gateway socket write failed.")
+            raise
+        finally:
+            if lock_acquired:
+                self._send_lock.release()
+
     def resolve_response(self, frame: Dict[str, Any]) -> str:
+        self.mark_inbound_frame()
         request_id = str(frame.get("id") or "").strip()
         pending = self._pending_requests.pop(request_id, None)
         if pending is None:
             return "response"
-        if not pending.future.done():
-            pending.loop.call_soon_threadsafe(pending.future.set_result, dict(frame or {}))
+        _future_set_result_threadsafe(pending.future, pending.loop, dict(frame or {}))
         return pending.message_type
 
     def remember_inbound_frame_id(self, frame_id: Any) -> bool:
+        self.mark_inbound_frame()
         normalized = str(frame_id or "").strip()
         if not normalized:
             return True
@@ -352,15 +550,69 @@ class _LiveGatewayConnection:
     def get_cached_frame_response(self, frame_id: str) -> Optional[Dict[str, Any]]:
         return self._frame_response_cache.get(frame_id)
 
+    def mark_inbound_frame(self) -> None:
+        self._last_inbound_monotonic = time.monotonic()
+
+    def last_inbound_age_seconds(self) -> float:
+        return max(time.monotonic() - self._last_inbound_monotonic, 0.0)
+
+    def has_recent_inbound_frame(self) -> bool:
+        return self.last_inbound_age_seconds() <= _LIVE_GATEWAY_FRESH_INBOUND_MAX_AGE_SECONDS
+
+    def is_stale(self) -> bool:
+        if self._closed:
+            return True
+        return (time.monotonic() - self._last_inbound_monotonic) > _LIVE_GATEWAY_STALE_SECONDS
+
+    async def close_stale(self, reason: str) -> None:
+        self.fail_pending(reason)
+        try:
+            await self.websocket.close(code=4408, reason=reason[:120])
+        except Exception:
+            pass
+
     def fail_pending(self, reason: str) -> None:
         if self._closed:
             return
         self._closed = True
+        writer_task = self._writer_task
+        if writer_task is not None and not writer_task.done():
+            current_loop: asyncio.AbstractEventLoop | None = None
+            current_task: asyncio.Task[Any] | None = None
+            try:
+                current_loop = asyncio.get_running_loop()
+                current_task = asyncio.current_task()
+            except RuntimeError:
+                current_loop = None
+                current_task = None
+
+            if writer_task is not current_task:
+                owner_loop = self._owner_loop
+
+                def _cancel_writer() -> None:
+                    if not writer_task.done():
+                        writer_task.cancel()
+
+                if owner_loop is not None and owner_loop.is_running() and current_loop is not owner_loop:
+                    owner_loop.call_soon_threadsafe(_cancel_writer)
+                else:
+                    _cancel_writer()
+        outbound_queue = self._outbound_queue
+        if outbound_queue is not None:
+            while True:
+                try:
+                    item = outbound_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                _future_set_exception_threadsafe(
+                    item.future,
+                    item.loop,
+                    RuntimeError(str(reason or "Gateway connection closed.")),
+                )
         for pending in list(self._pending_requests.values()):
-            if pending.future.done():
-                continue
-            pending.loop.call_soon_threadsafe(
-                pending.future.set_exception,
+            _future_set_exception_threadsafe(
+                pending.future,
+                pending.loop,
                 RuntimeError(str(reason or "Gateway connection closed.")),
             )
         self._pending_requests.clear()
@@ -387,8 +639,126 @@ def _get_live_connection(gateway_id: str) -> Optional[_LiveGatewayConnection]:
         return _LIVE_GATEWAY_CONNECTIONS_BY_GATEWAY.get(str(gateway_id or "").strip())
 
 
+def _connection_is_stale(connection: Any) -> bool:
+    checker = getattr(connection, "is_stale", None)
+    if callable(checker):
+        return bool(checker())
+    return False
+
+
+def _connection_has_recent_inbound_frame(connection: Any) -> bool:
+    checker = getattr(connection, "has_recent_inbound_frame", None)
+    if callable(checker):
+        return bool(checker())
+    age_getter = getattr(connection, "last_inbound_age_seconds", None)
+    if callable(age_getter):
+        try:
+            return float(age_getter()) <= _LIVE_GATEWAY_FRESH_INBOUND_MAX_AGE_SECONDS
+        except Exception:
+            return False
+    return True
+
+
 def gateway_connection_is_live(gateway_id: str) -> bool:
     return _get_live_connection(gateway_id) is not None
+
+
+async def _fresh_live_connection(
+    gateway_id: str,
+    *,
+    require_recent_inbound: bool = False,
+) -> _LiveGatewayConnection:
+    connection = _get_live_connection(gateway_id)
+    if connection is None:
+        raise ValueError("Gateway is not currently connected.")
+    if require_recent_inbound:
+        if await _wait_for_recent_inbound_frame(connection):
+            return connection
+        return await _close_and_wait_for_fresh_connection(
+            gateway_id=gateway_id,
+            connection=connection,
+            reason="gateway heartbeat not recent before dispatch",
+        )
+    if not _connection_is_stale(connection):
+        return connection
+    return await _close_and_wait_for_fresh_connection(
+        gateway_id=gateway_id,
+        connection=connection,
+        reason="gateway heartbeat stale before dispatch",
+    )
+
+
+async def _wait_for_recent_inbound_frame(connection: _LiveGatewayConnection) -> bool:
+    deadline = time.monotonic() + _LIVE_GATEWAY_FRESH_INBOUND_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if _connection_has_recent_inbound_frame(connection):
+            return True
+        await asyncio.sleep(0.2)
+    return _connection_has_recent_inbound_frame(connection)
+
+
+async def _close_and_wait_for_fresh_connection(
+    *,
+    gateway_id: str,
+    connection: _LiveGatewayConnection,
+    reason: str,
+) -> _LiveGatewayConnection:
+    previous_session_id = connection.session_id
+    await connection.close_stale(reason)
+    _unregister_live_connection(
+        gateway_id=gateway_id,
+        session_id=previous_session_id,
+        reason=reason,
+    )
+    deadline = time.monotonic() + _LIVE_GATEWAY_RECONNECT_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        candidate = _get_live_connection(gateway_id)
+        if (
+            candidate is not None
+            and candidate.session_id != previous_session_id
+            and not _connection_is_stale(candidate)
+            and _connection_has_recent_inbound_frame(candidate)
+        ):
+            return candidate
+        await asyncio.sleep(0.2)
+    raise ValueError("Gateway connection is stale and has not reconnected yet.")
+
+
+async def _probe_live_connection(connection: _LiveGatewayConnection) -> None:
+    response = await connection.send_request(
+        message_type="gateway.probe",
+        payload={"purpose": "pre_dispatch"},
+        timeout_seconds=_LIVE_GATEWAY_PROBE_TIMEOUT_SECONDS,
+        request_id=f"gprobe_{uuid.uuid4().hex}",
+    )
+    if not bool(response.get("ok")):
+        error = dict(response.get("error") or {})
+        raise RuntimeError(
+            str(error.get("message") or "Gateway probe failed.").strip()
+            or "Gateway probe failed."
+        )
+
+
+async def _connection_ready_for_tool_dispatch(
+    *,
+    gateway_id: str,
+    connection: _LiveGatewayConnection,
+) -> _LiveGatewayConnection:
+    if _connection_is_stale(connection):
+        return await _close_and_wait_for_fresh_connection(
+            gateway_id=gateway_id,
+            connection=connection,
+            reason="gateway heartbeat stale before dispatch",
+        )
+    try:
+        await _probe_live_connection(connection)
+        return connection
+    except Exception:
+        return await _close_and_wait_for_fresh_connection(
+            gateway_id=gateway_id,
+            connection=connection,
+            reason="gateway probe failed before dispatch",
+        )
 
 
 async def dispatch_tool_invoke(
@@ -407,9 +777,7 @@ async def dispatch_tool_invoke(
     policy: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     assert_not_killed(gateway_id=gateway_id, trace_id=trace_id)
-    connection = _get_live_connection(gateway_id)
-    if connection is None:
-        raise ValueError("Gateway is not currently connected.")
+    connection = await _fresh_live_connection(gateway_id, require_recent_inbound=True)
     registration = gateway_state_repository.get_gateway_registration(gateway_id) or {}
     _enforce_gateway_quota_check(
         gateway_id=str(gateway_id or "").strip(),
@@ -1174,6 +1542,16 @@ async def handle_gateway_websocket(
     connection: Optional[_LiveGatewayConnection] = None
     background_tasks: set[asyncio.Task[Any]] = set()
 
+    async def _send_frame(frame: Dict[str, Any]) -> None:
+        if connection is not None:
+            await connection.send_frame(frame)
+            return
+        await websocket.send_json(frame)
+
+    async def _drain_connection_outbound_queue() -> None:
+        if connection is not None:
+            await connection.drain_queued_sends()
+
     def _track_background_task(task: asyncio.Task[Any]) -> None:
         background_tasks.add(task)
         task.add_done_callback(background_tasks.discard)
@@ -1279,7 +1657,7 @@ async def handle_gateway_websocket(
             ack=first_ack,
         )
         if str(first_frame.get("kind") or "").strip() != "request" or _normalized_request_type(first_frame) != "gateway.connect":
-            await websocket.send_json(
+            await _send_frame(
                 _response_frame(
                     str(first_frame.get("id") or "connect"),
                     ok=False,
@@ -1298,7 +1676,7 @@ async def handle_gateway_websocket(
             return
         frame_scope = first_frame.get("scope") if isinstance(first_frame.get("scope"), dict) else {}
         if not _scope_matches_registration(frame_scope, registration):
-            await websocket.send_json(
+            await _send_frame(
                 _response_frame(
                     str(first_frame.get("id") or "connect"),
                     ok=False,
@@ -1320,7 +1698,7 @@ async def handle_gateway_websocket(
         client_version = _connect_frame_protocol_version(first_frame, connect_payload)
         version_error = _validate_client_protocol_version(client_version)
         if version_error:
-            await websocket.send_json(
+            await _send_frame(
                 _response_frame(
                     str(first_frame.get("id") or "connect"),
                     ok=False,
@@ -1384,13 +1762,14 @@ async def handle_gateway_websocket(
             session_id=session_id,
             scope=scope,
         )
+        connection.start_writer()
         _register_live_connection(connection)
         connect_response = _response_frame(
             str(first_frame.get("id") or "connect"),
             ok=True,
             payload={"accepted": True, "protocol_version": PROTOCOL_VERSION},
         )
-        await websocket.send_json(connect_response)
+        await _send_frame(connect_response)
         if connection is not None:
             connection.cache_frame_response(str(first_frame.get("id") or "").strip(), connect_response)
         server_event_seq += 1
@@ -1416,7 +1795,7 @@ async def handle_gateway_websocket(
             seq=server_event_seq,
             ack=first_ack,
         )
-        await websocket.send_json(hello_frame)
+        await _send_frame(hello_frame)
         server_event_seq += 1
         presence_frame = _event_frame(
             "gateway.presence",
@@ -1435,7 +1814,7 @@ async def handle_gateway_websocket(
             seq=server_event_seq,
             ack=first_ack,
         )
-        await websocket.send_json(presence_frame)
+        await _send_frame(presence_frame)
         await gateway_activity_service.emit_gateway_presence_activity(
             registration,
             action="gateway_connected",
@@ -1458,7 +1837,7 @@ async def handle_gateway_websocket(
                     ack=frame_ack,
                 )
             except GatewayFrameValidationError as exc:
-                await websocket.send_json(
+                await _send_frame(
                     _response_frame(
                         "invalid",
                         ok=False,
@@ -1476,7 +1855,7 @@ async def handle_gateway_websocket(
                 gateway_state_repository.mark_gateway_session_disconnected(session_id, reason=exc.error_code)
                 break
             if frame_seq is not None and last_client_seq is not None and frame_seq <= last_client_seq:
-                await websocket.send_json(
+                await _send_frame(
                     _response_frame(
                         str(frame.get("id") or "replayed"),
                         ok=False,
@@ -1505,9 +1884,9 @@ async def handle_gateway_websocket(
                 frame_id = str(frame.get("id") or "").strip()
                 cached = connection.get_cached_frame_response(frame_id)
                 if cached is not None:
-                    await websocket.send_json(cached)
+                    await _send_frame(cached)
                 else:
-                    await websocket.send_json(
+                    await _send_frame(
                         _response_frame(
                             frame_id or "replayed",
                             ok=False,
@@ -1580,7 +1959,7 @@ async def handle_gateway_websocket(
                     continue
                 continue
             if frame_kind != "request":
-                await websocket.send_json(
+                await _send_frame(
                     _response_frame(
                         str(frame.get("id") or "invalid"),
                         ok=False,
@@ -1601,7 +1980,7 @@ async def handle_gateway_websocket(
                     session_id,
                     reason="binding_validation_failed",
                 )
-                await websocket.send_json(
+                await _send_frame(
                     _response_frame(
                         str(frame.get("id") or "binding"),
                         ok=False,
@@ -1650,9 +2029,10 @@ async def handle_gateway_websocket(
                         "heartbeat_interval_seconds": gateway_registry_service.DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_SECONDS,
                     },
                 )
-                await websocket.send_json(heartbeat_response)
+                await _send_frame(heartbeat_response)
                 if connection is not None:
                     connection.cache_frame_response(str(frame.get("id") or "").strip(), heartbeat_response)
+                await _drain_connection_outbound_queue()
                 continue
             if message_type == "gateway.state.update":
                 previous_health_state = str(registration.get("metadata", {}).get("health_state") or "").strip().lower()
@@ -1724,9 +2104,10 @@ async def handle_gateway_websocket(
                     ok=True,
                     payload={"updated": True},
                 )
-                await websocket.send_json(state_update_response)
+                await _send_frame(state_update_response)
                 if connection is not None:
                     connection.cache_frame_response(str(frame.get("id") or "").strip(), state_update_response)
+                await _drain_connection_outbound_queue()
                 server_event_seq += 1
                 state_event = _event_frame(
                     "gateway.presence",
@@ -1749,7 +2130,7 @@ async def handle_gateway_websocket(
                     seq=server_event_seq,
                     ack=frame_ack,
                 )
-                await websocket.send_json(state_event)
+                await _send_frame(state_event)
                 continue
             if message_type == "gateway.disconnect":
                 _enforce_gateway_session_mutation(
@@ -1775,7 +2156,7 @@ async def handle_gateway_websocket(
                     ok=True,
                     payload={"disconnected": True},
                 )
-                await websocket.send_json(disconnect_response)
+                await _send_frame(disconnect_response)
                 if connection is not None:
                     connection.cache_frame_response(str(frame.get("id") or "").strip(), disconnect_response)
                 disconnected = True
@@ -1786,7 +2167,7 @@ async def handle_gateway_websocket(
                 ok=False,
                 error={"code": "unsupported_message_type", "message": f"Unsupported message type: {message_type}"},
             )
-            await websocket.send_json(unsupported_response)
+            await _send_frame(unsupported_response)
             if connection is not None:
                 connection.cache_frame_response(str(frame.get("id") or "").strip(), unsupported_response)
     except WebSocketDisconnect:

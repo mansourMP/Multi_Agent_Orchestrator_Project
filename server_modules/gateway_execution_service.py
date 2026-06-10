@@ -59,6 +59,17 @@ def _gateway_supervisor_capability(
 ) -> tuple[str, Dict[str, Any]]:
     normalized = str(capability_id or "").strip()
     args = dict(arguments or {})
+    if normalized == "shell.execute":
+        params = args.get("params") if isinstance(args.get("params"), dict) else {}
+        nested_arguments = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
+        command = _text(
+            args.get("command")
+            or params.get("command")
+            or nested_arguments.get("command")
+        )
+        if command:
+            args = {"command": command}
+        return normalized, args
     if normalized == "filesystem.read":
         args.setdefault("mode", "read")
         return "filesystem.read_write", args
@@ -618,25 +629,31 @@ async def execute_tool_via_gateway(
         "run_id": str(response.get("run_id") or run_id).strip(),
         "result": result,
     }
-    await gateway_activity_service.append_gateway_activity(
-        registration,
-        action="gateway_tool_executed",
-        title="Gateway tool executed",
-        summary=f"Executed {capability_id} through the paired local gateway.",
-        status="completed",
-        payload=secret_redaction_service.sanitize_mapping(activity_payload),
-        trace_id=str(trace_id or "").strip() or None,
-    )
-    gateway_transparency_service.emit_gateway_action_event(
-        event_type="gateway_action_completed",
-        title=f"Gateway action completed: {_cap}",
-        summary=f"Completed {_cap} through gateway {_gw}",
-        status="completed",
-        trace_id=_tid,
-        workspace_id=_ws,
-        gateway_id=_gw,
-        capability_id=_cap,
-    )
+    try:
+        await gateway_activity_service.append_gateway_activity(
+            registration,
+            action="gateway_tool_executed",
+            title="Gateway tool executed",
+            summary=f"Executed {capability_id} through the paired local gateway.",
+            status="completed",
+            payload=secret_redaction_service.sanitize_mapping(activity_payload),
+            trace_id=str(trace_id or "").strip() or None,
+        )
+    except Exception:
+        pass
+    try:
+        gateway_transparency_service.emit_gateway_action_event(
+            event_type="gateway_action_completed",
+            title=f"Gateway action completed: {_cap}",
+            summary=f"Completed {_cap} through gateway {_gw}",
+            status="completed",
+            trace_id=_tid,
+            workspace_id=_ws,
+            gateway_id=_gw,
+            capability_id=_cap,
+        )
+    except Exception:
+        pass
     return {
         "gateway_id": _gw,
         "device_id": str(registration.get("device_id") or "").strip(),

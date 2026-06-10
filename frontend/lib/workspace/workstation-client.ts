@@ -136,6 +136,7 @@ export type ConnectionCatalogItem = Record<string, unknown> & {
 export type ConnectionStatusItem = ConnectionCatalogItem & {
   connected?: boolean | null;
   configured?: boolean | null;
+  display_state?: 'connected' | 'connectable' | 'requires_setup' | 'requires_agent_computer' | 'unavailable' | string | null;
   test_status?: string | null;
   health_status?: string | null;
   selected_gateway_id?: string | null;

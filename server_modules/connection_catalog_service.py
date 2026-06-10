@@ -33,6 +33,11 @@ LAUNCH_LOCKED = "locked"
 _USABLE_LAUNCH_STATUSES = {LAUNCH_LIVE, LAUNCH_LIVE_WHEN_CONFIGURED}
 _GENERIC_CONNECTION_TEST_RUNNER = "not_implemented"
 _OAUTH_SETUP_KINDS = {"oauth", "oauth_or_app_install", "oauth_mailbox"}
+DISPLAY_CONNECTED = "connected"
+DISPLAY_CONNECTABLE = "connectable"
+DISPLAY_REQUIRES_SETUP = "requires_setup"
+DISPLAY_REQUIRES_AGENT_COMPUTER = "requires_agent_computer"
+DISPLAY_UNAVAILABLE = "unavailable"
 
 
 def _text(value: Any, fallback: str = "") -> str:
@@ -1367,6 +1372,28 @@ def _next_action(
     return "connect" if item.get("setup_available") else "locked"
 
 
+def _display_state(
+    item: Dict[str, Any],
+    *,
+    connected: bool,
+    selected_gateway: Optional[Dict[str, Any]],
+    selected_gateway_online: bool,
+    health_status: str,
+    next_action: str,
+) -> str:
+    if connected:
+        return DISPLAY_CONNECTED
+    if _token(item.get("launch_status")) not in _USABLE_LAUNCH_STATUSES or not bool(item.get("runtime_usable")):
+        return DISPLAY_UNAVAILABLE
+    if bool(item.get("requires_gateway")) and (not selected_gateway or not selected_gateway_online):
+        return DISPLAY_REQUIRES_AGENT_COMPUTER
+    if not bool(item.get("setup_available")):
+        return DISPLAY_REQUIRES_SETUP if _token(health_status) == "setup_missing" else DISPLAY_UNAVAILABLE
+    if _token(next_action) == "connect":
+        return DISPLAY_CONNECTABLE
+    return DISPLAY_REQUIRES_SETUP
+
+
 def _oauth_setup_unconfigured(item: Dict[str, Any]) -> bool:
     if _token(item.get("setup_kind")) not in _OAUTH_SETUP_KINDS:
         return False
@@ -1460,10 +1487,19 @@ def status_items(
             selected_gateway=selected_gateway,
             selected_gateway_online=selected_gateway_online,
         )
+        display_state = _display_state(
+            effective_item,
+            connected=connected,
+            selected_gateway=selected_gateway,
+            selected_gateway_online=selected_gateway_online,
+            health_status=health_status,
+            next_action=next_action,
+        )
         payload = deepcopy(effective_item)
         payload.update({
             "connected": connected,
             "configured": configured,
+            "display_state": display_state,
             "test_status": test_status,
             "health_status": health_status,
             "selected_gateway_id": selected_gateway_id_value,

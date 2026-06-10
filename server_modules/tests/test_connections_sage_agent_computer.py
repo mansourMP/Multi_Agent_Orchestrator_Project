@@ -477,6 +477,7 @@ def test_connection_status_does_not_auto_select_gateway(monkeypatch):
     assert item["gateway_count"] == 2
     assert item["selected_gateway_id"] is None
     assert item["connected"] is False
+    assert item["display_state"] == "connectable"
     assert item["online_gateway_count"] == 2
     assert item["online_gateway_candidate"] is None
 
@@ -559,6 +560,7 @@ def test_connection_status_uses_persisted_selected_gateway(monkeypatch):
     assert item["id"] == "agent_computer"
     assert item["selected_gateway_id"] == "gateway-2"
     assert item["connected"] is True
+    assert item["display_state"] == "connected"
 
 
 def test_connection_status_treats_fresh_active_gateway_as_online(monkeypatch):
@@ -696,7 +698,9 @@ def test_personal_channel_status_does_not_advertise_dead_generic_test(monkeypatc
     assert by_id["telegram_personal"]["configured"] is True
     assert by_id["telegram_personal"]["connected"] is False
     assert by_id["telegram_personal"]["next_action"] == "connect"
+    assert by_id["telegram_personal"]["display_state"] == "connectable"
     assert by_id["whatsapp_personal"]["next_action"] == "connect"
+    assert by_id["whatsapp_personal"]["display_state"] == "connectable"
 
 
 def test_sage_channel_catalog_exposes_cloud_telegram_bot_without_agent_computer():
@@ -711,6 +715,36 @@ def test_sage_channel_catalog_exposes_cloud_telegram_bot_without_agent_computer(
     assert by_id["telegram_bot"]["auth_required_fields"] == ["bot_token", "chat_id"]
     assert "telegram_personal" in by_id
     assert by_id["telegram_personal"]["requires_gateway"] is True
+
+
+def test_sage_channel_status_marks_gateway_dependent_channels_from_backend(monkeypatch):
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda workspace_id, tenant_id=None, user_id=None, include_revoked=False: [],
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.sage_agent_computer_selection_service,
+        "get_selection",
+        lambda workspace_id, user_id: None,
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.runtime_common,
+        "list_vault_connectors",
+        lambda workspace_id: [],
+    )
+
+    payload = connection_catalog_service.list_status_payload(
+        workspace_id="ws-1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        surface="sage",
+    )
+
+    by_id = {item["id"]: item for item in payload["items"]}
+    assert by_id["telegram_personal"]["display_state"] == "requires_agent_computer"
+    assert by_id["whatsapp_personal"]["display_state"] == "requires_agent_computer"
+    assert by_id["signal_personal"]["display_state"] == "unavailable"
 
 
 def test_connection_catalog_exposes_launch_contract_without_ui_side_lock_lists():
@@ -825,6 +859,7 @@ def test_oauth_status_locks_setup_when_provider_credentials_are_missing(monkeypa
     assert google["setup_available"] is False
     assert google["next_action"] == "locked"
     assert google["health_status"] == "setup_missing"
+    assert google["display_state"] == "requires_setup"
 
 
 def test_oauth_status_allows_setup_when_provider_credentials_exist(monkeypatch):
@@ -859,6 +894,7 @@ def test_oauth_status_allows_setup_when_provider_credentials_exist(monkeypatch):
     assert github["setup_available"] is True
     assert github["next_action"] == "connect"
     assert github["health_status"] == "not_configured"
+    assert github["display_state"] == "connectable"
 
 
 @pytest.mark.anyio

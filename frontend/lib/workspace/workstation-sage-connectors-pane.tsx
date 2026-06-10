@@ -1056,98 +1056,11 @@ const CONNECTOR_AUTH_FIELD_FALLBACKS: Record<string, string[]> = {
 
 const CONNECTOR_STATIC_LOCKED_IDS = new Set<string>();
 
-const CONSUMER_APP_CARD_IDS = new Set([
-  'gmail',
-  'google_calendar',
-  'drive',
-  'microsoft_365',
-  'github',
-  'notion',
-  'linear',
-  'dropbox',
-  'figma',
-  'todoist',
-  'airtable',
-  'canva',
-  'asana',
-  'hubspot',
-  'zoom',
-  'calendly',
-  'clickup',
-  'jira',
-  'stripe',
-  'salesforce',
-  'webflow',
-  'monday',
-  'box',
-  'gitlab',
-  'bitbucket',
-  'confluence',
-  'miro',
-  'mailchimp',
-  'pipedrive',
-  'intercom',
-  'docusign',
-  'square',
-  'typeform',
-  'quickbooks',
-  'xero',
-  'freshbooks',
-  'vercel',
-  'instagram_business',
-]);
-
 const TECHNICAL_APP_CARD_IDS = new Set([
   's3',
   'smtp',
   'wechat_work',
   'webhook',
-]);
-
-const OAUTH_READY_APP_CARD_IDS = new Set([
-  'gmail',
-  'google_calendar',
-  'drive',
-  'microsoft_365',
-  'github',
-  'notion',
-  'linear',
-  'dropbox',
-  'figma',
-  'todoist',
-  'airtable',
-  'canva',
-  'asana',
-  'hubspot',
-  'zoom',
-  'calendly',
-  'clickup',
-  'jira',
-  'stripe',
-  'salesforce',
-  'webflow',
-  'monday',
-  'box',
-  'gitlab',
-  'bitbucket',
-  'confluence',
-  'miro',
-  'mailchimp',
-  'pipedrive',
-  'intercom',
-  'docusign',
-  'square',
-  'typeform',
-  'quickbooks',
-  'xero',
-  'freshbooks',
-  'vercel',
-  'slack',
-]);
-
-const CLOUD_CHANNEL_INSTALL_CARD_IDS = new Set([
-  'slack',
-  'discord_bot',
 ]);
 
 const PROVIDER_MANAGED_CHANNEL_CARD_IDS = new Set([
@@ -3088,9 +3001,30 @@ export function WorkstationSageConnectorsPane({
     return connectionStatusById.get(readString(record.id).toLowerCase()) ?? null;
   }
 
+  function connectionDisplayState(item: ConnectionStatusItem | null): string {
+    return readString(item?.display_state).toLowerCase();
+  }
+
+  function connectionIsConnectable(item: ConnectionStatusItem | null): boolean {
+    return connectionDisplayState(item) === 'connectable';
+  }
+
+  function connectionUsesManagedSetup(item: ConnectionStatusItem | null): boolean {
+    const setupKind = readString(item?.setup_kind).toLowerCase();
+    return setupKind === 'oauth'
+      || setupKind === 'oauth_or_app_install'
+      || setupKind === 'oauth_mailbox';
+  }
+
   function connectionLaunchLocked(item: ConnectionStatusItem | null): boolean {
     if (!item) {
       return false;
+    }
+    const displayState = connectionDisplayState(item);
+    if (displayState) {
+      return displayState === 'requires_setup'
+        || displayState === 'requires_agent_computer'
+        || displayState === 'unavailable';
     }
     const launchStatus = readString(item.launch_status).toLowerCase();
     const nextAction = readString(item.next_action).toLowerCase();
@@ -3103,8 +3037,15 @@ export function WorkstationSageConnectorsPane({
   }
 
   function connectionLockedLabel(item: ConnectionStatusItem | null, fallback: string): string {
-    if (item?.requires_gateway) {
+    const displayState = connectionDisplayState(item);
+    if (displayState === 'requires_agent_computer') {
       return 'Requires Agent Computer';
+    }
+    if (displayState === 'requires_setup') {
+      return 'Requires setup';
+    }
+    if (displayState === 'unavailable') {
+      return 'Unavailable';
     }
     const launchStatus = readString(item?.launch_status).toLowerCase();
     if (launchStatus === 'partial') {
@@ -3118,11 +3059,10 @@ export function WorkstationSageConnectorsPane({
 
   function connectorActionLabel(record: ConnectorCardRecord): string | null {
     const statusItem = connectionStatusForConnector(record);
+    if (connectionIsConnectable(statusItem)) {
+      return 'Connect';
+    }
     if (statusItem) {
-      const nextAction = readString(statusItem.next_action).toLowerCase();
-      if (nextAction === 'connect') {
-        return 'Connect';
-      }
       return null;
     }
     return null;
@@ -3132,17 +3072,7 @@ export function WorkstationSageConnectorsPane({
     if (record.connected || statusItem?.connected === true) {
       return null;
     }
-    const nextAction = readString(statusItem?.next_action).toLowerCase();
-    const setupCanStart = Boolean(statusItem)
-      && statusItem?.setup_available !== false
-      && nextAction === 'connect';
-    if (CONSUMER_APP_CARD_IDS.has(record.id)) {
-      return OAUTH_READY_APP_CARD_IDS.has(record.id) && setupCanStart ? 'oauth_ready' : null;
-    }
-    if (CLOUD_CHANNEL_INSTALL_CARD_IDS.has(record.id)) {
-      return OAUTH_READY_APP_CARD_IDS.has(record.id) && setupCanStart ? 'oauth_ready' : null;
-    }
-    return null;
+    return connectionIsConnectable(statusItem) && connectionUsesManagedSetup(statusItem) ? 'oauth_ready' : null;
   }
 
   function consumerSetupMessage(record: ConnectorCardRecord, setupState: ConsumerSetupState | null): string | null {
@@ -3190,13 +3120,9 @@ export function WorkstationSageConnectorsPane({
     const fallbackConnectionId = readString(record.definition.connectorIds?.[0]) || record.id;
     const connectionId = readString(statusItem?.id) || fallbackConnectionId || null;
     const opensAdvancedSetup = record.id === 'webhook';
-    const oauthManaged = OAUTH_READY_APP_CARD_IDS.has(record.id)
-      || OAUTH_READY_APP_CARD_IDS.has(fallbackConnectionId);
     const locked = connectionLaunchLocked(statusItem)
-      || (oauthManaged && !statusItem)
       || CONNECTOR_STATIC_LOCKED_IDS.has(record.id)
       || CONNECTOR_STATIC_LOCKED_IDS.has(fallbackConnectionId);
-    const nextAction = readString(statusItem?.next_action).toLowerCase();
     const connectionProvider = readString(statusItem?.vault_provider)
       || readString(statusItem?.account_provider)
       || readString(statusItem?.connector_id)
@@ -3233,7 +3159,7 @@ export function WorkstationSageConnectorsPane({
       actionLabel: locked ? null : actionLabel,
       actionTarget: opensAdvancedSetup
         ? 'advanced'
-        : setupState === 'oauth_ready' || canCredentialSetup || (connectionId && nextAction === 'connect') ? 'connection' : 'close',
+        : setupState === 'oauth_ready' || canCredentialSetup || (connectionId && connectionIsConnectable(statusItem)) ? 'connection' : 'close',
       connectionId,
       connectionProvider,
       connectionAuthFields: effectiveAuthFields,

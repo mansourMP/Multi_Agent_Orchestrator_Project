@@ -25,6 +25,7 @@ const nextConfig: NextConfig = {
       '.next/server/pages-manifest.json',
       '.next/server/server-reference-manifest.js',
       '.next/server/server-reference-manifest.json',
+      '../scripts/install-agent-computer.sh',
     ],
   },
   experimental: {

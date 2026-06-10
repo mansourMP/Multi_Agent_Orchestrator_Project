@@ -1,28 +1,38 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
+import { controlPlaneBaseUrl } from '@/lib/server/control-plane-base-url';
 
 export const dynamic = 'force-dynamic';
-export const runtime = 'nodejs';
 
-const installerCandidates = [
-  path.resolve(process.cwd(), '..', 'scripts', 'install-agent-computer.sh'),
-  path.resolve(process.cwd(), 'scripts', 'install-agent-computer.sh'),
-];
+const INSTALLER_RAW_URL = 'https://raw.githubusercontent.com/mansourMP/Multi_Agent_Orchestrator_Project/main/scripts/install-agent-computer.sh';
+
+function installerResponse(script: string): Response {
+  return new Response(script, {
+    status: 200,
+    headers: {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+    },
+  });
+}
 
 export async function GET(): Promise<Response> {
-  for (const candidate of installerCandidates) {
-    try {
-      const script = await readFile(candidate, 'utf8');
-      return new Response(script, {
-        status: 200,
-        headers: {
-          'content-type': 'text/plain; charset=utf-8',
-          'cache-control': 'no-store',
-        },
-      });
-    } catch {
-      // Try the next traced path candidate.
+  try {
+    const upstream = await fetch(`${controlPlaneBaseUrl()}/api/hardware/bootstrap/install.sh`, {
+      cache: 'no-store',
+    });
+    if (upstream.ok) {
+      return installerResponse(await upstream.text());
     }
+  } catch {
+    // Fall back to the repository copy below.
+  }
+
+  try {
+    const raw = await fetch(INSTALLER_RAW_URL, { cache: 'no-store' });
+    if (raw.ok) {
+      return installerResponse(await raw.text());
+    }
+  } catch {
+    // Report the canonical installer as unavailable below.
   }
 
   return Response.json(

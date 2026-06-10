@@ -3,6 +3,7 @@
 export type WorkstationChatThreadSelectedEventDetail = {
   workspaceId: string;
   threadId: string;
+  force?: boolean;
 };
 
 const WORKSTATION_CHAT_THREAD_SELECTED_EVENT = 'workstation:chat-thread-selected';

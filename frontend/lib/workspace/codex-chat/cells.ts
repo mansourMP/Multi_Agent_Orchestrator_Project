@@ -17,6 +17,34 @@ export type CodexCellStatus =
   | 'incomplete'
   | 'waiting';
 
+export type AgentActivityEvent = {
+  id: string;
+  type:
+    | 'thinking'
+    | 'connecting_hardware'
+    | 'running_tool'
+    | 'hardware_running'
+    | 'waiting_approval'
+    | 'finalizing'
+    | 'error'
+    | 'done';
+  label: string;
+  detail?: string;
+  startedAt: number;
+  completedAt?: number;
+  status: 'active' | 'completed' | 'failed';
+};
+
+export type AgentActivityState =
+  | 'idle'
+  | 'thinking'
+  | 'connecting'
+  | 'running_tool'
+  | 'waiting'
+  | 'finalizing'
+  | 'done'
+  | 'error';
+
 type CodexCellBase = {
   id: string;
   createdAt: string | null;
@@ -114,6 +142,11 @@ export type CodexStatusCell = CodexCellBase & {
   status: 'idle' | 'running' | 'done' | 'error';
 };
 
+export type CodexAgentActivityCell = CodexCellBase & {
+  kind: 'agent_activity';
+  activity: AgentActivityEvent;
+};
+
 export type CodexErrorCell = CodexCellBase & {
   kind: 'error';
   message: string;
@@ -128,7 +161,8 @@ export type CodexTraceActivityCell =
   | CodexFileChangeCell
   | CodexScreenshotCell
   | CodexArtifactCell
-  | CodexStatusCell;
+  | CodexStatusCell
+  | CodexAgentActivityCell;
 
 export type CodexExecutionTraceCell = CodexCellBase & {
   kind: 'execution_trace';
@@ -150,6 +184,7 @@ export type CodexTranscriptCell =
   | CodexArtifactCell
   | CodexApprovalRequestCell
   | CodexStatusCell
+  | CodexAgentActivityCell
   | CodexErrorCell
   | CodexExecutionTraceCell;
 
@@ -166,6 +201,7 @@ export type CodexTimelineProjection = {
   activeCell: CodexTranscriptCell | null;
   activeTurnId: string | null;
   streamStatus: CodexStreamStatus;
+  agentActivityState: AgentActivityState;
   approvalQueue: CodexApprovalRequestCell[];
   composerState: CodexComposerState;
   cells: CodexTranscriptCell[];
@@ -212,6 +248,7 @@ export type CodexChatEvent =
   | { type: 'artifact_created'; id: string; title: string; artifactId: string | null; mimeType: string | null; status: 'done' | 'error' }
   | { type: 'approval_request'; id: string; prompt: string; status?: 'waiting' | 'done' | 'error'; metadata?: Record<string, unknown> }
   | { type: 'status'; id: string; label: string; detail: string | null; status: 'idle' | 'running' | 'done' | 'error' }
+  | { type: 'agent_activity'; activity: AgentActivityEvent }
   | { type: 'error'; id: string; message: string; retryable: boolean };
 
 export type TimelineRow =

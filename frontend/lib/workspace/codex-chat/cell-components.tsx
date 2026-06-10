@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 import type { CodexTranscriptCell } from './cells';
+import { stripInternalToolMarkup } from '../workstation-chat-pane-model';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 
 export type CodexApprovalAction = 'allow_once' | 'allow_session' | 'deny';
@@ -501,6 +502,9 @@ function traceActivityStatus(cell: TraceActivityCellRecord): 'running' | 'done' 
   if (cell.kind === 'web_search') {
     return cell.status === 'searching' ? 'running' : cell.status;
   }
+  if (cell.kind === 'agent_activity') {
+    return agentActivityState(cell.activity.status);
+  }
   if ('status' in cell) {
     if (cell.status === 'idle') {
       return 'running';
@@ -526,6 +530,8 @@ function traceActivityLabel(cell: TraceActivityCellRecord): string {
       return 'Artifact';
     case 'status':
       return statusPrimaryLabel(cell.label || 'Status');
+    case 'agent_activity':
+      return cell.activity.label;
     default:
       return 'Tool';
   }
@@ -547,6 +553,8 @@ function traceActivityInput(cell: TraceActivityCellRecord): string {
       return cell.title;
     case 'status':
       return cell.detail || cell.label;
+    case 'agent_activity':
+      return cell.activity.detail || cell.activity.label;
     default:
       return '';
   }
@@ -568,6 +576,8 @@ function traceActivityResult(cell: TraceActivityCellRecord): string | null {
       return cell.title;
     case 'status':
       return cell.detail;
+    case 'agent_activity':
+      return cell.activity.status === 'completed' ? (cell.activity.detail ?? 'Done') : null;
     default:
       return null;
   }
@@ -580,7 +590,17 @@ function traceSummaryParts(activities: TraceActivityCellRecord[]): string[] {
   const screenshots = activities.filter((cell) => cell.kind === 'screenshot').length;
   const genericTools = activities.filter((cell) => cell.kind === 'tool').length;
   const artifacts = activities.filter((cell) => cell.kind === 'artifact').length;
+  const agentActivities = activities.filter((cell) => cell.kind === 'agent_activity');
   const parts: string[] = [];
+  const activeAgentActivity = agentActivities.find((cell) => cell.activity.status === 'active');
+  if (activeAgentActivity) {
+    parts.push(activeAgentActivity.activity.label);
+  } else if (agentActivities.length > 0) {
+    const latest = agentActivities.at(-1);
+    if (latest) {
+      parts.push(latest.activity.label);
+    }
+  }
   if (searches > 0) {
     parts.push(`Searched ${searches} ${searches === 1 ? 'query' : 'queries'}`);
   }
@@ -772,6 +792,20 @@ function statusPrimaryLabel(label: string): string {
   return humanizeToken(label) || 'Done';
 }
 
+function agentActivityKind(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'agent_activity';
+}
+
+function agentActivityState(status: 'active' | 'completed' | 'failed'): 'running' | 'done' | 'error' {
+  if (status === 'failed') {
+    return 'error';
+  }
+  if (status === 'completed') {
+    return 'done';
+  }
+  return 'running';
+}
+
 function SystemInlineRow({
   icon,
   kind,
@@ -836,7 +870,7 @@ export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
   const timestamp = formatTimestamp(cell.createdAt);
   const effectiveLabel = providerLabel(cell);
   const taskRouteLabel = routeLabel(cell);
-  const text = cell.content.trim();
+  const text = stripInternalToolMarkup(cell.content);
   if ((!text && !cell.isStreaming) || isLeakedMachineResultJson(text)) {
     return null;
   }
@@ -1196,6 +1230,61 @@ export function StatusCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind
   );
 }
 
+export function AgentActivityCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'agent_activity' }> }) {
+  const [expanded, setExpanded] = useState(false);
+  const { activity } = cell;
+  const state = agentActivityState(activity.status);
+  const duration = formatDurationMs(
+    typeof activity.completedAt === 'number'
+      ? activity.completedAt - activity.startedAt
+      : null,
+  );
+  const hasDetails = Boolean(activity.detail || duration);
+  return (
+    <article
+      data-chat-role="system"
+      data-chat-activity-kind={agentActivityKind(activity.type)}
+      data-agent-activity-state={state}
+      className={`app-agent-activity-row app-chat-system-row--${state}${cell.dimmed ? ' app-chat-system-row--dimmed' : ''}`}
+    >
+      <button
+        type="button"
+        className="app-agent-activity-row__summary"
+        aria-expanded={expanded}
+        disabled={!hasDetails}
+        onClick={() => {
+          if (hasDetails) {
+            setExpanded((value) => !value);
+          }
+        }}
+      >
+        <span className="app-chat-system-row__icon" aria-hidden="true">
+          {state === 'done'
+            ? <Check size={14} strokeWidth={2} />
+            : state === 'error'
+              ? <CircleAlert size={14} strokeWidth={2} />
+              : <Terminal size={14} strokeWidth={1.9} />}
+        </span>
+        <span className="app-chat-system-row__primary">{activity.label}</span>
+        {hasDetails ? (
+          <ChevronRight
+            size={13}
+            strokeWidth={2}
+            className={`app-agent-activity-row__chevron${expanded ? ' app-agent-activity-row__chevron--expanded' : ''}`}
+            aria-hidden="true"
+          />
+        ) : null}
+      </button>
+      {expanded && hasDetails ? (
+        <div className="app-agent-activity-row__details">
+          {activity.detail ? <span>{activity.detail}</span> : null}
+          {duration ? <span>Duration {duration}</span> : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 export function ErrorCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'error' }> }) {
   const actionHref = typeof cell.metadata?.action_href === 'string' ? cell.metadata.action_href : '';
   const actionLabel = typeof cell.metadata?.action_label === 'string' ? cell.metadata.action_label : '';
@@ -1264,6 +1353,8 @@ export function CodexChatCell({
       );
     case 'status':
       return <StatusCell cell={cell} />;
+    case 'agent_activity':
+      return <AgentActivityCell cell={cell} />;
     case 'error':
       return <ErrorCell cell={cell} />;
     default:

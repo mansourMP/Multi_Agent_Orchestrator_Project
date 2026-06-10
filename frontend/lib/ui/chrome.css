@@ -4590,6 +4590,48 @@ body[data-emp-theme='dark'] .app-chat-message[data-chat-role='user'] .app-chat-m
   animation: sage-thinking-text-glow 1.7s ease-in-out infinite;
 }
 
+.app-agent-activity-row {
+  width: fit-content;
+  max-width: min(100%, 720px);
+  color: var(--text-secondary);
+}
+
+.app-agent-activity-row__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.app-agent-activity-row__summary:disabled {
+  cursor: default;
+}
+
+.app-agent-activity-row__chevron {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  transition: transform var(--transition);
+}
+
+.app-agent-activity-row__chevron--expanded {
+  transform: rotate(90deg);
+}
+
+.app-agent-activity-row__details {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 0 30px;
+  color: var(--text-tertiary);
+  font-size: var(--app-font-12);
+  line-height: 1.45;
+}
+
 .app-chat-thinking-row__activity,
 .app-chat-thinking-row__detail-text,
 .app-chat-thinking-row__section-title {

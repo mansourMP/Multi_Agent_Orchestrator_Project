@@ -1,6 +1,7 @@
 'use client';
 
 import type {
+  AgentActivityState,
   CodexApprovalRequestCell,
   CodexAssistantCell,
   CodexChatEvent,
@@ -162,6 +163,17 @@ function dimSystemCells(cells: CodexTranscriptCell[]): CodexTranscriptCell[] {
     if (cell.kind === 'status' && (cell.status === 'idle' || cell.status === 'running')) {
       return { ...cell, status: 'done', dimmed: true };
     }
+    if (cell.kind === 'agent_activity' && cell.activity.status === 'active') {
+      return {
+        ...cell,
+        activity: {
+          ...cell.activity,
+          status: 'completed',
+          completedAt: cell.activity.completedAt ?? Date.now(),
+        },
+        dimmed: true,
+      };
+    }
     if (
       cell.kind === 'exec'
       || cell.kind === 'tool'
@@ -170,11 +182,74 @@ function dimSystemCells(cells: CodexTranscriptCell[]): CodexTranscriptCell[] {
       || cell.kind === 'screenshot'
       || cell.kind === 'artifact'
       || cell.kind === 'status'
+      || cell.kind === 'agent_activity'
     ) {
       return { ...cell, dimmed: true };
     }
     return cell;
   });
+}
+
+function activityTypeToProjectionState(type: Extract<CodexChatEvent, { type: 'agent_activity' }>['activity']['type']): AgentActivityState {
+  if (type === 'thinking') {
+    return 'thinking';
+  }
+  if (type === 'connecting_hardware') {
+    return 'connecting';
+  }
+  if (type === 'running_tool' || type === 'hardware_running') {
+    return 'running_tool';
+  }
+  if (type === 'waiting_approval') {
+    return 'waiting';
+  }
+  if (type === 'finalizing') {
+    return 'finalizing';
+  }
+  if (type === 'error') {
+    return 'error';
+  }
+  if (type === 'done') {
+    return 'done';
+  }
+  return 'idle';
+}
+
+function activeStateFromCell(cell: CodexTranscriptCell | null): AgentActivityState {
+  if (!cell) {
+    return 'idle';
+  }
+  if (cell.kind === 'agent_activity') {
+    if (cell.activity.status === 'failed') {
+      return 'error';
+    }
+    if (cell.activity.status === 'completed') {
+      return 'done';
+    }
+    return activityTypeToProjectionState(cell.activity.type);
+  }
+  if (cell.kind === 'reasoning_summary' && cell.isStreaming) {
+    return 'thinking';
+  }
+  if (
+    (cell.kind === 'exec' || cell.kind === 'tool' || cell.kind === 'file_change')
+    && cell.status === 'running'
+  ) {
+    return 'running_tool';
+  }
+  if (cell.kind === 'web_search' && cell.status === 'searching') {
+    return 'running_tool';
+  }
+  if (cell.kind === 'status' && (cell.status === 'idle' || cell.status === 'running')) {
+    return 'running_tool';
+  }
+  if (cell.kind === 'approval_request' && cell.status === 'waiting') {
+    return 'waiting';
+  }
+  if (cell.kind === 'assistant' && cell.isStreaming) {
+    return 'finalizing';
+  }
+  return 'idle';
 }
 
 function applyCodexEvent(
@@ -277,6 +352,38 @@ function applyCodexEvent(
       }),
     );
     return { activeCell: cell, streamStatus: event.isIncomplete ? 'aborted' : 'complete' };
+  }
+
+  if (event.type === 'agent_activity') {
+    const activityCellId = `${event.activity.id}:${event.activity.type}`;
+    const cell = updateCell(
+      cells,
+      indexById,
+      activityCellId,
+      () => ({
+        id: activityCellId,
+        kind: 'agent_activity' as const,
+        activity: event.activity,
+        createdAt: new Date(event.activity.startedAt).toISOString(),
+      }),
+      (current) => ({
+        ...current,
+        activity: {
+          ...current.activity,
+          ...event.activity,
+          detail: event.activity.detail ?? current.activity.detail,
+          startedAt: current.activity.startedAt || event.activity.startedAt,
+        },
+      }),
+    );
+    return {
+      activeCell: cell,
+      streamStatus: event.activity.status === 'failed'
+        ? 'error'
+        : event.activity.status === 'active'
+          ? 'streaming'
+          : 'complete',
+    };
   }
 
   if (event.type === 'tool_started') {
@@ -691,6 +798,7 @@ export function projectCodexTimeline(events: TimelineProjectionEvent[]): CodexTi
   const indexById = new Map<string, number>();
   let activeCell: CodexTranscriptCell | null = null;
   let streamStatus: CodexTimelineProjection['streamStatus'] = 'idle';
+  let agentActivityState: AgentActivityState = 'idle';
 
   for (const [index, event] of events.entries()) {
     const projectedEvents = projectRawEventToCodexEvents(event, index);
@@ -698,8 +806,10 @@ export function projectCodexTimeline(events: TimelineProjectionEvent[]): CodexTi
       const result = applyCodexEvent(cells, indexById, projectedEvent);
       activeCell = result.activeCell;
       streamStatus = result.streamStatus;
+      agentActivityState = activeStateFromCell(activeCell);
       if (projectedEvent.type === 'assistant_final') {
         cells = dimSystemCells(cells);
+        agentActivityState = activeStateFromCell(activeCell);
       }
     }
   }
@@ -713,6 +823,7 @@ export function projectCodexTimeline(events: TimelineProjectionEvent[]): CodexTi
     activeCell,
     activeTurnId: null,
     streamStatus,
+    agentActivityState,
     approvalQueue,
     composerState: {
       draft: '',

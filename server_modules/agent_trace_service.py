@@ -509,16 +509,20 @@ async def emit_tool_started(
     capability_id: Optional[str],
     connector_id: Optional[str],
     args_preview: Optional[Dict[str, Any]],
+    agent_activity: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
+    data = {
+        "tool_name": str(tool_name or "").strip(),
+        "capability_id": str(capability_id or "").strip() or None,
+        "connector_id": str(connector_id or "").strip() or None,
+        "args_preview": _normalized_payload(args_preview),
+    }
+    if isinstance(agent_activity, dict) and agent_activity:
+        data["agent_activity"] = _normalized_payload(agent_activity)
     return await emit(
         trace_context,
         "tool.started",
-        {
-            "tool_name": str(tool_name or "").strip(),
-            "capability_id": str(capability_id or "").strip() or None,
-            "connector_id": str(connector_id or "").strip() or None,
-            "args_preview": _normalized_payload(args_preview),
-        },
+        data,
         persisted=True,
         item_id=item_id,
         tool_call_id=tool_call_id,
@@ -559,6 +563,7 @@ async def emit_tool_result(
     request_id: Optional[str] = None,
     action_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    agent_activity: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     data: Dict[str, Any] = {
         "status": str(status or "").strip(),
@@ -581,6 +586,8 @@ async def emit_tool_result(
         data["args_preview"] = _normalized_payload(args_preview)
     if isinstance(metadata, dict) and metadata:
         data["metadata"] = _normalized_payload(metadata)
+    if isinstance(agent_activity, dict) and agent_activity:
+        data["agent_activity"] = _normalized_payload(agent_activity)
     return await emit(
         trace_context,
         "tool.result",

@@ -164,7 +164,6 @@ import {
   normalizeHostedCreditStateForChat,
   buildPreRunCostEstimate,
   formatContextWindowLabel,
-  formatRelativeTime,
   reasoningLabel,
   findProviderFailureIntervention,
   stripInternalToolMarkup,
@@ -452,8 +451,6 @@ interface SageChatEmptyStateProps {
   modelLabel: string;
   providerGateVisible: boolean;
   integrationsHref: string;
-  recentThreads: RecentThreadSummary[];
-  onOpenThread: (threadId: string) => void;
   onSelectPrompt: (prompt: string) => void;
 }
 
@@ -461,11 +458,8 @@ function SageChatEmptyState({
   modelLabel,
   providerGateVisible,
   integrationsHref,
-  recentThreads,
-  onOpenThread,
   onSelectPrompt,
 }: SageChatEmptyStateProps) {
-  const visibleRecentThreads = recentThreads.slice(0, 5);
   return (
     <div className="app-chat-empty-state app-chat-empty-state--sage">
       <div className="app-chat-empty-state__content">
@@ -483,10 +477,7 @@ function SageChatEmptyState({
           </p>
         ) : (
           <div
-            className={[
-              'app-chat-empty-state__suggestions',
-              visibleRecentThreads.length === 0 && 'app-chat-empty-state__suggestions--composer-clearance',
-            ].filter(Boolean).join(' ')}
+            className="app-chat-empty-state__suggestions app-chat-empty-state__suggestions--composer-clearance"
             aria-label="Suggested prompts"
           >
             {SAGE_EMPTY_STATE_PROMPTS.map((prompt) => (
@@ -503,26 +494,6 @@ function SageChatEmptyState({
             ))}
           </div>
         )}
-
-        {visibleRecentThreads.length > 0 ? (
-          <div className="app-chat-empty-state__recent" aria-label="Previous chats">
-            {visibleRecentThreads.map((item) => (
-              <button
-                key={item.threadId}
-                type="button"
-                className="app-chat-empty-run-row"
-                onClick={() => {
-                  onOpenThread(item.threadId);
-                }}
-              >
-                <span className="app-chat-empty-run-row__time">
-                  {item.updatedAt ? formatRelativeTime(item.updatedAt) : 'Recent'}
-                </span>
-                <span className="app-chat-empty-run-row__preview">{item.title}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
       </div>
     </div>
   );
@@ -576,8 +547,13 @@ function isChatTranscriptNearBottom(element: HTMLElement | null): boolean {
 function transcriptCellScrollKey(cell: CodexTranscriptCell): string {
   const record = cell as unknown as Record<string, unknown>;
   const id = readString(record.id);
-  const content = readString(record.content) || readString(record.text) || readString(record.output);
-  const status = readString(record.status);
+  const activity = readObject(record.activity);
+  const content = readString(record.content)
+    || readString(record.text)
+    || readString(record.output)
+    || readString(activity.label)
+    || readString(activity.detail);
+  const status = readString(record.status) || readString(activity.status) || readString(activity.type);
   const streaming = record.isStreaming === true ? 'streaming' : '';
   return `${cell.kind}:${id}:${content.length}:${status}:${streaming}`;
 }
@@ -1447,7 +1423,8 @@ export function WorkstationChatPane() {
       return;
     }
     const nextThreadId = readString(detail.threadId);
-    if (!nextThreadId || nextThreadId === activeThreadIdRef.current) {
+    const forceOpen = detail.force === true;
+    if (!nextThreadId || (nextThreadId === activeThreadIdRef.current && !forceOpen)) {
       return;
     }
     setHasEnteredConversationFlow(true);
@@ -1627,6 +1604,16 @@ export function WorkstationChatPane() {
     pendingApprovalCells,
     visibleTranscriptCells,
   } = useWorkstationTimelineProjection(projectionOptions);
+  const unifiedAgentActivityState = isSending
+    ? (projectedTimelineProjection.agentActivityState === 'idle'
+        ? 'thinking'
+        : (projectedTimelineProjection.agentActivityState === 'done' || projectedTimelineProjection.agentActivityState === 'error') && !timelineSettled
+          ? 'finalizing'
+          : projectedTimelineProjection.agentActivityState)
+    : 'idle';
+  const chatActivityBusy = unifiedAgentActivityState !== 'idle'
+    && unifiedAgentActivityState !== 'done'
+    && unifiedAgentActivityState !== 'error';
 
   const hasConversationContent = visibleTranscriptCells.length > 0
     || Boolean(liveTrace);
@@ -3678,6 +3665,7 @@ export function WorkstationChatPane() {
       <main
         data-workstation-surface="chat"
         data-workstation-chat="pane"
+        data-agent-activity-state={unifiedAgentActivityState}
         className={`app-chat-page app-chat-page--surface${showFirstImpression ? ' app-chat-page--first-impression' : ''}`}
       >
         <section className={`app-chat-thread app-chat-thread--surface${showBlankTranscript || showFirstImpression ? ' app-chat-thread--blank' : ''}`}>
@@ -3831,18 +3819,6 @@ export function WorkstationChatPane() {
                   modelLabel={selectedModelOption.label}
                   providerGateVisible={!activeProviderSummary.connected}
                   integrationsHref={integrationsHref}
-                  recentThreads={recentThreads}
-                  onOpenThread={(threadId) => {
-                    const nextThreadId = readString(threadId);
-                    if (!nextThreadId) {
-                      return;
-                    }
-                    persistActiveThread(bootstrap.workspace.id, nextThreadId);
-                    emitWorkstationChatThreadSelected({
-                      workspaceId: bootstrap.workspace.id,
-                      threadId: nextThreadId,
-                    });
-                  }}
                   onSelectPrompt={setDraft}
                 />
               ) : null}
@@ -3988,7 +3964,7 @@ export function WorkstationChatPane() {
           return transcript;
         }}
         contextWindowLabel={contextWindowLabel}
-        busy={isSending}
+        busy={chatActivityBusy}
         controlsDisabled={isPersistingModelSelection}
         sendDisabled={false}
         placeholder="Message Sage..."

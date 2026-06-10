@@ -335,6 +335,10 @@ function installTransparencyTurnStub(page, initialSavedState = null) {
       }
 
       if (url.includes('/api/turn')) {
+        if (Array.isArray(savedState.turnEvents)) {
+          state.pendingTranscriptEvents = [];
+          return eventStreamResponse(savedState.turnEvents);
+        }
         const reply = 'I reviewed the workspace activity and I am ready to continue.';
         state.pendingTranscriptEvents = [];
         return eventStreamResponse([
@@ -550,6 +554,163 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="browser_action"]')).toContainText('Used browser');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
     await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
+  });
+
+  test('strips DSML from projected assistant cells', async ({ page }) => {
+    await installTransparencyTurnStub(page, {
+      turnEvents: [
+        {
+          delay: 20,
+          event: 'chunk',
+          payload: {
+            delta: 'Let me check that for you.\\n< | | DSML | | tool_calls>< | | DSML | | invoke name="bash">< | | DSML | | parameter name="command" string="true">curl http://localhost:9090/health</ | | DSML | | parameter></ | | DSML | | invoke>',
+          },
+        },
+        {
+          delay: 60,
+          event: 'final',
+          payload: {
+            status: 'completed',
+            reply: 'Let me check that for you.\\n< | | DSML | | tool_calls>< | | DSML | | invoke name="bash">curl http://localhost:9090/health</ | | DSML | | invoke>',
+            thread_id: 'primary',
+            session_id: 'session-transparency',
+            metadata: {
+              trace_id: 'trace-dsml-1',
+            },
+          },
+        },
+      ],
+    });
+    await loginAsOwner(page);
+    await page.goto('/w/ws-1/sage');
+
+    const composer = page.locator('[data-workstation-chat-composer="root"] textarea');
+    await composer.fill('are you connected to my hardware?');
+    await composer.press('Enter');
+
+    await expect(page.locator('article[data-chat-role="assistant"]').filter({ hasText: 'Let me check that for you.' })).toBeVisible();
+    await expect(page.getByText(/DSML/)).toHaveCount(0);
+    await expect(page.getByText(/tool_calls/)).toHaveCount(0);
+    await expect(page.getByText(/localhost:9090/)).toHaveCount(0);
+  });
+
+  test('shows hardware lifecycle labels and keeps activity active while hardware is running', async ({ page }) => {
+    await installTransparencyTurnStub(page, {
+      turnEvents: [
+        {
+          delay: 20,
+          event: 'trace',
+          payload: {
+            trace_id: 'trace-hardware-1',
+            event_type: 'tool.started',
+            tool_call_id: 'hardware-1',
+            data: {
+              tool_name: 'screen.read',
+              capability_id: 'screen.read',
+              connector_id: 'hardware_runtime',
+              agent_activity: {
+                id: 'hardware-1',
+                type: 'connecting_hardware',
+                label: 'Connecting to your Mac...',
+                startedAt: Date.now(),
+                status: 'active',
+              },
+            },
+          },
+        },
+        {
+          delay: 1000,
+          event: 'trace',
+          payload: {
+            trace_id: 'trace-hardware-1',
+            event_type: 'tool.result',
+            tool_call_id: 'hardware-1',
+            data: {
+              status: 'running',
+              state: 'running',
+              connector_id: 'hardware_runtime',
+              runtime_session_id: 'hrs-hardware-1',
+              summary: 'Screen read is running.',
+            },
+          },
+        },
+        {
+          delay: 1500,
+          event: 'trace',
+          payload: {
+            trace_id: 'trace-hardware-1',
+            event_type: 'tool.result',
+            tool_call_id: 'hardware-1',
+            data: {
+              status: 'waiting_approval',
+              state: 'waiting_approval',
+              connector_id: 'hardware_runtime',
+              runtime_session_id: 'hrs-hardware-1',
+              summary: 'Approval required.',
+            },
+          },
+        },
+        {
+          delay: 1000,
+          event: 'trace',
+          payload: {
+            trace_id: 'trace-hardware-1',
+            event_type: 'tool.result',
+            tool_call_id: 'hardware-1',
+            data: {
+              status: 'completed',
+              state: 'ready',
+              connector_id: 'hardware_runtime',
+              runtime_session_id: 'hrs-hardware-1',
+              summary: 'Screen read completed.',
+            },
+          },
+        },
+        {
+          delay: 500,
+          event: 'trace',
+          payload: {
+            trace_id: 'trace-hardware-1',
+            event_type: 'tool.result',
+            tool_call_id: 'hardware-offline-1',
+            data: {
+              status: 'offline',
+              state: 'offline',
+              connector_id: 'hardware_runtime',
+              runtime_session_id: 'hrs-hardware-offline-1',
+              summary: 'Agent Computer offline.',
+            },
+          },
+        },
+        {
+          delay: 80,
+          event: 'final',
+          payload: {
+            status: 'completed',
+            reply: 'Done.',
+            thread_id: 'primary',
+            session_id: 'session-transparency',
+            metadata: {
+              trace_id: 'trace-hardware-1',
+            },
+          },
+        },
+      ],
+    });
+    await loginAsOwner(page);
+    await page.goto('/w/ws-1/sage');
+
+    const composer = page.locator('[data-workstation-chat-composer="root"] textarea');
+    await composer.fill('check this Mac');
+    await composer.press('Enter');
+
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="connecting_hardware"]')).toContainText('Connecting to your Mac...');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="hardware_running"]')).toContainText('Running on your Mac');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="hardware_running"].app-chat-system-row--running')).toBeVisible();
+    await expect(page.locator('[data-workstation-chat="pane"]')).toHaveAttribute('data-agent-activity-state', 'running_tool');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="waiting_approval"]')).toContainText('Sage needs your approval');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="done"]')).toContainText('Done');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="error"]')).toContainText('Mac is not connected');
   });
 
   test('does not render persisted thinking rows in historical transcript', async ({ page }) => {

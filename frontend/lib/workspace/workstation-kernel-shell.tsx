@@ -661,7 +661,7 @@ function MainAgentMobileHistoryList({
 
   const openThread = (threadId: string) => {
     persistActiveThread(workspaceId, threadId);
-    emitWorkstationChatThreadSelected({ workspaceId, threadId });
+    emitWorkstationChatThreadSelected({ workspaceId, threadId, force: true });
     setActiveThreadId(threadId);
     onNavigate();
     router.push(chatHref);
@@ -773,7 +773,7 @@ function AssistantPanelContent({
 
   const openThread = (threadId: string) => {
     persistActiveThread(workspaceId, threadId);
-    emitWorkstationChatThreadSelected({ workspaceId, threadId });
+    emitWorkstationChatThreadSelected({ workspaceId, threadId, force: true });
     setActiveThreadId(threadId);
     router.push(chatHref);
   };

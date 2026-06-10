@@ -57,6 +57,7 @@ const SAFE_TRACE_DATA_KEYS = new Set([
   'caption',
   'capability_id',
   'code',
+  'connector_id',
   'command',
   'cwd',
   'decision',
@@ -363,6 +364,7 @@ function isProofCell(cell: CodexTranscriptCell): boolean {
     || cell.kind === 'artifact'
     || cell.kind === 'approval_request'
     || cell.kind === 'status'
+    || cell.kind === 'agent_activity'
     || cell.kind === 'error'
   );
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List, Optional
 
 from server_modules import agent_trace_service, secret_redaction_service, thread_service
@@ -11,6 +12,68 @@ def _text(value: Any) -> str:
 
 def _dict(value: Any) -> Dict[str, Any]:
     return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _safe_activity_detail(value: Any) -> Optional[str]:
+    text = " ".join(_text(value).split())
+    if not text:
+        return None
+    if "DSML" in text or "<||" in text or "< | |" in text or "tool_calls" in text:
+        return None
+    if text.startswith("{") or text.startswith("["):
+        return None
+    return text[:500]
+
+
+def _hardware_agent_activity(
+    *,
+    tool_call_id: str,
+    state: str,
+    summary: Optional[str] = None,
+    started_at: Optional[int] = None,
+) -> Dict[str, Any]:
+    normalized_state = _text(state).lower() or "running"
+    if normalized_state in {"queued", "connecting", "starting", "started", "pending"}:
+        activity_type = "connecting_hardware"
+        label = "Connecting to your Mac..."
+        status = "active"
+    elif normalized_state == "running":
+        activity_type = "hardware_running"
+        label = "Running on your Mac"
+        status = "active"
+    elif normalized_state in {"completed", "complete", "done", "ready", "success", "succeeded"}:
+        activity_type = "done"
+        label = "Done"
+        status = "completed"
+    elif normalized_state in {"waiting_approval", "waiting", "approval_required"}:
+        activity_type = "waiting_approval"
+        label = "Sage needs your approval"
+        status = "active"
+    elif normalized_state in {"offline", "degraded"}:
+        activity_type = "error"
+        label = "Mac is not connected"
+        status = "failed"
+    else:
+        activity_type = "error"
+        label = "Mac is not connected"
+        status = "failed"
+    payload: Dict[str, Any] = {
+        "id": _text(tool_call_id) or f"hardware:{_now_ms()}",
+        "type": activity_type,
+        "label": label,
+        "startedAt": int(started_at or _now_ms()),
+        "status": status,
+    }
+    if status != "active":
+        payload["completedAt"] = _now_ms()
+    detail = _safe_activity_detail(summary)
+    if detail:
+        payload["detail"] = detail
+    return payload
 
 
 def _append_unique(ids: List[str], candidate: Any) -> None:
@@ -118,6 +181,11 @@ async def emit_tool_started(
     capability_id: str,
     arguments: Dict[str, Any],
 ) -> None:
+    activity = _hardware_agent_activity(
+        tool_call_id=tool_call_id,
+        state="connecting",
+        summary="Preparing Agent Computer action.",
+    )
     await agent_trace_service.emit_tool_started(
         trace_context,
         item_id=None,
@@ -126,7 +194,27 @@ async def emit_tool_started(
         capability_id=capability_id,
         connector_id="hardware_runtime",
         args_preview=secret_redaction_service.sanitize_mapping(arguments),
+        agent_activity=activity,
     )
+    if trace_context and getattr(trace_context, "thread_id", None):
+        await append_hardware_transcript_event(
+            {
+                "tenant_id": getattr(trace_context, "tenant_id", None),
+                "workspace_id": getattr(trace_context, "workspace_id", None),
+                "thread_id": getattr(trace_context, "thread_id", None),
+                "trace_id": getattr(trace_context, "trace_id", None),
+                "run_id": getattr(trace_context, "run_id", None),
+                "request_id": tool_call_id,
+            },
+            event_type="tool.started",
+            data={
+                "tool_name": capability_id,
+                "capability_id": capability_id,
+                "connector_id": "hardware_runtime",
+                "agent_activity": activity,
+            },
+            tool_call_id=tool_call_id,
+        )
 
 
 async def emit_tool_result(
@@ -172,6 +260,16 @@ async def emit_tool_result(
         "summary": _text(summary),
         "artifact_ids": list(artifact_ids or []),
     }
+    activity = _hardware_agent_activity(
+        tool_call_id=tool_call_id,
+        state=(
+            _text(session.get("state"))
+            or _text(status)
+            or "running"
+        ),
+        summary=summary,
+    )
+    trace_data["agent_activity"] = activity
     for key, value in {
         "tool_name": resolved_capability_id,
         "capability_id": resolved_capability_id,
@@ -201,6 +299,7 @@ async def emit_tool_result(
         request_id=resolved_request_id or None,
         action_id=resolved_action_id or None,
         metadata=result_metadata,
+        agent_activity=activity,
     )
     await append_hardware_transcript_event(
         session,
@@ -276,12 +375,18 @@ async def emit_hardware_stop_transcript_event(
     reason: Optional[str],
 ) -> None:
     session = _dict(runtime_session)
+    activity = _hardware_agent_activity(
+        tool_call_id=_text(target_request_id) or _text(session.get("request_id")) or _text(session.get("session_id")),
+        state="terminated",
+        summary="Hardware action stopped.",
+    )
     await append_hardware_transcript_event(
         session,
         event_type="tool.result",
         data={
             "status": "terminated",
             "summary": "Hardware action stopped.",
+            "agent_activity": activity,
             "tool_name": _text(session.get("capability_id")) or "tool.interrupt",
             "capability_id": _text(session.get("capability_id")) or "tool.interrupt",
             "connector_id": "hardware_runtime",

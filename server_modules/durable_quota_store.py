@@ -88,7 +88,8 @@ def consume_window(
     normalized_window = max(int(window_seconds or 0), 1)
     current = float(now if now is not None else time.time())
 
-    with _connect() as connection:
+    connection = _connect()
+    try:
         _ensure_schema(connection)
         connection.execute("BEGIN IMMEDIATE")
         try:
@@ -131,6 +132,8 @@ def consume_window(
         except Exception:
             connection.rollback()
             raise
+    finally:
+        connection.close()
 
     return QuotaWindowDecision(
         allowed=True,
@@ -162,12 +165,15 @@ def snapshot_window(
             retry_after_seconds=0,
             window_seconds=normalized_window,
         )
-    with _connect() as connection:
+    connection = _connect()
+    try:
         _ensure_schema(connection)
         row = connection.execute(
             "SELECT window_started_at, count FROM quota_windows WHERE quota_key = ?",
             (normalized_key,),
         ).fetchone()
+    finally:
+        connection.close()
     if row is None or current - float(row["window_started_at"]) >= normalized_window:
         observed = 0
         retry_after = 0

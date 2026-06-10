@@ -113,6 +113,14 @@ class GatewayRoutesTests(unittest.TestCase):
             },
         }
 
+    def test_agent_computer_bootstrap_installer_is_public_plain_text(self) -> None:
+        response = self.client.get("/api/hardware/bootstrap/install.sh")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/plain"))
+        self.assertIn("#!/usr/bin/env bash", response.text)
+        self.assertIn("EMPYRALIS_PAIRING_TOKEN", response.text)
+
     @staticmethod
     def _other_workspace_user():
         return {

@@ -8,10 +8,11 @@ import os
 import shlex
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette import status
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -79,6 +80,8 @@ LOGGER = logging.getLogger(__name__)
 router = APIRouter()
 GATEWAY_WS_SAFE_SUBPROTOCOL = "empyralis.gateway.v1"
 GATEWAY_WS_TOKEN_SUBPROTOCOL_PREFIX = "empyralis.gateway.session."
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_AGENT_COMPUTER_INSTALLER_PATH = _REPO_ROOT / "scripts" / "install-agent-computer.sh"
 
 
 def _utc_now_iso() -> str:
@@ -1613,6 +1616,16 @@ async def create_gateway_ssh_pairing(
             "expires_at": pairing.get("expires_at") if isinstance(pairing, dict) else None,
         },
     }
+
+
+@router.get("/hardware/bootstrap/install.sh", response_class=PlainTextResponse)
+async def get_agent_computer_bootstrap_installer() -> PlainTextResponse:
+    if not _AGENT_COMPUTER_INSTALLER_PATH.exists():
+        raise HTTPException(status_code=404, detail="Agent Computer installer is not available")
+    return PlainTextResponse(
+        _AGENT_COMPUTER_INSTALLER_PATH.read_text(encoding="utf-8"),
+        media_type="text/plain",
+    )
 
 
 @router.get("/hardware/vps/oauth/digitalocean/start")

@@ -975,6 +975,7 @@ export type WorkstationClientPaths = {
   sageAgentComputerSelection: string;
   connectionSetupStart: (connectionId: string) => string;
   connectionTest: (connectionId: string) => string;
+  connectionVerify: (connectionId: string) => string;
   connectionDisconnect: (connectionId: string) => string;
   studioChannelAccounts: string;
   studioAgentChannelBindings: (deployedAgentId: string) => string;
@@ -1276,6 +1277,11 @@ export type WorkstationClient = {
     metadata?: Record<string, unknown> | null;
   }) => Promise<Record<string, unknown> | null>;
   testConnection: (options: {
+    connectionId: string;
+    surface?: string | null;
+    selectedGatewayId?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  verifyConnection: (options: {
     connectionId: string;
     surface?: string | null;
     selectedGatewayId?: string | null;
@@ -1828,6 +1834,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/connections/${encodeURIComponent(connectionId)}/setup/start`,
     connectionTest: (connectionId) =>
       `/api/connections/${encodeURIComponent(connectionId)}/test`,
+    connectionVerify: (connectionId) =>
+      `/api/connections/${encodeURIComponent(connectionId)}/verify`,
     connectionDisconnect: (connectionId) =>
       `/api/connections/${encodeURIComponent(connectionId)}/disconnect`,
     studioChannelAccounts:
@@ -3514,6 +3522,20 @@ export function createWorkstationClient(
     testConnection: ({ connectionId, surface = null, selectedGatewayId = null }) =>
       requestJson<Record<string, unknown>>({
         path: paths.connectionTest(connectionId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            surface,
+            selected_gateway_id: selectedGatewayId,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    verifyConnection: ({ connectionId, surface = null, selectedGatewayId = null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.connectionVerify(connectionId),
         init: {
           method: 'POST',
           headers: mergeJsonHeaders(),

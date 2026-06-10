@@ -3843,12 +3843,27 @@ export function WorkstationSageConnectorsPane({
         },
         skipValidation: false,
       });
+      const normalizedProvider = provider.toLowerCase();
+      let verifiedAccountName = '';
+      if (record.connectionId && (normalizedProvider === 'telegram_bot' || normalizedProvider === 'discord_bot')) {
+        const verifyPayload = await services.client.verifyConnection({
+          connectionId: record.connectionId,
+          surface,
+          selectedGatewayId,
+        });
+        if (verifyPayload?.valid !== true) {
+          throw new Error('Connection could not be verified.');
+        }
+        verifiedAccountName = readString(verifyPayload.account_name);
+      }
       setConnectorDraftCredentials((current) => {
         const next = { ...current };
         delete next[record.id];
         return next;
       });
-      await refreshAfterMutation(`${record.label} connected.`);
+      await refreshAfterMutation(
+        verifiedAccountName ? `${record.label} connected as ${verifiedAccountName}.` : `${record.label} connected.`,
+      );
       setExpandedCardId(null);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Connection details could not be saved.');

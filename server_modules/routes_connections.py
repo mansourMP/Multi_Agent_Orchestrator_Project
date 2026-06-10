@@ -12,6 +12,7 @@ from server_modules import auth as auth_module
 from server_modules import (
     connection_catalog_service,
     connection_oauth_service,
+    connection_verify_service,
     execution_mode_policy,
     gateway_registry_service,
     gateway_state_repository,
@@ -508,6 +509,46 @@ async def test_connection(
     if not item.get("test_action"):
         raise HTTPException(status_code=409, detail="Connection has no launch-ready test action.")
     raise HTTPException(status_code=409, detail="Connection test is not implemented for this connection yet.")
+
+
+@router.post("/connections/{connection_id}/verify")
+async def verify_connection(
+    connection_id: str,
+    body: ConnectionActionRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    resolved_workspace_id, tenant_id = _workspace_scope(current_user, body.workspace_id, minimum_role="owner")
+    auth_module.enforce_workspace_access(
+        current_user,
+        resolved_workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
+    try:
+        item = connection_catalog_service.reject_if_unusable(connection_id)
+    except Exception as error:
+        _raise_catalog_error(error)
+    provider = str(
+        item.get("vault_provider")
+        or item.get("account_provider")
+        or item.get("connector_id")
+        or item.get("id")
+        or ""
+    ).strip()
+    result = connection_verify_service.verify_connection(
+        connection_id=str(item.get("id") or connection_id),
+        provider=provider,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+    )
+    return {
+        "ok": True,
+        "connection_id": item.get("id") or connection_id,
+        "provider": provider,
+        **result,
+    }
 
 
 @router.post("/connections/{connection_id}/disconnect")

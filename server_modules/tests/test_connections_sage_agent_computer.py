@@ -752,6 +752,8 @@ def test_connection_catalog_exposes_launch_contract_without_ui_side_lock_lists()
 
     google = by_id["google_workspace"]
     assert google["launch_status"] == connection_catalog_service.LAUNCH_LIVE_WHEN_CONFIGURED
+    assert "google_calendar" not in by_id
+    assert google["connector_ids"] == ["google_workspace", "gmail", "google_calendar", "google_drive"]
     assert google["setup_available"] is True
     assert google["runtime_usable"] is True
     assert google["launchable"] is True
@@ -1314,6 +1316,46 @@ async def test_local_bridge_connection_setup_is_blocked_until_certified(monkeypa
 
     assert exc_info.value.status_code == 409
     assert "launch" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_connection_verify_route_returns_provider_identity(monkeypatch):
+    _install_auth(monkeypatch)
+    calls = []
+
+    def fake_verify_connection(**kwargs):
+        calls.append(kwargs)
+        return {
+            "valid": True,
+            "account_name": "@empyralis_bot",
+            "account_id": "123",
+        }
+
+    monkeypatch.setattr(routes_connections.connection_verify_service, "verify_connection", fake_verify_connection)
+
+    payload = await routes_connections.verify_connection(
+        "telegram_bot",
+        body=routes_connections.ConnectionActionRequest(
+            workspace_id="ws-1",
+            surface="studio",
+        ),
+        request=SimpleNamespace(),
+        current_user={"user_id": "owner-1", "role": "owner"},
+    )
+
+    assert payload["ok"] is True
+    assert payload["connection_id"] == "telegram_bot"
+    assert payload["provider"] == "telegram_bot"
+    assert payload["valid"] is True
+    assert payload["account_name"] == "@empyralis_bot"
+    assert calls == [
+        {
+            "connection_id": "telegram_bot",
+            "provider": "telegram_bot",
+            "workspace_id": "ws-1",
+            "tenant_id": "tenant-1",
+        }
+    ]
 
 
 @pytest.mark.anyio

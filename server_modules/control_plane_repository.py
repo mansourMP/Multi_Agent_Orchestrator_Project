@@ -247,10 +247,17 @@ LOCAL_CONTROL_PLANE_DB_FILE = Path(
         str(EMPYRALIS_STATE_HOME / "control-plane" / "control-plane.sqlite3"),
     )
 ).expanduser()
+LOCAL_AGENT_THREADS_FILE = Path(
+    os.getenv(
+        "EMPYRALIS_LOCAL_AGENT_THREADS_FILE",
+        str(EMPYRALIS_STATE_HOME / "control-plane" / "agent-threads.json"),
+    )
+).expanduser()
 _LOCAL_IDENTITY_LOCK = threading.Lock()
 _LOCAL_AGENT_THREAD_LOCK = threading.RLock()
 _LOCAL_AGENT_THREADS: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 _LOCAL_AGENT_TURNS: Dict[tuple[str, str, str], List[Dict[str, Any]]] = {}
+_LOCAL_AGENT_THREADS_LOADED = False
 _LOCAL_DEPLOYED_AGENT_LOCK = threading.RLock()
 WORKSPACE_LOOKUP_CACHE_TTL_SECONDS = max(
     float(os.getenv("ORION_WORKSPACE_LOOKUP_CACHE_TTL_SECONDS", "3")),
@@ -10204,6 +10211,72 @@ def _local_agent_thread_key(tenant_id: str, workspace_id: str, thread_id: str) -
     )
 
 
+def _local_load_agent_thread_store_locked() -> None:
+    global _LOCAL_AGENT_THREADS_LOADED
+    if _LOCAL_AGENT_THREADS_LOADED:
+        return
+    _LOCAL_AGENT_THREADS_LOADED = True
+    if not LOCAL_AGENT_THREADS_FILE.exists():
+        return
+    try:
+        payload = json.loads(LOCAL_AGENT_THREADS_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - corrupt local cache should not block boot.
+        LOGGER.warning("Could not read local agent thread store %s: %s", LOCAL_AGENT_THREADS_FILE, exc)
+        return
+    if not isinstance(payload, dict):
+        return
+    for raw_record in list(payload.get("threads") or []):
+        if not isinstance(raw_record, dict):
+            continue
+        try:
+            key = _local_agent_thread_key(
+                str(raw_record.get("tenant_id") or ""),
+                str(raw_record.get("workspace_id") or ""),
+                str(raw_record.get("id") or ""),
+            )
+        except Exception:
+            continue
+        _LOCAL_AGENT_THREADS[key] = dict(raw_record)
+    for raw_group in list(payload.get("turns") or []):
+        if not isinstance(raw_group, dict):
+            continue
+        try:
+            key = _local_agent_thread_key(
+                str(raw_group.get("tenant_id") or ""),
+                str(raw_group.get("workspace_id") or ""),
+                str(raw_group.get("thread_id") or ""),
+            )
+        except Exception:
+            continue
+        _LOCAL_AGENT_TURNS[key] = [
+            dict(item)
+            for item in list(raw_group.get("items") or raw_group.get("turns") or [])
+            if isinstance(item, dict)
+        ]
+
+
+def _local_persist_agent_thread_store_locked() -> None:
+    payload = {
+        "threads": [dict(record) for record in _LOCAL_AGENT_THREADS.values()],
+        "turns": [
+            {
+                "tenant_id": key[0],
+                "workspace_id": key[1],
+                "thread_id": key[2],
+                "items": [dict(item) for item in turns],
+            }
+            for key, turns in _LOCAL_AGENT_TURNS.items()
+        ],
+    }
+    try:
+        LOCAL_AGENT_THREADS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = LOCAL_AGENT_THREADS_FILE.with_suffix(f"{LOCAL_AGENT_THREADS_FILE.suffix}.tmp")
+        temporary_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        os.replace(temporary_path, LOCAL_AGENT_THREADS_FILE)
+    except Exception as exc:  # pragma: no cover - local persistence should degrade gracefully.
+        LOGGER.warning("Could not persist local agent thread store %s: %s", LOCAL_AGENT_THREADS_FILE, exc)
+
+
 def _clone_local_agent_thread(record: Dict[str, Any], *, include_turns: bool = False) -> Dict[str, Any]:
     payload = dict(record)
     key = _local_agent_thread_key(
@@ -10233,6 +10306,7 @@ def _local_ensure_agent_thread(
     key = _local_agent_thread_key(tenant_id, workspace_id, token)
     now = _utc_now_iso()
     with _LOCAL_AGENT_THREAD_LOCK:
+        _local_load_agent_thread_store_locked()
         existing = _LOCAL_AGENT_THREADS.get(key)
         next_metadata = _decode_json_object(existing.get("metadata") if existing else None)
         next_metadata.update(_coerce_dict(metadata))
@@ -10264,6 +10338,7 @@ def _local_ensure_agent_thread(
                 existing["title"] = str(title or "").strip() or "New chat"
             existing["metadata"] = next_metadata
             existing["updated_at"] = now
+        _local_persist_agent_thread_store_locked()
         return _clone_local_agent_thread(_LOCAL_AGENT_THREADS[key], include_turns=False)
 
 
@@ -10291,6 +10366,7 @@ def _local_upsert_agent_turn(
     resolved_role = str(role or "assistant").strip().lower() or "assistant"
     resolved_request_id = str(request_id or "").strip() or None
     with _LOCAL_AGENT_THREAD_LOCK:
+        _local_load_agent_thread_store_locked()
         if key not in _LOCAL_AGENT_THREADS:
             _local_ensure_agent_thread(
                 thread_id=key[2],
@@ -10362,6 +10438,7 @@ def _local_upsert_agent_turn(
             thread_record["last_turn_at"] = now
             if str(thread_record.get("title") or "") == "New chat" and resolved_role == "user":
                 thread_record["title"] = build_default_thread_title(content)
+        _local_persist_agent_thread_store_locked()
         return {
             "thread": _clone_local_agent_thread(thread_record, include_turns=False) if thread_record else None,
             "turn": dict(turn_record),
@@ -10443,6 +10520,7 @@ async def append_agent_turn_transcript_event(
         if connection is None:
             key = _local_agent_thread_key(resolved_tenant_id, resolved_workspace_id, resolved_thread_id)
             with _LOCAL_AGENT_THREAD_LOCK:
+                _local_load_agent_thread_store_locked()
                 turns = list(_LOCAL_AGENT_TURNS.get(key, []))
                 for turn in reversed(turns):
                     if str(turn.get("role") or "").lower() != "assistant":
@@ -10459,6 +10537,7 @@ async def append_agent_turn_transcript_event(
                         transcript_event,
                     )
                     turn["updated_at"] = _utc_now_iso()
+                    _local_persist_agent_thread_store_locked()
                     return {"turn": dict(turn)}
             return None
         rows = await connection.fetch(
@@ -10843,6 +10922,7 @@ async def list_agent_turns(
         if connection is None:
             key = _local_agent_thread_key(tenant_id, workspace_id, thread_id)
             with _LOCAL_AGENT_THREAD_LOCK:
+                _local_load_agent_thread_store_locked()
                 rows = [dict(item) for item in _LOCAL_AGENT_TURNS.get(key, [])]
             if active_agent_install_id:
                 resolved_install_id = str(active_agent_install_id or "").strip()
@@ -10902,6 +10982,7 @@ async def get_agent_thread(
         if connection is None:
             key = _local_agent_thread_key(tenant_id, workspace_id, thread_id)
             with _LOCAL_AGENT_THREAD_LOCK:
+                _local_load_agent_thread_store_locked()
                 record = _LOCAL_AGENT_THREADS.get(key)
                 return _clone_local_agent_thread(record, include_turns=include_turns) if isinstance(record, dict) else None
         row = await connection.fetchrow(
@@ -10955,6 +11036,7 @@ async def list_agent_threads(
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             with _LOCAL_AGENT_THREAD_LOCK:
+                _local_load_agent_thread_store_locked()
                 items = [
                     _clone_local_agent_thread(record, include_turns=include_turns)
                     for (tenant_key, workspace_key, _thread_key), record in _LOCAL_AGENT_THREADS.items()

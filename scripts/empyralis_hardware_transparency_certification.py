@@ -1818,7 +1818,7 @@ def main() -> int:
     parser.add_argument("--allow-revoke", action="store_true")
     parser.add_argument("--include-live-smoke", action="store_true")
     parser.add_argument("--require-live-smoke", action="store_true")
-    parser.add_argument("--health-timeout", type=int, default=3)
+    parser.add_argument("--health-timeout", type=int, default=8)
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--backend-timeout", type=int, default=120)
     parser.add_argument("--frontend-timeout", type=int, default=120)

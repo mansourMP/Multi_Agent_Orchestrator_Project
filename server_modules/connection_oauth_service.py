@@ -57,7 +57,6 @@ OAUTH_PROVIDER_CONFIGS: Dict[str, OAuthProviderConfig] = {
             "profile",
             "https://www.googleapis.com/auth/gmail.modify",
             "https://www.googleapis.com/auth/calendar",
-            "https://www.googleapis.com/auth/drive.file",
         ),
         auth_url="https://accounts.google.com/o/oauth2/v2/auth",
         token_url="https://oauth2.googleapis.com/token",
@@ -653,6 +652,24 @@ def _env_first(*names: str) -> str:
     return ""
 
 
+def _env_flag_enabled(*names: str) -> bool:
+    value = _env_first(*names).strip().lower()
+    return value in {"1", "true", "yes", "on", "enabled"}
+
+
+def _split_scope_tokens(value: str) -> tuple[str, ...]:
+    raw = str(value or "").replace(",", " ")
+    scopes: list[str] = []
+    seen: set[str] = set()
+    for token in raw.split():
+        scope = token.strip()
+        if not scope or scope in seen:
+            continue
+        seen.add(scope)
+        scopes.append(scope)
+    return tuple(scopes)
+
+
 def _state_secret() -> str:
     return _env_first(
         "CONNECTION_OAUTH_STATE_SECRET",
@@ -795,8 +812,27 @@ def _provider_url(provider: str, url_template: str) -> str:
     return url_template
 
 
-def _joined_scopes(config: OAuthProviderConfig) -> str:
-    return config.scope_separator.join(config.scopes)
+def _effective_scopes(provider: str, config: OAuthProviderConfig) -> tuple[str, ...]:
+    normalized = str(provider or "").strip().lower()
+    if normalized != "google_workspace":
+        return config.scopes
+
+    explicit_scopes = _split_scope_tokens(
+        _env_first("GOOGLE_WORKSPACE_OAUTH_SCOPES", "GOOGLE_OAUTH_SCOPES")
+    )
+    if explicit_scopes:
+        return explicit_scopes
+
+    scopes = list(config.scopes)
+    if _env_flag_enabled("GOOGLE_WORKSPACE_ENABLE_DRIVE_SCOPE", "GOOGLE_OAUTH_ENABLE_DRIVE_SCOPE"):
+        drive_scope = "https://www.googleapis.com/auth/drive.file"
+        if drive_scope not in scopes:
+            scopes.append(drive_scope)
+    return tuple(scopes)
+
+
+def _joined_scopes(provider: str, config: OAuthProviderConfig) -> str:
+    return config.scope_separator.join(_effective_scopes(provider, config))
 
 
 def _new_pkce_nonce() -> str:
@@ -851,8 +887,9 @@ def start_oauth(
             query["redirect_uri"] = redirect_uri
         if config.include_response_type:
             query["response_type"] = "code"
-        if config.scopes:
-            query["scope"] = _joined_scopes(config)
+        scopes = _effective_scopes(provider, config)
+        if scopes:
+            query["scope"] = _joined_scopes(provider, config)
         if config.auth_method == "pkce":
             query["code_challenge"] = _pkce_challenge(code_verifier)
             query["code_challenge_method"] = "S256"
@@ -1041,7 +1078,7 @@ def _exchange_microsoft(code: str, redirect_uri: str) -> Dict[str, Any]:
             "client_secret": client_secret,
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
-            "scope": _joined_scopes(config),
+            "scope": _joined_scopes("microsoft_365", config),
         },
     )
     access_token = str(payload.get("access_token") or "").strip()

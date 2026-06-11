@@ -715,6 +715,9 @@ def test_sage_channel_catalog_exposes_cloud_telegram_bot_without_agent_computer(
     assert by_id["telegram_bot"]["auth_required_fields"] == ["bot_token", "chat_id"]
     assert "telegram_personal" in by_id
     assert by_id["telegram_personal"]["requires_gateway"] is True
+    assert "sage_telegram_hosted" in by_id
+    assert by_id["sage_telegram_hosted"]["requires_gateway"] is False
+    assert by_id["sage_telegram_hosted"]["launch_status"] == connection_catalog_service.LAUNCH_PLANNED
 
 
 def test_sage_channel_status_marks_gateway_dependent_channels_from_backend(monkeypatch):
@@ -747,6 +750,71 @@ def test_sage_channel_status_marks_gateway_dependent_channels_from_backend(monke
     assert by_id["signal_personal"]["display_state"] == "unavailable"
 
 
+def test_local_bridge_health_promotes_status_to_connected(monkeypatch):
+    gateway = {
+        "gateway_id": "gateway-1",
+        "workspace_id": "ws-1",
+        "user_id": "user-1",
+        "status": "active",
+        "connection_status": "online",
+        "heartbeat_fresh": True,
+        "metadata": {
+            "personal_channel_health": {
+                "signal_personal": {
+                    "channel_key": "signal_personal",
+                    "status": "connected",
+                    "connected": True,
+                }
+            }
+        },
+    }
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda workspace_id, tenant_id=None, user_id=None, include_revoked=False: [gateway],
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.gateway_registry_service,
+        "gateway_registration_public_payload",
+        lambda registration: dict(registration),
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.sage_agent_computer_selection_service,
+        "get_selection",
+        lambda workspace_id, user_id: {"selected_gateway_id": "gateway-1"},
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.runtime_common,
+        "list_vault_connectors",
+        lambda workspace_id: [],
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.personal_channels_repository,
+        "get_telegram_state",
+        lambda gateway_id, channel_key="telegram_personal": None,
+    )
+    monkeypatch.setattr(
+        connection_catalog_service.personal_channels_repository,
+        "get_whatsapp_state",
+        lambda gateway_id, channel_key="whatsapp_personal": None,
+    )
+
+    payload = connection_catalog_service.list_status_payload(
+        workspace_id="ws-1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        surface="sage",
+    )
+
+    signal = {item["id"]: item for item in payload["items"]}["signal_personal"]
+    assert signal["connected"] is True
+    assert signal["health_status"] == "healthy"
+    assert signal["display_state"] == "connected"
+    assert signal["next_action"] == "manage"
+    assert signal["readiness_status"] == "launch_certified"
+    assert signal["certification_required"] is False
+
+
 def test_connection_catalog_exposes_launch_contract_without_ui_side_lock_lists():
     by_id = {item["id"]: item for item in connection_catalog_service.catalog_items()}
 
@@ -767,6 +835,8 @@ def test_connection_catalog_exposes_launch_contract_without_ui_side_lock_lists()
     assert signal["runtime_usable"] is False
     assert signal["launchable"] is False
     assert "launch_status:planned" in signal["launch_blockers"]
+    assert signal["readiness_status"] == "planned"
+    assert signal["certification_required"] is True
 
     apple = by_id["apple_messages_business"]
     assert apple["launch_status"] == connection_catalog_service.LAUNCH_PLANNED
@@ -775,6 +845,7 @@ def test_connection_catalog_exposes_launch_contract_without_ui_side_lock_lists()
     assert apple["launchable"] is False
     assert apple["requires_gateway"] is False
     assert apple["connector_id"] == "apple_messages_business"
+    assert apple["certification_required"] is True
 
     discord = by_id["discord_bot"]
     assert discord["launch_status"] == connection_catalog_service.LAUNCH_LIVE_WHEN_CONFIGURED
@@ -927,6 +998,36 @@ async def test_google_workspace_connection_setup_starts_oauth_not_fake_session(m
     assert payload["provider"] == "google_workspace"
     assert payload["redirect_uri"] == "http://localhost:3000/api/connections/oauth/google_workspace/callback"
     assert payload["authorization_url"].startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+    query = urlparse.parse_qs(urlparse.urlparse(payload["authorization_url"]).query)
+    scopes = query["scope"][0].split()
+    assert "https://www.googleapis.com/auth/gmail.modify" in scopes
+    assert "https://www.googleapis.com/auth/calendar" in scopes
+    assert "https://www.googleapis.com/auth/drive.file" not in scopes
+
+
+@pytest.mark.anyio
+async def test_google_workspace_connection_setup_can_opt_into_drive_scope(monkeypatch):
+    _install_auth(monkeypatch)
+    monkeypatch.setenv("GOOGLE_WORKSPACE_OAUTH_CLIENT_ID", "google-client-id")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET", "google-client-secret")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_ENABLE_DRIVE_SCOPE", "true")
+
+    payload = await routes_connections.start_connection_setup(
+        "google_workspace",
+        body=routes_connections.ConnectionActionRequest(
+            workspace_id="ws-1",
+            surface="sage",
+        ),
+        request=SimpleNamespace(
+            headers={"x-forwarded-proto": "http", "x-forwarded-host": "localhost:3000"},
+            base_url="http://127.0.0.1:8001/",
+        ),
+        current_user={"user_id": "user-1", "role": "member"},
+    )
+
+    query = urlparse.parse_qs(urlparse.urlparse(payload["authorization_url"]).query)
+    scopes = query["scope"][0].split()
+    assert "https://www.googleapis.com/auth/drive.file" in scopes
 
 
 @pytest.mark.anyio
@@ -1273,7 +1374,7 @@ async def test_personal_channel_setup_accepts_fresh_active_gateway(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_local_bridge_connection_setup_is_blocked_until_certified(monkeypatch):
+async def test_local_bridge_connection_setup_returns_agent_computer_contract(monkeypatch):
     _install_auth(monkeypatch)
 
     async def fail_create_setup_session(*_args, **_kwargs):
@@ -1302,20 +1403,21 @@ async def test_local_bridge_connection_setup_is_blocked_until_certified(monkeypa
         lambda registration: dict(registration),
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await routes_connections.start_connection_setup(
-            "signal_personal",
-            body=routes_connections.ConnectionActionRequest(
-                workspace_id="ws-1",
-                surface="sage",
-                selected_gateway_id="gateway-1",
-            ),
-            request=SimpleNamespace(),
-            current_user={"user_id": "user-1", "role": "member"},
-        )
+    payload = await routes_connections.start_connection_setup(
+        "signal_personal",
+        body=routes_connections.ConnectionActionRequest(
+            workspace_id="ws-1",
+            surface="sage",
+            selected_gateway_id="gateway-1",
+        ),
+        request=SimpleNamespace(),
+        current_user={"user_id": "user-1", "role": "member"},
+    )
 
-    assert exc_info.value.status_code == 409
-    assert "launch" in exc_info.value.detail
+    assert payload["next_action"] == "agent_computer_local_bridge_setup"
+    assert payload["certification_required"] is True
+    assert payload["bridge_contract"]["channel_key"] == "signal_personal"
+    assert payload["bridge_contract"]["http_contract"]["health"] == "GET /health"
 
 
 @pytest.mark.anyio
@@ -1359,7 +1461,7 @@ async def test_connection_verify_route_returns_provider_identity(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_wechat_connection_setup_is_blocked_until_certified(monkeypatch):
+async def test_wechat_connection_setup_returns_agent_computer_contract(monkeypatch):
     _install_auth(monkeypatch)
 
     async def fail_create_setup_session(*_args, **_kwargs):
@@ -1388,17 +1490,18 @@ async def test_wechat_connection_setup_is_blocked_until_certified(monkeypatch):
         lambda registration: dict(registration),
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await routes_connections.start_connection_setup(
-            "wechat_personal",
-            body=routes_connections.ConnectionActionRequest(
-                workspace_id="ws-1",
-                surface="sage",
-                selected_gateway_id="gateway-1",
-            ),
-            request=SimpleNamespace(),
-            current_user={"user_id": "user-1", "role": "member"},
-        )
+    payload = await routes_connections.start_connection_setup(
+        "wechat_personal",
+        body=routes_connections.ConnectionActionRequest(
+            workspace_id="ws-1",
+            surface="sage",
+            selected_gateway_id="gateway-1",
+        ),
+        request=SimpleNamespace(),
+        current_user={"user_id": "user-1", "role": "member"},
+    )
 
-    assert exc_info.value.status_code == 409
-    assert "launch" in exc_info.value.detail
+    assert payload["next_action"] == "agent_computer_local_bridge_setup"
+    assert payload["certification_required"] is True
+    assert payload["bridge_contract"]["channel_key"] == "wechat_personal"
+    assert payload["bridge_contract"]["gateway_runtime"] == "empyralis-gateway/src/channels/local-bridge-runtime.ts"

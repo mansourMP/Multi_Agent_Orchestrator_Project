@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, Optional
 from server_modules import (
     channel_lane_contract_service,
     connection_oauth_service,
+    connection_readiness_service,
     gateway_registry_service,
     gateway_state_repository,
     personal_channels_repository,
@@ -108,7 +109,7 @@ def _item(
         setup_available=setup,
         runtime_usable=usable,
     )
-    return {
+    return connection_readiness_service.decorate_catalog_item({
         "id": connection_id,
         "display_name": display_name,
         "lane": lane,
@@ -136,7 +137,7 @@ def _item(
         "proof_blockers": ["generic_connection_test_not_implemented"] if test_action else [],
         "auth_required_fields": auth_required_fields,
         "test_runner": _GENERIC_CONNECTION_TEST_RUNNER if test_action else "not_required",
-    }
+    })
 
 
 def _static_launch_blockers(
@@ -302,6 +303,27 @@ _CATALOG: tuple[Dict[str, Any], ...] = (
         connector_id="telegram_bot",
         account_provider="telegram_bot",
         vault_provider="telegram_bot",
+    ),
+    _item(
+        connection_id="sage_telegram_hosted",
+        display_name="Sage on Telegram",
+        lane=LANE_STUDIO_BUSINESS_CHANNEL,
+        surfaces=("sage",),
+        setup_kind="first_party_bot_pairing",
+        launch_status=LAUNCH_PLANNED,
+        description="Planned hosted Empyralis Telegram bot for users who want to message Sage without bringing their own bot token.",
+        supports_inbound=True,
+        supports_outbound=True,
+        media_support=_media(text=True),
+        approval_policy="channel_policy",
+        health_check="first_party_bot_health",
+        provider="sage_telegram_hosted_bot",
+        runtime_provider="sage_telegram_hosted_bot",
+        connector_id="sage_telegram_hosted",
+        account_provider="sage_telegram_hosted",
+        vault_provider="sage_telegram_hosted",
+        setup_available=False,
+        runtime_usable=False,
     ),
     _item(
         connection_id="web_chat",
@@ -1356,6 +1378,8 @@ def _next_action(
     selected_gateway: Optional[Dict[str, Any]],
     selected_gateway_online: bool,
 ) -> str:
+    if connected and _token(item.get("id")) in {"signal_personal", "imessage_personal", "wechat_personal"}:
+        return "manage"
     if _token(item.get("launch_status")) not in _USABLE_LAUNCH_STATUSES or not bool(item.get("runtime_usable")):
         return "locked"
     if bool(item.get("requires_gateway")) and not selected_gateway:
@@ -1510,6 +1534,7 @@ def status_items(
             "last_error": last_error,
             "next_action": next_action,
         })
+        payload = connection_readiness_service.decorate_status_item(payload)
         out.append(payload)
     return out
 

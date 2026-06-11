@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from server_modules import auth as auth_module
 from server_modules import (
     connection_catalog_service,
+    connection_certification_service,
     connection_oauth_service,
     connection_verify_service,
     execution_mode_policy,
@@ -304,10 +305,15 @@ async def start_connection_setup(
 ):
     auth_module.validate_csrf(request)
     resolved_workspace_id, _tenant_id = _workspace_scope(current_user, body.workspace_id, minimum_role="member")
-    try:
-        item = connection_catalog_service.reject_if_unusable(connection_id)
-    except Exception as error:
-        _raise_catalog_error(error)
+    item = connection_catalog_service.catalog_item(connection_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Connection was not found.")
+    local_bridge_contract = LOCAL_BRIDGE_SETUP_CONTRACTS.get(str(item.get("id") or "").strip())
+    if not local_bridge_contract:
+        try:
+            item = connection_catalog_service.reject_if_unusable(connection_id)
+        except Exception as error:
+            _raise_catalog_error(error)
     if item.get("requires_gateway"):
         selection = sage_agent_computer_selection_service.get_selection(
             workspace_id=resolved_workspace_id,
@@ -337,7 +343,6 @@ async def start_connection_setup(
                 "setup_endpoint": f"/api/personal-channels/{channel}/gateways/{gateway_id}/setup",
                 "next_action": "personal_channel_setup",
             }
-        local_bridge_contract = LOCAL_BRIDGE_SETUP_CONTRACTS.get(str(item.get("id") or "").strip())
         if local_bridge_contract:
             env_prefix = str(local_bridge_contract.get("env_prefix") or "").strip()
             return {
@@ -347,6 +352,7 @@ async def start_connection_setup(
                 "setup_endpoint": f"/api/personal-channels/gateways/{gateway_id}/channels",
                 "message_endpoint": f"/api/personal-channels/{item.get('id')}/gateways/{gateway_id}/messages",
                 "next_action": "agent_computer_local_bridge_setup",
+                "certification_required": True,
                 "bridge_contract": {
                     **local_bridge_contract,
                     "channel_key": item.get("id"),
@@ -549,6 +555,53 @@ async def verify_connection(
         "provider": provider,
         **result,
     }
+
+
+@router.get("/connections/{connection_id}/doctor")
+async def doctor_connection(
+    connection_id: str,
+    workspace_id: str = Query(..., min_length=1),
+    surface: Optional[str] = Query(default=None),
+    selected_gateway_id: Optional[str] = Query(default=None),
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id, tenant_id = _workspace_scope(current_user, workspace_id, minimum_role="viewer")
+    return {
+        "ok": True,
+        **connection_certification_service.doctor_connection(
+            connection_id=connection_id,
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+            user_id=_user_id(current_user),
+            surface=surface,
+            selected_gateway_id=selected_gateway_id,
+        ),
+    }
+
+
+@router.post("/connections/{connection_id}/certify")
+async def certify_connection(
+    connection_id: str,
+    body: ConnectionActionRequest,
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    auth_module.validate_csrf(request)
+    resolved_workspace_id, tenant_id = _workspace_scope(current_user, body.workspace_id, minimum_role="owner")
+    auth_module.enforce_workspace_access(
+        current_user,
+        resolved_workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
+    return connection_certification_service.certify_connection(
+        connection_id=connection_id,
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        user_id=_user_id(current_user),
+        surface=body.surface,
+        selected_gateway_id=body.selected_gateway_id,
+    )
 
 
 @router.post("/connections/{connection_id}/disconnect")

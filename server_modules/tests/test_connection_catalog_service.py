@@ -14,6 +14,8 @@ def test_catalog_promotes_supported_work_app_connectors() -> None:
         assert item["launchable"] is True
         assert item["requires_gateway"] is False
         assert item["vault_provider"] == connection_id
+        assert item["readiness_status"] == "implementation_ready"
+        assert item["certification_required"] is True
 
 
 def test_catalog_keeps_email_channel_partial_while_smtp_app_is_live() -> None:
@@ -23,5 +25,25 @@ def test_catalog_keeps_email_channel_partial_while_smtp_app_is_live() -> None:
     assert by_id["email"]["lane"] == service.LANE_STUDIO_BUSINESS_CHANNEL
     assert by_id["email"]["launch_status"] == service.LAUNCH_PARTIAL
     assert by_id["email"]["runtime_usable"] is False
+    assert by_id["email"]["readiness_status"] == "planned"
+    assert by_id["email"]["certification_required"] is True
     assert by_id["smtp"]["lane"] == service.LANE_WORK_APP_CONNECTOR
     assert by_id["smtp"]["launch_status"] == service.LAUNCH_LIVE_WHEN_CONFIGURED
+    assert by_id["smtp"]["readiness_status"] == "implementation_ready"
+
+
+def test_catalog_exposes_channel_certification_truth() -> None:
+    payload = service.list_catalog_payload(surface="sage")
+    by_id = {item["id"]: item for item in payload["items"]}
+
+    assert by_id["telegram_personal"]["readiness_status"] == "launch_certified"
+    assert by_id["telegram_personal"]["certification_required"] is False
+    assert by_id["whatsapp_personal"]["readiness_status"] == "launch_certified"
+    assert by_id["signal_personal"]["readiness_status"] == "planned"
+    assert by_id["signal_personal"]["requires_local_bridge"] is True
+    assert by_id["signal_personal"]["certification_required"] is True
+    assert by_id["signal_personal"]["certification_requirements"]
+    assert by_id["apple_messages_business"]["readiness_status"] == "planned"
+    assert by_id["apple_messages_business"]["requires_external_account"] is True
+    assert by_id["sage_telegram_hosted"]["readiness_status"] == "planned"
+    assert by_id["sage_telegram_hosted"]["requires_gateway"] is False

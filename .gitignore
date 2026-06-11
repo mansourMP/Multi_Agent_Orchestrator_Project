@@ -35,6 +35,7 @@ yarn-error.log*
 
 # Local generated runtime/certification scratch
 .tmp/
+reports/agent-computer-launch-cert/
 
 # OS files
 .DS_Store

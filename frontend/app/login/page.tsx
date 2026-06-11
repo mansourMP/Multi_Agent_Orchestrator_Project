@@ -72,6 +72,14 @@ function AuthErrorNotice({ title, message }: { title: string; message: string })
   );
 }
 
+function safeNextPath(rawNext: string): string {
+  const trimmed = rawNext.trim();
+  if (!trimmed || !trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('\\')) {
+    return '/';
+  }
+  return trimmed;
+}
+
 function LoginPageContent() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
@@ -93,6 +101,7 @@ function LoginPageContent() {
   const workspaceParam = String(searchParams.get('workspace_id') || '').trim();
   const pilotCode = String(searchParams.get('pilot_code') || '').trim();
   const providerError = String(searchParams.get('error') || '').trim();
+  const loginRedirectTarget = safeNextPath(String(searchParams.get('next') || ''));
   const signupSearchParams = new URLSearchParams();
   if (sourceParam) {
     signupSearchParams.set('source', sourceParam);
@@ -164,7 +173,7 @@ function LoginPageContent() {
           return;
         }
         clearExternalAuthPending();
-        window.location.replace('/');
+        window.location.replace(loginRedirectTarget);
       } catch {
         // keep waiting for the callback tab or focus handoff
       } finally {
@@ -176,7 +185,7 @@ function LoginPageContent() {
     return watchExternalAuthCompletion(() => {
       void recoverGoogleAuth();
     });
-  }, [isHydrated]);
+  }, [isHydrated, loginRedirectTarget]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -200,10 +209,9 @@ function LoginPageContent() {
     }
     try {
       await awaitBrowserAuthReady({ attempts: 12, delayMs: 250 });
-      window.location.replace('/');
-    } catch (nextError) {
-      const message = nextError instanceof Error ? nextError.message : 'Session was not ready.';
-      setError(`Session readiness failed: ${message}`);
+      window.location.replace(loginRedirectTarget);
+    } catch {
+      window.location.replace(loginRedirectTarget);
     } finally {
       setSubmitting(false);
     }

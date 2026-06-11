@@ -4,11 +4,12 @@ import { type ClipboardEvent, type ReactNode, useCallback, useEffect, useMemo, u
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Check, X } from 'lucide-react';
 
-import { CommandSheet } from '@/lib/ui/command-sheet';
 import { FormField, FormInput, FormSelect } from '@/lib/ui/form-controls';
 import { MotionSlidePanel } from '@/lib/ui/motion';
+import { PlatformNotification } from '@/lib/ui/platform-notification';
 import { AppButton, AppNotice, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
+import { ConnectorSetupModalShell } from '@/lib/workspace/connector-setup-modal-shell';
 import { WorkstationSplitWorkbench } from '@/lib/workspace/workstation-split-workbench';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { emitWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
@@ -546,14 +547,24 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     surfaceScope: 'all',
   },
   {
+    id: 'sage_telegram_hosted',
+    label: 'Sage on Telegram',
+    image: '/brand-assets/channels/telegram.svg?v=3',
+    connectorIds: ['sage_telegram_hosted'],
+    capabilityTags: ['Hosted channel', 'Bot replies'],
+    summary: 'Sage on Telegram is the hosted Telegram path. Users open Sage from Telegram without bringing their own bot token.',
+    setupHint: 'Connect the hosted Sage Telegram channel when it is enabled for this environment.',
+    surfaceScope: 'all',
+  },
+  {
     id: 'telegram_bot',
     label: 'Telegram Bot',
     image: '/brand-assets/channels/telegram.svg?v=3',
     connectorIds: ['telegram_bot'],
-    capabilityTags: ['Cloud channel', 'Bot replies'],
-    summary: 'Telegram Bot is the cloud-first Telegram path for Sage and Studio. It does not need Agent Computer.',
-    setupHint: 'Connect a Telegram bot token when Sage should be reachable in Telegram without using your personal account.',
-    surfaceScope: 'all',
+    capabilityTags: ['Custom bot', 'Advanced'],
+    summary: 'Telegram Bot is the custom Studio bot-token path for teams that bring their own Telegram bot.',
+    setupHint: 'Use hosted Sage on Telegram for the normal path. Custom Telegram bot setup belongs in Studio or Advanced.',
+    surfaceScope: 'studio_only',
   },
   {
     id: 'whatsapp_twilio',
@@ -572,7 +583,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     connectorIds: ['slack'],
     capabilityTags: ['Channels', 'DMs'],
     summary: 'Use Slack when Sage should work in team channels and direct messages.',
-    setupHint: 'Connect Slack to let Sage read and send messages in your workspace.',
+    setupHint: 'Connect Slack with workspace sign-in when Sage should work in team channels and direct messages.',
     surfaceScope: 'all',
   },
   {
@@ -582,7 +593,7 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     connectorIds: ['discord_bot'],
     capabilityTags: ['Servers', 'DMs'],
     summary: 'Discord bot deployments let Sage or Studio agents work in configured servers, channels, and DMs.',
-    setupHint: 'Connect a Discord bot when Sage or a Studio agent should work in Discord.',
+    setupHint: 'Connect Discord through an app install when Sage or a Studio agent should work in Discord.',
     surfaceScope: 'all',
   },
   {
@@ -1008,51 +1019,54 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
 ];
 
 const CONNECTOR_AUTH_FIELD_FALLBACKS: Record<string, string[]> = {
-  google_workspace: ['access_token'],
-  gmail: ['access_token'],
-  google_calendar: ['access_token'],
-  github: ['personal_access_token'],
-  notion: ['integration_token'],
-  linear: ['api_key'],
-  dropbox: ['access_token'],
-  figma: ['access_token'],
-  todoist: ['access_token'],
-  airtable: ['access_token'],
-  canva: ['access_token'],
-  asana: ['access_token'],
-  hubspot: ['access_token'],
-  zoom: ['access_token'],
-  calendly: ['access_token'],
-  clickup: ['access_token'],
-  jira: ['access_token'],
-  stripe: ['access_token'],
-  salesforce: ['access_token'],
-  webflow: ['access_token'],
-  monday: ['access_token'],
-  box: ['access_token'],
-  gitlab: ['access_token'],
-  bitbucket: ['access_token'],
-  confluence: ['access_token'],
-  miro: ['access_token'],
-  mailchimp: ['access_token'],
-  pipedrive: ['access_token'],
-  intercom: ['access_token'],
-  docusign: ['access_token'],
-  square: ['access_token'],
-  typeform: ['access_token'],
-  quickbooks: ['access_token'],
-  xero: ['access_token'],
-  freshbooks: ['access_token'],
-  vercel: ['access_token'],
   s3: ['aws_access_key_id', 'aws_secret_access_key', 'region'],
   smtp: ['host', 'port', 'username', 'password', 'use_tls'],
-  telegram_bot: ['bot_token', 'chat_id'],
-  slack: ['bot_token', 'user_token', 'team_id', 'team_name'],
-  discord_bot: ['bot_token'],
   whatsapp_twilio: ['account_sid', 'auth_token', 'from_number', 'to_number'],
   wechat_work: ['webhook_url'],
   instagram_business: ['access_token', 'instagram_account_id', 'page_id'],
 };
+
+const MANAGED_OAUTH_PROVIDER_IDS = new Set([
+  'google_workspace',
+  'gmail',
+  'google_calendar',
+  'google_drive',
+  'microsoft_365',
+  'outlook',
+  'github',
+  'notion',
+  'linear',
+  'dropbox',
+  'figma',
+  'todoist',
+  'airtable',
+  'canva',
+  'asana',
+  'hubspot',
+  'zoom',
+  'calendly',
+  'clickup',
+  'jira',
+  'stripe',
+  'salesforce',
+  'webflow',
+  'monday',
+  'box',
+  'gitlab',
+  'bitbucket',
+  'confluence',
+  'miro',
+  'mailchimp',
+  'pipedrive',
+  'intercom',
+  'docusign',
+  'square',
+  'typeform',
+  'quickbooks',
+  'xero',
+  'freshbooks',
+  'vercel',
+]);
 
 const CONNECTOR_STATIC_LOCKED_IDS = new Set<string>();
 
@@ -1086,11 +1100,16 @@ function normalizeIntegrationCategoryId(value: unknown): IntegrationWorkbenchCat
     case 'recipe':
     case 'workflows':
     case 'automations':
-      return 'recipes';
+      return 'apps';
     case 'channels':
     case 'personal_messaging':
     case 'apps_messaging':
       return 'channels';
+    case 'agent_computer':
+    case 'agent-computer':
+    case 'computer':
+    case 'hardware':
+      return 'advanced';
     case 'apps':
     case 'app_connections':
     case 'connected_apps':
@@ -1714,6 +1733,32 @@ function workspaceAiRouteNeedsSetup(route: Record<string, unknown> | null): bool
 function errorMentionsMissingCredential(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? '');
   return message.toLowerCase().includes('credential id not found');
+}
+
+function errorMentionsMissingAccessToken(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const lower = message.toLowerCase();
+  return lower.includes('access token')
+    && (lower.includes('required') || lower.includes('missing'));
+}
+
+function humanizeConnectionSetupError(error: unknown, label = 'This connection'): string {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const normalized = message.trim();
+  const lower = normalized.toLowerCase();
+  if (lower.includes('oauth is not configured')) {
+    return `${label} sign-in is not configured in this environment yet. Add the provider OAuth app in deployment settings, then retry.`;
+  }
+  if (errorMentionsMissingAccessToken(error) || errorMentionsMissingCredential(error)) {
+    return `${label} is not connected yet. Click Connect to sign in with the provider.`;
+  }
+  if (lower.includes('permission') || lower.includes('forbidden') || lower.includes('owner')) {
+    return `${label} can only be connected by a workspace owner.`;
+  }
+  if (lower.includes('not launch-ready') || lower.includes('not available yet')) {
+    return `${label} setup is not available in this environment yet.`;
+  }
+  return normalized || `${label} could not start setup.`;
 }
 
 function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
@@ -2638,6 +2683,10 @@ export function WorkstationSageConnectorsPane({
     void loadState()
       .catch((loadError) => {
         if (!cancelled) {
+          if (errorMentionsMissingCredential(loadError) || errorMentionsMissingAccessToken(loadError)) {
+            setError(null);
+            return;
+          }
           setError(loadError instanceof Error ? loadError.message : 'Connections are unavailable right now.');
         }
       })
@@ -2650,6 +2699,19 @@ export function WorkstationSageConnectorsPane({
       cancelled = true;
     };
   }, [cacheKey, loadState]);
+
+  useEffect(() => {
+    const callbackError = readString(searchParams.get('connection_error'));
+    if (!callbackError) {
+      return;
+    }
+    setError(humanizeConnectionSetupError(new Error(callbackError), 'Connection'));
+    if (typeof window !== 'undefined') {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete('connection_error');
+      window.history.replaceState(window.history.state, '', nextUrl.toString());
+    }
+  }, [searchParams]);
 
   const localCompanionOnline = useMemo(
     () => bootstrap.runtime.runtimeTargets.some((target) => target.id === 'local_companion' && target.online),
@@ -3006,7 +3068,21 @@ export function WorkstationSageConnectorsPane({
   }
 
   function connectionIsConnectable(item: ConnectionStatusItem | null): boolean {
-    return connectionDisplayState(item) === 'connectable';
+    const displayState = connectionDisplayState(item);
+    if (displayState === 'connectable') {
+      return true;
+    }
+    if (displayState !== 'requires_setup') {
+      return false;
+    }
+    const launchStatus = readString(item?.launch_status).toLowerCase();
+    const nextAction = readString(item?.next_action).toLowerCase();
+    return item?.setup_available !== false
+      && item?.runtime_usable !== false
+      && nextAction !== 'locked'
+      && launchStatus !== 'planned'
+      && launchStatus !== 'partial'
+      && launchStatus !== 'locked';
   }
 
   function connectionUsesManagedSetup(item: ConnectionStatusItem | null): boolean {
@@ -3016,14 +3092,27 @@ export function WorkstationSageConnectorsPane({
       || setupKind === 'oauth_mailbox';
   }
 
+  function connectionProviderUsesManagedOAuth(provider: string | null | undefined): boolean {
+    return MANAGED_OAUTH_PROVIDER_IDS.has(readString(provider).toLowerCase());
+  }
+
   function connectionLaunchLocked(item: ConnectionStatusItem | null): boolean {
     if (!item) {
       return false;
     }
     const displayState = connectionDisplayState(item);
     if (displayState) {
-      return displayState === 'requires_setup'
-        || displayState === 'requires_agent_computer'
+      if (displayState === 'requires_setup') {
+        const launchStatus = readString(item.launch_status).toLowerCase();
+        const nextAction = readString(item.next_action).toLowerCase();
+        return item.setup_available === false
+          || item.runtime_usable === false
+          || nextAction === 'locked'
+          || launchStatus === 'planned'
+          || launchStatus === 'partial'
+          || launchStatus === 'locked';
+      }
+      return displayState === 'requires_agent_computer'
         || displayState === 'unavailable';
     }
     const launchStatus = readString(item.launch_status).toLowerCase();
@@ -3083,7 +3172,7 @@ export function WorkstationSageConnectorsPane({
 
   function consumerSetupStatusLabel(setupState: ConsumerSetupState | null): string | null {
     if (setupState === 'oauth_ready') {
-      return 'Ready to connect';
+      return 'Connect';
     }
     if (setupState === 'oauth_not_wired') {
       return 'Connect';
@@ -3132,8 +3221,12 @@ export function WorkstationSageConnectorsPane({
     const fallbackAuthFields = CONNECTOR_AUTH_FIELD_FALLBACKS[connectionProvider]
       ?? CONNECTOR_AUTH_FIELD_FALLBACKS[fallbackConnectionId]
       ?? [];
-    const setupState = consumerSetupState(record, statusItem);
-    const hideCredentialFields = setupState === 'oauth_ready';
+    const managedOAuth = connectionUsesManagedSetup(statusItem)
+      || connectionProviderUsesManagedOAuth(connectionProvider)
+      || connectionProviderUsesManagedOAuth(fallbackConnectionId);
+    const setupState = consumerSetupState(record, statusItem)
+      ?? (!statusItem && managedOAuth ? 'oauth_ready' : null);
+    const hideCredentialFields = setupState === 'oauth_ready' || managedOAuth;
     const effectiveAuthFields = hideCredentialFields
       ? []
       : fallbackAuthFields.length > 0 ? fallbackAuthFields : connectionAuthFields;
@@ -3153,7 +3246,7 @@ export function WorkstationSageConnectorsPane({
       statusLabel: opensAdvancedSetup
         ? 'Advanced setup'
         : locked ? connectionLockedLabel(statusItem, 'Requires setup') : connected ? 'Connected' : consumerSetupStatusLabel(setupState) ?? 'Not connected',
-      statusTone: locked ? 'neutral' : connected ? 'connected' : setupState ? 'warning' : 'neutral',
+      statusTone: locked ? 'neutral' : connected ? 'connected' : 'neutral',
       summary: record.definition.summary,
       nextStep: locked ? null : connected ? null : record.definition.setupHint,
       actionLabel: locked ? null : actionLabel,
@@ -3234,6 +3327,29 @@ export function WorkstationSageConnectorsPane({
     [knowledgeConnectorCards],
   );
 
+  function connectorAsAppSectionCard(card: ConnectorCardRecord): ExternalIntegrationCardRecord {
+    const record = connectorAsExternalCard(card);
+    if (record.locked || record.statusTone === 'connected') {
+      return {
+        ...record,
+        connectionAuthFields: [],
+      };
+    }
+    if (record.actionTarget === 'advanced') {
+      return {
+        ...record,
+        connectionAuthFields: [],
+        actionLabel: 'Open Advanced',
+      };
+    }
+    return {
+      ...record,
+      connectionAuthFields: [],
+      actionLabel: record.actionLabel ?? (record.connectionId ? 'Connect' : null),
+      actionTarget: record.connectionId ? 'connection' : record.actionTarget,
+    };
+  }
+
   const appCards = useMemo<ExternalIntegrationCardRecord[]>(
     () => connectorCards
       .filter((card) =>
@@ -3279,13 +3395,15 @@ export function WorkstationSageConnectorsPane({
         || card.id === 'wechat_work'
         || card.id === 'instagram_business',
       )
-      .map(connectorAsExternalCard),
+      .map(connectorAsAppSectionCard),
     [connectorCards],
   );
 
   const channelCards = useMemo<ExternalIntegrationCardRecord[]>(
     () => {
-      const telegramBotRecord = connectorCards.find((card) => card.id === 'telegram_bot') ?? null;
+      const telegramBotRecord = connectorCards.find((card) => card.id === 'sage_telegram_hosted')
+        ?? connectorCards.find((card) => card.id === 'telegram_bot')
+        ?? null;
       const telegramPersonalRecord = communicationPersonalCards.find((card) => card.id === 'telegram_personal') ?? null;
       const whatsappPersonalRecord = communicationPersonalCards.find((card) => card.id === 'whatsapp_personal') ?? null;
       const telegramBot = telegramBotRecord ? connectorAsExternalCard(telegramBotRecord) : null;
@@ -3297,14 +3415,14 @@ export function WorkstationSageConnectorsPane({
             id: 'telegram',
             label: 'Telegram',
             image: telegramBot?.image ?? telegramPersonal?.image ?? '',
-            detail: 'Use a cloud bot or your personal Telegram account.',
+            detail: 'Use hosted Telegram or your personal Telegram account.',
             statusLabel: telegramBot?.statusTone === 'connected'
               ? 'Bot connected'
               : telegramPersonal?.statusTone === 'connected'
                 ? 'Personal connected'
                 : 'Choose setup',
             statusTone: telegramConnected ? 'connected' : 'neutral',
-            summary: 'Choose Telegram Bot for cloud setup, or Personal Telegram when Sage must use your logged-in account through Agent Computer.',
+            summary: 'Choose hosted Telegram for the simple cloud setup, or Personal Telegram when Sage must use your logged-in account through Agent Computer.',
             nextStep: null,
             actionTarget: 'close',
             runtimeDependency: 'gateway_optional',
@@ -3364,14 +3482,6 @@ export function WorkstationSageConnectorsPane({
       detail: 'Gmail, Calendar, GitHub, Notion, Linear, Dropbox, S3, SMTP, WeChat Work, Instagram, and more.',
       countLabel: `${appCards.length}`,
       statusTone: appCards.some((card) => card.statusTone === 'connected') ? 'connected' : 'neutral',
-    });
-    groups.push({
-      id: 'recipes',
-      label: 'Recipes',
-      description: 'Repeatable work Sage can start from connected apps.',
-      detail: 'Morning brief, Email triage, Meeting prep, Follow up, Weekly report.',
-      countLabel: `${SAGE_RECIPE_DEFINITIONS.length}`,
-      statusTone: 'neutral',
     });
     groups.push({
       id: 'channels',
@@ -3534,7 +3644,7 @@ export function WorkstationSageConnectorsPane({
       setError(null);
       await loadState().catch(() => undefined);
     } catch (connectionError) {
-      setError(connectionError instanceof Error ? connectionError.message : 'Connection setup is not available yet.');
+      setError(humanizeConnectionSetupError(connectionError, record.label));
     } finally {
       setBusyCardId(null);
     }
@@ -3654,10 +3764,10 @@ export function WorkstationSageConnectorsPane({
 
   function connectorCredentialPlaceholder(field: string): string {
     if (field === 'access_token') {
-      return 'OAuth access token';
+      return 'Access token';
     }
     if (field === 'personal_access_token') {
-      return 'ghp_...';
+      return 'Personal access token';
     }
     if (field === 'integration_token') {
       return 'Integration token';
@@ -3739,11 +3849,8 @@ export function WorkstationSageConnectorsPane({
 
   function connectorCredentialFieldLabelForRecord(record: ExternalIntegrationCardRecord, field: string): string {
     const provider = readString(record.connectionProvider).toLowerCase();
-    if ((provider === 'google_workspace' || provider === 'gmail' || provider === 'google_calendar') && field === 'access_token') {
-      return 'Google Workspace access token';
-    }
     if (provider === 'github' && field === 'personal_access_token') {
-      return 'GitHub personal access token';
+      return 'Personal access token';
     }
     if (provider === 'notion' && field === 'integration_token') {
       return 'Notion integration token';
@@ -4639,6 +4746,10 @@ export function WorkstationSageConnectorsPane({
             openIntegrationSection('advanced');
             return;
           }
+          if (record.actionTarget === 'connection') {
+            void handleConnectionSetupStart(record);
+            return;
+          }
           if (record.id === 'telegram' && !isExpanded) {
             setTelegramChannelMode('bot');
           }
@@ -5155,25 +5266,26 @@ export function WorkstationSageConnectorsPane({
 
   function renderTelegramChannelExpand(record: ExternalIntegrationCardRecord, options: { showClose?: boolean } = {}) {
     const showClose = options.showClose !== false;
-    const telegramBotRecord = connectorCards.find((card) => card.id === 'telegram_bot') ?? null;
+    const telegramBotRecord = connectorCards.find((card) => card.id === 'sage_telegram_hosted')
+      ?? connectorCards.find((card) => card.id === 'telegram_bot')
+      ?? null;
     const telegramPersonalRecord = communicationPersonalCards.find((card) => card.id === 'telegram_personal') ?? null;
     const botRecord = telegramBotRecord ? connectorAsExternalCard(telegramBotRecord) : null;
     const botSetupRecord: ExternalIntegrationCardRecord = {
       id: botRecord?.id ?? 'connector_telegram_bot',
-      label: botRecord?.label ?? 'Telegram Bot',
+      label: botRecord?.label ?? 'Sage on Telegram',
       image: botRecord?.image ?? record.image,
-      detail: botRecord?.detail ?? 'Cloud Telegram bot channel.',
+      detail: botRecord?.detail ?? 'Hosted Telegram channel.',
       statusLabel: botRecord?.statusLabel ?? 'Not connected',
       statusTone: botRecord?.statusTone ?? 'neutral',
-      summary: botRecord?.summary ?? 'Telegram Bot is the cloud-first Telegram path for Sage and Studio. It does not need Agent Computer.',
-      nextStep: 'Paste the bot token from BotFather and the chat ID or @channel username Sage should send messages to.',
+      summary: botRecord?.summary ?? 'Sage on Telegram is the hosted cloud path. It does not need Agent Computer or user-managed bot credentials.',
+      nextStep: botRecord?.nextStep ?? 'Hosted Telegram must be enabled by the platform before users can connect it.',
+      actionLabel: botRecord?.actionLabel ?? null,
       actionTarget: 'connection',
-      connectionId: botRecord?.connectionId ?? 'telegram_bot',
-      connectionProvider: botRecord?.connectionProvider ?? 'telegram_bot',
-      connectionAuthFields: (botRecord?.connectionAuthFields ?? []).length > 0
-        ? botRecord?.connectionAuthFields ?? []
-        : ['bot_token', 'chat_id'],
-      locked: false,
+      connectionId: botRecord?.connectionId ?? 'sage_telegram_hosted',
+      connectionProvider: botRecord?.connectionProvider ?? 'sage_telegram_hosted',
+      connectionAuthFields: botRecord?.connectionAuthFields ?? [],
+      locked: botRecord?.locked ?? false,
     };
     const channelDraft = channelDrafts.telegram;
     const channelBusy = busyCardId === 'telegram_personal' || busyCardId === 'telegram_personal:test';
@@ -5259,7 +5371,27 @@ export function WorkstationSageConnectorsPane({
         </div>
         {telegramChannelMode === 'bot' ? (
           <>
+            {!showBotCredentialForm ? (
+              <>
+                <div className="sage-unified-expand__text">{botSetupRecord.summary}</div>
+                {botSetupRecord.nextStep ? <div className="sage-unified-expand__text">{botSetupRecord.nextStep}</div> : null}
+                {botSetupRecord.locked ? <AppNotice tone="warning">Hosted Telegram is not enabled in this environment yet.</AppNotice> : null}
+              </>
+            ) : null}
             {showBotCredentialForm ? renderFlatConnectorCredentialForm(botSetupRecord) : null}
+            {botSetupRecord.actionLabel && !showBotCredentialForm && !botSetupRecord.locked ? (
+              <div className="sage-unified-expand__actions">
+                <button
+                  type="button"
+                  className="app-button app-button--primary"
+                  onClick={() => {
+                    void handleConnectionSetupStart(botSetupRecord);
+                  }}
+                >
+                  {botSetupRecord.actionLabel}
+                </button>
+              </div>
+            ) : null}
           </>
         ) : (
           <>
@@ -5709,7 +5841,7 @@ export function WorkstationSageConnectorsPane({
     const lastSeen = selectedGateway ? formatRelativeTimestamp(selectedGateway.last_seen_at) : 'Not connected';
     const statusLabel = connected ? 'Online and ready' : 'Not connected';
     return (
-      <CommandSheet
+      <ConnectorSetupModalShell
         open={computerConnectOpen}
         title="Connect Agent Computer"
         description="Choose a computer source for Sage. Cloud remains the default when no computer is connected."
@@ -5770,7 +5902,7 @@ export function WorkstationSageConnectorsPane({
             <p>Connection details are only for reconnecting, revoking, or debugging the selected Agent Computer. Normal users should only need the connect button.</p>
           </details>
         </div>
-      </CommandSheet>
+      </ConnectorSetupModalShell>
     );
   }
 
@@ -6613,12 +6745,9 @@ export function WorkstationSageConnectorsPane({
   function renderSelectedIntegrationDetail() {
     if (!selectedIntegrationGroup) {
       return (
-        <>
-          {error ? <AppNotice tone="warning">{error}</AppNotice> : null}
-          <div className="sage-settings-empty">
-            No setup options available.
-          </div>
-        </>
+        <div className="sage-settings-empty">
+          No setup options available.
+        </div>
       );
     }
     const detail = (() => {
@@ -6636,12 +6765,7 @@ export function WorkstationSageConnectorsPane({
           return renderAdvancedOverview();
       }
     })();
-    return (
-      <>
-        {error ? <AppNotice tone="warning">{error}</AppNotice> : null}
-        {detail}
-      </>
-    );
+    return detail;
   }
 
 
@@ -6657,10 +6781,18 @@ export function WorkstationSageConnectorsPane({
         ) : null}
         {renderSelectedIntegrationDetail()}
       </WorkstationSplitWorkbench>
+      {error ? (
+        <PlatformNotification
+          tone="warning"
+          title="Connection setup needs attention"
+          detail={error}
+          onClose={() => setError(null)}
+        />
+      ) : null}
 
       {renderComputerConnectSheet()}
 
-      <CommandSheet
+      <ConnectorSetupModalShell
         open={providerPickerOpen}
         title="Choose workspace AI route"
         description="Use the workspace default route, provider API keys, or local models from AI & Runtime."
@@ -6688,7 +6820,7 @@ export function WorkstationSageConnectorsPane({
             </section>
           ))}
         </div>
-      </CommandSheet>
+      </ConnectorSetupModalShell>
     </div>
   );
 }

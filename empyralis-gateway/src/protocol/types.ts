@@ -3,6 +3,7 @@ export const PROTOCOL_VERSION = "v1alpha2";
 export type GatewayRequestType =
   | "gateway.connect"
   | "gateway.heartbeat"
+  | "gateway.probe"
   | "gateway.state.update"
   | "gateway.disconnect"
   | "tool.invoke"

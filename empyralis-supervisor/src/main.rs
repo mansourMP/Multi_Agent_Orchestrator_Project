@@ -1,7 +1,7 @@
 mod capabilities;
 mod execution;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
 use std::net::SocketAddr;
@@ -45,11 +45,18 @@ struct AppState {
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 struct PolicyEnvelope {
+    #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     agent_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     allowed_paths: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     filesystem_scope: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     full_access_warning_acknowledged: Option<bool>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -795,6 +802,54 @@ mod tests {
     }
 
     #[test]
+    fn execute_signature_preserves_extra_policy_fields() {
+        let secret = "test-secret";
+        let state = test_state(secret);
+        let expires_at = (Utc::now() + chrono::Duration::seconds(30)).to_rfc3339();
+        let mut extra = BTreeMap::new();
+        extra.insert(
+            "blocked_filesystem_scope".to_string(),
+            serde_json::json!([]),
+        );
+        extra.insert(
+            "policy_id".to_string(),
+            serde_json::json!("gateway:gateway_123"),
+        );
+        extra.insert("policy_version".to_string(), serde_json::json!(1));
+        let mut request = signed_execute_request(
+            secret,
+            "req-extra-policy",
+            "shell.execute",
+            "run-extra-policy",
+            "trace-extra-policy",
+            "ws-1",
+            serde_json::json!({"command": "echo hello from hardware"}),
+            Some("full_access"),
+            true,
+            Some("sage"),
+            Some(PolicyEnvelope {
+                mode: Some("full_access".to_string()),
+                agent_scope: Some("sage".to_string()),
+                allowed_paths: Some(vec!["/".to_string()]),
+                filesystem_scope: Some(vec!["/".to_string()]),
+                full_access_warning_acknowledged: Some(true),
+                extra,
+            }),
+            "nonce-extra-policy",
+            &expires_at,
+        );
+        assert!(verify_execute_request(&state, &request).is_ok());
+
+        request
+            .policy
+            .as_mut()
+            .expect("policy")
+            .extra
+            .remove("policy_version");
+        assert!(verify_execute_request(&state, &request).is_err());
+    }
+
+    #[test]
     fn execute_signature_rejects_replayed_nonce() {
         let secret = "test-secret";
         let state = test_state(secret);
@@ -859,6 +914,7 @@ mod tests {
                 allowed_paths: None,
                 filesystem_scope: None,
                 full_access_warning_acknowledged: Some(true),
+                extra: BTreeMap::new(),
             }),
             signature_version: Some(SIGNATURE_VERSION_V2.to_string()),
             nonce: "nonce-policy".to_string(),
@@ -878,6 +934,7 @@ mod tests {
             allowed_paths: None,
             filesystem_scope: None,
             full_access_warning_acknowledged: Some(false),
+            extra: BTreeMap::new(),
         });
         assert!(execution_policy(&request)
             .unwrap_err()
@@ -890,6 +947,7 @@ mod tests {
             allowed_paths: None,
             filesystem_scope: None,
             full_access_warning_acknowledged: Some(true),
+            extra: BTreeMap::new(),
         });
         assert!(execution_policy(&request).unwrap().full_access);
     }

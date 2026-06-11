@@ -73,6 +73,7 @@ export interface PassiveInventoryCollectorDeps {
 
 export interface PassiveInventoryCollectorOptions {
   requestedCapabilities?: string[];
+  localRunnerReady?: boolean;
   deps?: PassiveInventoryCollectorDeps;
 }
 
@@ -80,6 +81,25 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 1_500;
 const PASSIVE_INVENTORY_CACHE_TTL_MS = 60_000;
 const OLLAMA_TAGS_URL = "http://127.0.0.1:11434/api/tags";
 const MACOS_SYSTEM_PROFILER = "/usr/sbin/system_profiler";
+const LOCAL_RUNNER_CAPABILITIES: ReadonlySet<string> = new Set([
+  "filesystem.read_write",
+  "shell.execute",
+  "screenshot.capture",
+  "computer_control.ocr",
+  "computer_control.move",
+  "computer_control.click",
+  "computer_control.type",
+  "computer_control.key",
+  "computer_control.clipboard_read",
+  "computer_control.clipboard_write",
+  "computer_control.list_windows",
+  "computer_control.list_apps",
+  "computer_control.launch",
+  "computer_control.launch_app",
+  "computer_control.notify",
+  "computer_control.applescript",
+  "computer_control.speak",
+]);
 
 let passiveInventoryCache: { key: string; capturedAtMs: number; snapshot: PassiveInventorySnapshot } | null = null;
 
@@ -220,6 +240,93 @@ function buildDesktopPermissionInventoryItem(
       blocked_capabilities: blocked.map((status) => status.capability_id),
     },
   }, checkedAt);
+}
+
+function buildLocalRunnerInventoryItem(ready: boolean, checkedAt: string): PassiveServiceInventoryItem {
+  return makeItem({
+    id: "local_runner",
+    label: "Local runner",
+    kind: "agent_computer_runtime",
+    status: ready ? "ready" : "offline",
+    detected: ready,
+    check: "GET /health",
+    summary: ready
+      ? "Agent Computer local runner is reachable."
+      : "Agent Computer local runner is not reachable.",
+  }, checkedAt);
+}
+
+export function applyLocalRunnerReadiness(
+  snapshot: PassiveInventorySnapshot,
+  localRunnerReady: boolean,
+  checkedAt = new Date().toISOString(),
+): PassiveInventorySnapshot {
+  const serviceInventory = snapshot.service_inventory.filter((item) => item.id !== "local_runner");
+  serviceInventory.unshift(buildLocalRunnerInventoryItem(localRunnerReady, checkedAt));
+  const requested = [...snapshot.capability_readiness.requested];
+  const ready = requested.filter((capability) => {
+    if (LOCAL_RUNNER_CAPABILITIES.has(capability) && !localRunnerReady) {
+      return false;
+    }
+    return snapshot.capability_readiness.ready.includes(capability);
+  });
+  const readySet = new Set(ready);
+  const blocked = requested.filter((capability) => !readySet.has(capability));
+  const serviceStatuses = Object.fromEntries(
+    serviceInventory.map((item) => [item.id, item.status]),
+  ) as Record<string, PassiveServiceStatus>;
+  return {
+    ...snapshot,
+    service_inventory: serviceInventory,
+    capability_readiness: {
+      ...snapshot.capability_readiness,
+      ready,
+      blocked,
+      passive_services: serviceInventory.map((item) => item.id),
+      service_statuses: serviceStatuses,
+    },
+  };
+}
+
+export function buildFastPassiveInventorySnapshot(
+  options: PassiveInventoryCollectorOptions = {},
+): PassiveInventorySnapshot {
+  const deps = options.deps ?? {};
+  const env = deps.env ?? process.env;
+  const requested = [...(options.requestedCapabilities ?? [])];
+  const checkedAt = (deps.now ?? (() => new Date()))().toISOString();
+  const nativeRuntime = buildNativeRuntimeSnapshot(deps);
+  const serviceInventory: PassiveServiceInventoryItem[] = [];
+  if (typeof options.localRunnerReady === "boolean") {
+    serviceInventory.push(buildLocalRunnerInventoryItem(options.localRunnerReady, checkedAt));
+  }
+  const permissionInventory = buildDesktopPermissionInventoryItem(requested, checkedAt, env);
+  if (permissionInventory) {
+    serviceInventory.push(permissionInventory);
+  }
+  const serviceStatuses = Object.fromEntries(
+    serviceInventory.map((item) => [item.id, item.status]),
+  ) as Record<string, PassiveServiceStatus>;
+  const permissionStates = Object.fromEntries(
+    requested
+      .map((capability) => [capability, capabilityPermissionStatus(capability, env)] as const)
+      .filter(([, status]) => status.state !== "not_applicable"),
+  );
+  const snapshot = {
+    service_inventory: serviceInventory,
+    native_runtime: nativeRuntime,
+    capability_readiness: {
+      requested,
+      ready: requested.filter((capability) => capabilityPermissionReady(capability, env)),
+      blocked: requested.filter((capability) => !capabilityPermissionReady(capability, env)),
+      permission_states: permissionStates,
+      passive_services: serviceInventory.map((item) => item.id),
+      service_statuses: serviceStatuses,
+    },
+  };
+  return typeof options.localRunnerReady === "boolean"
+    ? applyLocalRunnerReadiness(snapshot, options.localRunnerReady, checkedAt)
+    : snapshot;
 }
 
 async function probePostgres(
@@ -442,6 +549,9 @@ export async function collectPassiveInventorySnapshot(
     probeCodexCli(checkedAt, env, commandExists, runCommand),
     probeGpu(checkedAt, platform, commandExists, runCommand),
   ]);
+  if (typeof options.localRunnerReady === "boolean") {
+    serviceInventory.unshift(buildLocalRunnerInventoryItem(options.localRunnerReady, checkedAt));
+  }
   const permissionInventory = buildDesktopPermissionInventoryItem(requested, checkedAt, env);
   if (permissionInventory) {
     serviceInventory.push(permissionInventory);
@@ -469,8 +579,11 @@ export async function collectPassiveInventorySnapshot(
       service_statuses: serviceStatuses,
     },
   };
-  if (!hasCustomDeps) {
-    passiveInventoryCache = { key: cacheKey, capturedAtMs: Date.now(), snapshot };
+  const readySnapshot = typeof options.localRunnerReady === "boolean"
+    ? applyLocalRunnerReadiness(snapshot, options.localRunnerReady, checkedAt)
+    : snapshot;
+  if (!hasCustomDeps && typeof options.localRunnerReady !== "boolean") {
+    passiveInventoryCache = { key: cacheKey, capturedAtMs: Date.now(), snapshot: readySnapshot };
   }
-  return snapshot;
+  return readySnapshot;
 }

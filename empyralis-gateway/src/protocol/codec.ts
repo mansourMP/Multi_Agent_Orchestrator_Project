@@ -9,6 +9,7 @@ export const SAFE_FRAME_TYPES: ReadonlySet<string> = new Set([
   // Request types
   "gateway.connect",
   "gateway.heartbeat",
+  "gateway.probe",
   "gateway.state.update",
   "gateway.disconnect",
   "tool.invoke",

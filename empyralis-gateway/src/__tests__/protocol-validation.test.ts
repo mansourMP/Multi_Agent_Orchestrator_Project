@@ -258,6 +258,7 @@ test("SAFE_FRAME_TYPES contains all known types", () => {
   const knownTypes = [
     "gateway.connect",
     "gateway.heartbeat",
+    "gateway.probe",
     "gateway.state.update",
     "gateway.disconnect",
     "tool.invoke",

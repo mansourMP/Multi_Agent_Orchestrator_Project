@@ -30,7 +30,12 @@ import { ReconnectBackoff, classifyReconnectError, classifyCloseCode, sleep, typ
 import { GatewayCapabilityRouter } from "../supervisor/capability-router";
 import { PersonalChannelRuntimeRegistry } from "../channels/personal-runtime";
 import { buildGatewayHeartbeatPayload } from "./heartbeat-payload";
-import { collectPassiveInventorySnapshot } from "../health/service-inventory";
+import {
+  applyLocalRunnerReadiness,
+  buildFastPassiveInventorySnapshot,
+  collectPassiveInventorySnapshot,
+  type PassiveInventorySnapshot,
+} from "../health/service-inventory";
 
 /**
  * Message types that are safe to replay automatically.
@@ -106,6 +111,8 @@ export class GatewayWsClient {
   private socketFailureReason: string | null = null;
   private _connectionStartedAt: number | null = null;
   private _lastHeartbeatResponseAt: number | null = null;
+  private passiveInventorySnapshot: PassiveInventorySnapshot | null = null;
+  private passiveInventoryRefresh: Promise<void> | null = null;
 
   constructor(
     private readonly config: GatewayConfig,
@@ -365,9 +372,12 @@ export class GatewayWsClient {
   async sendHeartbeat(scope: GatewayScope, runtimeMetadata: GatewayRuntimeMetadata): Promise<void> {
     const checkpoints = await this.checkpoints.load();
     const outboxSummary = await this.outbox.summarize();
-    const inventory = await collectPassiveInventorySnapshot({
+    const localRunnerReady = await this.checkLocalRunnerHealth();
+    const inventory = applyLocalRunnerReadiness(this.passiveInventorySnapshot ?? buildFastPassiveInventorySnapshot({
       requestedCapabilities: runtimeMetadata.requestedCapabilities,
-    });
+      localRunnerReady,
+    }), localRunnerReady);
+    void this.refreshPassiveInventorySnapshot(runtimeMetadata.requestedCapabilities, localRunnerReady);
     const payload = buildGatewayHeartbeatPayload({
       runtimeMetadata,
       inventory,
@@ -390,6 +400,47 @@ export class GatewayWsClient {
       lastOutboxError: undefined,
       pendingOutboxCount: outboxSummary.pending,
     });
+  }
+
+  private async checkLocalRunnerHealth(): Promise<boolean> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.min(this.config.supervisorTimeoutMs, 750));
+    try {
+      const response = await fetch(`${this.config.supervisorUrl}/health`, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async refreshPassiveInventorySnapshot(
+    requestedCapabilities: string[],
+    localRunnerReady: boolean,
+  ): Promise<void> {
+    if (this.passiveInventoryRefresh) {
+      return this.passiveInventoryRefresh;
+    }
+    this.passiveInventoryRefresh = collectPassiveInventorySnapshot({
+      requestedCapabilities,
+      localRunnerReady,
+    })
+      .then((snapshot) => {
+        this.passiveInventorySnapshot = snapshot;
+      })
+      .catch(async (error) => {
+        await this.journal.append("system", "gateway.inventory.refresh_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.passiveInventoryRefresh = null;
+      });
+    return this.passiveInventoryRefresh;
   }
 
   async sendStateUpdate(scope: GatewayScope, payload: Record<string, unknown>): Promise<void> {
@@ -841,6 +892,12 @@ export class GatewayWsClient {
           frame as unknown as GatewayRequestEnvelope<GatewayToolInvokePayload>,
         );
         await this.sendResponse(frame.id, true, payload);
+        return;
+      }
+      if (frame.type === "gateway.probe") {
+        await this.sendResponse(frame.id, true, {
+          status: "ready",
+        });
         return;
       }
       if (frame.type === "tool.interrupt") {

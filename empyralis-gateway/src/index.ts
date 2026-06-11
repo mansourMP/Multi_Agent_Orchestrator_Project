@@ -96,13 +96,15 @@ async function main(): Promise<void> {
   const supervisorClient = new GatewaySupervisorClient(config);
   const browserWorker = new GatewayBrowserWorker(config);
   const browserRuntime = new GatewayBrowserRuntime(db, browserWorker);
-  const whatsappRuntime = new WhatsAppPersonalRuntime(db);
-  const telegramRuntime = new TelegramPersonalRuntime(db);
-  const personalChannelRuntimes = new PersonalChannelRuntimeRegistry([
-    whatsappRuntime,
-    telegramRuntime,
-    ...LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.map((config) => new LocalBridgePersonalChannelRuntime(config)),
-  ]);
+  const personalChannelRuntimes = new PersonalChannelRuntimeRegistry(
+    config.personalChannelsEnabled
+      ? [
+          new WhatsAppPersonalRuntime(db),
+          new TelegramPersonalRuntime(db),
+          ...LOCAL_BRIDGE_PERSONAL_CHANNEL_CONFIGS.map((config) => new LocalBridgePersonalChannelRuntime(config)),
+        ]
+      : [],
+  );
   const capabilityRouter = new GatewayCapabilityRouter(
     supervisorClient,
     browserRuntime,
@@ -166,7 +168,12 @@ async function main(): Promise<void> {
     });
     await client.run(identity, runtimeMetadata, {
       afterConnected: async () => {
-        await personalChannelRuntimes.startAll();
+        void personalChannelRuntimes.startAll().catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          void journal.append("system", "gateway.personal_channels.start_failed", {
+            error: message,
+          });
+        });
       },
     });
   } finally {

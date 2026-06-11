@@ -38,6 +38,9 @@ Environment:
   EMPYRALIS_GATEWAY_PAIRING_TOKEN   Pairing token from Empyralis, used on first start.
   EMPYRALIS_GATEWAY_TOKEN           Existing paired-device token.
   EMPYRALIS_GATEWAY_API_URL         Control plane URL. Defaults to local dev runtime.
+  EMPYRALIS_GATEWAY_PERSONAL_CHANNELS_ENABLED=1
+                                      Start personal channel runtimes in the Gateway. Defaults to 0
+                                      so local hardware execution is isolated from channel reconnect loops.
   EMPYRALIS_GATEWAY_EXPECTED_WORKSPACE_ID
                                       Optional workspace id used by status/start to warn when
                                       this computer is paired to a different workspace.
@@ -153,6 +156,7 @@ write_env() {
     secret="$(generate_secret)"
   fi
   local state_dir="${EMPYRALIS_GATEWAY_STATE_DIR:-${STATE_DIR}/edge}"
+  local personal_channels_enabled="${EMPYRALIS_GATEWAY_PERSONAL_CHANNELS_ENABLED:-0}"
   cat > "${ENV_FILE}" <<EOF
 export EMPYRALIS_SUPERVISOR_SECRET=$(shell_quote "${secret}")
 export EMPYRALIS_SUPERVISOR_URL=$(shell_quote "${SUPERVISOR_URL}")
@@ -161,6 +165,7 @@ export EMPYRALIS_GATEWAY_API_URL=$(shell_quote "${CONTROL_PLANE_URL}")
 export EMPYRALIS_GATEWAY_STATE_DIR=$(shell_quote "${state_dir}")
 export EMPYRALIS_GATEWAY_DISPLAY_NAME=$(shell_quote "${DISPLAY_NAME}")
 export EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT=$(shell_quote "${ROOT_DIR}")
+export EMPYRALIS_GATEWAY_PERSONAL_CHANNELS_ENABLED=$(shell_quote "${personal_channels_enabled}")
 EOF
   if [[ -n "${EMPYRALIS_GATEWAY_PAIRING_TOKEN:-}" ]]; then
     echo "export EMPYRALIS_GATEWAY_PAIRING_TOKEN=$(shell_quote "${EMPYRALIS_GATEWAY_PAIRING_TOKEN}")" >> "${ENV_FILE}"
@@ -289,6 +294,14 @@ if not match:
     sys.exit(1)
 print(hashlib.sha256(match.group(1).encode("utf-8")).hexdigest()[:12])
 PY
+}
+
+runtime_process_secret_matches_env() {
+  local pid="${1:-}" env_hash process_hash
+  [[ -n "${pid}" ]] || return 1
+  env_hash="$(runtime_env_secret_hash 2>/dev/null || true)"
+  process_hash="$(runtime_process_secret_hash "${pid}" 2>/dev/null || true)"
+  [[ -n "${env_hash}" && -n "${process_hash}" && "${env_hash}" == "${process_hash}" ]]
 }
 
 runtime_secret_status() {
@@ -422,13 +435,38 @@ start_supervisor() {
   local pid
   pid="$(pid_from_file "${SUPERVISOR_PID_FILE}")"
   if is_pid_alive "${pid}"; then
+    if ! runtime_process_secret_matches_env "${pid}"; then
+      echo "[Agent Computer] Local runner secret differs from ${ENV_FILE}; restarting local runner."
+      kill_tree "${pid}" || true
+      rm -f "${SUPERVISOR_PID_FILE}"
+    else
+      echo "[Agent Computer] Local runner already running (pid ${pid})."
+      return 0
+    fi
+  fi
+  pid="$(runtime_process_pid "${SUPERVISOR_PID_FILE}" "${SUPERVISOR_BIN#${ROOT_DIR}/}" "${SUPERVISOR_BIN#${ROOT_DIR}/}$" || true)"
+  if is_pid_alive "${pid}"; then
+    if ! runtime_process_secret_matches_env "${pid}"; then
+      echo "[Agent Computer] Existing local runner secret differs from ${ENV_FILE}; restarting local runner."
+      kill_tree "${pid}" || true
+      rm -f "${SUPERVISOR_PID_FILE}"
+    else
+      echo "[Agent Computer] Local runner already running (pid ${pid})."
+      echo "${pid}" > "${SUPERVISOR_PID_FILE}"
+      chmod 600 "${SUPERVISOR_PID_FILE}" 2>/dev/null || true
+      return 0
+    fi
+  fi
+  pid="$(pid_from_file "${SUPERVISOR_PID_FILE}")"
+  if is_pid_alive "${pid}"; then
     echo "[Agent Computer] Local runner already running (pid ${pid})."
     return 0
   fi
   rm -f "${SUPERVISOR_PID_FILE}"
   if wait_for_supervisor; then
-    echo "[Agent Computer] Local runner health is already reachable at ${SUPERVISOR_URL}."
-    return 0
+    echo "[Agent Computer] Local runner health is reachable at ${SUPERVISOR_URL}, but process ownership could not be verified."
+    echo "[Agent Computer] Stop the existing process or start with the matching ${ENV_FILE} before launching the cloud connection."
+    return 1
   fi
   echo "[Agent Computer] Starting local runner..."
   nohup env \
@@ -503,8 +541,27 @@ start_edge() {
   local pid
   pid="$(pid_from_file "${EDGE_PID_FILE}")"
   if is_pid_alive "${pid}"; then
-    echo "[Agent Computer] Cloud connection already running (pid ${pid})."
-    return 0
+    if ! runtime_process_secret_matches_env "${pid}"; then
+      echo "[Agent Computer] Cloud connection secret differs from ${ENV_FILE}; restarting cloud connection."
+      kill_tree "${pid}" || true
+      rm -f "${EDGE_PID_FILE}"
+    else
+      echo "[Agent Computer] Cloud connection already running (pid ${pid})."
+      return 0
+    fi
+  fi
+  pid="$(runtime_process_pid "${EDGE_PID_FILE}" "${EDGE_ENTRY#${ROOT_DIR}/}" "${EDGE_ENTRY#${ROOT_DIR}/}$" || true)"
+  if is_pid_alive "${pid}"; then
+    if ! runtime_process_secret_matches_env "${pid}"; then
+      echo "[Agent Computer] Existing cloud connection secret differs from ${ENV_FILE}; restarting cloud connection."
+      kill_tree "${pid}" || true
+      rm -f "${EDGE_PID_FILE}"
+    else
+      echo "[Agent Computer] Cloud connection already running (pid ${pid})."
+      echo "${pid}" > "${EDGE_PID_FILE}"
+      chmod 600 "${EDGE_PID_FILE}" 2>/dev/null || true
+      return 0
+    fi
   fi
   rm -f "${EDGE_PID_FILE}"
   if ! has_pairing_material; then
@@ -530,6 +587,7 @@ start_edge() {
     EMPYRALIS_GATEWAY_STATE_DIR="${EMPYRALIS_GATEWAY_STATE_DIR}" \
     EMPYRALIS_GATEWAY_DISPLAY_NAME="${EMPYRALIS_GATEWAY_DISPLAY_NAME}" \
     EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT="${EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT}" \
+    EMPYRALIS_GATEWAY_PERSONAL_CHANNELS_ENABLED="${EMPYRALIS_GATEWAY_PERSONAL_CHANNELS_ENABLED}" \
     EMPYRALIS_GATEWAY_PAIRING_TOKEN="${EMPYRALIS_GATEWAY_PAIRING_TOKEN:-}" \
     EMPYRALIS_GATEWAY_TOKEN="${EMPYRALIS_GATEWAY_TOKEN:-}" \
     "${node_bin}" "${EDGE_ENTRY}" \
@@ -938,9 +996,24 @@ cleanup_service_run() {
 
 start_supervisor_for_service() {
   local mode_label="${1:-service mode}"
+  local pid
+  pid="$(runtime_process_pid "${SUPERVISOR_PID_FILE}" "${SUPERVISOR_BIN#${ROOT_DIR}/}" "${SUPERVISOR_BIN#${ROOT_DIR}/}$" || true)"
+  if is_pid_alive "${pid}"; then
+    if ! runtime_process_secret_matches_env "${pid}"; then
+      echo "[Agent Computer] Existing local runner secret differs from ${ENV_FILE}; restarting local runner in ${mode_label}."
+      kill_tree "${pid}" || true
+      rm -f "${SUPERVISOR_PID_FILE}"
+    else
+      echo "[Agent Computer] Local runner already running (pid ${pid})."
+      echo "${pid}" > "${SUPERVISOR_PID_FILE}"
+      chmod 600 "${SUPERVISOR_PID_FILE}" 2>/dev/null || true
+      return 0
+    fi
+  fi
   if wait_for_supervisor; then
-    echo "[Agent Computer] Local runner health is already reachable at ${SUPERVISOR_URL}."
-    return 0
+    echo "[Agent Computer] Local runner health is reachable at ${SUPERVISOR_URL}, but process ownership could not be verified."
+    echo "[Agent Computer] Stop the existing process or start with the matching ${ENV_FILE} before launching the cloud connection."
+    return 1
   fi
   echo "[Agent Computer] Starting local runner in ${mode_label}..."
   env \
@@ -1016,6 +1089,7 @@ run_edge_forever() {
       EMPYRALIS_GATEWAY_STATE_DIR="${EMPYRALIS_GATEWAY_STATE_DIR}" \
       EMPYRALIS_GATEWAY_DISPLAY_NAME="${EMPYRALIS_GATEWAY_DISPLAY_NAME}" \
       EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT="${EMPYRALIS_GATEWAY_BROWSER_PROJECT_ROOT}" \
+      EMPYRALIS_GATEWAY_PERSONAL_CHANNELS_ENABLED="${EMPYRALIS_GATEWAY_PERSONAL_CHANNELS_ENABLED}" \
       EMPYRALIS_GATEWAY_PAIRING_TOKEN="${EMPYRALIS_GATEWAY_PAIRING_TOKEN:-}" \
       EMPYRALIS_GATEWAY_TOKEN="${EMPYRALIS_GATEWAY_TOKEN:-}" \
       "${node_bin}" "${EDGE_ENTRY}" \

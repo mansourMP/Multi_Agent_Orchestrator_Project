@@ -8,6 +8,7 @@ export interface GatewayConfig {
   heartbeatIntervalMs: number;
   reconnectMinDelayMs: number;
   reconnectMaxDelayMs: number;
+  personalChannelsEnabled: boolean;
   supervisorUrl: string;
   supervisorSecret?: string;
   supervisorTimeoutMs: number;
@@ -56,6 +57,20 @@ function assertCloudApiBaseUrl(value: string, env: NodeJS.ProcessEnv): string {
 function normalizePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function normalizeBoolean(value: string | undefined, fallback: boolean): boolean {
+  const token = String(value ?? "").trim().toLowerCase();
+  if (!token) {
+    return fallback;
+  }
+  if (["1", "true", "yes", "on", "enabled"].includes(token)) {
+    return true;
+  }
+  if (["0", "false", "no", "off", "disabled"].includes(token)) {
+    return false;
+  }
+  return fallback;
 }
 
 function resolveBrowserPythonExecutable(projectRoot: string, explicitValue: string | undefined): string {
@@ -113,12 +128,13 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     heartbeatIntervalMs: normalizePositiveInt(env.EMPYRALIS_GATEWAY_HEARTBEAT_MS, 20_000),
     reconnectMinDelayMs: normalizePositiveInt(env.EMPYRALIS_GATEWAY_RECONNECT_MIN_MS, 1_000),
     reconnectMaxDelayMs: normalizePositiveInt(env.EMPYRALIS_GATEWAY_RECONNECT_MAX_MS, 30_000),
+    personalChannelsEnabled: normalizeBoolean(env.EMPYRALIS_GATEWAY_PERSONAL_CHANNELS_ENABLED, false),
     supervisorUrl: assertCloudApiBaseUrl(
       normalizeBaseUrl(env.EMPYRALIS_SUPERVISOR_URL, "http://127.0.0.1:7788"),
       env,
     ),
     supervisorSecret: String(env.EMPYRALIS_SUPERVISOR_SECRET || "").trim() || undefined,
-    supervisorTimeoutMs: normalizePositiveInt(env.EMPYRALIS_SUPERVISOR_TIMEOUT_MS, 10_000),
+    supervisorTimeoutMs: normalizePositiveInt(env.EMPYRALIS_SUPERVISOR_TIMEOUT_MS, 120_000),
     pairingToken: String(env.EMPYRALIS_GATEWAY_PAIRING_TOKEN || "").trim() || undefined,
     gatewayId: String(env.EMPYRALIS_GATEWAY_ID || "").trim() || undefined,
     deviceId: String(env.EMPYRALIS_GATEWAY_DEVICE_ID || "").trim() || undefined,

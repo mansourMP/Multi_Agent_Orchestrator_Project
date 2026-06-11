@@ -19,7 +19,38 @@ from urllib import error, parse, request
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from server_modules.internal_tool_markup_service import detect_internal_tool_markup
+
 VALID_SUITES = {"automated", "agent-computer", "gateway", "self-hosted", "cloud-computer", "full"}
+
+SURFACE_MARKUP_BLOCKED_TOKENS = (
+    "DSML",
+    "tool_calls",
+    "invoke name",
+    "<||",
+    "< | |",
+    "<｜｜",
+    "<|｜",
+    "<｜|",
+)
+
+LAUNCH_GATE_REQUIRED_STEPS = (
+    "backend_runtime_transparency_tests",
+    "frontend_typecheck",
+    "frontend_chat_transparency_e2e",
+    "agent_computer_backend_tests",
+    "agent_computer_gateway_typecheck",
+    "agent_computer_gateway_phase_tests",
+    "agent_computer_supervisor_tests",
+    "cloud_computer_screenshot_artifact_replay",
+    "gateway_doctor",
+    "gateway_sage_chat_local_gateway_smoke",
+    "gateway_default_safe_actions",
+    "self_hosted_claim_complete_artifact_replay",
+)
 
 BACKEND_TESTS = [
     "server_modules/tests/test_agent_computer_permission_secret_model.py",
@@ -185,7 +216,10 @@ def _write_log(log_dir: Path, name: str, content: str) -> str:
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / f"{name}.log"
     path.write_text(content, encoding="utf-8")
-    return str(path.relative_to(ROOT_DIR))
+    try:
+        return str(path.relative_to(ROOT_DIR))
+    except ValueError:
+        return str(path)
 
 
 def _write_json_log(log_dir: Path, name: str, payload: dict[str, Any]) -> str:
@@ -261,6 +295,58 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _capture_command(command: list[str], *, cwd: Path = ROOT_DIR, timeout: int = 10) -> tuple[int, str]:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(cwd),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            check=False,
+        )
+        return completed.returncode, completed.stdout or ""
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
+        return 124, output
+
+
+def _git_metadata() -> dict[str, Any]:
+    sha_code, sha = _capture_command(["git", "rev-parse", "HEAD"])
+    branch_code, branch = _capture_command(["git", "branch", "--show-current"])
+    status_code, status = _capture_command(["git", "status", "--porcelain"])
+    return {
+        "sha": sha.strip() if sha_code == 0 else "",
+        "branch": branch.strip() if branch_code == 0 else "",
+        "dirty": bool(status.strip()) if status_code == 0 else True,
+        "status_porcelain": status.strip().splitlines() if status_code == 0 else ["git status failed"],
+    }
+
+
+def _redacted_launch_inputs(args: argparse.Namespace) -> dict[str, Any]:
+    gateway_id = args.gateway_id or os.getenv("EMPYRALIS_CERT_GATEWAY_ID") or ""
+    return {
+        "backend_url": args.backend_url,
+        "workspace_id": args.workspace_id or os.getenv("EMPYRALIS_CERT_WORKSPACE_ID") or "",
+        "tenant_id": args.tenant_id or os.getenv("EMPYRALIS_CERT_TENANT_ID") or "",
+        "gateway_id": gateway_id,
+        "self_hosted_profile_id_present": bool(args.self_hosted_profile_id or os.getenv("EMPYRALIS_CERT_SELF_HOSTED_PROFILE_ID")),
+        "self_hosted_node_token_present": bool(args.self_hosted_node_token or os.getenv("EMPYRALIS_CERT_SELF_HOSTED_NODE_TOKEN")),
+        "self_hosted_node_id_present": bool(args.self_hosted_node_id or os.getenv("EMPYRALIS_CERT_SELF_HOSTED_NODE_ID")),
+        "auth_method": "email_password" if (args.email or os.getenv("EMPYRALIS_CERT_EMAIL")) and (args.password or os.getenv("EMPYRALIS_CERT_PASSWORD")) else ("bearer_token" if (args.bearer_token or os.getenv("EMPYRALIS_CERT_BEARER_TOKEN")) else ("runtime_key" if (args.runtime_key or os.getenv("EMPYRALIS_CERT_RUNTIME_KEY")) else "")),
+    }
+
+
+def _assert_no_internal_markup_surface(value: Any, *, label: str) -> None:
+    serialized = json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+    if detect_internal_tool_markup(serialized):
+        raise CertificationError(f"{label} leaked internal tool markup")
+    for token in SURFACE_MARKUP_BLOCKED_TOKENS:
+        if token in serialized:
+            raise CertificationError(f"{label} leaked blocked token: {token}")
+
+
 def _read_first(payload: dict[str, Any], *keys: str) -> str:
     for key in keys:
         token = _text(payload.get(key))
@@ -286,6 +372,7 @@ def _transcript_payloads(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _assert_safe_transcript_events(events: list[dict[str, Any]]) -> None:
     if not events:
         raise CertificationError("assistant turn did not persist metadata.transcript_events")
+    _assert_no_internal_markup_surface(events, label="transcript_events")
     serialized = json.dumps(events, sort_keys=True)
     for token in ("args_preview", "arguments", "raw_output", "prompt", "trace_id", "policy", "provider_id"):
         if token in serialized:
@@ -624,6 +711,13 @@ def _cert_ids(*payloads: dict[str, Any]) -> dict[str, Any]:
     return ids
 
 
+def _expected_echo_stdout(command: str) -> str:
+    stripped = str(command or "").strip()
+    if stripped.startswith("echo "):
+        return stripped.removeprefix("echo ").strip().strip("\"'")
+    return ""
+
+
 def _missing_input_step(*, suite: str, name: str, missing: list[str], env: dict[str, str]) -> StepResult:
     return StepResult(
         name,
@@ -637,6 +731,62 @@ def _missing_input_step(*, suite: str, name: str, missing: list[str], env: dict[
             "setup": "Provide real enrolled hardware identifiers. Missing live hardware inputs are certification failures, not passes.",
         },
     )
+
+
+def launch_gate_preflight_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
+    if not args.launch_gate:
+        return []
+    command = ["scripts/empyralis_hardware_transparency_certification.py", "--suite", args.suite, "--launch-gate"]
+
+    def require_full_suite() -> dict[str, Any]:
+        if args.suite != "full":
+            raise CertificationError("--launch-gate requires --suite full", {"suite": args.suite})
+        return {"suite": args.suite}
+
+    def require_live_smoke() -> dict[str, Any]:
+        if not args.require_live_smoke:
+            raise CertificationError("--launch-gate requires --require-live-smoke")
+        return {"require_live_smoke": True}
+
+    def require_clean_git() -> dict[str, Any]:
+        metadata = _git_metadata()
+        if metadata["dirty"]:
+            raise CertificationError("launch gate requires a clean git worktree", metadata)
+        return metadata
+
+    def require_live_inputs() -> dict[str, Any]:
+        inputs = _redacted_launch_inputs(args)
+        missing: list[str] = []
+        if not inputs["auth_method"]:
+            missing.append("owner authentication (--email/--password or --bearer-token)")
+        if not inputs["gateway_id"]:
+            missing.append("--gateway-id")
+        if not inputs["self_hosted_profile_id_present"]:
+            missing.append("--self-hosted-profile-id")
+        if not inputs["self_hosted_node_token_present"]:
+            missing.append("--self-hosted-node-token")
+        if missing:
+            raise CertificationError("launch gate is missing required live inputs", {"missing": missing, "inputs": inputs})
+        return inputs
+
+    return [
+        _live_step(name="launch_gate_requires_full_suite", command=command, log_dir=log_dir, fn=require_full_suite),
+        _live_step(name="launch_gate_requires_live_smoke", command=command, log_dir=log_dir, fn=require_live_smoke),
+        _live_step(name="launch_gate_git_clean", command=command, log_dir=log_dir, fn=require_clean_git),
+        _live_step(name="launch_gate_required_live_inputs", command=command, log_dir=log_dir, fn=require_live_inputs),
+        _run_step(
+            name="launch_gate_backend_health",
+            command=["bash", "-lc", f"curl -fsS {shlex.quote(args.backend_url.rstrip('/') + '/health')}"],
+            timeout=args.health_timeout,
+            log_dir=log_dir,
+        ),
+        _run_step(
+            name="launch_gate_agent_computer_status",
+            command=["bash", "-lc", "./scripts/agent_computer.sh status"],
+            timeout=30,
+            log_dir=log_dir,
+        ),
+    ]
 
 
 def automated_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
@@ -1037,6 +1187,12 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
 
     def safe_actions_step() -> dict[str, Any]:
         shell = execute_gateway_action("gateway safe shell", "shell.exec", {"command": args.gateway_safe_command}, "default_guarded", {"completed"})
+        expected_stdout = _expected_echo_stdout(args.gateway_safe_command)
+        if args.launch_gate and expected_stdout and expected_stdout not in json.dumps(shell["result"], sort_keys=True, default=str):
+            raise CertificationError(
+                "gateway safe shell result did not include expected stdout proof",
+                {"expected_stdout": expected_stdout, "result": shell["result"]},
+            )
         file_read = execute_gateway_action(
             "gateway file read/list",
             "file.read",
@@ -1046,6 +1202,32 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
         )
         screenshot = execute_gateway_action("gateway screenshot", "screenshot.capture", {}, "default_guarded", {"completed"})
         return {"shell": shell["result"], "file_read": file_read["result"], "screenshot": screenshot["result"]}
+
+    def sage_chat_step() -> dict[str, Any]:
+        chat = _seed_chat_turn(
+            client,
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+            message=args.gateway_chat_message,
+            timeout=args.turn_timeout,
+            poll_attempts=args.poll_attempts,
+            poll_interval=args.poll_interval,
+        )
+        _assert_no_internal_markup_surface(chat.get("stream_events") or [], label="gateway_sage_chat_stream")
+        serialized = json.dumps(chat, sort_keys=True, default=str)
+        for token in ("Running on your Mac", "Done", "local_gateway"):
+            if token not in serialized:
+                raise CertificationError(
+                    "Sage chat local gateway smoke missed required proof token",
+                    {"missing_token": token, "request_id": chat.get("request_id"), "thread_id": chat.get("thread_id")},
+                )
+        expected_stdout = _expected_echo_stdout(args.gateway_safe_command)
+        if expected_stdout and expected_stdout not in serialized:
+            raise CertificationError(
+                "Sage chat local gateway smoke missed expected stdout proof",
+                {"expected_stdout": expected_stdout, "request_id": chat.get("request_id"), "thread_id": chat.get("thread_id")},
+            )
+        return {"ids": _cert_ids({"request_id": chat.get("request_id")}), **chat}
 
     def approval_step(decision: str, remember: bool = False) -> dict[str, Any]:
         pending = execute_gateway_action(
@@ -1192,7 +1374,7 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
             )
         return {"ids": _cert_ids(blocked), "revoked": revoked, "blocked": blocked}
 
-    return [
+    steps = [
         _live_step(name="gateway_doctor", command=command, log_dir=log_dir, fn=doctor_step),
         _live_step(name="gateway_seed_chat_turn", command=command, log_dir=log_dir, fn=seed_step),
         _live_step(name="gateway_default_safe_actions", command=command, log_dir=log_dir, fn=safe_actions_step),
@@ -1203,6 +1385,9 @@ def gateway_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
         _live_step(name="gateway_stop_cancel", command=command, log_dir=log_dir, fn=stop_step),
         _live_step(name="gateway_revoke_blocks_followup", command=command, log_dir=log_dir, fn=revoke_step),
     ]
+    if args.launch_gate:
+        steps.insert(2, _live_step(name="gateway_sage_chat_local_gateway_smoke", command=command, log_dir=log_dir, fn=sage_chat_step))
+    return steps
 
 
 def self_hosted_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResult]:
@@ -1424,11 +1609,115 @@ def self_hosted_steps(args: argparse.Namespace, log_dir: Path) -> list[StepResul
     ]
 
 
+def launch_gate_final_steps(args: argparse.Namespace, log_dir: Path, results: list[StepResult]) -> list[StepResult]:
+    if not args.launch_gate:
+        return []
+    command = ["scripts/empyralis_hardware_transparency_certification.py", "--suite", args.suite, "--launch-gate"]
+
+    def no_skipped_steps() -> dict[str, Any]:
+        skipped = [item.name for item in results if item.status == "SKIP"]
+        if skipped:
+            raise CertificationError("launch gate does not allow skipped steps", {"skipped_steps": skipped})
+        return {"skipped_steps": []}
+
+    def required_steps_passed() -> dict[str, Any]:
+        by_name = {item.name: item for item in results}
+        missing = [name for name in LAUNCH_GATE_REQUIRED_STEPS if name not in by_name]
+        failed = [name for name in LAUNCH_GATE_REQUIRED_STEPS if name in by_name and by_name[name].status != "PASS"]
+        if missing or failed:
+            raise CertificationError(
+                "launch gate required proof steps are missing or failed",
+                {"missing_steps": missing, "failed_required_steps": failed},
+            )
+        return {"required_steps": list(LAUNCH_GATE_REQUIRED_STEPS)}
+
+    def no_internal_markup_in_evidence() -> dict[str, Any]:
+        checked_steps: list[str] = []
+        for item in results:
+            if not item.details:
+                continue
+            checked_steps.append(item.name)
+            _assert_no_internal_markup_surface(item.details, label=f"{item.name}.details")
+        return {"checked_step_details": checked_steps}
+
+    return [
+        _live_step(name="launch_gate_no_skipped_steps", command=command, log_dir=log_dir, fn=no_skipped_steps),
+        _live_step(name="launch_gate_required_steps_passed", command=command, log_dir=log_dir, fn=required_steps_passed),
+        _live_step(name="launch_gate_no_internal_markup_in_evidence", command=command, log_dir=log_dir, fn=no_internal_markup_in_evidence),
+    ]
+
+
+def _render_markdown_report(payload: dict[str, Any]) -> str:
+    lines = [
+        "# Empyralis Agent Computer Launch Certification",
+        "",
+        f"- Generated: `{payload.get('generated_at', '')}`",
+        f"- Suite: `{payload.get('suite', '')}`",
+        f"- Launch gate: `{bool(payload.get('launch_gate'))}`",
+        f"- Result: **{payload.get('result', 'UNKNOWN')}**",
+        f"- JSON report: `{payload.get('report_path', '')}`",
+        f"- Logs: `{payload.get('logs_dir', '')}`",
+        "",
+        "## Release Candidate",
+        "",
+    ]
+    git = payload.get("git") if isinstance(payload.get("git"), dict) else {}
+    lines.extend(
+        [
+            f"- Branch: `{git.get('branch', '')}`",
+            f"- Commit: `{git.get('sha', '')}`",
+            f"- Dirty: `{bool(git.get('dirty'))}`",
+            "",
+            "## Environment",
+            "",
+        ]
+    )
+    environment = payload.get("environment") if isinstance(payload.get("environment"), dict) else {}
+    for key, value in environment.items():
+        lines.append(f"- {key}: `{value}`")
+    lines.extend(["", "## Steps", "", "| Step | Status | Duration | Summary | Log |", "| --- | --- | ---: | --- | --- |"])
+    for item in list(payload.get("steps") or []):
+        if not isinstance(item, dict):
+            continue
+        summary = str(item.get("summary") or "").replace("\n", "<br>")
+        log_path = str(item.get("log_path") or "")
+        log_link = f"`{log_path}`" if log_path else ""
+        lines.append(
+            f"| `{item.get('name', '')}` | **{item.get('status', '')}** | {item.get('duration_seconds', 0)}s | {summary} | {log_link} |"
+        )
+    blockers = [
+        item
+        for item in list(payload.get("steps") or [])
+        if isinstance(item, dict) and str(item.get("status") or "") == "FAIL"
+    ]
+    lines.extend(["", "## Launch Verdict", ""])
+    if blockers:
+        lines.append("**FAIL. Do not ship this runtime as launch-certified.**")
+        lines.append("")
+        lines.append("Blockers:")
+        for item in blockers:
+            lines.append(f"- `{item.get('name', '')}`: {item.get('summary', '')}")
+    else:
+        lines.append("**PASS. This exact release candidate passed the configured launch gate.**")
+    lines.extend(
+        [
+            "",
+            "## Notes",
+            "",
+            str(payload.get("real_hardware_note") or ""),
+            "",
+            "This certificate is evidence for this exact commit, machine, Gateway, Supervisor, and runtime configuration only.",
+        ]
+    )
+    return "\n".join(lines).strip() + "\n"
+
+
 def run_certification(args: argparse.Namespace) -> int:
     if args.suite not in VALID_SUITES:
         raise SystemExit(f"Unknown suite {args.suite!r}. Expected one of: {', '.join(sorted(VALID_SUITES))}")
     log_dir = ROOT_DIR / ".tmp" / "hardware_transparency_cert"
     results: list[StepResult] = []
+    results.extend(launch_gate_preflight_steps(args, log_dir))
     if args.suite in {"automated", "full"}:
         results.extend(automated_steps(args, log_dir))
     if args.suite in {"agent-computer", "full"}:
@@ -1440,13 +1729,18 @@ def run_certification(args: argparse.Namespace) -> int:
     if args.suite in {"self-hosted", "full"}:
         results.extend(self_hosted_steps(args, log_dir))
     results.append(_run_step(name="git_diff_check", command=["git", "diff", "--check"], timeout=30, log_dir=log_dir))
+    results.extend(launch_gate_final_steps(args, log_dir, results))
 
     failed = [item for item in results if item.status == "FAIL"]
+    skipped = [item for item in results if item.status == "SKIP"]
     payload = {
         "generated_at": _utc_now(),
         "suite": args.suite,
-        "result": "FAIL" if failed else "PASS",
+        "launch_gate": bool(args.launch_gate),
+        "result": "FAIL" if failed or (args.launch_gate and skipped) else "PASS",
         "logs_dir": str(log_dir.relative_to(ROOT_DIR)),
+        "git": _git_metadata(),
+        "environment": _redacted_launch_inputs(args),
         "steps": [
             {
                 "name": item.name,
@@ -1468,10 +1762,17 @@ def run_certification(args: argparse.Namespace) -> int:
     if not report_path.is_absolute():
         report_path = ROOT_DIR / report_path
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     payload["report_path"] = str(report_path.relative_to(ROOT_DIR))
+    report_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    markdown_path = Path(args.markdown_report_path or report_path.with_suffix(".md"))
+    if not markdown_path.is_absolute():
+        markdown_path = ROOT_DIR / markdown_path
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    payload["markdown_report_path"] = str(markdown_path.relative_to(ROOT_DIR))
+    markdown_path.write_text(_render_markdown_report(payload), encoding="utf-8")
+    report_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(payload, indent=2, sort_keys=True))
-    return 1 if failed else 0
+    return 1 if payload["result"] == "FAIL" else 0
 
 
 def main() -> int:
@@ -1498,6 +1799,8 @@ def main() -> int:
     parser.add_argument("--gateway-long-command", default=os.getenv("EMPYRALIS_CERT_GATEWAY_LONG_COMMAND") or "sleep 30")
     parser.add_argument("--self-hosted-safe-command", default=os.getenv("EMPYRALIS_CERT_SELF_HOSTED_SAFE_COMMAND") or "echo empyralis-self-hosted-cert")
     parser.add_argument("--self-hosted-long-command", default=os.getenv("EMPYRALIS_CERT_SELF_HOSTED_LONG_COMMAND") or "sleep 30")
+    parser.add_argument("--gateway-chat-message", default=os.getenv("EMPYRALIS_CERT_GATEWAY_CHAT_MESSAGE") or "run: echo hello from hardware")
+    parser.add_argument("--launch-gate", action="store_true")
     parser.add_argument("--allow-revoke", action="store_true")
     parser.add_argument("--include-live-smoke", action="store_true")
     parser.add_argument("--require-live-smoke", action="store_true")
@@ -1515,6 +1818,7 @@ def main() -> int:
     parser.add_argument("--poll-interval", type=float, default=0.5)
     parser.add_argument("--stop-delay", type=float, default=1.0)
     parser.add_argument("--report-path", default="")
+    parser.add_argument("--markdown-report-path", default="")
     return run_certification(parser.parse_args())
 
 

@@ -86,3 +86,58 @@ class HardwareTransparencyCertificationRunnerTests(unittest.TestCase):
         self.assertEqual(ids["request_id"], "req-1")
         self.assertEqual(ids["runtime_node_id"], "node-1")
         self.assertEqual(ids["artifact_ids"], ["artifact-1"])
+
+    def test_transcript_guard_rejects_mixed_delimiter_dsml(self) -> None:
+        with self.assertRaises(cert.CertificationError) as raised:
+            cert._assert_safe_transcript_events(
+                [
+                    {
+                        "event": "step",
+                        "schema_version": 1,
+                        "payload": {
+                            "event_type": "tool.progress",
+                            "data": {"label": "<|｜DSML｜|tool_calls>"},
+                        },
+                    }
+                ]
+            )
+
+        self.assertIn("internal tool markup", str(raised.exception))
+
+    def test_launch_gate_final_steps_fail_on_skips(self) -> None:
+        args = argparse.Namespace(launch_gate=True, suite="full")
+        results = [cert.StepResult("frontend_typecheck", "SKIP", [], 0.0, "not run")]
+        with tempfile.TemporaryDirectory() as tmp:
+            steps = cert.launch_gate_final_steps(args, Path(tmp), results)
+
+        self.assertEqual(steps[0].name, "launch_gate_no_skipped_steps")
+        self.assertEqual(steps[0].status, "FAIL")
+        self.assertIn("skipped", steps[0].summary)
+
+    def test_markdown_report_lists_failed_blockers(self) -> None:
+        markdown = cert._render_markdown_report(
+            {
+                "generated_at": "2026-06-11T00:00:00Z",
+                "suite": "full",
+                "launch_gate": True,
+                "result": "FAIL",
+                "report_path": "reports/cert.json",
+                "logs_dir": ".tmp/hardware_transparency_cert",
+                "git": {"branch": "main", "sha": "abc123", "dirty": False},
+                "environment": {"backend_url": "http://127.0.0.1:8001"},
+                "steps": [
+                    {
+                        "name": "gateway_sage_chat_local_gateway_smoke",
+                        "status": "FAIL",
+                        "duration_seconds": 1.2,
+                        "summary": "missing local_gateway proof",
+                        "log_path": ".tmp/hardware_transparency_cert/gateway.log",
+                    }
+                ],
+                "real_hardware_note": "real hardware required",
+            }
+        )
+
+        self.assertIn("**FAIL. Do not ship", markdown)
+        self.assertIn("gateway_sage_chat_local_gateway_smoke", markdown)
+        self.assertIn("missing local_gateway proof", markdown)

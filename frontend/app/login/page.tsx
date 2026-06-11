@@ -189,18 +189,15 @@ function LoginPageContent() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (authRuntimeError) {
-      setError(authRuntimeError);
-      return;
-    }
-    if (!providersLoaded || providers.email?.enabled !== true) {
-      setError('Email sign-in is not available in this environment.');
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password) {
+      setError('Enter your email and password to continue.');
       return;
     }
     setSubmitting(true);
     setError(null);
     try {
-      await login(email, password);
+      await login(trimmedEmail, password);
     } catch (nextError) {
       const message = nextError instanceof Error ? nextError.message : 'Login failed.';
       setError(message);
@@ -226,6 +223,7 @@ function LoginPageContent() {
     && providersLoaded
     && !authRuntimeUnavailable
     && providers.google?.enabled === true;
+  const emailSubmitEnabled = email.trim().length > 0 && password.length > 0;
 
   return (
     <main className="app-auth-page">
@@ -272,7 +270,7 @@ function LoginPageContent() {
                 value={email}
                 className="app-auth-input"
                 placeholder="Enter your email"
-                disabled={!emailAuthEnabled || submitting}
+                disabled={submitting}
                 onChange={(event) => setEmail(event.target.value)}
               />
             </span>
@@ -289,13 +287,13 @@ function LoginPageContent() {
                 value={password}
                 className="app-auth-input"
                 placeholder="Enter your password"
-                disabled={!emailAuthEnabled || submitting}
+                disabled={submitting}
                 onChange={(event) => setPassword(event.target.value)}
               />
             </span>
           </label>
           {error ? <AuthErrorNotice title="Couldn’t sign in" message={error} /> : null}
-          <AppButton type="submit" tone="primary" disabled={submitting || !emailAuthEnabled} className="app-auth-submit">
+          <AppButton type="submit" tone="primary" disabled={submitting || !emailSubmitEnabled} className="app-auth-submit">
             <span>{submitting ? 'Signing in…' : 'Continue'}</span>
             <ArrowRight size={16} aria-hidden="true" />
           </AppButton>

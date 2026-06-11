@@ -1717,17 +1717,31 @@ def run_certification(args: argparse.Namespace) -> int:
         raise SystemExit(f"Unknown suite {args.suite!r}. Expected one of: {', '.join(sorted(VALID_SUITES))}")
     log_dir = ROOT_DIR / ".tmp" / "hardware_transparency_cert"
     results: list[StepResult] = []
-    results.extend(launch_gate_preflight_steps(args, log_dir))
-    if args.suite in {"automated", "full"}:
-        results.extend(automated_steps(args, log_dir))
-    if args.suite in {"agent-computer", "full"}:
-        results.extend(agent_computer_steps(args, log_dir))
-    if args.suite in {"cloud-computer", "full"}:
-        results.extend(cloud_computer_steps(args, log_dir))
-    if args.suite in {"gateway", "full"}:
-        results.extend(gateway_steps(args, log_dir))
-    if args.suite in {"self-hosted", "full"}:
-        results.extend(self_hosted_steps(args, log_dir))
+    preflight_results = launch_gate_preflight_steps(args, log_dir)
+    results.extend(preflight_results)
+    preflight_failed = any(item.status == "FAIL" for item in preflight_results)
+    if args.launch_gate and preflight_failed:
+        results.append(
+            StepResult(
+                "launch_gate_suite_execution_blocked",
+                "FAIL",
+                ["scripts/empyralis_hardware_transparency_certification.py", "--suite", args.suite, "--launch-gate"],
+                0.0,
+                "required launch-gate preflight failed; full certification suites were not run",
+                details={"failed_preflight_steps": [item.name for item in preflight_results if item.status == "FAIL"]},
+            )
+        )
+    else:
+        if args.suite in {"automated", "full"}:
+            results.extend(automated_steps(args, log_dir))
+        if args.suite in {"agent-computer", "full"}:
+            results.extend(agent_computer_steps(args, log_dir))
+        if args.suite in {"cloud-computer", "full"}:
+            results.extend(cloud_computer_steps(args, log_dir))
+        if args.suite in {"gateway", "full"}:
+            results.extend(gateway_steps(args, log_dir))
+        if args.suite in {"self-hosted", "full"}:
+            results.extend(self_hosted_steps(args, log_dir))
     results.append(_run_step(name="git_diff_check", command=["git", "diff", "--check"], timeout=30, log_dir=log_dir))
     results.extend(launch_gate_final_steps(args, log_dir, results))
 

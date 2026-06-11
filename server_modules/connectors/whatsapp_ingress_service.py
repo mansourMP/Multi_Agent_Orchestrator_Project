@@ -455,6 +455,10 @@ class WhatsAppIngressService:
 
         active_link = pair_resolution.get("link") if isinstance(pair_resolution.get("link"), dict) else {}
         if not self._link_scopes_allow_chat(active_link):
+            connect_url = self.channel_pairing_service().platform_connect_url(
+                provider="whatsapp",
+                workspace_id=workspace_id,
+            )
             return {
                 "handled": True,
                 "processed": False,
@@ -463,7 +467,7 @@ class WhatsAppIngressService:
                 "workspace_id": workspace_id,
                 "reply_text": (
                     "This WhatsApp number is not opted in for Empyralis chat yet. "
-                    "Create a fresh pairing code in Empyralis and send `pair CODE` here."
+                    f"Open Empyralis to reconnect it: {connect_url}"
                 ),
             }
 

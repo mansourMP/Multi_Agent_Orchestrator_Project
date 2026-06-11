@@ -21,6 +21,10 @@ class _PairingStub:
         self.calls.append(kwargs)
         return self.result
 
+    def platform_connect_url(self, **kwargs):
+        provider = str(kwargs.get("provider") or "whatsapp").strip() or "whatsapp"
+        return f"https://app.empyralis.test/continue?source=channel_connect&channel={provider}"
+
 
 class WhatsAppIngressServiceTests(unittest.TestCase):
     def _make_service(self, **overrides) -> WhatsAppIngressService:

@@ -12,8 +12,12 @@ const ANDROID_DOWNLOAD_URL = 'https://play.google.com/store/apps/details?id=com.
 
 function ContinuePageShell({
   onContinueOnWeb,
+  title = 'Continue your conversation',
+  subtitle = 'Download the app or sign in to unlock more messages and keep your history across all your devices.',
 }: {
   onContinueOnWeb: () => void;
+  title?: string;
+  subtitle?: string;
 }) {
   return (
     <main className="continue-page">
@@ -24,10 +28,9 @@ function ContinuePageShell({
         </div>
 
         <div className="continue-page__copy">
-          <h1 className="continue-page__title">Continue your conversation</h1>
+          <h1 className="continue-page__title">{title}</h1>
           <p className="continue-page__subtitle">
-            Download the app or sign in to unlock more messages and keep your history across all
-            your devices.
+            {subtitle}
           </p>
         </div>
 
@@ -65,7 +68,13 @@ function ContinuePageContent() {
 
   const source = searchParams.get('source');
   const agent = searchParams.get('agent');
+  const channel = String(searchParams.get('channel') || '').trim().toLowerCase();
+  const workspaceId = String(searchParams.get('workspace_id') || searchParams.get('workspace') || '').trim();
   const channelAttribution = searchParams.get('channel_attribution') || searchParams.get('token');
+  const isChannelConnect = source === 'channel_connect';
+  const channelLabel = channel
+    ? channel.replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+    : 'your channel';
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.sessionStorage === 'undefined') {
@@ -121,6 +130,8 @@ function ContinuePageContent() {
         JSON.stringify({
           source,
           agent,
+          channel,
+          workspaceId,
           channelAttribution,
           capturedAt: Date.now(),
         }),
@@ -131,6 +142,15 @@ function ContinuePageContent() {
     if (agent) {
       nextSearchParams.set('agent', agent);
     }
+    if (source) {
+      nextSearchParams.set('source', source);
+    }
+    if (channel) {
+      nextSearchParams.set('channel', channel);
+    }
+    if (workspaceId) {
+      nextSearchParams.set('workspace_id', workspaceId);
+    }
     if (channelAttribution) {
       nextSearchParams.set('channel_attribution', channelAttribution);
     }
@@ -138,7 +158,15 @@ function ContinuePageContent() {
     router.push(nextSearchParams.size > 0 ? `/login?${nextSearchParams.toString()}` : '/login');
   }
 
-  return <ContinuePageShell onContinueOnWeb={handleContinueOnWeb} />;
+  return (
+    <ContinuePageShell
+      onContinueOnWeb={handleContinueOnWeb}
+      title={isChannelConnect ? `Connect ${channelLabel}` : undefined}
+      subtitle={isChannelConnect
+        ? 'Sign in or create an account to finish setup inside Empyralis. The channel stays only for messages.'
+        : undefined}
+    />
+  );
 }
 
 export default function ContinuePage() {

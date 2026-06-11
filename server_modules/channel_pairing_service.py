@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import sqlite3
 import time
 import uuid
 from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
 from fastapi import HTTPException
 
@@ -29,6 +31,12 @@ PAIRING_COMMAND_RE = re.compile(
 )
 PAIRING_BARE_CODE_RE = re.compile(r"^\s*(EMP-[A-Za-z0-9-]{6,48})\s*$", re.IGNORECASE)
 PROVIDER_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
+PUBLIC_FRONTEND_ORIGIN_ENV_KEYS = (
+    "EMPYRALIS_PUBLIC_FRONTEND_ORIGIN",
+    "FRONTEND_PUBLIC_ORIGIN",
+    "NEXT_PUBLIC_APP_ORIGIN",
+    "BACKEND_PUBLIC_ORIGIN",
+)
 
 
 def _normalize_provider(value: Any) -> str:
@@ -137,6 +145,38 @@ def _pair_command_hint(provider: str) -> str:
     return "/pair CODE" if provider == "telegram" else "pair CODE"
 
 
+def _public_frontend_origin() -> str:
+    for key in PUBLIC_FRONTEND_ORIGIN_ENV_KEYS:
+        value = str(os.getenv(key) or "").strip()
+        if value:
+            return value.rstrip("/")
+    origins = str(os.getenv("FRONTEND_ORIGINS") or "").strip()
+    if origins:
+        first_origin = origins.split(",", 1)[0].strip()
+        if first_origin:
+            return first_origin.rstrip("/")
+    return "http://127.0.0.1:3000"
+
+
+def _platform_channel_connect_url(
+    provider: str,
+    *,
+    workspace_id: Optional[str] = None,
+    intent_id: Optional[str] = None,
+) -> str:
+    params = {
+        "source": "channel_connect",
+        "channel": _normalize_provider(provider),
+    }
+    clean_workspace_id = str(workspace_id or "").strip()
+    if clean_workspace_id:
+        params["workspace_id"] = clean_workspace_id
+    clean_intent_id = str(intent_id or "").strip()
+    if clean_intent_id:
+        params["intent_id"] = clean_intent_id
+    return f"{_public_frontend_origin()}/continue?{urlencode(params)}"
+
+
 def _subject_hint(value: Any) -> str:
     token = str(value or "").strip()
     if not token:
@@ -171,6 +211,19 @@ class ChannelPairingService:
 
     def _now(self) -> int:
         return int(time.time())
+
+    def platform_connect_url(
+        self,
+        *,
+        provider: Any,
+        workspace_id: Optional[str] = None,
+        intent_id: Optional[str] = None,
+    ) -> str:
+        return _platform_channel_connect_url(
+            _normalize_provider(provider),
+            workspace_id=workspace_id,
+            intent_id=intent_id,
+        )
 
     def _ensure_tables_locked(self, connection: sqlite3.Connection) -> None:
         connection.execute(
@@ -449,7 +502,17 @@ class ChannelPairingService:
                 "created_at": created_at,
                 "expires_at": expires_at,
                 "pairing_code": pairing_code,
-                "instructions": f"Send `{_pair_command_hint(resolved_provider)}` from your {_display_provider(resolved_provider)} account.",
+                "connect_url": _platform_channel_connect_url(
+                    resolved_provider,
+                    workspace_id=resolved_workspace_id,
+                    intent_id=intent_id,
+                ),
+                "instructions": (
+                    f"Open {_display_provider(resolved_provider)} from your account. "
+                    "If it is not linked yet, the channel will send an Empyralis connect link. "
+                    "Finish setup and relinking inside Empyralis."
+                ),
+                "legacy_pairing_command": _pair_command_hint(resolved_provider),
             },
         }
 
@@ -807,10 +870,18 @@ class ChannelPairingService:
                     observed_metadata=observed_metadata,
                 )
             except HTTPException as exc:
+                connect_url = _platform_channel_connect_url(
+                    resolved_provider,
+                    workspace_id=requested_workspace or None,
+                )
                 return {
                     "authorized": False,
                     "status": "pairing_failed",
-                    "reply_text": str(exc.detail or "Pairing failed."),
+                    "connect_url": connect_url,
+                    "reply_text": (
+                        f"{str(exc.detail or 'Pairing failed.')} "
+                        f"Open Empyralis to connect this channel: {connect_url}"
+                    ),
                 }
             return {
                 "authorized": False,
@@ -823,20 +894,27 @@ class ChannelPairingService:
                 ),
             }
         if active_link:
+            connect_url = _platform_channel_connect_url(resolved_provider)
             return {
                 "authorized": False,
                 "status": "linked_elsewhere",
+                "connect_url": connect_url,
                 "reply_text": (
                     f"This {_display_provider(resolved_provider)} identity is already linked to another workspace. "
-                    "Revoke it in Empyralis or create a relink pairing code."
+                    f"Open Empyralis to manage or relink it: {connect_url}"
                 ),
             }
+        connect_url = _platform_channel_connect_url(
+            resolved_provider,
+            workspace_id=requested_workspace or None,
+        )
         return {
             "authorized": False,
             "status": "pairing_required",
+            "connect_url": connect_url,
             "reply_text": (
                 f"This {_display_provider(resolved_provider)} identity is not linked to Empyralis yet. "
-                f"Create a pairing code in Empyralis and send `{_pair_command_hint(resolved_provider)}` here."
+                f"Open this link to connect it: {connect_url}"
             ),
         }
 

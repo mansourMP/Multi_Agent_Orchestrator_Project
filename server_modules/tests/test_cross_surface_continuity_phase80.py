@@ -100,6 +100,10 @@ def test_phase80_paired_telegram_and_whatsapp_messages_share_workspace(monkeypat
         )
         assert unpaired["authorized"] is False
         assert unpaired["status"] == "pairing_required"
+        assert unpaired["connect_url"].endswith(
+            f"/continue?source=channel_connect&channel=telegram&workspace_id={workspace_id}"
+        )
+        assert "/pair" not in unpaired["reply_text"].lower()
 
         telegram_intent = pairing_module.create_authenticated_channel_pairing_intent(
             current_user,
@@ -201,7 +205,8 @@ def test_phase80_paid_mobile_and_free_channel_boundaries():
         )
     )
 
-    assert free_flags["mobile_app_enabled"] is False
+    assert free_flags["mobile_app_enabled"] is True
+    assert free_flags["mobile_push_enabled"] is False
     assert free_flags["approvals_enabled"] is False
     assert free_flags["telegram_channel_enabled"] is True
     assert free_flags["whatsapp_channel_enabled"] is True

@@ -86,6 +86,27 @@ def _current_user(auth, token: str):
     return auth.get_current_user(_Request(), authorization=f"Bearer {token}")
 
 
+def test_unlinked_channel_message_returns_platform_connect_link(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    with _isolated_modules(monkeypatch, tmp_path) as (_auth, pairing_module, _):
+        monkeypatch.setenv("EMPYRALIS_PUBLIC_FRONTEND_ORIGIN", "https://app.empyralis.test")
+        result = pairing_module.get_channel_pairing_service().authorize_channel_message(
+            provider="telegram",
+            external_subject="telegram-user-unlinked",
+            workspace_id="ws-connect",
+            message_text="start",
+        )
+
+        assert result["authorized"] is False
+        assert result["status"] == "pairing_required"
+        assert result["connect_url"] == (
+            "https://app.empyralis.test/continue?"
+            "source=channel_connect&channel=telegram&workspace_id=ws-connect"
+        )
+        assert "connect it" in result["reply_text"].lower()
+        assert "/pair" not in result["reply_text"].lower()
+        assert "pair code" not in result["reply_text"].lower()
+
+
 def test_create_intent_and_pair_authorizes_same_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path):
     with _isolated_modules(monkeypatch, tmp_path) as (auth, pairing_module, _):
         created = auth.register_user("pair@example.com", "password-123", name="Pair User")
@@ -98,6 +119,9 @@ def test_create_intent_and_pair_authorizes_same_workspace(monkeypatch: pytest.Mo
             workspace_id="default",
         )
         pairing_code = intent_payload["intent"]["pairing_code"]
+        assert intent_payload["intent"]["connect_url"].startswith("http://127.0.0.1:3000/continue?")
+        assert "send `/pair" not in intent_payload["intent"]["instructions"].lower()
+        assert intent_payload["intent"]["legacy_pairing_command"] == "/pair CODE"
 
         pair_result = pairing_module.get_channel_pairing_service().authorize_channel_message(
             provider="telegram",

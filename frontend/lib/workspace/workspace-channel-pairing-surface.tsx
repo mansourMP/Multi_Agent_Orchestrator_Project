@@ -41,7 +41,9 @@ type ChannelPairingIntentRecord = {
   created_at: number;
   expires_at: number;
   pairing_code: string;
+  connect_url?: string;
   instructions: string;
+  legacy_pairing_command?: string;
 };
 
 type ChannelLinksResponse = {
@@ -58,21 +60,21 @@ const CHANNEL_PROVIDER_DEFINITIONS: Record<
   ChannelProvider,
   {
     label: string;
-    commandExample: string;
+    legacyCommandExample: string;
     helpText: string;
     capabilityKey: string;
   }
 > = {
   telegram: {
-    label: 'Telegram Bot',
-    commandExample: '/pair EMP-ABCD-EFGH',
-    helpText: 'Open the Telegram bot chat, paste the pairing command, then continue your conversation there.',
+    label: 'Telegram',
+    legacyCommandExample: '/pair EMP-ABCD-EFGH',
+    helpText: 'Start the Telegram channel. If it is not linked, it sends an Empyralis connect link and setup finishes here.',
     capabilityKey: 'telegram_channel_enabled',
   },
   whatsapp: {
-    label: 'WhatsApp Business',
-    commandExample: 'pair EMP-ABCD-EFGH',
-    helpText: 'Open the WhatsApp Business channel, paste the pairing command, then continue your conversation there.',
+    label: 'WhatsApp',
+    legacyCommandExample: 'pair EMP-ABCD-EFGH',
+    helpText: 'Start the WhatsApp channel. If it is not linked, it sends an Empyralis connect link and setup finishes here.',
     capabilityKey: 'whatsapp_channel_enabled',
   },
 };
@@ -144,7 +146,7 @@ function IntegrationsSkeleton() {
         </div>
       )}
       secondary={(
-        <ListDetailPanel eyebrow="Selection" title="Loading pairing detail">
+        <ListDetailPanel eyebrow="Selection" title="Loading connection detail">
           <SkeletonBlock height="3.2rem" />
           <SkeletonBlock height="3.2rem" />
           <SkeletonBlock height="3.2rem" />
@@ -235,7 +237,7 @@ export function WorkspaceChannelPairingSurface({
       if (fallback) {
         setLinksResponse(fallback);
         setIsLoadedOnce(true);
-        setStatusMessage('Showing cached pairing state because the backend is temporarily unreachable.');
+        setStatusMessage('Showing cached channel connection state because the backend is temporarily unreachable.');
       }
       const message = error instanceof Error ? error.message : 'Could not load channel links.';
       setErrorMessage(message);
@@ -254,7 +256,7 @@ export function WorkspaceChannelPairingSurface({
 
   const createIntentRequest = async (provider: ChannelProvider, allowRelink: boolean) => {
     if (!canPairChannels) {
-      setErrorMessage('Channel pairing is blocked for this workspace membership.');
+      setErrorMessage('Channel connection is blocked for this workspace membership.');
       return;
     }
     if (!hasCapability(CHANNEL_PROVIDER_DEFINITIONS[provider].capabilityKey)) {
@@ -288,11 +290,11 @@ export function WorkspaceChannelPairingSurface({
       setSelectedProvider(provider);
       setCodeSheetProvider(provider);
       setStatusMessage(
-        `${CHANNEL_PROVIDER_DEFINITIONS[provider].label} pairing code created. Expires ${formatTimestamp(payload.intent.expires_at)}.`,
+        `${CHANNEL_PROVIDER_DEFINITIONS[provider].label} connection prepared. Expires ${formatTimestamp(payload.intent.expires_at)}.`,
       );
       await refreshLinks({ silent: true }).catch(() => undefined);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Could not create channel pairing code.');
+      setErrorMessage(error instanceof Error ? error.message : 'Could not prepare channel connection.');
     } finally {
       setActionProvider(null);
       setPendingRelinkProvider(null);
@@ -335,10 +337,10 @@ export function WorkspaceChannelPairingSurface({
     }
   };
 
-  const title = featureId === 'settings' ? 'Channel pairing' : 'Studio · Channels';
+  const title = featureId === 'settings' ? 'Channel connections' : 'Studio · Channels';
   const intro =
     featureId === 'settings'
-      ? 'Generate pairing codes, review active links, and manage channel identities from workspace-backed settings.'
+      ? 'Connect Telegram and WhatsApp identities from Empyralis, then use the channel only for messages.'
       : 'Connect customer channels, manage linked identities, and keep launch-ready coverage in one place.';
 
   return (
@@ -366,7 +368,7 @@ export function WorkspaceChannelPairingSurface({
         >
           {canPairChannels
             ? `Link status ${summarizeLinkStatus(linksResponse.links)}.`
-            : 'Pairing codes require the correct workspace role and channel access settings.'}
+            : 'Channel connections require the correct workspace role and channel access settings.'}
         </StateBanner>
 
         {statusMessage ? (
@@ -389,7 +391,7 @@ export function WorkspaceChannelPairingSurface({
                 <ListDetailPanel
                   eyebrow="Providers"
                   title="Connected channel providers"
-                  subtitle="Select a provider to review readiness, active links, and the latest pairing code."
+                  subtitle="Select a provider to review readiness, active links, and the latest platform connection."
                 >
                   <div className="app-stack-3">
                     {visibleProviders.map((provider) => {
@@ -427,7 +429,7 @@ export function WorkspaceChannelPairingSurface({
                   {activeLinks.length === 0 ? (
                     <EmptyPanel
                       title="No active links"
-                      body={`Generate a pairing code, paste it into ${selectedDefinition.label}, and your first linked account will appear here.`}
+                      body={`Prepare a connection, open ${selectedDefinition.label}, and finish linking from the Empyralis connect link.`}
                     />
                   ) : (
                     <DataTable>
@@ -509,8 +511,8 @@ export function WorkspaceChannelPairingSurface({
             secondary={(
               <ListDetailPanel
                 eyebrow="Selection"
-                title={`${selectedDefinition.label} pairing`}
-                subtitle="Current provider readiness, latest pairing code, and active workspace link status."
+                title={`${selectedDefinition.label} connection`}
+                subtitle="Current provider readiness, latest platform connection, and active workspace link status."
                 actions={(
                   <div className="app-inline-actions">
                     {selectedIntent && isIntentActive(selectedIntent) ? (
@@ -519,7 +521,7 @@ export function WorkspaceChannelPairingSurface({
                         tone="secondary"
                         onClick={() => setCodeSheetProvider(selectedProvider)}
                       >
-                        View code
+                        View connection
                       </AppButton>
                     ) : null}
                     <AppButton
@@ -532,16 +534,16 @@ export function WorkspaceChannelPairingSurface({
                       {actionProvider === selectedProvider
                         ? 'Creating…'
                         : selectedProviderLinks.length > 0
-                          ? 'Create re-link code'
-                          : 'Create pairing code'}
+                          ? 'Prepare re-link'
+                          : 'Prepare connection'}
                     </AppButton>
                   </div>
                 )}
               >
                 <StateBanner
                   tone={!providerEnabled ? 'warning' : selectedProviderLinks.length > 0 ? 'success' : 'neutral'}
-                  title={!providerEnabled ? 'Provider disabled for this plan' : selectedProviderLinks.length > 0 ? 'Provider linked' : 'Provider ready to pair'}
-                  detail={`${selectedProviderLinks.length} active links · command ${selectedDefinition.commandExample}`}
+                  title={!providerEnabled ? 'Provider disabled for this plan' : selectedProviderLinks.length > 0 ? 'Provider linked' : 'Provider ready to connect'}
+                  detail={`${selectedProviderLinks.length} active links · setup stays inside Empyralis`}
                 >
                   {selectedDefinition.helpText}
                 </StateBanner>
@@ -549,15 +551,15 @@ export function WorkspaceChannelPairingSurface({
                 <FormGrid>
                   <FormReadout label="Workspace" value={bootstrap.workspace.label} />
                   <FormReadout label="Shell profile" value={shellProfile.label} />
-                  <FormReadout label="Command" value={selectedDefinition.commandExample} />
+                  <FormReadout label="Connection link" value={selectedIntent?.connect_url || 'Prepare a connection first'} />
                   <FormReadout label="Plan enabled" value={providerEnabled ? 'Yes' : 'No'} />
                   <FormReadout label="Active links" value={String(selectedProviderLinks.length)} />
-                  <FormReadout label="Latest code" value={selectedIntent && isIntentActive(selectedIntent) ? selectedIntent.pairing_code : 'No active code'} />
+                  <FormReadout label="Legacy fallback" value={selectedIntent && isIntentActive(selectedIntent) ? selectedIntent.pairing_code : 'No active fallback'} />
                 </FormGrid>
                 {selectedProviderLinks.length === 0 ? (
                   <EmptyPanel
                     title={`No active ${selectedDefinition.label} links`}
-                    body={`Generate a pairing code and link your first ${selectedDefinition.label} identity to this workspace.`}
+                    body={`Prepare a connection and link your first ${selectedDefinition.label} identity to this workspace from Empyralis.`}
                   />
                 ) : (
                   <div className="app-stack-3">
@@ -582,21 +584,21 @@ export function WorkspaceChannelPairingSurface({
 
       <CommandSheet
         open={Boolean(codeSheetProvider && intentByProvider[codeSheetProvider] && isIntentActive(intentByProvider[codeSheetProvider] ?? null))}
-        title={codeSheetProvider ? `${CHANNEL_PROVIDER_DEFINITIONS[codeSheetProvider].label} pairing code` : 'Pairing code'}
-        description="Copy the pairing code and follow the provider-specific command instructions in the linked channel."
+        title={codeSheetProvider ? `${CHANNEL_PROVIDER_DEFINITIONS[codeSheetProvider].label} connection` : 'Channel connection'}
+        description="Open the channel normally. If it is not linked, it sends a secure Empyralis connect link and setup finishes here."
         onClose={() => setCodeSheetProvider(null)}
         actions={<AppButton type="button" tone="secondary" onClick={() => setCodeSheetProvider(null)}>Done</AppButton>}
       >
         {codeSheetProvider && intentByProvider[codeSheetProvider] ? (
           <>
-            <ModalSection title="Pairing code" description="Paste this exact code into the selected provider chat to complete the link.">
+            <ModalSection title="Platform connection" description="Use the connect link when the channel asks you to finish setup in Empyralis.">
               <FormGrid columns="1fr">
-                <FormReadout label="Code" value={intentByProvider[codeSheetProvider]?.pairing_code ?? 'n/a'} />
+                <FormReadout label="Connect link" value={intentByProvider[codeSheetProvider]?.connect_url ?? 'Open the channel to request a link.'} />
                 <FormReadout label="Expires" value={formatTimestamp(intentByProvider[codeSheetProvider]?.expires_at ?? null)} />
-                <FormReadout label="Command" value={CHANNEL_PROVIDER_DEFINITIONS[codeSheetProvider].commandExample} />
+                <FormReadout label="Legacy fallback code" value={intentByProvider[codeSheetProvider]?.pairing_code ?? 'n/a'} />
               </FormGrid>
             </ModalSection>
-            <ModalSection title="Instructions" description="Follow these steps to complete the link in your selected channel.">
+            <ModalSection title="Instructions" description="Setup and relinking stay inside Empyralis. The channel is only the message surface.">
               <div className="app-meta-value app-meta-value--body">
                 {intentByProvider[codeSheetProvider]?.instructions ?? CHANNEL_PROVIDER_DEFINITIONS[codeSheetProvider].helpText}
               </div>
@@ -607,9 +609,9 @@ export function WorkspaceChannelPairingSurface({
 
       <ConfirmDialog
         open={Boolean(pendingRelinkProvider)}
-        title="Create re-link code"
-        body={pendingRelinkProvider ? `${CHANNEL_PROVIDER_DEFINITIONS[pendingRelinkProvider].label} already has an active link in this workspace. Create a re-link code anyway?` : 'Create a re-link code anyway?'}
-        confirmLabel="Create re-link code"
+        title="Prepare re-link"
+        body={pendingRelinkProvider ? `${CHANNEL_PROVIDER_DEFINITIONS[pendingRelinkProvider].label} already has an active link in this workspace. Prepare a re-link anyway?` : 'Prepare a re-link anyway?'}
+        confirmLabel="Prepare re-link"
         confirmTone="primary"
         busy={pendingRelinkProvider ? actionProvider === pendingRelinkProvider : false}
         onCancel={() => setPendingRelinkProvider(null)}

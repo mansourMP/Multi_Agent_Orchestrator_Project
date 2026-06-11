@@ -47,7 +47,7 @@ function upstreamUnavailableResponse(error: unknown): NextResponse {
   const reason = error instanceof Error ? error.message : 'upstream_unavailable';
   return new NextResponse(
     JSON.stringify({
-      detail: 'Control plane is unavailable. Restart the local runtime or try again in a moment.',
+      detail: 'Control plane is unavailable. Check that the configured backend is reachable from this deployment or restart the local runtime.',
       reason,
     }),
     {

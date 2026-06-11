@@ -152,6 +152,9 @@ async function parseJson(response: Response): Promise<unknown> {
 
 function authFailureMessage(status: number, detail: string): string {
   const normalized = detail.toLowerCase();
+  if (normalized.includes('control plane is unavailable') || normalized.includes('fetch failed')) {
+    return detail || 'The Empyralis control plane is unavailable.';
+  }
   if (status >= 500 || /internal server|bad gateway|service unavailable|gateway timeout/.test(normalized)) {
     return 'The auth service is warming up or temporarily unavailable. Try again in a moment.';
   }

@@ -23,6 +23,9 @@ function authErrorCopy(error: string): string {
     .trim()
     .replace(/^(login request failed|session readiness failed|authentication request failed):\s*/i, '');
   const normalized = unwrapped.toLowerCase();
+  if (normalized.includes('control plane is unavailable') || normalized.includes('fetch failed')) {
+    return 'This deployment cannot reach the Empyralis control plane. Open the local app or connect this deployment to a reachable backend.';
+  }
   if (normalized.includes('google_not_configured')) {
     return 'Google sign-in is not configured for this environment yet.';
   }
@@ -76,16 +79,30 @@ function LoginPageContent() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [providersLoaded, setProvidersLoaded] = useState(false);
+  const [authRuntimeError, setAuthRuntimeError] = useState<string | null>(null);
   const [providers, setProviders] = useState<AuthProviderOptions>({
-    email: { enabled: true },
-    google: { enabled: true },
+    email: { enabled: false },
+    google: { enabled: false },
     apple: { enabled: false },
   });
   const agentParam = String(searchParams.get('agent') || '').trim();
   const channelAttribution = String(searchParams.get('channel_attribution') || '').trim();
+  const sourceParam = String(searchParams.get('source') || '').trim();
+  const channelParam = String(searchParams.get('channel') || '').trim();
+  const workspaceParam = String(searchParams.get('workspace_id') || '').trim();
   const pilotCode = String(searchParams.get('pilot_code') || '').trim();
   const providerError = String(searchParams.get('error') || '').trim();
   const signupSearchParams = new URLSearchParams();
+  if (sourceParam) {
+    signupSearchParams.set('source', sourceParam);
+  }
+  if (channelParam) {
+    signupSearchParams.set('channel', channelParam);
+  }
+  if (workspaceParam) {
+    signupSearchParams.set('workspace_id', workspaceParam);
+  }
   if (agentParam) {
     signupSearchParams.set('agent', agentParam);
   }
@@ -112,13 +129,20 @@ function LoginPageContent() {
           google: { enabled: payload?.google?.enabled === true },
           apple: { enabled: false },
         });
+        setAuthRuntimeError(null);
+        setProvidersLoaded(true);
       })
-      .catch(() => {
+      .catch((nextError) => {
+        const message = nextError instanceof Error
+          ? nextError.message
+          : 'Authentication provider discovery failed.';
         setProviders({
-          email: { enabled: true },
-          google: { enabled: true },
+          email: { enabled: false },
+          google: { enabled: false },
           apple: { enabled: false },
         });
+        setAuthRuntimeError(message);
+        setProvidersLoaded(true);
       });
   }, [providerError]);
 
@@ -156,6 +180,14 @@ function LoginPageContent() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (authRuntimeError) {
+      setError(authRuntimeError);
+      return;
+    }
+    if (!providersLoaded || providers.email?.enabled !== true) {
+      setError('Email sign-in is not available in this environment.');
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -177,6 +209,16 @@ function LoginPageContent() {
     }
   }
 
+  const authRuntimeUnavailable = authRuntimeError !== null;
+  const emailAuthEnabled = isHydrated
+    && providersLoaded
+    && !authRuntimeUnavailable
+    && providers.email?.enabled === true;
+  const googleAuthEnabled = isHydrated
+    && providersLoaded
+    && !authRuntimeUnavailable
+    && providers.google?.enabled === true;
+
   return (
     <main className="app-auth-page">
       <div className="app-auth-shell app-auth-shell--centered">
@@ -185,6 +227,9 @@ function LoginPageContent() {
             <h1 className="app-auth-title">Log in to Empyralis</h1>
             <p className="app-auth-subtitle">Your personal control surface for autonomous work.</p>
           </div>
+          {authRuntimeError ? (
+            <AuthErrorNotice title="Auth unavailable" message={authRuntimeError} />
+          ) : null}
           <div className="app-auth-provider-stack">
             <div className="app-auth-social-stack">
               <AppButton
@@ -192,7 +237,7 @@ function LoginPageContent() {
                 tone="secondary"
                 className="app-auth-social"
                 onClick={() => googleLogin()}
-                disabled={submitting || !isHydrated || providers.google?.enabled !== true}
+                disabled={submitting || !googleAuthEnabled}
               >
                 <GoogleProviderIcon className="app-auth-provider-mark" />
                 <span className="app-auth-social__content">
@@ -200,7 +245,7 @@ function LoginPageContent() {
                 </span>
               </AppButton>
             </div>
-            {providers.google?.enabled !== true ? (
+            {!authRuntimeUnavailable && providersLoaded && providers.google?.enabled !== true && emailAuthEnabled ? (
               <p className="app-auth-provider-note">Google sign-in is unavailable right now. Use email below.</p>
             ) : null}
             <div className="app-auth-divider">
@@ -219,6 +264,7 @@ function LoginPageContent() {
                 value={email}
                 className="app-auth-input"
                 placeholder="Enter your email"
+                disabled={!emailAuthEnabled || submitting}
                 onChange={(event) => setEmail(event.target.value)}
               />
             </span>
@@ -235,12 +281,13 @@ function LoginPageContent() {
                 value={password}
                 className="app-auth-input"
                 placeholder="Enter your password"
+                disabled={!emailAuthEnabled || submitting}
                 onChange={(event) => setPassword(event.target.value)}
               />
             </span>
           </label>
           {error ? <AuthErrorNotice title="Couldn’t sign in" message={error} /> : null}
-          <AppButton type="submit" tone="primary" disabled={submitting} className="app-auth-submit">
+          <AppButton type="submit" tone="primary" disabled={submitting || !emailAuthEnabled} className="app-auth-submit">
             <span>{submitting ? 'Signing in…' : 'Continue'}</span>
             <ArrowRight size={16} aria-hidden="true" />
           </AppButton>

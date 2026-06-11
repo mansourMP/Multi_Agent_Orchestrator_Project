@@ -33,13 +33,15 @@ Certified recipe v1 lanes:
   `google_workspace__list_calendar_events`.
 - Email triage: uses `google_workspace__fetch_emails`; drafting/sending remains
   approval-gated through `google_workspace__draft_email`.
-- Meeting prep: uses `google_workspace__list_calendar_events` and
-  `google_workspace__list_drive_files`; calendar writes remain approval-gated.
+- Meeting prep: uses `google_workspace__list_calendar_events` by default.
+  `google_workspace__list_drive_files` is used only when Drive scope is
+  explicitly enabled and verified; calendar writes remain approval-gated.
 
-These recipes run only when the required read tools are available. If Gmail,
-Calendar, or Drive access is missing, Sage returns `daily_operator_blocked`
-with concrete `blocked_tools`; it must not fabricate brief, email, calendar, or
-Drive context. Read tool outputs are sanitized and included in direct-tool
+These recipes run only when the required read tools are available. If Gmail or
+Calendar access is missing, Sage returns `daily_operator_blocked` with concrete
+`blocked_tools`; it must not fabricate brief, email, or calendar context. If
+Drive access is missing, Drive context is skipped unless the selected recipe
+explicitly requires it. Read tool outputs are sanitized and included in direct-tool
 result text so the operator can reason over real connector data. Every recipe
 result also returns a structured `proof_log` with what Sage checked, what
 changed, what could not run, and why approval is needed. External writes and

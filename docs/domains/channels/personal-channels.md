@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Platform
-Last verified: 2026-06-07
+Last verified: 2026-06-10
 Source of truth: personal channel service and routes
 
 ## Supported Providers
@@ -25,12 +25,31 @@ Implemented personal channel keys in
 All require Agent Computer and are `surface_support: ["sage"]` in the platform
 catalog. They are not launch-allowed Studio bindings. Only Telegram and
 WhatsApp are currently launch-live personal lanes. Signal, iMessage, and WeChat
-remain private bridge contracts until certified.
+have local bridge setup contracts and route plumbing, but the canonical
+connection catalog keeps them non-launch-certified until bridge health,
+inbound, outbound, restart, and replay certification is complete.
 
 Official Apple Messages for Business is a separate business-channel lane:
 `apple_messages_business`. It uses a cloud/MSP adapter and must satisfy Apple
 review requirements such as AI disclosure and human handoff. It must not be
 presented as personal iMessage support.
+
+## Readiness And Certification
+
+The connection catalog exposes launch truth fields from
+`server_modules/connection_readiness_service.py`:
+
+- `readiness_status`: `planned`, `implementation_ready`,
+  `launch_certified`, or `disabled`.
+- `certification_required`: true until this channel has runtime/account proof.
+- `certification_requirements`: actionable requirements for the specific
+  channel.
+
+`GET /api/connections/{connection_id}/doctor` returns the channel checks and
+requirements. `POST /api/connections/{connection_id}/certify` can certify a
+provider account or an Agent Computer bridge only when the route can verify
+real proof. Do not mark Signal, iMessage, or WeChat launch-ready by changing
+copy alone.
 
 ## Pairing And State
 
@@ -46,13 +65,18 @@ not the channel identity pairing code path. Gateway pairing is handled by
 `server_modules/gateway_pairing_service.py`, `server_modules/gateway_state_repository.py`,
 and `/gateway/pairings/...` routes in `server_modules/routes_gateway.py`.
 
-There is also a separate channel identity pairing service for Telegram/WhatsApp
-bot-style links. `frontend/lib/workspace/workspace-channel-pairing-surface.tsx`
-creates/list/revokes pairing intents through `/api/channel-pairing/...`, while
-`server_modules/channel_pairing_service.py` issues one-time pairing codes,
-hashes stored codes, consumes them from inbound connector messages, and records
-security audit events. This service is for external channel identity links; it
-is not the personal Agent Computer session store.
+There is also a separate channel identity connection service for
+Telegram/WhatsApp bot-style links.
+`frontend/lib/workspace/workspace-channel-pairing-surface.tsx`
+creates/list/revokes connection intents through `/api/channel-pairing/...`,
+while `server_modules/channel_pairing_service.py` issues one-time fallback
+codes, hashes stored codes, consumes legacy codes from inbound connector
+messages, and records security audit events. The primary product contract is
+platform-owned: if an unlinked Telegram/WhatsApp identity sends a message, the
+channel replies with an Empyralis `/continue?source=channel_connect...` link.
+Setup, account creation, relinking, and revocation stay inside Empyralis. This
+service is for external channel identity links; it is not the personal Agent
+Computer session store.
 
 WhatsApp setup accepts `phone_number` and `custom_pairing_code`. Telegram setup
 accepts `api_id`, `api_hash`, `phone_number`, `login_code`, and `password`.

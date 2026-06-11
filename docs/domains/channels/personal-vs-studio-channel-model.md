@@ -1,6 +1,6 @@
 # Personal Vs Studio Channel Model
 
-Last verified: 2026-06-07
+Last verified: 2026-06-10
 Status: Live boundary with implemented lane split
 
 This document freezes the boundary between:
@@ -112,11 +112,29 @@ Current implemented personal lane truth:
   reconnect ownership
 - personal Telegram uses the gateway lane with local session state and reconnect
   ownership
-- Signal, iMessage, and WeChat use the Agent Computer local-bridge contract and
-  are live when their selected gateway bridge is configured
+- Signal, iMessage, and WeChat have an Agent Computer local-bridge contract and
+  route/service plumbing, but the canonical connection catalog keeps them
+  `planned`, `setup_available: false`, and `runtime_usable: false` until bridge
+  certification is complete
 - the gateway publishes inbound personal messages into cloud through the gateway
   protocol
 - outbound personal replies route back through the same gateway control plane
+
+Canonical launch truth:
+
+| Channel | Current state | Gateway required | Customer launch status |
+| --- | --- | --- | --- |
+| `telegram_personal` | GramJS gateway runtime | Yes | Launch-live |
+| `whatsapp_personal` | Baileys gateway runtime | Yes | Launch-live |
+| `signal_personal` | local bridge contract plus signal-cli bridge code | Yes | Planned/locked until certified |
+| `imessage_personal` | local bridge contract plus BlueBubbles bridge code | Yes, Mac | Planned/locked until certified |
+| `wechat_personal` | generic local bridge contract | Yes | Planned/locked until certified |
+
+The gateway can project bridge health for Signal/iMessage/WeChat when a
+selected Agent Computer reports it, but setup remains locked by
+`server_modules/connection_catalog_service.py` and
+`server_modules/routes_connections.py` until the canonical catalog is updated
+and the certification tests stop asserting the planned state.
 
 ### What Still Needs Productization
 

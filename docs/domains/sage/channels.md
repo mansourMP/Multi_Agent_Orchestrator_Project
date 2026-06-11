@@ -2,8 +2,9 @@
 
 Status: Active
 Owner: Platform
-Last verified: 2026-06-08
-Source of truth: channel routing code
+Last verified: 2026-06-10
+Source of truth: connection catalog, channel routing code, and personal-channel
+routes
 
 ## Web And Mobile Chat
 
@@ -28,7 +29,19 @@ implemented personal keys are:
 - `imessage_personal` via `bluebubbles_local_bridge`
 - `wechat_personal` via `wechat_local_bridge`
 
-Sources: `server_modules/channel_lane_contract_service.py`,
+Launch-live personal keys:
+
+- `telegram_personal`
+- `whatsapp_personal`
+
+Bridge-contract keys with backend/gateway plumbing but locked customer setup:
+
+- `signal_personal`
+- `imessage_personal`
+- `wechat_personal`
+
+Sources: `server_modules/connection_catalog_service.py`,
+`server_modules/channel_lane_contract_service.py`,
 `server_modules/routes_personal_channels.py`, and
 `server_modules/personal_channels_service.py`.
 
@@ -55,7 +68,7 @@ require text and do not pass media payloads into Sage.
 
 Cloud channels do not require Agent Computer. `telegram_bot` is the Telegram
 path for a bot account and `telegram_personal` is the personal-account path.
-Sage channel setup surfaces should expose one Telegram card with a Bot/Personal
+Sage channel setup surfaces should expose one Telegram card with Bot/Personal
 choice inside the setup panel. The product copy must not imply that all
 Telegram usage depends on gateway hardware:
 
@@ -65,6 +78,18 @@ Telegram usage depends on gateway hardware:
 
 Use the personal lane only when the user intentionally wants Sage to use their
 own logged-in account. Use the bot lane for the simpler Telegram entry point.
+If the product wants one official Empyralis Telegram bot that every customer can
+message without bringing a bot token, use the separate `sage_telegram_hosted`
+connection. It is planned until official bot provisioning, pairing, signed
+inbound events, outbound replies, approvals, rate limits, and replay tests are
+certified. Do not overload `telegram_personal` for that purpose.
+
+For all cloud/personal message surfaces, setup stays inside Empyralis. Telegram
+or WhatsApp may send a platform connect link when a user starts a channel before
+linking, but they must not ask the user to configure Sage by chat commands. The
+`/continue?source=channel_connect...` handoff preserves the channel intent
+through login/signup and routes the user back to the workspace Connectors
+surface.
 
 Launchable channel setup surfaces:
 
@@ -82,6 +107,28 @@ Launchable channel setup surfaces:
   channel, guild, application, and public-key fields needed by the Discord
   connector contract.
 
+Launchable no-gateway app connectors:
+
+- `google_workspace`: Gmail and Calendar through one Google OAuth connection.
+  Google Drive is optional and must be enabled only when Drive is also
+  verification/demo-ready.
+- `microsoft_365`: Outlook mail, calendar, and OneDrive through Microsoft
+  OAuth.
+- `github`: OAuth or app install for repository work and signed webhooks.
+- `notion`, `linear`, and `dropbox`: OAuth/token-backed work-app connectors.
+- `smtp`: custom mailbox credentials through the work-app connector, not the
+  partial generic `email` channel.
+- `wechat_work`: webhook URL backed work-app connector.
+- `instagram_business`: Graph API token backed work-app connector.
+
+For cloud connectors, `/api/connections/{connection_id}/setup/start` either
+returns an OAuth start response or a `/api/connectors/vault` setup contract
+with required fields. Agent Computer is not involved.
+
+The broader app catalog also contains many `live_when_configured` cards that are
+not yet runtime-certified by connector-module proof. Those should not be sold as
+done until each has a concrete connector runtime and focused tests.
+
 Email is shown as one channel entry but is backed by app connectors:
 
 - Gmail uses the `google_workspace` connector.
@@ -96,5 +143,8 @@ Disabled bridge channels:
 - `wechat_personal`
 
 These stay visible only as disabled bridge lanes until their Agent Computer
-runtime bridges are certified end to end. The UI must not open fake setup
-panels for these items.
+runtime bridges are certified end to end. The UI may open the real Agent
+Computer bridge setup contract returned by
+`POST /api/connections/{id}/setup/start`, but it must show certification
+required and must not present the bridge as launch-ready until
+`/api/connections/{id}/doctor` and `/api/connections/{id}/certify` show proof.

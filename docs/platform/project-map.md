@@ -25,8 +25,8 @@ Shell classes are frozen as:
   - Live personal Agent Computer channels: Telegram, WhatsApp
   - Planned personal Agent Computer bridge channels: Signal, iMessage, WeChat
   - Live when configured cloud/business channels: Telegram Bot, Slack, Discord
-  - Email setup: Gmail through Google Workspace, or custom SMTP / IMAP
-  - Planned/partial channels: Web Chat, WhatsApp Business, Webhook, Teams, Matrix, phone, Microsoft 365
+  - Email setup: Gmail through Google Workspace, Microsoft 365, or custom SMTP / IMAP
+  - Planned/partial channels: generic Email channel, Web Chat, WhatsApp Business, Webhook, Teams, Matrix, phone
 
 Channel shells may do:
 - conversation

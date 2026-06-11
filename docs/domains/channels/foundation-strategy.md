@@ -69,8 +69,8 @@ personal bridges are cloud customer channels.
 ## Studio Agent Channels
 
 - Live when configured: Telegram Bot API, Discord Bot, Slack app
-- Live when configured as connected apps: GitHub, Notion, Linear, Dropbox, Amazon S3, SMTP / IMAP, WeChat Work, Instagram Business
-- Partial: Email as a durable inbound channel, Microsoft 365
+- Live when configured as connected apps: Google Workspace, Microsoft 365, GitHub, Notion, Linear, Dropbox, Amazon S3, SMTP / IMAP, WeChat Work, Instagram Business
+- Partial: Generic Email as a durable inbound channel; use Google Workspace, Microsoft 365, or SMTP work-app connectors for launchable mailbox setup
 - Planned: Web Chat, WhatsApp Business / Twilio, Webhook, Teams, Matrix, Feishu/Lark, Zalo OA
 
 ## Channel Priority
@@ -84,9 +84,9 @@ personal bridges are cloud customer channels.
 
 ### Build next
 
-1. Microsoft 365 OAuth/mail/calendar/file proof
-2. Webhook channel with signed ingress and outbox delivery
-3. Matrix and Teams
+1. Webhook channel with signed ingress and outbox delivery
+2. Matrix and Teams
+3. Hosted Sage Telegram bot as a first-party no-token user entry point
 
 ### Research only
 

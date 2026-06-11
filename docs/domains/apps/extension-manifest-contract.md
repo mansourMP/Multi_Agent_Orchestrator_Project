@@ -86,7 +86,9 @@ separate in product UI and permission prompts.
   bridge URL and should not be represented as native WeChat automation shipped
   by Empyralis.
 - GitHub, Linear, Notion, Dropbox, Amazon S3, SMTP / IMAP, WeChat Work,
-  Instagram Business, Gmail, Calendar, and Drive belong to Connected Apps, not
-  Personal Messaging.
-- Microsoft 365 is partial until OAuth/mail/calendar/file proof is complete.
+  Instagram Business, Gmail, Calendar, Drive, and Microsoft 365 belong to
+  Connected Apps, not Personal Messaging.
+- Microsoft 365 is live-when-configured in the canonical connection catalog.
+- Broad app cards without connector-module proof must not be treated as
+  runtime-certified just because the catalog lists them as live-when-configured.
 - Webhook remains planned until signed ingress and delivery are first-class.

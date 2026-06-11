@@ -20,7 +20,7 @@ Internal `/apps/...` routes are hidden tool/runtime routes, not a visible mobile
 - Live personal Agent Computer channels: Telegram, WhatsApp
 - Planned personal Agent Computer bridge channels: Signal, iMessage, WeChat
 - Live when configured cloud/business channels: Telegram Bot, Slack, Discord
-- Email setup: Gmail through Google Workspace, or custom SMTP / IMAP
+- Email setup: Gmail through Google Workspace, Microsoft 365, or custom SMTP / IMAP
 - Planned/partial channels: Web Chat, WhatsApp Business, Webhook, Teams, Matrix
 
 They may do:

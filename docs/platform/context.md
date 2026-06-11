@@ -1,7 +1,7 @@
 # Context
 
-Last verified: 2026-06-07
-Latest verified green commit: `efd0cab9`
+Last verified: 2026-06-10
+Latest verified green commit: `2ca0ec3c`
 
 ## Product Identity
 
@@ -30,8 +30,8 @@ Shell classes are explicit:
   - Live personal Agent Computer channels: Telegram, WhatsApp
   - Planned personal Agent Computer bridge channels: Signal, iMessage, WeChat
   - Live when configured cloud/business channels: Telegram Bot, Slack, Discord
-  - Live when configured connected apps: GitHub, Notion, Linear, Dropbox, Amazon S3, SMTP / IMAP, WeChat Work, Instagram Business, Google Workspace
-  - Partial/planned: Microsoft 365, Webhook, Web Chat, WhatsApp Business, Teams, Matrix, phone
+  - Live when configured connected apps: Google Workspace, Microsoft 365, GitHub, Notion, Linear, Dropbox, Amazon S3, SMTP / IMAP, WeChat Work, Instagram Business
+  - Partial/planned: generic Email channel, Webhook, Web Chat, WhatsApp Business, Teams, Matrix, phone
 
 Shell truth:
 - every shell shares the same captain identity

@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Tuple
 
+from server_modules import internal_tool_markup_service
 from server_modules import secret_redaction_service
 
 
@@ -11,10 +12,6 @@ _RED_MEMORY_PATTERNS: Tuple[tuple[str, re.Pattern[str]], ...] = (
     ("red_sensitivity_label", re.compile(r"(?im)^\s*(red\s*[:=-]|sensitivity\s*:\s*red\b|classification\s*:\s*red\b)")),
     ("private_memory_marker", re.compile(r"\b(RED_MEMORY|PRIVATE_MEMORY|SAGE_PRIVATE_CONTEXT|RAW_MEMORY)\b", re.I)),
     ("secret_instruction_leak", re.compile(r"\b(system prompt|developer instructions?|hidden instructions?|internal policy)\b\s*[:=-]", re.I)),
-)
-_INTERNAL_TOOL_MARKUP_RE = re.compile(
-    r"<\s*\|\s*\|\s*DSML(?:\s*\|\s*\|\s*tool_calls\s*>?)?.*",
-    re.I | re.S,
 )
 _REDACTED_PLACEHOLDER_RE = re.compile(
     r"\[redacted-(?:secret|token|private-key|phone|private-context)\]|\[redacted\]",
@@ -46,9 +43,9 @@ class ResponseLeakGuardResult:
 
 def guard_model_response(value: Any) -> ResponseLeakGuardResult:
     raw = str(value or "")
-    removed_internal_tool_markup = bool(_INTERNAL_TOOL_MARKUP_RE.search(raw))
+    removed_internal_tool_markup = internal_tool_markup_service.detect_internal_tool_markup(raw)
     without_internal_tool_markup = (
-        _INTERNAL_TOOL_MARKUP_RE.sub("", raw).strip()
+        internal_tool_markup_service.strip_internal_tool_markup(raw)
         if removed_internal_tool_markup
         else raw
     )

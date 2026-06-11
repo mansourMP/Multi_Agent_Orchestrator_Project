@@ -208,7 +208,7 @@ export function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-const INTERNAL_TOOL_MARKUP_PATTERN = /<\s*\|\s*\|\s*DSML(?:\s*\|\s*\|\s*tool_calls\s*>?)?[\s\S]*/i;
+const INTERNAL_TOOL_MARKUP_PATTERN = /<\s*(?:[|｜]\s*[|｜])\s*DSML(?:\s*(?:[|｜]\s*[|｜])\s*tool_calls\s*>?)?[\s\S]*/i;
 
 export function stripInternalToolMarkup(value: unknown): string {
   return readString(value).replace(INTERNAL_TOOL_MARKUP_PATTERN, '').trim();

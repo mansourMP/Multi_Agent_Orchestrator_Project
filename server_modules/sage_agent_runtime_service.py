@@ -12,6 +12,7 @@ from server_modules import (
     direct_chat_tool_catalog_service,
     kill_switch_gate,
     no_provider_service,
+    response_leak_guard_service,
     sage_daily_operator_service,
     sage_instruction_compiler_service,
     sage_heartbeat_service,
@@ -520,6 +521,101 @@ def _connector_requirements_satisfied(required_connections: list[str], connected
     return True
 
 
+def _message_requests_local_agent_computer_action(message: str) -> bool:
+    compact = _compact_route_text(message)
+    if not compact:
+        return False
+    return (
+        direct_chat_tool_catalog_service.looks_like_local_path_request(compact)
+        or direct_chat_tool_catalog_service.looks_like_local_system_info_request(compact)
+        or direct_chat_tool_catalog_service.looks_like_local_working_directory_request(compact)
+    )
+
+
+def _prior_assistant_requested_hardware_check(prior_messages: list[dict[str, Any]] | None) -> bool:
+    for item in reversed((prior_messages or [])[-6:]):
+        if not isinstance(item, dict):
+            continue
+        role = _coerce_text(item.get("role")).lower()
+        if role not in {"assistant", "sage"}:
+            continue
+        content = _compact_route_text(item.get("content") or item.get("message") or item.get("text"))
+        if not content:
+            continue
+        if any(
+            token in content
+            for token in (
+                "hardware check",
+                "hardware overview",
+                "system overview",
+                "system hardware",
+                "agent computer",
+                "your mac",
+                "your laptop",
+                "your computer",
+                "run a quick hardware",
+                "take a look at your system",
+            )
+        ):
+            return True
+    return False
+
+
+def _message_is_hardware_check_followup(message: str, prior_messages: list[dict[str, Any]] | None) -> bool:
+    if not _prior_assistant_requested_hardware_check(prior_messages):
+        return False
+    compact = _compact_route_text(message)
+    if not compact or len(compact) > 120:
+        return False
+    compact = compact.replace("waht", "what")
+    approval_tokens = (
+        "ok",
+        "okay",
+        "yes",
+        "yep",
+        "yeah",
+        "sure",
+        "do it",
+        "go ahead",
+        "please do",
+        "check",
+    )
+    if compact in approval_tokens:
+        return True
+    if any(token in compact for token in approval_tokens) and any(
+        target in compact
+        for target in (
+            "what things i have",
+            "what i have",
+            "things i have",
+            "my hardware",
+            "my system",
+            "my laptop",
+            "my mac",
+            "my computer",
+            "where you are running",
+            "where are you running",
+        )
+    ):
+        return True
+    return False
+
+
+def _normalized_sage_action_loop_message(message: str, prior_messages: list[dict[str, Any]] | None = None) -> str:
+    if _message_is_hardware_check_followup(message, prior_messages):
+        return "check what hardware I have on my Mac"
+    return message
+
+
+def _guard_sage_visible_reply(value: Any) -> tuple[str, dict[str, Any]]:
+    raw = _coerce_text(value)
+    guarded = response_leak_guard_service.guard_model_response(raw)
+    text = guarded.text
+    if raw and "internal_tool_markup" in guarded.findings and not text:
+        text = "I couldn't show internal tool instructions. Please try again with Agent Computer connected."
+    return text, guarded.metadata()
+
+
 def _build_sage_route_decision(
     *,
     message: str,
@@ -536,6 +632,8 @@ def _build_sage_route_decision(
     browser_status = _sage_agent_computer_browser_status(availability or {})
     gateway_requested = any(token in compact for token in _GATEWAY_ROUTE_KEYWORDS)
     local_path_requested = direct_chat_tool_catalog_service.looks_like_local_path_request(compact)
+    local_system_requested = direct_chat_tool_catalog_service.looks_like_local_system_info_request(compact)
+    local_cwd_requested = direct_chat_tool_catalog_service.looks_like_local_working_directory_request(compact)
     browser_requested = direct_chat_tool_catalog_service.message_has_browser_automation_intent(message)
     web_lookup_requested = direct_chat_tool_catalog_service.message_has_web_lookup_intent(message)
     cloud_computer_requested = any(token in compact for token in _CLOUD_COMPUTER_ROUTE_KEYWORDS)
@@ -545,7 +643,7 @@ def _build_sage_route_decision(
     fallback_modes: list[str] = []
     approval_required = False
 
-    if blocked_agent_computer_tool is not None or gateway_requested or local_path_requested:
+    if blocked_agent_computer_tool is not None or gateway_requested or local_path_requested or local_system_requested or local_cwd_requested:
         mode = "gateway_required"
         reason = "This needs Agent Computer because it asks for local/private computer access."
         fallback_modes = ["cloud_computer", "cloud_browser", "connector_api"]
@@ -757,6 +855,8 @@ def _blocked_agent_computer_tool_for_message(message: str, availability: dict[st
     compact = " ".join(str(message or "").lower().split())
     if direct_chat_tool_catalog_service.message_has_browser_automation_intent(message):
         return {"name": "browser__navigate", "reason": "agent_computer_unavailable", "status": "blocked"}
+    if _message_requests_local_agent_computer_action(message):
+        return {"name": "hardware__action", "reason": "agent_computer_unavailable", "status": "blocked"}
     if any(
         token in compact
         for token in (
@@ -818,10 +918,12 @@ def _matching_mcp_skill(*, workspace_id: str, message: str) -> Any | None:
     return None
 
 
-def _message_might_need_sage_action_loop(message: str) -> bool:
+def _message_might_need_sage_action_loop(message: str, prior_messages: list[dict[str, Any]] | None = None) -> bool:
     compact = " ".join(str(message or "").lower().split())
     if not compact:
         return False
+    if _message_is_hardware_check_followup(message, prior_messages):
+        return True
     if sage_daily_operator_service.message_might_need_daily_operator(message):
         return True
     if _connector_requirements_for_message(message):
@@ -831,6 +933,8 @@ def _message_might_need_sage_action_loop(message: str) -> bool:
     if direct_chat_tool_catalog_service.message_has_web_lookup_intent(message):
         return True
     if direct_chat_tool_catalog_service.message_has_browser_automation_intent(message):
+        return True
+    if _message_requests_local_agent_computer_action(message):
         return True
     if compact.startswith(("run:", "execute:")):
         return True
@@ -1609,6 +1713,7 @@ async def handle_sage_chat(
         heartbeat_context=heartbeat_context,
     )
     prompt_diagnostics = instruction_bundle.diagnostics
+    prior_messages = instruction_bundle.prior_messages or []
     if prompt_diagnostics.get("included_root_files") or prompt_diagnostics.get("available_memory_file_count"):
         used_context.append("workspace_context_files")
     if int(prompt_diagnostics.get("capability_count") or 0) > 0:
@@ -1628,6 +1733,10 @@ async def handle_sage_chat(
         "or verify something and an available tool can do it, use that tool in this turn. "
         "If no available tool or permission can do it, say exactly what is missing and "
         "answer from current context.\n"
+        "Internal protocol rule: never write XML, DSML, tool_calls, invoke tags, gateway IDs, "
+        "runtime IDs, trace IDs, tool.invoke, or protocol syntax in user-visible replies. "
+        "Use structured tools when available. If a tool is unavailable, explain the missing "
+        "connection or approval in plain language.\n"
         "Approval rule: require explicit approval before sending messages, "
         "changing files, spending credits, controlling a computer, publishing "
         "apps, or making external changes when policy requires approval."
@@ -1649,11 +1758,12 @@ async def handle_sage_chat(
     )
 
     action_result = None
-    if _message_might_need_sage_action_loop(normalized_message):
+    action_loop_message = _normalized_sage_action_loop_message(normalized_message, prior_messages)
+    if _message_might_need_sage_action_loop(normalized_message, prior_messages=prior_messages):
         action_result = await _run_sage_action_loop_v3(
             workspace_id=normalized_workspace_id,
             tenant_id=normalized_tenant_id,
-            message=envelope["user_message"],
+            message=action_loop_message,
             provider=provider,
             model=requested_model,
             credentials=credentials,
@@ -1661,12 +1771,12 @@ async def handle_sage_chat(
             actor_user_id=actor_user_id,
             normalized_channel_context=normalized_channel_context,
             system_prompt=envelope["system_prompt"],
-            prior_messages=instruction_bundle.prior_messages or [],
+            prior_messages=prior_messages,
         )
     if action_result is not None:
         if "sage_action_loop" not in used_context:
             used_context.append("sage_action_loop")
-        reply = _coerce_text(action_result.get("message"))
+        reply, action_reply_guard_metadata = _guard_sage_visible_reply(action_result.get("message"))
         tool_calls = list(action_result.get("tool_calls") or [])
         blocked_tools = list(action_result.get("blocked_tools") or [])
         approvals_required = list(action_result.get("approvals_required") or [])
@@ -1714,6 +1824,7 @@ async def handle_sage_chat(
             "daily_operator": daily_operator_payload,
             "proof_log": proof_log_payload,
             "proof_log_id": proof_log_id,
+            "response_leak_guard": action_reply_guard_metadata,
         }
 
         try:
@@ -1853,7 +1964,7 @@ async def handle_sage_chat(
             metadata,
             envelope["user_message"],
             envelope["system_prompt"],
-            prior_messages=instruction_bundle.prior_messages or None,
+            prior_messages=prior_messages or None,
         )
     except Exception as exc:
         _emit_failed_audit_event(
@@ -1881,6 +1992,7 @@ async def handle_sage_chat(
         )
         raise RuntimeError(last_error)
 
+    reply, reply_guard_metadata = _guard_sage_visible_reply(reply)
     attempted = [p.strip() for p in _coerce_text(attempted_providers).split(",") if p.strip()]
     effective_provider = attempted[-1] if attempted else provider
     effective_model = _coerce_text((usage or {}).get("model")) or requested_model
@@ -1888,6 +2000,7 @@ async def handle_sage_chat(
     prompt_diagnostics = {
         **prompt_diagnostics,
         "route_decision": route_decision,
+        "response_leak_guard": reply_guard_metadata,
     }
 
     # --- Persist interaction ---

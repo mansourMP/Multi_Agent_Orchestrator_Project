@@ -52,6 +52,44 @@ class OrionLocalWorkerLlmDirectToolTests(unittest.TestCase):
         self.assertEqual(tool_calls[0]["name"], "shell__exec")
         self.assertEqual(tool_calls[0]["arguments"]["command"], "ls -la")
 
+    def test_extract_fullwidth_dsml_tool_call_from_trusted_worker_text(self):
+        text = (
+            "Let me check.\n"
+            "<｜｜DSML｜｜tool_calls>"
+            "<｜｜DSML｜｜invoke name=\"bash\">"
+            "<｜｜DSML｜｜parameter name=\"description\" string=\"true\">Check hardware</｜｜DSML｜｜parameter>"
+            "<｜｜DSML｜｜parameter name=\"command\" string=\"true\">system_profiler SPHardwareDataType</｜｜DSML｜｜parameter>"
+            "</｜｜DSML｜｜invoke>"
+        )
+
+        clean_text, tool_calls = worker_llm.extract_dsml_tool_calls_from_text(text)
+
+        self.assertEqual(clean_text, "Let me check.")
+        self.assertEqual(tool_calls, [
+            {
+                "name": "shell__exec",
+                "arguments": {
+                    "command": "system_profiler SPHardwareDataType",
+                    "description": "Check hardware",
+                },
+            }
+        ])
+
+    def test_extract_mixed_delimiter_dsml_tool_call_from_trusted_worker_text(self):
+        text = (
+            "Let me check.\n"
+            "<|｜DSML｜|tool_calls>"
+            "<｜|DSML|｜invoke name=\"bash\">"
+            "<|｜DSML｜|parameter name=\"command\" string=\"true\">system_profiler SPHardwareDataType</｜|DSML|｜parameter>"
+            "</｜|DSML|｜invoke>"
+        )
+
+        clean_text, tool_calls = worker_llm.extract_dsml_tool_calls_from_text(text)
+
+        self.assertEqual(clean_text, "Let me check.")
+        self.assertEqual(tool_calls[0]["name"], "shell__exec")
+        self.assertEqual(tool_calls[0]["arguments"]["command"], "system_profiler SPHardwareDataType")
+
     def test_codex_backend_buffers_dsml_text_instead_of_streaming_it(self):
         class FakeSseResponse:
             def __init__(self, chunks):

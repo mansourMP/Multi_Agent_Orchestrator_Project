@@ -61,7 +61,7 @@ function safeActivityDetail(...values: unknown[]): string | undefined {
     if (!text) {
       continue;
     }
-    if (/<\s*\|\s*\||\bDSML\b|tool_calls|<\/?\s*xml/i.test(text)) {
+    if (/<\s*(?:[|｜]\s*[|｜])|\bDSML\b|tool_calls|<\/?\s*xml/i.test(text)) {
       continue;
     }
     if (text.startsWith('{') || text.startsWith('[')) {
@@ -78,7 +78,7 @@ function safeActivityLabel(value: unknown, fallback: string): string {
     return fallback;
   }
   if (
-    /<\s*\|\s*\||\bDSML\b|tool_calls|tool\.invoke|gateway_id|capability_id|runtime_session_id|local_gateway|user_device_gateway/i.test(text)
+    /<\s*(?:[|｜]\s*[|｜])|\bDSML\b|tool_calls|tool\.invoke|gateway_id|capability_id|runtime_session_id|local_gateway|user_device_gateway/i.test(text)
     || /^gateway[-_:]/i.test(text)
     || /^gw[-_:]/i.test(text)
     || /gateway offline/i.test(text)

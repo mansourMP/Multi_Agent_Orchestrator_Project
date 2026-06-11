@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import html
 import http.client
 import json
 import logging
@@ -28,6 +27,7 @@ from server_modules.agent_turn import (
     resolve_agent_turn_request,
 )
 from server_modules import usage_accounting_service
+from server_modules import internal_tool_markup_service
 from server_modules.usage_reporting import build_usage_record
 
 SUPPORTED_PROVIDERS = (
@@ -76,40 +76,6 @@ ANTHROPIC_RETIRED_MODEL_ALIASES = {
 }
 _RETRY_AFTER_RE = re.compile(r"(?:retry[-_ ]after)\D*(\d+)", re.IGNORECASE)
 _RETRY_SECONDS_RE = re.compile(r"(\d+)\s*(?:s|sec|secs|second|seconds)\b", re.IGNORECASE)
-_DSML_PREFIX_RE = r"<\s*\|\s*\|\s*DSML\s*\|\s*\|\s*"
-_DSML_CLOSE_PREFIX_RE = r"<\s*/\s*\|\s*\|\s*DSML\s*\|\s*\|\s*"
-_DSML_TOOL_BLOCK_RE = re.compile(
-    _DSML_PREFIX_RE + r"tool_calls\s*>.*",
-    re.IGNORECASE | re.DOTALL,
-)
-_DSML_INVOKE_RE = re.compile(
-    _DSML_PREFIX_RE
-    + r"invoke\s+name=[\"']([^\"']+)[\"']\s*>(.*?)"
-    + _DSML_CLOSE_PREFIX_RE
-    + r"invoke\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
-_DSML_PARAMETER_RE = re.compile(
-    _DSML_PREFIX_RE
-    + r"parameter\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)"
-    + _DSML_CLOSE_PREFIX_RE
-    + r"parameter\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _normalize_dsml_tool_name(name: str) -> str:
-    normalized = str(name or "").strip().lower().replace("-", "_")
-    aliases = {
-        "bash": "shell__exec",
-        "sh": "shell__exec",
-        "shell": "shell__exec",
-        "terminal": "shell__exec",
-        "zsh": "shell__exec",
-    }
-    return aliases.get(normalized, normalized)
-
-
 def extract_dsml_tool_calls_from_text(value: Any) -> Tuple[str, List[Dict[str, Any]]]:
     """Convert Codex DSML tool markup in output text into internal tool calls.
 
@@ -117,37 +83,10 @@ def extract_dsml_tool_calls_from_text(value: Any) -> Tuple[str, List[Dict[str, A
     subscription paths can instead place the DSML tool-call envelope in visible
     output text. That text must never be rendered to users.
     """
-    raw = str(value or "")
-    if not raw or not _DSML_TOOL_BLOCK_RE.search(raw):
-        return raw, []
-
-    tool_calls: List[Dict[str, Any]] = []
-    for invoke_match in _DSML_INVOKE_RE.finditer(raw):
-        tool_name = _normalize_dsml_tool_name(invoke_match.group(1))
-        if not tool_name:
-            continue
-        body = invoke_match.group(2) or ""
-        parameters: Dict[str, str] = {}
-        for parameter_match in _DSML_PARAMETER_RE.finditer(body):
-            parameter_name = str(parameter_match.group(1) or "").strip()
-            if not parameter_name:
-                continue
-            parameters[parameter_name] = html.unescape(str(parameter_match.group(2) or "")).strip()
-        arguments: Dict[str, Any] = {}
-        if tool_name == "shell__exec":
-            command = parameters.get("command") or parameters.get("cmd") or parameters.get("input") or ""
-            if not command:
-                continue
-            arguments["command"] = command
-            description = parameters.get("description")
-            if description:
-                arguments["description"] = description
-        else:
-            arguments = dict(parameters)
-        tool_calls.append({"name": tool_name, "arguments": arguments})
-
-    cleaned = _DSML_TOOL_BLOCK_RE.sub("", raw).strip()
-    return cleaned, tool_calls
+    return internal_tool_markup_service.extract_trusted_dsml_tool_calls(
+        value,
+        source="orion_local_worker_llm",
+    )
 
 
 def ensure_trailing_slashless(url: str) -> str:

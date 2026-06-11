@@ -284,6 +284,36 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             self.assertIn("what can you do", system_prompt)
             self.assertIn("explain Sage's role in the current workspace", system_prompt)
             self.assertIn("Do not dump a tool inventory", system_prompt)
+            self.assertIn("never write XML, DSML, tool_calls", system_prompt)
+
+    def test_chat_only_fullwidth_dsml_reply_is_sanitized_before_persisting(self):
+        dsml_reply = (
+            "Let me check.\n"
+            "<｜｜DSML｜｜tool_calls>"
+            "<｜｜DSML｜｜invoke name=\"bash\">"
+            "<｜｜DSML｜｜parameter name=\"command\" string=\"true\">system_profiler</｜｜DSML｜｜parameter>"
+            "</｜｜DSML｜｜invoke>"
+        )
+        mocks = self._setup_mocks()
+        mocks["generate"] = patch(
+            "server_modules.sage_agent_runtime_service.generate_chat_reply_with_provider_fallback",
+            return_value=(dsml_reply, {"model": "deepseek-chat"}, "deepseek", ""),
+        )
+        with (
+            mocks["profile"], mocks["files"], mocks["memory"], mocks["heartbeat"],
+            mocks["skills"], mocks["provider"],
+            mocks["generate"], mocks["persist"] as mock_persist, mocks["activity"], mocks["audit"],
+        ):
+            result = _run(sage_agent_runtime_service.handle_sage_chat(
+                workspace_id="ws-1", message="hello",
+            ))
+
+            self.assertEqual(result["message"], "Let me check.")
+            self.assertNotIn("DSML", result["message"])
+            self.assertNotIn("system_profiler", result["message"])
+            persisted_reply = mock_persist.call_args.kwargs["assistant_reply"]
+            self.assertEqual(persisted_reply, "Let me check.")
+            self.assertNotIn("DSML", persisted_reply)
 
     def test_write_skill_terms_do_not_preempt_model(self):
         from server_modules.skill_registry import SkillDefinition
@@ -1222,6 +1252,32 @@ class SageTaskRouteDecisionTests(unittest.TestCase):
             )
         )
 
+    def test_local_hardware_requests_enter_sage_action_loop(self):
+        self.assertTrue(
+            sage_agent_runtime_service._message_might_need_sage_action_loop(
+                "check what hardware I have on my Mac"
+            )
+        )
+
+    def test_hardware_check_followup_routes_to_action_loop_with_context(self):
+        prior_messages = [
+            {"role": "assistant", "content": "Want me to run a quick hardware check or take a look at something specific?"}
+        ]
+
+        self.assertTrue(
+            sage_agent_runtime_service._message_might_need_sage_action_loop(
+                "ok check waht things i have !",
+                prior_messages=prior_messages,
+            )
+        )
+        self.assertEqual(
+            sage_agent_runtime_service._normalized_sage_action_loop_message(
+                "ok check waht things i have !",
+                prior_messages,
+            ),
+            "check what hardware I have on my Mac",
+        )
+
     def test_cloud_browser_route_for_website_automation(self):
         decision = sage_agent_runtime_service._build_sage_route_decision(
             message="Open example.com and fill the contact form.",
@@ -1242,6 +1298,15 @@ class SageTaskRouteDecisionTests(unittest.TestCase):
     def test_gateway_route_for_local_private_work(self):
         decision = sage_agent_runtime_service._build_sage_route_decision(
             message="Open my local VS Code project and inspect the files.",
+        )
+
+        self.assertEqual(decision["mode"], "gateway_required")
+        self.assertEqual(decision["user_label"], "Computer Assistant")
+        self.assertTrue(decision["approval_required"])
+
+    def test_gateway_route_for_local_system_overview(self):
+        decision = sage_agent_runtime_service._build_sage_route_decision(
+            message="check what hardware I have on my Mac",
         )
 
         self.assertEqual(decision["mode"], "gateway_required")

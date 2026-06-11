@@ -126,6 +126,7 @@ _ASSISTANT_SHELL_PLAN_MARKERS = (
 )
 
 _LOCAL_PRIVATE_TOOL_RESULT_PROVIDERS = {"ollama"}
+_STREAM_INTERNAL_MARKUP_LOOKBACK_CHARS = 96
 
 
 def _tool_result_context_is_local_private(provider: Any, credentials: Any) -> bool:
@@ -158,6 +159,17 @@ def sanitize_tool_result_for_context(
     if _tool_result_context_is_local_private(provider, credentials):
         return result_text
     return workspace_context_memory_adapter.strip_red_facts_from_external_context(result_text)
+
+
+def _stable_visible_stream_prefix(value: Any) -> str:
+    guarded = response_leak_guard_service.guard_model_response(value)
+    text = guarded.text
+    if "internal_tool_markup" in guarded.findings:
+        return text
+    marker_start = text.rfind("<")
+    if marker_start >= 0 and len(text) - marker_start <= _STREAM_INTERNAL_MARKUP_LOOKBACK_CHARS:
+        return text[:marker_start]
+    return text
 
 
 def _has_shell_exec_tool(tools: List[Dict[str, Any]]) -> bool:
@@ -706,6 +718,7 @@ def stream_provider_backed_direct_chat(
         yield services.thinking_step_payload(thinking_iteration, "active")
 
         iteration_reply = ""
+        iteration_raw_reply = ""
         iteration_tool_calls: List[Dict[str, Any]] = []
         iteration_failed = False
 
@@ -719,7 +732,11 @@ def stream_provider_backed_direct_chat(
         ):
             event_type = str(event.get("type") or "").strip().lower()
             if event_type == "chunk":
-                delta = response_leak_guard_service.guard_stream_delta(event.get("delta") or "")
+                iteration_raw_reply += str(event.get("delta") or "")
+                stable_visible_reply = _stable_visible_stream_prefix(iteration_raw_reply)
+                if not stable_visible_reply.startswith(iteration_reply):
+                    continue
+                delta = stable_visible_reply[len(iteration_reply):]
                 if delta:
                     iteration_reply += delta
                     if not buffer_assistant_tool_plans:
@@ -737,7 +754,7 @@ def stream_provider_backed_direct_chat(
                             yield trace_delta
                 continue
             if event_type == "result":
-                final_reply = str(event.get("reply") or "").strip() or iteration_reply
+                final_reply = str(event.get("reply") or "").strip() or iteration_raw_reply or iteration_reply
                 usage_masked = event.get("usage_masked") if isinstance(event.get("usage_masked"), dict) else {}
                 attempted_providers = str(event.get("attempted_providers") or "").strip()
                 llm_error = str(event.get("error") or "").strip()

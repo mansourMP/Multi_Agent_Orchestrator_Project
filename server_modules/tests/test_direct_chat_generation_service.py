@@ -188,6 +188,69 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         self.assertIn("Looks like the commands ran", events[-1]["payload"]["reply"])
         self.assertIn("uname -a && sw_vers", events[-1]["payload"]["reply"])
 
+    def test_stream_provider_backed_direct_chat_never_streams_split_fullwidth_dsml(self) -> None:
+        dsml_reply = (
+            "Let me check.\n"
+            "<｜｜DSML｜｜tool_calls>"
+            "<｜｜DSML｜｜invoke name=\"bash\">"
+            "<｜｜DSML｜｜parameter name=\"command\" string=\"true\">system_profiler</｜｜DSML｜｜parameter>"
+            "</｜｜DSML｜｜invoke>"
+        )
+
+        events = list(
+            direct_chat_generation_service.stream_provider_backed_direct_chat(
+                services=self._services(
+                    stream_events=[
+                        {"type": "chunk", "delta": "Let me check.\n<"},
+                        {"type": "chunk", "delta": "｜｜"},
+                        {"type": "chunk", "delta": "DSML｜｜tool_calls>"},
+                        {
+                            "type": "result",
+                            "reply": dsml_reply,
+                            "usage_masked": {"provider": "deepseek"},
+                            "provider": "deepseek",
+                            "model": "deepseek-chat",
+                            "attempted_providers": "deepseek",
+                            "error": "",
+                            "tool_calls": [],
+                        },
+                    ]
+                ),
+                context={"provider": "deepseek"},
+                metadata={"provider": "deepseek", "model": "deepseek-chat"},
+                system_prompt="System prompt",
+                normalized_workspace_id="default",
+                normalized_requested_provider="deepseek",
+                normalized_requested_model="deepseek-chat",
+                normalized_reasoning_effort="medium",
+                normalized_thread_id="thread-1",
+                normalized_message="check what hardware I have on my Mac",
+                compacted_prior_messages=[],
+                prior_messages_used=False,
+                history_mode="none",
+                connected_systems=[],
+                tool_capabilities=[],
+                availability_payload={"ai_ready": True},
+                tools=[],
+                direct_chat_credentials={},
+                proactive_suggestions=[],
+                tool_loop_session_key="session-1",
+                fallback_reason=None,
+                session_ctx=None,
+                trace_context=None,
+                resolved_chat_max_iterations=3,
+                direct_tool_result_summary_system_message="Summarize tool results.",
+            )
+        )
+
+        streamed_text = "".join(str(event.get("delta") or "") for event in events if event.get("type") == "chunk")
+        self.assertNotIn("DSML", streamed_text)
+        self.assertNotIn("tool_calls", streamed_text)
+        self.assertNotIn("system_profiler", streamed_text)
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(events[-1]["payload"]["reply"], "Let me check.")
+        self.assertTrue(events[-1]["payload"]["response_leak_guard"]["redacted"])
+
     def test_stream_provider_backed_direct_chat_returns_final_answer(self) -> None:
         events = list(
             direct_chat_generation_service.stream_provider_backed_direct_chat(

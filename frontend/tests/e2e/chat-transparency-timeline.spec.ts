@@ -568,7 +568,7 @@ test.describe('chat transparency timeline', () => {
           delay: 20,
           event: 'chunk',
           payload: {
-            delta: 'Let me check that for you.\\n< | | DSML | | tool_calls>< | | DSML | | invoke name="bash">< | | DSML | | parameter name="command" string="true">curl http://localhost:9090/health</ | | DSML | | parameter></ | | DSML | | invoke>',
+            delta: 'Let me check that for you.\\n<|｜DSML｜|tool_calls><｜|DSML|｜invoke name="bash"><|｜DSML｜|parameter name="command" string="true">curl http://localhost:9090/health</｜|DSML|｜parameter></｜|DSML|｜invoke>',
           },
         },
         {
@@ -576,7 +576,7 @@ test.describe('chat transparency timeline', () => {
           event: 'final',
           payload: {
             status: 'completed',
-            reply: 'Let me check that for you.\\n< | | DSML | | tool_calls>< | | DSML | | invoke name="bash">curl http://localhost:9090/health</ | | DSML | | invoke>',
+            reply: 'Let me check that for you.\\n<|｜DSML｜|tool_calls><｜|DSML|｜invoke name="bash">curl http://localhost:9090/health</｜|DSML|｜invoke>',
             thread_id: 'primary',
             session_id: 'session-transparency',
             metadata: {
@@ -595,6 +595,7 @@ test.describe('chat transparency timeline', () => {
 
     await expect(page.locator('article[data-chat-role="assistant"]').filter({ hasText: 'Let me check that for you.' })).toBeVisible();
     await expect(page.getByText(/DSML/)).toHaveCount(0);
+    await expect(page.getByText(/｜｜/)).toHaveCount(0);
     await expect(page.getByText(/tool_calls/)).toHaveCount(0);
     await expect(page.getByText(/localhost:9090/)).toHaveCount(0);
   });

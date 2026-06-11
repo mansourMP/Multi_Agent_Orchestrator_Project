@@ -77,3 +77,14 @@ try {
 } catch {
   fs.cpSync(source, target, { recursive: true });
 }
+
+const vercelOutputRoot = path.join(cwd, '.vercel', 'output');
+const nextStaticSource = path.join(source, 'static');
+const vercelStaticRoot = path.join(vercelOutputRoot, 'static', '_next');
+const vercelStaticTarget = path.join(vercelStaticRoot, 'static');
+
+if (fs.existsSync(vercelOutputRoot) && fs.existsSync(nextStaticSource)) {
+  fs.rmSync(vercelStaticTarget, { recursive: true, force: true });
+  fs.mkdirSync(vercelStaticRoot, { recursive: true });
+  fs.cpSync(nextStaticSource, vercelStaticTarget, { recursive: true });
+}

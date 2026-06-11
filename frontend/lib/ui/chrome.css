@@ -15585,11 +15585,11 @@ body.theme-light .studio-agents-nav__agent[aria-selected='true'] {
   }
 
   .workstation-shell[data-workstation-destination='studio'].workstation-shell--studio-agent-detail {
-    grid-template-rows: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .workstation-shell[data-workstation-destination='studio'].workstation-shell--studio-agent-detail .workstation-shell__topbar {
-    display: none;
+  .workstation-shell[data-workstation-destination='studio'].workstation-shell--studio-agent-detail .workstation-shell__main-column {
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .workstation-shell[data-workstation-destination='studio'].workstation-shell--studio-agent-detail .workstation-mobile-bottom-nav {

@@ -37,6 +37,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
+import { PlatformNotification } from '@/lib/ui/platform-notification';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 
 type ComposerOption = {
@@ -684,20 +685,6 @@ export function ChatComposer({
           </div>
         ) : null}
 
-        {voiceNotice ? (
-          <div className="app-chat-composer__small-model-warning" role="status">
-            <span>{voiceNotice}</span>
-            <button
-              type="button"
-              className="app-chat-composer__small-model-warning-dismiss"
-              aria-label="Dismiss voice notice"
-              onClick={() => setVoiceNotice(null)}
-            >
-              <X size={13} strokeWidth={2} aria-hidden="true" />
-            </button>
-          </div>
-        ) : null}
-
         {showInlineReasoningToggle ? (
           <button
             type="button"
@@ -949,6 +936,14 @@ export function ChatComposer({
         </div>
       </form>
 
+      {voiceNotice ? (
+        <PlatformNotification
+          tone={voiceNotice.toLowerCase().includes('blocked') || voiceNotice.toLowerCase().includes('could not') ? 'warning' : 'success'}
+          title="Voice input"
+          detail={voiceNotice}
+          onClose={() => setVoiceNotice(null)}
+        />
+      ) : null}
     </section>
   );
 }

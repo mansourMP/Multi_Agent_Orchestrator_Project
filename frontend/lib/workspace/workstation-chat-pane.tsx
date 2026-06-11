@@ -2187,8 +2187,9 @@ export function WorkstationChatPane() {
   );
   const selectedCanvasModelLabel = useMemo(
     () => canvasModelOptions.find((option) => option.id === effectiveSelectedModel)?.label
-      ?? (selectedModelOption.uiSection === 'empyralis' ? selectedModelOption.label : 'Light'),
-    [canvasModelOptions, effectiveSelectedModel, selectedModelOption.label, selectedModelOption.uiSection],
+      ?? selectedModelOption.label
+      ?? 'Auto',
+    [canvasModelOptions, effectiveSelectedModel, selectedModelOption.label],
   );
   const modelPickerProviderPanels = useMemo<SageModelPickerProviderPanel[]>(
     () => SAGE_MODEL_PICKER_PROVIDERS.flatMap((pickerProvider): SageModelPickerProviderPanel[] => {

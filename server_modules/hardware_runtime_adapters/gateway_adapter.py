@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from server_modules import (
@@ -22,6 +23,8 @@ from server_modules.hardware_runtime_adapters.common import dict_value, text
 
 HARDWARE_RUNTIME_SESSION_BINDING = hardware_runtime_session_service.HARDWARE_RUNTIME_SESSION_BINDING
 FULL_RUNTIME_ACCESS_MODE = execution_mode_policy.FULL_RUNTIME_ACCESS_MODE
+DEFAULT_AGENT_COMPUTER_TOOL_TIMEOUT_SECONDS = 120
+LOGGER = logging.getLogger(__name__)
 
 
 def _actor_role_from_runtime_context(*, runtime_access_mode: str, user_id: Optional[str]) -> str:
@@ -340,7 +343,7 @@ async def execute_gateway_action(
             run_id=run_id,
             trace_id=trace_id,
             workspace_id=text(workspace_id) or "default",
-            timeout_seconds=int(timeout_seconds or gateway_protocol_service.DEFAULT_TOOL_REQUEST_TIMEOUT_SECONDS),
+            timeout_seconds=int(timeout_seconds or DEFAULT_AGENT_COMPUTER_TOOL_TIMEOUT_SECONDS),
             request_id=request_id,
             runtime_access_mode=runtime_access_mode,
             empyralis_approved=runtime_access_mode == FULL_RUNTIME_ACCESS_MODE,
@@ -351,6 +354,13 @@ async def execute_gateway_action(
         state = text(failure.get("state")) or "failed"
         reason = text(failure.get("reason")) or "hardware_action_failed"
         summary = text(failure.get("summary")) or "Hardware action failed."
+        LOGGER.warning(
+            "Gateway hardware action failed after dispatch setup: type=%s reason=%s capability=%s request_id=%s",
+            type(exc).__name__,
+            reason,
+            capability_id,
+            request_id,
+        )
         metadata = agent_computer_permission_secret_model.diagnostic_metadata(
             {"gateway_id": gateway_token, "device_id": device_token, "failure_reason": reason}
         )

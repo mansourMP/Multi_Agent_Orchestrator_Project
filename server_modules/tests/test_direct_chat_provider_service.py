@@ -45,6 +45,72 @@ class DirectChatProviderServiceTests(unittest.TestCase):
 
         self.assertEqual(credentials, {"auth_mode": "none"})
 
+    def test_direct_chat_credentials_prefers_usable_candidate_over_codex_token(self) -> None:
+        def fake_candidates(_context: dict[str, object], metadata: dict[str, object], _provider: str) -> list[dict[str, object]]:
+            if metadata.get("workspace_only"):
+                return []
+            return [
+                {
+                    "source": "vault_default",
+                    "credentials": {
+                        "auth_mode": "oauth_token",
+                        "credential_type": "codex_token",
+                        "oauth_token": "codex-token",
+                    },
+                    "label": "vault-default",
+                },
+                {
+                    "source": "env",
+                    "credentials": {
+                        "auth_mode": "api_key",
+                        "credential_type": "api_key",
+                        "api_key": "sk-openai",
+                    },
+                    "label": "env-openai",
+                },
+            ]
+
+        credentials = direct_chat_provider_service.direct_chat_credentials(
+            "workspace-a",
+            "openai",
+            build_provider_credential_candidates_fn=fake_candidates,
+            hosted_sage_ai_access_state_for_workspace_id_fn=lambda **_kwargs: {"allowed": True},
+        )
+
+        self.assertEqual(credentials["auth_mode"], "api_key")
+        self.assertEqual(credentials["api_key"], "sk-openai")
+
+    def test_direct_chat_credentials_can_use_explicit_openai_env_when_codex_token_shadows_candidates(self) -> None:
+        def fake_candidates(_context: dict[str, object], _metadata: dict[str, object], _provider: str) -> list[dict[str, object]]:
+            return [
+                {
+                    "source": "vault_default",
+                    "credentials": {
+                        "auth_mode": "oauth_token",
+                        "credential_type": "codex_token",
+                        "oauth_token": "codex-token",
+                    },
+                    "label": "vault-default",
+                },
+            ]
+
+        with patch.dict(
+            "os.environ",
+            {
+                "ORION_DISABLE_OPENAI_API_KEY": "0",
+                "OPENAI_API_KEY": "sk-openai-env",
+            },
+        ):
+            credentials = direct_chat_provider_service.direct_chat_credentials(
+                "workspace-a",
+                "openai",
+                build_provider_credential_candidates_fn=fake_candidates,
+                hosted_sage_ai_access_state_for_workspace_id_fn=lambda **_kwargs: {"allowed": True},
+            )
+
+        self.assertEqual(credentials["auth_mode"], "api_key")
+        self.assertEqual(credentials["api_key"], "sk-openai-env")
+
     def test_supports_direct_message_native_chat_requires_scoped_key_for_cloud_api_providers(self) -> None:
         for provider in (
             "deepseek",

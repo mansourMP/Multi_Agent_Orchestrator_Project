@@ -2304,6 +2304,15 @@ def _execute_hardware_action_tool_call(
     if not action_id:
         raise RuntimeError("Tool 'hardware__action' requires an action.")
     action_arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+    action_data = payload.get("action_data")
+    if isinstance(action_data, str) and action_data.strip():
+        try:
+            parsed_action_data = json.loads(action_data)
+        except Exception:
+            parsed_action_data = None
+        action_data = parsed_action_data if isinstance(parsed_action_data, dict) else action_data
+    if isinstance(action_data, dict):
+        action_arguments = {**dict(action_data), **action_arguments}
     if not action_arguments:
         action_arguments = {
             key: value
@@ -2314,6 +2323,7 @@ def _execute_hardware_action_tool_call(
                 "capability_id",
                 "tool",
                 "operation",
+                "action_data",
                 "arguments",
                 "runtime_target",
                 "runtime_access_mode",
@@ -2424,6 +2434,8 @@ def _safe_direct_shell_command(command: str) -> bool:
         return True
     if any(token in compact for token in ("&&", "||", ";", "|", ">", "<", "$(", "`")):
         return False
+    if re.fullmatch(r"echo\s+[a-z0-9][a-z0-9 .,_:/=@+-]{0,200}", compact):
+        return True
     if any(
         re.search(rf"(^|\s){re.escape(token)}(\s|$)", compact)
         for token in (
@@ -2435,7 +2447,6 @@ def _safe_direct_shell_command(command: str) -> bool:
             "mkdir",
             "touch",
             "tee",
-            "echo",
             "python",
             "python3",
             "node",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from server_modules.hardware_runtime_adapters import gateway_adapter
 
@@ -202,7 +202,7 @@ class HardwareGatewayAdapterTests(unittest.TestCase):
             ) as decision_mock,
             patch(
                 "server_modules.hardware_runtime_adapters.gateway_adapter.rust_runtime_kernel_client.enforce_kernel_decision",
-                side_effect=lambda _command, decision: decision,
+                side_effect=lambda _command, decision, **_kwargs: decision,
             ),
         ):
             gateway_adapter._enforce_gateway_action_decision(
@@ -238,7 +238,7 @@ class HardwareGatewayAdapterTests(unittest.TestCase):
             ) as decision_mock,
             patch(
                 "server_modules.hardware_runtime_adapters.gateway_adapter.rust_runtime_kernel_client.enforce_kernel_decision",
-                side_effect=lambda _command, decision: decision,
+                side_effect=lambda _command, decision, **_kwargs: decision,
             ),
         ):
             gateway_adapter._enforce_gateway_action_decision(
@@ -258,6 +258,97 @@ class HardwareGatewayAdapterTests(unittest.TestCase):
         request = decision_mock.call_args.kwargs
         self.assertEqual(request["operation"], "browser_session_stop")
         self.assertEqual(request["capability_id"], "browser.session.interrupt")
+
+    def test_execute_gateway_action_defaults_to_agent_computer_timeout(self) -> None:
+        async def run_test() -> None:
+            runtime_session = {
+                "session_id": "session-1",
+                "state": "ready",
+                "canonical_runtime_target": "user_device_gateway",
+            }
+            execution_mock = unittest.mock.AsyncMock(
+                return_value={
+                    "request_id": "req-1",
+                    "capability_id": "shell.execute",
+                    "run_id": "run-1",
+                    "result": {"command": "echo ok", "exit_code": 0, "stdout": "ok"},
+                }
+            )
+            with (
+                patch(
+                    "server_modules.hardware_runtime_adapters.gateway_adapter.find_gateway_registration",
+                    return_value=_registration(),
+                ),
+                patch(
+                    "server_modules.hardware_runtime_adapters.gateway_adapter.registration_is_usable",
+                    return_value=(True, ""),
+                ),
+                patch(
+                    "server_modules.hardware_runtime_adapters.gateway_adapter.gateway_execution_service.gateway_registration_execution_readiness",
+                    return_value=(True, ""),
+                ),
+                patch(
+                    "server_modules.hardware_runtime_adapters.gateway_adapter.hardware_runtime_session_service.update_runtime_session",
+                    side_effect=lambda session, **kwargs: {**session, **({"state": kwargs["state"]} if "state" in kwargs else {})},
+                ),
+                patch(
+                    "server_modules.hardware_runtime_adapters.gateway_adapter.hardware_access_policy_service.hardware_action_requires_software_approval",
+                    return_value=False,
+                ),
+                patch(
+                    "server_modules.hardware_runtime_adapters.gateway_adapter.rust_runtime_kernel_client.gateway_action_decision",
+                    return_value={
+                        "ok": True,
+                        "decision": "allow",
+                        "operation": "tool_execute",
+                        "next_action": "dispatch_tool_invoke",
+                    },
+                ),
+                patch(
+                    "server_modules.hardware_runtime_adapters.gateway_adapter.rust_runtime_kernel_client.enforce_kernel_decision",
+                    side_effect=lambda _command, decision, **_kwargs: decision,
+                ),
+                patch(
+                    "server_modules.hardware_runtime_adapters.gateway_adapter.gateway_execution_service.execute_tool_via_gateway",
+                    execution_mock,
+                ),
+                patch(
+                    "server_modules.hardware_runtime_adapters.gateway_adapter.hardware_result_correlator_service.emit_artifacts",
+                    new_callable=unittest.mock.AsyncMock,
+                ),
+                patch(
+                    "server_modules.hardware_runtime_adapters.gateway_adapter.hardware_result_correlator_service.emit_tool_result",
+                    new_callable=unittest.mock.AsyncMock,
+                ),
+            ):
+                result = await gateway_adapter.execute_gateway_action(
+                    tenant_id="tenant-1",
+                    workspace_id="ws-1",
+                    user_id="user-1",
+                    gateway_id="gw-1",
+                    device_id="device-1",
+                    action_id="shell.execute",
+                    capability_id="shell.execute",
+                    arguments={"command": "echo ok"},
+                    runtime_session=runtime_session,
+                    run_id="run-1",
+                    trace_id="trace-1",
+                    thread_id=None,
+                    request_id="req-1",
+                    trace_context=None,
+                    require_approval=None,
+                    runtime_access_mode="guarded",
+                    timeout_seconds=None,
+                    tool_call_id="tool-1",
+                )
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(
+                execution_mock.await_args.kwargs["timeout_seconds"],
+                gateway_adapter.DEFAULT_AGENT_COMPUTER_TOOL_TIMEOUT_SECONDS,
+            )
+
+        asyncio.run(run_test())
 
     def test_execute_gateway_action_blocks_wrong_rust_action_before_dispatch(self) -> None:
         async def run_test() -> None:
@@ -294,7 +385,7 @@ class HardwareGatewayAdapterTests(unittest.TestCase):
                 ),
                 patch(
                     "server_modules.hardware_runtime_adapters.gateway_adapter.rust_runtime_kernel_client.enforce_kernel_decision",
-                    side_effect=lambda _command, decision: decision,
+                    side_effect=lambda _command, decision, **_kwargs: decision,
                 ),
                 patch(
                     "server_modules.hardware_runtime_adapters.gateway_adapter.gateway_execution_service.execute_tool_via_gateway",
@@ -358,7 +449,7 @@ class HardwareGatewayAdapterTests(unittest.TestCase):
                 ),
                 patch(
                     "server_modules.hardware_runtime_adapters.gateway_adapter.rust_runtime_kernel_client.enforce_kernel_decision",
-                    side_effect=lambda _command, decision: decision,
+                    side_effect=lambda _command, decision, **_kwargs: decision,
                 ),
                 patch(
                     "server_modules.hardware_runtime_adapters.gateway_adapter.gateway_execution_service.interrupt_tool_via_gateway",

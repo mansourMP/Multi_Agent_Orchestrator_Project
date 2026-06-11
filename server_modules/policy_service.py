@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -1466,12 +1467,45 @@ def browser_direct_tool_requires_approval(action_id: str) -> bool:
     return normalized_action in {"click", "fill", "execute_js", "download_file"}
 
 
+def _hardware_action_payload(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(arguments, dict):
+        return {}
+    input_payload: Dict[str, Any] = {}
+    raw_input = arguments.get("input")
+    if isinstance(raw_input, dict):
+        input_payload = dict(raw_input)
+    elif isinstance(raw_input, str) and raw_input.strip():
+        try:
+            parsed = json.loads(raw_input)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            input_payload = dict(parsed)
+    action_data_payload: Dict[str, Any] = {}
+    raw_action_data = input_payload.get("action_data") or arguments.get("action_data")
+    if isinstance(raw_action_data, dict):
+        action_data_payload = dict(raw_action_data)
+    elif isinstance(raw_action_data, str) and raw_action_data.strip():
+        try:
+            parsed = json.loads(raw_action_data)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            action_data_payload = dict(parsed)
+    return {**arguments, **input_payload, **action_data_payload}
+
+
 def _hardware_shell_command_argument(arguments: Dict[str, Any]) -> str:
-    nested = arguments.get("arguments") if isinstance(arguments.get("arguments"), dict) else {}
+    payload = _hardware_action_payload(arguments)
+    nested = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    payload_command = payload.get("payload") if isinstance(payload.get("payload"), str) else ""
     return str(
         nested.get("command")
-        or arguments.get("command")
-        or arguments.get("script")
+        or params.get("command")
+        or payload.get("command")
+        or payload.get("script")
+        or payload_command
         or ""
     ).strip()
 
@@ -1498,15 +1532,21 @@ def approval_required_for_direct_tool(
     if normalized_connector_id == "browser":
         return browser_direct_tool_requires_approval(normalized_action_id)
     if normalized_connector_id == "hardware":
+        hardware_payload = _hardware_action_payload(arguments)
         capability_id = str(
-            arguments.get("capability_id")
-            or arguments.get("action")
-            or arguments.get("tool")
+            hardware_payload.get("capability_id")
+            or hardware_payload.get("action")
+            or hardware_payload.get("tool")
             or ""
         ).strip()
         if capability_id:
+            normalized_hardware_capability = capability_id.lower().replace("_", ".")
             if (
-                canonical_capability_id(capability_id) == "shell.execute"
+                (
+                    canonical_capability_id(capability_id) == "shell.execute"
+                    or normalized_hardware_capability
+                    in {"shell", "shell.execute", "shell.exec", "run", "run.command", "command"}
+                )
                 and skills_service._safe_direct_shell_command(_hardware_shell_command_argument(arguments))
             ):
                 return False

@@ -6,6 +6,11 @@ from server_modules import hardware_access_policy_service as policy
 
 
 class HardwareAccessPolicyServiceTests(unittest.TestCase):
+    def test_shell_command_aliases_resolve_to_shell_execute(self) -> None:
+        for alias in ("shell", "run", "run.command", "command"):
+            with self.subTest(alias=alias):
+                self.assertEqual(policy.normalize_hardware_capability_id(alias), "shell.execute")
+
     def test_default_guarded_allows_safe_read_actions(self) -> None:
         self.assertFalse(
             policy.hardware_action_requires_software_approval(

@@ -363,17 +363,22 @@ def persist_direct_chat_hosted_usage_best_effort(
     availability = _coerce_dict(availability_payload)
     usage = _coerce_dict(usage_masked)
     if _text(availability.get("credential_plane")).lower() != "platform_runtime":
-        _record_direct_chat_transparency_usage(
-            workspace_id=workspace_id,
-            thread_id=thread_id,
-            session_ctx=session_ctx,
-            availability=availability,
-            usage=usage,
-            requested_provider=requested_provider,
-            effective_provider=effective_provider,
-            requested_model=requested_model,
-            effective_model=effective_model,
-        )
+        if not availability:
+            raise RuntimeError("Direct chat usage is missing a known AI source for credit accounting.")
+        try:
+            _record_direct_chat_transparency_usage(
+                workspace_id=workspace_id,
+                thread_id=thread_id,
+                session_ctx=session_ctx,
+                availability=availability,
+                usage=usage,
+                requested_provider=requested_provider,
+                effective_provider=effective_provider,
+                requested_model=requested_model,
+                effective_model=effective_model,
+            )
+        except Exception:
+            pass
         return
     if not bool(availability.get("platform_runtime_allowed")):
         raise RuntimeError("Hosted AI platform runtime usage was not allowed for credit accounting.")

@@ -34,6 +34,10 @@ CAPABILITY_ALIASES = {
     "shell.execute": "shell.execute",
     "shell__exec": "shell.execute",
     "shell__execute": "shell.execute",
+    "run": "shell.execute",
+    "run.command": "shell.execute",
+    "run__command": "shell.execute",
+    "command": "shell.execute",
 }
 
 DEFAULT_GUARDED_APPROVAL_CAPABILITIES = {

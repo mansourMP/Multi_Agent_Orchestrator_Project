@@ -1032,6 +1032,59 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(call_kwargs["action_id"], "shell.execute")
         self.assertEqual(call_kwargs["gateway_id"], "gw-1")
 
+    def test_execute_single_direct_tool_call_flattens_hardware_action_data(self) -> None:
+        callbacks = self._execution_callbacks()
+        callbacks = direct_tool_execution_service.DirectToolExecutionCallbacks(
+            **{
+                **callbacks.__dict__,
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+        execute_hardware_mock = AsyncMock(
+            return_value={
+                "status": "completed",
+                "runtime_session": {
+                    "state": "completed",
+                    "canonical_runtime_target": "user_device_gateway",
+                    "gateway_id": "gw-1",
+                },
+            }
+        )
+        with (
+            patch(
+                "server_modules.skills_service._resolve_direct_tool_gateway_id",
+                return_value="gw-1",
+            ),
+            patch(
+                "server_modules.hardware_action_broker_service.execute_hardware_action",
+                execute_hardware_mock,
+            ),
+        ):
+            skills_service.execute_single_direct_tool_call(
+                tool_call={
+                    "name": "hardware__action",
+                    "arguments": {
+                        "action": "shell",
+                        "action_data": {"command": "echo hello from hardware"},
+                    },
+                },
+                workspace_id="default",
+                thread_id="thread-1",
+                index=1,
+                session_ctx={
+                    "tenant_id": "tenant-1",
+                    "request_id": "chat-request-shell-action-data",
+                    "client_request_id": "chat-request-shell-action-data",
+                },
+                callbacks=callbacks,
+            )
+
+        execute_hardware_mock.assert_awaited_once()
+        call_kwargs = execute_hardware_mock.await_args.kwargs
+        self.assertEqual(call_kwargs["action_id"], "shell")
+        self.assertEqual(call_kwargs["arguments"], {"command": "echo hello from hardware"})
+        self.assertEqual(call_kwargs["runtime_target"], "user_device_gateway")
+
     def test_execute_single_direct_tool_call_hardware_shell_offline_fails_closed(self) -> None:
         callbacks = self._execution_callbacks()
         execute_hardware_mock = AsyncMock(return_value={})

@@ -314,6 +314,20 @@ def credential_auth_mode(
     return normalize_auth_mode_fn(provider, credentials=payload)
 
 
+def _openai_explicit_env_api_key_credentials() -> Dict[str, Any]:
+    disabled = str(os.getenv("ORION_DISABLE_OPENAI_API_KEY", "1") or "").strip().lower()
+    if disabled not in {"0", "false", "no", "off"}:
+        return {}
+    api_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        return {}
+    return {
+        "api_key": api_key,
+        "auth_mode": "api_key",
+        "credential_type": "api_key",
+    }
+
+
 def supports_direct_message_native_chat(
     provider: str,
     credentials: Optional[Dict[str, Any]],
@@ -374,7 +388,13 @@ def direct_chat_credentials(
         {"source": "chat_direct", "workspace_only": True},
         candidate_provider,
     )
-    if not candidates:
+    workspace_candidates_are_usable = any(
+        isinstance(item, dict)
+        and isinstance(item.get("credentials"), dict)
+        and supports_direct_message_native_chat(normalized_provider, item.get("credentials"))
+        for item in candidates
+    )
+    if not candidates or not workspace_candidates_are_usable:
         candidates = build_provider_credential_candidates_fn(
             {"workspace_id": normalized_workspace_id},
             {"source": "chat_direct"},
@@ -398,6 +418,16 @@ def direct_chat_credentials(
             for item in candidates
             if _credential_plane_metadata(source=item.get("source"), identity_owner=None).get("credential_plane") != "platform_runtime"
         ]
+    for item in candidates:
+        credentials = item.get("credentials") if isinstance(item, dict) else {}
+        if not isinstance(credentials, dict):
+            continue
+        if supports_direct_message_native_chat(normalized_provider, credentials):
+            return dict(credentials)
+    if normalized_provider == "openai":
+        explicit_env_credentials = _openai_explicit_env_api_key_credentials()
+        if explicit_env_credentials:
+            return explicit_env_credentials
     first = candidates[0].get("credentials") if candidates else {}
     return dict(first) if isinstance(first, dict) else {}
 

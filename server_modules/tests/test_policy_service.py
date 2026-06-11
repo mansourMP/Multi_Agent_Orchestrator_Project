@@ -406,6 +406,66 @@ class PolicyServiceTests(unittest.TestCase):
 
         self.assertFalse(requires_approval)
 
+    def test_hardware_shell_action_skips_approval_for_simple_echo_input_payload(self) -> None:
+        requires_approval = policy_service.approval_required_for_direct_tool(
+            "hardware",
+            "action",
+            {"input": '{"action": "shell", "command": "echo hello from hardware"}'},
+            [],
+            compact_text=lambda value: str(value or "").strip().lower(),
+            http_request_requires_approval=lambda method, url: False,
+        )
+
+        self.assertFalse(requires_approval)
+
+    def test_hardware_run_action_skips_approval_for_simple_echo_input_payload(self) -> None:
+        requires_approval = policy_service.approval_required_for_direct_tool(
+            "hardware",
+            "action",
+            {"input": '{"action": "run", "runtime_t": "cloud", "command": "echo hello from hardware"}'},
+            [],
+            compact_text=lambda value: str(value or "").strip().lower(),
+            http_request_requires_approval=lambda method, url: False,
+        )
+
+        self.assertFalse(requires_approval)
+
+    def test_hardware_run_action_skips_approval_for_simple_echo_payload_field(self) -> None:
+        requires_approval = policy_service.approval_required_for_direct_tool(
+            "hardware",
+            "action",
+            {"input": '{"action": "run", "runtime_t": "cloud", "payload": "echo hello from hardware"}'},
+            [],
+            compact_text=lambda value: str(value or "").strip().lower(),
+            http_request_requires_approval=lambda method, url: False,
+        )
+
+        self.assertFalse(requires_approval)
+
+    def test_hardware_shell_action_skips_approval_for_simple_echo_action_data_payload(self) -> None:
+        requires_approval = policy_service.approval_required_for_direct_tool(
+            "hardware",
+            "action",
+            {"input": '{"action": "shell", "action_data": "{\\"command\\": \\"echo hello from hardware\\"}"}'},
+            [],
+            compact_text=lambda value: str(value or "").strip().lower(),
+            http_request_requires_approval=lambda method, url: False,
+        )
+
+        self.assertFalse(requires_approval)
+
+    def test_hardware_shell_action_skips_approval_for_simple_echo_input_params_payload(self) -> None:
+        requires_approval = policy_service.approval_required_for_direct_tool(
+            "hardware",
+            "action",
+            {"input": '{"action": "shell", "params": {"command": "echo hello from hardware"}}'},
+            [],
+            compact_text=lambda value: str(value or "").strip().lower(),
+            http_request_requires_approval=lambda method, url: False,
+        )
+
+        self.assertFalse(requires_approval)
+
     def test_hardware_shell_action_still_requires_approval_for_unknown_command(self) -> None:
         requires_approval = policy_service.approval_required_for_direct_tool(
             "hardware",

@@ -478,7 +478,18 @@ fn update_browser_session_decision(payload: &Value) -> Value {
     if !status.is_empty()
         && !matches!(
             status.as_str(),
-            "active" | "paused" | "interrupted" | "completed" | "failed" | "cancelled"
+            "active"
+                | "paused"
+                | "waiting_for_input"
+                | "fallback_ready"
+                | "attached"
+                | "not_attached"
+                | "attach_required"
+                | "attach_failed"
+                | "interrupted"
+                | "completed"
+                | "failed"
+                | "cancelled"
         )
     {
         return block(
@@ -867,5 +878,83 @@ mod tests {
             response["reason"].as_str(),
             Some("gateway_pairing_token_invalid")
         );
+    }
+
+    #[test]
+    fn browser_session_allows_confirmed_waiting_for_input_takeover() {
+        let response = gateway_state_decision_command(&json!({
+            "operation": "update_browser_session",
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-1",
+            "user_id": "user-1",
+            "device_id": "device-1",
+            "gateway_id": "gateway-1",
+            "browser_session_id": "gbsess-1",
+            "run_id": "run-1",
+            "status": "waiting_for_input",
+            "manual_takeover": true,
+            "takeover_confirmed": true,
+            "actor_role": "system"
+        }));
+
+        assert_eq!(response["decision"].as_str(), Some("allow"));
+        assert_eq!(
+            response["next_action"].as_str(),
+            Some("upsert_gateway_browser_session")
+        );
+    }
+
+    #[test]
+    fn browser_session_takeover_still_requires_confirmation() {
+        let response = gateway_state_decision_command(&json!({
+            "operation": "update_browser_session",
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-1",
+            "user_id": "user-1",
+            "device_id": "device-1",
+            "gateway_id": "gateway-1",
+            "browser_session_id": "gbsess-1",
+            "run_id": "run-1",
+            "status": "waiting_for_input",
+            "manual_takeover": true,
+            "takeover_confirmed": false,
+            "actor_role": "system"
+        }));
+
+        assert_eq!(response["decision"].as_str(), Some("require_approval"));
+        assert_eq!(
+            response["reason"].as_str(),
+            Some("gateway_browser_takeover_requires_confirmation")
+        );
+    }
+
+    #[test]
+    fn browser_session_allows_fallback_and_attach_lifecycle_statuses() {
+        for status in [
+            "fallback_ready",
+            "attached",
+            "not_attached",
+            "attach_required",
+            "attach_failed",
+        ] {
+            let response = gateway_state_decision_command(&json!({
+                "operation": "update_browser_session",
+                "tenant_id": "tenant-1",
+                "workspace_id": "workspace-1",
+                "user_id": "user-1",
+                "device_id": "device-1",
+                "gateway_id": "gateway-1",
+                "browser_session_id": format!("gbsess-{}", status),
+                "run_id": "run-1",
+                "status": status,
+                "actor_role": "system"
+            }));
+
+            assert_eq!(response["decision"].as_str(), Some("allow"));
+            assert_eq!(
+                response["next_action"].as_str(),
+                Some("upsert_gateway_browser_session")
+            );
+        }
     }
 }

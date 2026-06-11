@@ -85,8 +85,9 @@ def _enforce_gateway_browser_action_decision(
         "risk_decision": "allow",
         "approval_provided": True,
     }
-    if capability_id == BROWSER_SESSION_ACTION_CAPABILITY:
-        payload["browser_session_id"] = str((arguments or {}).get("browser_session_id") or "").strip() or None
+    browser_session_id = str((arguments or {}).get("browser_session_id") or "").strip()
+    if browser_session_id:
+        payload["browser_session_id"] = browser_session_id
     try:
         decision = rust_runtime_kernel_client.gateway_action_decision(**payload)
         decision = rust_runtime_kernel_client.enforce_kernel_decision(
@@ -331,7 +332,7 @@ def _persist_browser_session_result(
             "execution_binding": result.get("execution_binding") if isinstance(result.get("execution_binding"), dict) else {},
             "immutable_plan_hash": result.get("immutable_plan_hash"),
             "reviewed_approval_required": result.get("reviewed_approval_required"),
-            "reviewed_approved": result.get("reviewed_approved"),
+            "reviewed_approved": result.get("reviewed_approved") or result.get("reviewed_approval_approved"),
         }
     checkpoint = browser_session.get("checkpoint") if isinstance(browser_session.get("checkpoint"), dict) else {}
     metadata = browser_session.get("metadata") if isinstance(browser_session.get("metadata"), dict) else {}

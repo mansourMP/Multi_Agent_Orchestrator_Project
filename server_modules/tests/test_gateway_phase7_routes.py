@@ -131,6 +131,18 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
         self.assertEqual(registration_response.status_code, 200)
         return registration_response.json()
 
+    def _allow_example_domain(self, gateway_id: str) -> None:
+        gateway_state_repository.update_gateway_registration_state(
+            gateway_id=gateway_id,
+            metadata={
+                "agent_computer_policy": {
+                    "policy_id": "policy-example-domain",
+                    "autonomy_mode": "ask_every_time",
+                    "domain_allowlist": ["example.com"],
+                }
+            },
+        )
+
     def _connect_gateway(self, gateway_id: str, gateway_token: str) -> tuple[dict, str]:
         session_response = self.client.post(
             "/api/gateway/sessions",
@@ -767,6 +779,7 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
     def test_gateway_approval_resolution_requires_owner_role(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
+        self._allow_example_domain(gateway_id)
         approval_response = self.client.post(
             f"/api/gateway/registrations/{gateway_id}/tools/execute",
             json={
@@ -795,6 +808,7 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
     def test_approval_memory_reuses_only_matching_narrow_gateway_scope(self) -> None:
         registration_payload = self._register_gateway()
         gateway_id = registration_payload["gateway"]["gateway_id"]
+        self._allow_example_domain(gateway_id)
         approval_response = self.client.post(
             f"/api/gateway/registrations/{gateway_id}/tools/execute",
             json={
@@ -862,6 +876,8 @@ class GatewayPhase7RoutesTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(blocked_by_scope_response.status_code, 202)
-        self.assertEqual(blocked_by_scope_response.json()["status"], "approval_required")
+        self.assertEqual(blocked_by_scope_response.status_code, 403)
+        blocked_detail = blocked_by_scope_response.json()["detail"]
+        self.assertEqual(blocked_detail["error"], "GATEWAY_RISK_BLOCKED")
+        self.assertEqual(blocked_detail["reason"], "domain_not_allowed")
         execute_mock.assert_not_awaited()

@@ -517,8 +517,9 @@ test.describe('chat transparency timeline', () => {
     await page.goto('/w/ws-1/sage');
 
     await expect(page.locator('[data-workstation-chat-composer="root"]')).toBeVisible();
-    await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('Light');
-    await expect(page.locator('.app-chat-composer__provider-pill')).toContainText('Empyralis credits');
+    const modelButton = page.getByRole('button', { name: /choose model and reasoning\. current model: light/i });
+    await expect(modelButton).toBeVisible();
+    await expect(modelButton).toContainText('Light');
     const composer = page.locator('[data-workstation-chat-composer="root"] textarea');
     await composer.fill('/');
     await expect(page.locator('.app-chat-composer__command-list')).toBeVisible();
@@ -527,33 +528,37 @@ test.describe('chat transparency timeline', () => {
     await composer.fill('show me what you are doing');
     await composer.press('Enter');
 
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="search"]')).toContainText('Searching web');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Running shell');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Reading file');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="browser_action"]')).toContainText('Used browser');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="sending_telegram"]')).toContainText('Sending Telegram');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="sending_whatsapp"]')).toContainText('Sending WhatsApp');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /artifact-screenshot-1/);
+    const liveTraceSummary = page.getByRole('button', {
+      name: /searched 1 query · ran 1 command · checked 1 file · captured 1 screenshot · used 3 tools/i,
+    });
+    await expect(liveTraceSummary).toBeVisible();
+    await liveTraceSummary.click();
+    const liveTrace = page.locator('.app-agent-trace-stack').first();
+    await expect(liveTrace).toContainText('gateway reconnect behavior');
+    await expect(liveTrace).toContainText('Command');
+    await expect(liveTrace).toContainText('tmux ls');
+    await expect(liveTrace).toContainText('docs/super-app-foundation.md');
+    await expect(liveTrace).toContainText('Prepared the Telegram follow-up.');
+    await expect(liveTrace).toContainText('Queued the WhatsApp reply for review.');
+    await expect(liveTrace).toContainText('Captured the settings panel.');
+    await expect(liveTrace.getByRole('link', { name: 'Open' })).toHaveAttribute('href', /artifact-screenshot-1/);
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval approved');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="done"]')).toContainText('Done');
+    await expect(page.getByRole('button', { name: /completed 1 step/i })).toBeVisible();
 
     await expect(page.getByText(/inspect workspace state and decide next step/i)).toHaveCount(0);
     await expect(page.getByText(/activity_event_id/i)).toHaveCount(0);
     await expect(page.getByText(/trace-live-1/i)).toHaveCount(0);
-    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'Searching web' })).toHaveCount(0);
-    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'Running shell' })).toHaveCount(0);
+    await expect(page.locator('article.app-chat-message[data-chat-role="assistant"]').filter({ hasText: 'Searching web' })).toHaveCount(0);
+    await expect(page.locator('article.app-chat-message[data-chat-role="assistant"]').filter({ hasText: 'Running shell' })).toHaveCount(0);
 
-    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
+    await expect(page.locator('article.app-chat-message[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
 
     await page.reload();
     await expect(page.locator('[data-workstation-chat-composer="root"]')).toBeVisible();
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="search"]')).toContainText('Searching web');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Running shell');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Reading file');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="browser_action"]')).toContainText('Used browser');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
-    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
+    await expect(page.getByRole('button', {
+      name: /searched 1 query · ran 1 command · checked 1 file · captured 1 screenshot · used 3 tools/i,
+    })).toBeVisible();
+    await expect(page.locator('article.app-chat-message[data-chat-role="assistant"]').filter({ hasText: /I reviewed the workspace activity/i })).toBeVisible();
   });
 
   test('strips DSML from projected assistant cells', async ({ page }) => {
@@ -690,7 +695,7 @@ test.describe('chat transparency timeline', () => {
           },
         },
         {
-          delay: 80,
+          delay: 1200,
           event: 'final',
           payload: {
             status: 'completed',
@@ -810,11 +815,17 @@ test.describe('chat transparency timeline', () => {
     await loginAsOwner(page);
     await page.goto('/w/ws-1/sage');
 
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="search"]')).toContainText('legacy trace replay');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Ran command');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Captured screenshot');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /legacy-artifact-1/);
-    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'Legacy answer is ready.' })).toBeVisible();
+    const legacyTraceSummary = page.getByRole('button', { name: /searched 1 query · ran 1 command · captured 1 screenshot/i });
+    await expect(legacyTraceSummary).toBeVisible();
+    await legacyTraceSummary.click();
+    const legacyTrace = page.locator('.app-agent-trace-stack').first();
+    await expect(legacyTrace).toContainText('legacy trace replay');
+    await expect(legacyTrace).toContainText('Command');
+    await expect(legacyTrace).toContainText('Legacy command completed.');
+    await expect(legacyTrace).toContainText('Screenshot');
+    await expect(legacyTrace).toContainText('Legacy screenshot captured.');
+    await expect(legacyTrace.getByRole('link', { name: 'Open' })).toHaveAttribute('href', /legacy-artifact-1/);
+    await expect(page.locator('article.app-chat-message[data-chat-role="assistant"]').filter({ hasText: 'Legacy answer is ready.' })).toBeVisible();
     await expect(page.getByText(/trace-legacy-1/i)).toHaveCount(0);
     await expect(page.getByText(/hidden raw output/i)).toHaveCount(0);
     await expect(page.getByText(/rm -rf hidden-raw-command/i)).toHaveCount(0);
@@ -960,17 +971,31 @@ test.describe('chat transparency timeline', () => {
     await loginAsOwner(page);
     await page.goto('/w/ws-1/sage');
 
+    const delegationSummary = page.getByRole('button', { name: /used 2 tools/i });
+    await expect(delegationSummary).toBeVisible();
+    await delegationSummary.click();
+    const delegationTrace = page.locator('.app-agent-trace-stack').nth(0);
+    await expect(delegationTrace).toContainText('Delegated to Research Specialist');
+    await expect(delegationTrace).toContainText('Specialist finished');
+    await expect(delegationTrace).toContainText('Research Specialist checked the result.');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="approval"]')).toContainText('Approval approved');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]')).toContainText('Created artifact');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="artifact"]').getByRole('link', { name: 'Open' })).toHaveAttribute('href', /artifact-hardware-1/);
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="delegated_to_research_specialist"]')).toContainText('Delegated to Research Specialist');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="specialist_finished"]')).toContainText('Specialist finished');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="specialist_finished"]')).toContainText('Research Specialist checked the result.');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Read file');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('reports/current-status.md');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="gateway_offline"]')).toContainText(/Agent Computer offline/i);
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Ran command');
-    await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'The hardware check completed.' })).toBeVisible();
+    const artifactSummary = page.getByRole('button', { name: /checked 1 file · created 1 artifact/i });
+    await expect(artifactSummary).toBeVisible();
+    await artifactSummary.click();
+    const artifactTrace = page.locator('.app-agent-trace-stack').nth(1);
+    await expect(artifactTrace).toContainText('Artifact');
+    await expect(artifactTrace).toContainText('Self-hosted output bundle');
+    await expect(artifactTrace.getByRole('link', { name: 'Open' })).toHaveAttribute('href', /artifact-hardware-1/);
+    await expect(artifactTrace).toContainText('Reading file');
+    await expect(artifactTrace).toContainText('reports/current-status.md');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="error"]')).toContainText(/Agent Computer offline/i);
+    const commandSummary = page.getByRole('button', { name: /ran 1 command/i });
+    await expect(commandSummary).toBeVisible();
+    await commandSummary.click();
+    const commandTrace = page.locator('.app-agent-trace-stack').nth(2);
+    await expect(commandTrace).toContainText('Command');
+    await expect(commandTrace).toContainText('Self-hosted command completed.');
+    await expect(page.locator('article.app-chat-message[data-chat-role="assistant"]').filter({ hasText: 'The hardware check completed.' })).toBeVisible();
     await expect(page.getByText(/trace-hardware-1/i)).toHaveCount(0);
     await expect(page.getByText(/hrs-hardware-1/i)).toHaveCount(0);
     await expect(page.getByText(/raw file body should stay hidden/i)).toHaveCount(0);

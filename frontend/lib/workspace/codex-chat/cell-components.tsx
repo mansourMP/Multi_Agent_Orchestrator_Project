@@ -670,6 +670,7 @@ function TerminalOutputBlock({ value }: { value: string }) {
 }
 
 function ToolTraceCard({ cell }: { cell: TraceActivityCellRecord }) {
+  const services = useWorkspaceServices();
   const [expanded, setExpanded] = useState(false);
   if (cell.kind === 'reasoning_summary') {
     return null;
@@ -684,6 +685,10 @@ function ToolTraceCard({ cell }: { cell: TraceActivityCellRecord }) {
   const terminalText = cell.kind === 'exec'
     ? [cell.stdoutTail || cell.output || '', cell.stderrTail || ''].filter(Boolean).join('\n')
     : '';
+  const artifactId = cell.kind === 'screenshot' || cell.kind === 'artifact'
+    ? cell.artifactId
+    : null;
+  const artifactHref = artifactId ? services.client.artifactDownloadUrl(artifactId) : null;
 
   return (
     <section className={`app-agent-tool-card app-agent-tool-card--${status}`}>
@@ -714,6 +719,11 @@ function ToolTraceCard({ cell }: { cell: TraceActivityCellRecord }) {
             <pre className="app-agent-tool-card__output"><code>{result}</code></pre>
           ) : null}
         </>
+      ) : null}
+      {artifactHref ? (
+        <Link href={artifactHref} target="_blank" rel="noreferrer" className="app-agent-tool-card__link">
+          Open
+        </Link>
       ) : null}
     </section>
   );

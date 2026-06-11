@@ -3472,6 +3472,18 @@ body[data-emp-theme='dark'] .app-auth-divider > span[aria-hidden="true"] {
   font-weight: var(--app-weight-medium);
 }
 
+.sage-canvas-model__busy-note {
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--app-warning, #b7791f) 22%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--app-warning, #b7791f) 9%, transparent);
+  color: var(--app-text-secondary, var(--muted-foreground, var(--text-tertiary)));
+  font-size: 12px;
+  font-weight: var(--app-weight-medium);
+  line-height: 1.35;
+}
+
 .sage-canvas-model__divider {
   height: 1px;
   margin: 6px 8px;

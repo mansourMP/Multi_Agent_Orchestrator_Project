@@ -3300,7 +3300,7 @@ export function WorkstationChatPane() {
         className="sage-canvas-model__trigger sage-canvas-model__trigger--composer"
         aria-label={`Choose model and reasoning. Current model: ${selectedCanvasModelLabel}`}
         aria-expanded={modelCanvasPickerOpen}
-        disabled={isSending || isPersistingModelSelection}
+        disabled={isPersistingModelSelection}
         onClick={() => {
           setHardwareCanvasPickerOpen(false);
           setModelPickerSubpanel(null);
@@ -3312,6 +3312,11 @@ export function WorkstationChatPane() {
       </button>
       {modelCanvasPickerOpen ? (
         <div className="sage-canvas-model__menu sage-canvas-model__menu--composer" role="dialog" aria-label="Model and reasoning">
+          {isSending ? (
+            <div className="sage-canvas-model__busy-note" role="status">
+              Stop the current response before switching models.
+            </div>
+          ) : null}
           <div className="sage-canvas-model__section-title">Reasoning</div>
           <div className="sage-canvas-model__options" role="listbox" aria-label="Reasoning">
             {reasoningOptions.map((option) => (

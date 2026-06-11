@@ -191,6 +191,49 @@ class SessionTranscriptStoreTests(unittest.TestCase):
             ],
         )
 
+    def test_legacy_fullwidth_dsml_transcript_replay_is_sanitized(self) -> None:
+        transcript_dir = self._transcripts_root / "default"
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        transcript_payload = {
+            "timestamp": "2026-06-11T12:14:00Z",
+            "workspace_id": "default",
+            "thread_id": "thread-dsml",
+            "provider": "deepseek",
+            "model": "chat",
+            "messages": [
+                {"role": "user", "content": "ok check waht things i have !"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Let me take a look.\n"
+                        "<｜｜DSML｜｜tool_calls>"
+                        "<｜｜DSML｜｜invoke name=\"bash\">"
+                        "<｜｜DSML｜｜parameter name=\"command\" string=\"true\">system_profiler"
+                        "</｜｜DSML｜｜parameter>"
+                        "</｜｜DSML｜｜invoke>"
+                    ),
+                },
+            ],
+        }
+        (transcript_dir / "2026-06-11.jsonl").write_text(
+            json.dumps(transcript_payload, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        messages = session_transcript_store.load_latest_session_transcript_messages(
+            workspace_id="default",
+            thread_id="thread-dsml",
+        )
+        summaries = session_transcript_store.list_session_transcript_summaries(workspace_id="default")
+        replay_text = json.dumps({"messages": messages, "summaries": summaries}, ensure_ascii=False)
+
+        self.assertIn("Let me take a look.", replay_text)
+        self.assertNotIn("DSML", replay_text)
+        self.assertNotIn("tool_calls", replay_text)
+        self.assertNotIn("invoke name", replay_text)
+        self.assertNotIn("｜｜", replay_text)
+        self.assertNotIn("system_profiler", replay_text)
+
 
 if __name__ == "__main__":
     unittest.main()

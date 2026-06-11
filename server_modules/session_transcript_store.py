@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from server_modules.memory_service import save_daily_log
 from server_modules import failure_policy_service, memory_summary_service
+from server_modules import internal_tool_markup_service
 from server_modules import rust_runtime_kernel_client
 from server_modules.error_contracts import STORAGE_READ_FAILURE, STORAGE_WRITE_FAILURE, SEVERITY_WARNING
 
@@ -132,6 +133,10 @@ def _normalized_transcript_messages(messages: List[Dict[str, Any]]) -> List[Dict
         content = _extract_message_text(item.get("content"))
         if not content:
             continue
+        if role == "assistant":
+            content = internal_tool_markup_service.strip_internal_tool_markup(content)
+            if not content:
+                continue
         if role == "user" and content.lstrip().startswith("/"):
             continue
         normalized.append({"role": role, "content": content})

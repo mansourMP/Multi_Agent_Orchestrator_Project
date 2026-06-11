@@ -26,6 +26,11 @@ function originOf(value: string): string | null {
   }
 }
 
+const DEFAULT_PRODUCTION_AUTH_ORIGINS = [
+  'https://empyralis.ai',
+  'https://www.empyralis.ai',
+];
+
 export function googleOAuthClientId(): string {
   return String(
     process.env.GOOGLE_AUTH_CLIENT_ID
@@ -70,6 +75,7 @@ export function requestOrigin(request: NextRequest): string {
 
 export function configuredAuthOrigins(): Set<string> {
   const candidates = [
+    ...DEFAULT_PRODUCTION_AUTH_ORIGINS,
     ...splitList(process.env.EMPYRALIS_AUTH_ALLOWED_ORIGINS),
     ...splitList(process.env.NEXT_PUBLIC_APP_URL),
     ...splitList(process.env.EMPYRALIS_WEB_URL),

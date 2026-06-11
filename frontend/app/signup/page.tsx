@@ -85,8 +85,20 @@ export default function SignupPage() {
   });
   const [channelAttribution, setChannelAttribution] = useState('');
   const [agent, setAgent] = useState('');
+  const [source, setSource] = useState('');
+  const [channel, setChannel] = useState('');
+  const [workspaceId, setWorkspaceId] = useState('');
   const [pilotCode, setPilotCode] = useState('');
   const loginSearchParams = new URLSearchParams();
+  if (source) {
+    loginSearchParams.set('source', source);
+  }
+  if (channel) {
+    loginSearchParams.set('channel', channel);
+  }
+  if (workspaceId) {
+    loginSearchParams.set('workspace_id', workspaceId);
+  }
   if (channelAttribution) {
     loginSearchParams.set('channel_attribution', channelAttribution);
   }
@@ -105,6 +117,9 @@ export default function SignupPage() {
     const params = new URLSearchParams(window.location.search);
     setChannelAttribution(String(params.get('channel_attribution') || '').trim());
     setAgent(String(params.get('agent') || '').trim());
+    setSource(String(params.get('source') || '').trim());
+    setChannel(String(params.get('channel') || '').trim());
+    setWorkspaceId(String(params.get('workspace_id') || '').trim());
     setPilotCode(String(params.get('pilot_code') || '').trim());
     const providerError = String(params.get('error') || '').trim();
     if (providerError) {

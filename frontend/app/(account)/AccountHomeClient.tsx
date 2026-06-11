@@ -21,6 +21,12 @@ function canonicalStudioHref(workspaceId: string, agentId: string): string {
   return `/w/${encodeURIComponent(workspaceId)}/studio?agent=${encodeURIComponent(agentId)}`;
 }
 
+function canonicalIntegrationsHref(workspaceId: string, channel?: string): string {
+  const cleanChannel = String(channel || '').trim().toLowerCase();
+  const query = cleanChannel ? `?channel=${encodeURIComponent(cleanChannel)}` : '';
+  return `/w/${encodeURIComponent(workspaceId)}/integrations${query}`;
+}
+
 export function AccountHomeClient() {
   const router = useRouter();
   const { state, actions } = useAccountShell();
@@ -97,12 +103,36 @@ export function AccountHomeClient() {
       }
 
       let agentId = '';
+      let source = '';
+      let channel = '';
+      let requestedWorkspaceId = '';
       try {
         const parsed = JSON.parse(rawIntent) as Record<string, unknown>;
         agentId = typeof parsed.agent === 'string' ? parsed.agent.trim() : '';
+        source = typeof parsed.source === 'string' ? parsed.source.trim() : '';
+        channel = typeof parsed.channel === 'string' ? parsed.channel.trim() : '';
+        requestedWorkspaceId = typeof parsed.workspaceId === 'string' ? parsed.workspaceId.trim() : '';
       } catch {
         window.sessionStorage.removeItem(CONTINUE_INTENT_STORAGE_KEY);
         router.replace(suggestedHref);
+        return;
+      }
+
+      if (source === 'channel_connect') {
+        const requestedMembership = requestedWorkspaceId
+          ? getWorkspaceMembership(state.workspaceMembershipIndex, requestedWorkspaceId)
+          : null;
+        const targetWorkspaceId =
+          requestedMembership && isWorkspaceReadyForProduct(requestedMembership)
+            ? requestedMembership.workspace.id
+            : selectedWorkspaceId;
+
+        window.sessionStorage.removeItem(CONTINUE_INTENT_STORAGE_KEY);
+        router.replace(
+          targetWorkspaceId
+            ? canonicalIntegrationsHref(targetWorkspaceId, channel)
+            : suggestedHref,
+        );
         return;
       }
 
@@ -126,7 +156,7 @@ export function AccountHomeClient() {
     return () => {
       cancelled = true;
     };
-  }, [router, state.status, state.workspaceMemberships, suggestedHref]);
+  }, [router, selectedWorkspaceId, state.status, state.workspaceMembershipIndex, state.workspaceMemberships, suggestedHref]);
 
   return (
     <main className="app-page-message">

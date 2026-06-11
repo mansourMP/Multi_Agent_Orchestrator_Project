@@ -6,6 +6,13 @@ import type {
   TimelineProjectionEvent,
 } from './cells';
 
+const AGENT_COMPUTER_CONNECTING_LABEL = 'Connecting to your Mac...';
+const AGENT_COMPUTER_RUNNING_LABEL = 'Running on your Mac';
+const AGENT_COMPUTER_DONE_LABEL = 'Done';
+const AGENT_COMPUTER_REQUIRED_LABEL = 'Needs Agent Computer';
+const AGENT_COMPUTER_OFFLINE_LABEL = 'Agent Computer offline';
+const AGENT_COMPUTER_APPROVAL_LABEL = 'Sage needs your approval';
+
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -65,6 +72,23 @@ function safeActivityDetail(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+function safeActivityLabel(value: unknown, fallback: string): string {
+  const text = readString(value).replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return fallback;
+  }
+  if (
+    /<\s*\|\s*\||\bDSML\b|tool_calls|tool\.invoke|gateway_id|capability_id|runtime_session_id|local_gateway|user_device_gateway/i.test(text)
+    || /^gateway[-_:]/i.test(text)
+    || /^gw[-_:]/i.test(text)
+    || /gateway offline/i.test(text)
+    || /mac is not connected/i.test(text)
+  ) {
+    return fallback;
+  }
+  return text.slice(0, 120);
+}
+
 function normalizeStepStatus(value: unknown): 'running' | 'done' | 'error' {
   const normalized = readString(value).toLowerCase();
   if (normalized === 'done' || normalized === 'complete' || normalized === 'completed' || normalized === 'success') {
@@ -103,24 +127,27 @@ function normalizeAgentActivityStatus(value: unknown): AgentActivityEvent['statu
 
 function activityLabelForHardwareState(state: string): Pick<AgentActivityEvent, 'type' | 'label' | 'status'> {
   if (['queued', 'connecting', 'starting', 'started', 'pending'].includes(state)) {
-    return { type: 'connecting_hardware', label: 'Connecting to your Mac...', status: 'active' };
+    return { type: 'connecting_hardware', label: AGENT_COMPUTER_CONNECTING_LABEL, status: 'active' };
   }
   if (state === 'running') {
-    return { type: 'hardware_running', label: 'Running on your Mac', status: 'active' };
+    return { type: 'hardware_running', label: AGENT_COMPUTER_RUNNING_LABEL, status: 'active' };
   }
-  if (['completed', 'complete', 'done', 'ready', 'success', 'succeeded'].includes(state)) {
-    return { type: 'done', label: 'Done', status: 'completed' };
+  if (['completed', 'complete', 'done', 'ready', 'success', 'succeeded', 'terminated', 'stopped', 'cancelled', 'canceled'].includes(state)) {
+    return { type: 'done', label: AGENT_COMPUTER_DONE_LABEL, status: 'completed' };
   }
   if (state === 'waiting_approval' || state === 'waiting' || state === 'approval_required') {
-    return { type: 'waiting_approval', label: 'Sage needs your approval', status: 'active' };
+    return { type: 'waiting_approval', label: AGENT_COMPUTER_APPROVAL_LABEL, status: 'active' };
+  }
+  if (state === 'requires_agent_computer' || state === 'needs_agent_computer' || state === 'required') {
+    return { type: 'error', label: AGENT_COMPUTER_REQUIRED_LABEL, status: 'failed' };
   }
   if (state === 'offline' || state === 'degraded') {
-    return { type: 'error', label: 'Mac is not connected', status: 'failed' };
+    return { type: 'error', label: AGENT_COMPUTER_OFFLINE_LABEL, status: 'failed' };
   }
-  if (['failed', 'failure', 'error', 'blocked', 'denied', 'terminated'].includes(state)) {
-    return { type: 'error', label: 'Mac is not connected', status: 'failed' };
+  if (['failed', 'failure', 'error', 'blocked', 'denied'].includes(state)) {
+    return { type: 'error', label: AGENT_COMPUTER_OFFLINE_LABEL, status: 'failed' };
   }
-  return { type: 'hardware_running', label: 'Running on your Mac', status: 'active' };
+  return { type: 'hardware_running', label: AGENT_COMPUTER_RUNNING_LABEL, status: 'active' };
 }
 
 function agentActivityFromObject(
@@ -135,7 +162,7 @@ function agentActivityFromObject(
   return {
     id: readString(activity.id) || fallback.id,
     type: rawType ? rawType as AgentActivityEvent['type'] : fallback.type,
-    label: readString(activity.label) || fallback.label,
+    label: safeActivityLabel(activity.label, fallback.label),
     detail: safeActivityDetail(activity.detail, activity.summary),
     startedAt: readTimestampMs(activity.startedAt, activity.started_at, fallback.startedAt),
     ...(hasCompletedAt ? { completedAt } : {}),
@@ -437,13 +464,15 @@ function fileActionFromEventType(eventType: string, fallback: string): string {
 }
 
 function runtimeStatusLabel(eventType: string, data: Record<string, unknown>): string {
-  const target = readString(data.runtime_target).toLowerCase();
   const state = readString(data.state || data.status).toLowerCase();
+  if (state === 'requires_agent_computer' || state === 'needs_agent_computer' || state === 'required') {
+    return AGENT_COMPUTER_REQUIRED_LABEL;
+  }
   if (state === 'offline' || eventType.includes('offline')) {
-    return target.includes('node') ? 'Node offline' : 'Gateway offline';
+    return AGENT_COMPUTER_OFFLINE_LABEL;
   }
   if (state === 'degraded' || eventType.includes('degraded')) {
-    return target.includes('node') ? 'Node degraded' : 'Runtime degraded';
+    return AGENT_COMPUTER_OFFLINE_LABEL;
   }
   if (eventType.includes('blocked')) {
     return 'Action blocked';

@@ -3,7 +3,12 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
-from server_modules import agent_trace_service, secret_redaction_service, thread_service
+from server_modules import (
+    agent_computer_surface_service,
+    agent_trace_service,
+    secret_redaction_service,
+    thread_service,
+)
 
 
 def _text(value: Any) -> str:
@@ -37,30 +42,10 @@ def _hardware_agent_activity(
     started_at: Optional[int] = None,
 ) -> Dict[str, Any]:
     normalized_state = _text(state).lower() or "running"
-    if normalized_state in {"queued", "connecting", "starting", "started", "pending"}:
-        activity_type = "connecting_hardware"
-        label = "Connecting to your Mac..."
-        status = "active"
-    elif normalized_state == "running":
-        activity_type = "hardware_running"
-        label = "Running on your Mac"
-        status = "active"
-    elif normalized_state in {"completed", "complete", "done", "ready", "success", "succeeded"}:
-        activity_type = "done"
-        label = "Done"
-        status = "completed"
-    elif normalized_state in {"waiting_approval", "waiting", "approval_required"}:
-        activity_type = "waiting_approval"
-        label = "Sage needs your approval"
-        status = "active"
-    elif normalized_state in {"offline", "degraded"}:
-        activity_type = "error"
-        label = "Mac is not connected"
-        status = "failed"
-    else:
-        activity_type = "error"
-        label = "Mac is not connected"
-        status = "failed"
+    activity_shape = agent_computer_surface_service.agent_computer_activity_shape(normalized_state)
+    activity_type = activity_shape["type"]
+    label = activity_shape["label"]
+    status = activity_shape["status"]
     payload: Dict[str, Any] = {
         "id": _text(tool_call_id) or f"hardware:{_now_ms()}",
         "type": activity_type,

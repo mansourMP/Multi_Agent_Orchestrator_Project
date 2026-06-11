@@ -679,6 +679,13 @@ test.describe('chat transparency timeline', () => {
               connector_id: 'hardware_runtime',
               runtime_session_id: 'hrs-hardware-offline-1',
               summary: 'Agent Computer offline.',
+              agent_activity: {
+                id: 'hardware-offline-1',
+                type: 'error',
+                label: 'Gateway offline',
+                startedAt: Date.now(),
+                status: 'failed',
+              },
             },
           },
         },
@@ -710,7 +717,7 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-workstation-chat="pane"]')).toHaveAttribute('data-agent-activity-state', 'running_tool');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="waiting_approval"]')).toContainText('Sage needs your approval');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="done"]')).toContainText('Done');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="error"]')).toContainText('Mac is not connected');
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="error"]')).toContainText('Agent Computer offline');
   });
 
   test('does not render persisted thinking rows in historical transcript', async ({ page }) => {
@@ -961,7 +968,7 @@ test.describe('chat transparency timeline', () => {
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="specialist_finished"]')).toContainText('Research Specialist checked the result.');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('Read file');
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="file"]')).toContainText('reports/current-status.md');
-    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="gateway_offline"]')).toContainText(/Gateway offline/i);
+    await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="gateway_offline"]')).toContainText(/Agent Computer offline/i);
     await expect(page.locator('[data-chat-role="system"][data-chat-activity-kind="shell"]')).toContainText('Ran command');
     await expect(page.locator('[data-chat-role="assistant"]').filter({ hasText: 'The hardware check completed.' })).toBeVisible();
     await expect(page.getByText(/trace-hardware-1/i)).toHaveCount(0);

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from server_modules import runtime_attachment_service
+from server_modules import agent_computer_surface_service, runtime_attachment_service
 
 
 AGENT_COMPUTER_GROUP_LABEL = "Agent Computer"
@@ -67,7 +67,7 @@ _LOCAL_HARDWARE_ACTION_IDS = {
     "window.control",
 }
 
-AGENT_COMPUTER_OFFLINE_ERROR = "Agent Computer offline — this action requires local hardware"
+AGENT_COMPUTER_OFFLINE_ERROR = agent_computer_surface_service.AGENT_COMPUTER_OFFLINE_LABEL
 
 
 def runtime_edge(canonical_runtime_target: str) -> str:

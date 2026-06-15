@@ -91,3 +91,6 @@ config/cache/
 config/codex.sqlite3
 config/codex.toml
 config/secret_key
+dump.rdb
+*.rdb
+*.dmg

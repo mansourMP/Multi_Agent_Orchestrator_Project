@@ -23,16 +23,24 @@ from server_modules.logging_config import configure_logging
 
 configure_logging()
 
+# Load .env for local development (production uses real env vars)
+try:
+    from dotenv import load_dotenv
+    _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    load_dotenv(_env_path)
+except Exception:
+    pass
+
 try:
     from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-except Exception:  # pragma: no cover - optional dependency guard
+except Exception as _startup_exc:  # pragma: no cover - optional dependency guard
     SqlalchemyIntegration = None  # type: ignore[assignment]
 
 sentry_integrations = [FastApiIntegration()]
 if SqlalchemyIntegration is not None:
     try:
         sentry_integrations.append(SqlalchemyIntegration())
-    except Exception:
+    except Exception as _startup_exc:
         logging.getLogger(__name__).debug("SQLAlchemy Sentry integration is unavailable.", exc_info=True)
 
 sentry_sdk.init(
@@ -217,12 +225,12 @@ from server_modules.routes_studio import router as studio_router
 from server_modules.routes_workspaces import router as workspaces_router
 from server_modules.routes_workflows import router as workflows_router
 from server_modules.routes_doctor import router as doctor_router
+from server_modules.routes_sage_telegram_hosted import router as sage_telegram_hosted_router
 
 
 docs_url = "/docs" if os.getenv("ENV") == "development" else None
 redoc_url = "/redoc" if os.getenv("ENV") == "development" else None
 openapi_url = "/openapi.json" if os.getenv("ENV") == "development" else None
-
 
 @asynccontextmanager
 async def runtime_app_lifespan(app_instance: FastAPI):
@@ -242,7 +250,6 @@ existing_shared_app = getattr(shared, "app", None)
 if existing_shared_app is not None and existing_shared_app is not app:
     raise RuntimeError("shared.app must reference the server-owned FastAPI app.")
 shared.app = app
-
 
 @app.exception_handler(FastAPIHTTPException)
 async def fastapi_http_exception_handler(request: Request, exc: FastAPIHTTPException):
@@ -335,6 +342,7 @@ app.include_router(pilot_router, prefix="/api")
 app.include_router(studio_router, prefix="/api")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(doctor_router)
+app.include_router(sage_telegram_hosted_router, prefix="/api")
 
 
 def _runtime_cli_args() -> argparse.Namespace:

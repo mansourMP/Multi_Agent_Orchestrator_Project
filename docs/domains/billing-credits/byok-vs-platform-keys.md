@@ -47,3 +47,7 @@ When hosted platform runtime is blocked, direct chat provider truth marks the
 runtime as restricted and sets issue codes such as
 `hosted_ai_owner_approval_required`, `hosted_ai_cap_reached`, or
 `hosted_ai_policy_disabled`.
+
+## Platform Provider: DeepSeek Only
+
+Empyralis credits use **only DeepSeek** as the internal provider. There is no fallback chain — `CLOUD_PROVIDER_IDS` in `sage_agent_runtime_service.py` contains only `("deepseek",)`. Users who want a different provider must use the "My API Key" or "My AI Account" tiers, which are documented in `hosted-ai-credits.md`.

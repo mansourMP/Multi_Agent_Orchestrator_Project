@@ -39,7 +39,7 @@ Sage is the primary AI intelligence bound to each workspace. It maintains a pers
 - **Persistent Identity**: Sage maintains a stable identity bound to the workspace via Soul.md, Identity.md, and Heartbeat.md memory files.
 - **Layered Memory Architecture**: Four-tier memory system — Profile Memory (long-term), Episodic Memory (interactions), Local Private (on-device), Cloud Synced (encrypted). Memory is permissioned and private by design.
 - **Safety Control Plane**: Granular governance for every turn. Approval gates, audit streams, and egress policy enforcement. Quotas, entitlements, and policy-bound runtime placement.
-- **Provider Routing**: Model selection and provider routing with tier-based contracts. Supports multiple AI providers simultaneously.
+- **Provider Routing**: Model selection and provider routing with tier-based contracts. Empyralis credits always route to DeepSeek (best quality-to-price ratio). Users can bring their own API key for other providers via "My API Key" tier.
 - **Skills System**: Installable callable tools that extend Sage's capabilities. Skills are registered in a workspace-scoped registry.
 - **Transparency Timeline**: Every interaction produces a verifiable transparency record showing tool calls, memory loads, approvals, and provider decisions.
 - **Context Files**: Knowledge retrieval augmented generation with file upload support (.md, .txt, .csv, .json).

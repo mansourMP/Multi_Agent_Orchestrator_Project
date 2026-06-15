@@ -36,6 +36,16 @@ policy, monthly cap USD, monthly cost USD, monthly remaining USD, credit balance
 total available credits, and reason. Chat tiers expose light/pro/max monthly
 credit caps.
 
+## Default Provider: DeepSeek
+
+Empyralis credits always route to **DeepSeek**. All three platform tiers (light, pro, max) use DeepSeek internally — there is no other provider behind Empyralis credits.
+
+**Why:** DeepSeek offers frontier-model quality at roughly 1/10th the cost of alternatives (Anthropic, OpenAI). This lets Empyralis offer affordable credit-based pricing while maintaining quality.
+
+**BYO:** Users who want a different provider select "My API Key" or "My AI Account" from the model picker — those tiers bypass Empyralis credits entirely and use the user's own key/account. This is documented in `byok-vs-platform-keys.md`.
+
+**Do not add a second provider to `CLOUD_PROVIDER_IDS` in `sage_agent_runtime_service.py` without explicit product approval.**
+
 ## Refunds
 
 Not implemented in inspected code: no automatic refund path was verified in

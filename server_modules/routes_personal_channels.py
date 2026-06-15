@@ -715,6 +715,7 @@ _CLOUD_HMAC_SECRET = os.getenv("CLOUD_SESSION_HMAC_SECRET", os.getenv("API_SECRE
 
 class CloudChannelInboundRequest(BaseModel):
     session_id: str = Field(min_length=1)
+    workspace_id: str = Field(default="default")
     channel_key: str = Field(default="telegram_personal")
     message: dict
     signature: str = Field(min_length=1)
@@ -762,5 +763,6 @@ async def cloud_channel_inbound(
         session_id=body.session_id,
         channel_key=body.channel_key,
         message=body.message,
+        workspace_id=body.workspace_id,
     )
     return JSONResponse(content=result)

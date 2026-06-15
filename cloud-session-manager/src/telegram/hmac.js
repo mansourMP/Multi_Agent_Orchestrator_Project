@@ -18,18 +18,21 @@ export function signPayload(payload) {
  * Build a signed request body for forwarding to the backend.
  * Signs {sessionId, messageId, timestamp} as specified.
  */
-export function buildSignedInbound({ sessionId, messageId, channelKey, senderId, senderName, text, timestamp }) {
+export function buildSignedInbound({ sessionId, messageId, channelKey, senderId, senderName, linkedUsername, workspaceId, text, timestamp }) {
   const ts = timestamp || new Date().toISOString();
   const payload = { sessionId, messageId, timestamp: ts };
+  const workspace_id = workspaceId || "default";
   const signature = signPayload(payload);
 
   return {
     session_id: sessionId,
+    workspace_id,
     channel_key: channelKey || "telegram_personal",
     message: {
       external_message_id: messageId,
       sender_id: senderId || "",
       sender_name: senderName || "",
+      linked_username: linkedUsername || "",
       text: text || "",
       received_at: ts,
     },

@@ -111,6 +111,7 @@ export class InboundHandler {
 
       const body = buildSignedInbound({
         sessionId: this.sessionId,
+        workspaceId: this.workspaceId,
         messageId,
         channelKey: "telegram_personal",
         senderId,

@@ -21,11 +21,13 @@ export function createRoutes(pool, logger) {
   // Provision a new session from a sessionString
   router.post("/sessions", async (req, res) => {
     try {
-      const { sessionString } = req.body || {};
+      const { sessionString, workspace_id } = req.body || {};
       if (!sessionString || !String(sessionString).trim()) {
         return res.status(400).json({ error: "sessionString is required" });
       }
-      const sessionId = await pool.createSession(String(sessionString).trim());
+      const opts = {};
+      if (workspace_id) opts.workspaceId = String(workspace_id).trim();
+      const sessionId = await pool.createSession(String(sessionString).trim(), opts);
       const session = pool.getSession(sessionId);
       res.status(201).json(session);
     } catch (err) {

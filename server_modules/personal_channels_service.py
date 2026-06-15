@@ -1135,6 +1135,12 @@ async def _deliver_whatsapp_personal_reply(
         return {"duplicate": duplicate, "inbound": inbound, "outbound": outbound}
 
     if outbound is None:
+        # Resolve linked user name from WhatsApp state for identity context
+        _wa_state = personal_channels_repository.get_whatsapp_state(
+            str(gateway_id or "").strip(),
+            channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+        )
+        linked_user_name = str((_wa_state or {}).get("linked_name") or "").strip() or None
         reply = personal_channel_sage_bridge_service.build_whatsapp_personal_reply(
             workspace_id=str(registration.get("workspace_id") or "").strip(),
             gateway_id=str(gateway_id or "").strip(),
@@ -1142,6 +1148,7 @@ async def _deliver_whatsapp_personal_reply(
             text=text,
             push_name=push_name,
             source_event_id=external_message_id,
+            linked_user_name=linked_user_name,
         )
         if not reply or not str(reply.get("text") or "").strip():
             no_reply_idempotency_key = f"{WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX}{external_message_id}"
@@ -1219,8 +1226,18 @@ async def _handle_whatsapp_gateway_channel_inbound(
     text = str(message.get("text") or "").strip()
     if not external_message_id or not remote_jid or not text:
         raise ValueError("channel.inbound requires external_message_id, remote_jid, and text.")
-    if bool(message.get("from_me")):
+    if bool(message.get("from_me")) and not bool(message.get("is_self_chat")):
         return {"ignored": True, "reason": "from_me", "channel_key": WHATSAPP_PERSONAL_CHANNEL_KEY}
+    # Group gate: skip group messages unless mentioned or replying to Sage.
+    # The Gateway-side filter (runtime.ts) is the primary gate; this is a
+    # backend safety net in case the Gateway bypasses it for any reason.
+    if bool(message.get("is_group")):
+        if not bool(message.get("is_mentioned")) and not bool(message.get("is_reply_to_sage")):
+            return {
+                "ignored": True,
+                "reason": "group_no_mention",
+                "channel_key": WHATSAPP_PERSONAL_CHANNEL_KEY,
+            }
     sync_gateway_personal_channel_state(
         gateway_id=gateway_id,
         registration=registration,
@@ -2003,6 +2020,7 @@ async def handle_cloud_channel_inbound(
     session_id: str,
     channel_key: str,
     message: Dict[str, Any],
+    workspace_id: str = "default",
 ) -> Dict[str, Any]:
     """Handle inbound message from cloud session manager (Stage 2).
 
@@ -2014,27 +2032,32 @@ async def handle_cloud_channel_inbound(
         session_id: cloud session manager session ID
         channel_key: "telegram_personal" or "whatsapp_personal"
         message: {external_message_id, sender_id, sender_name, text, received_at}
+        workspace_id: workspace UUID from cloud session (defaults to "default" for backward compat)
     """
     if not _CLOUD_SESSION_MANAGER_ENABLED:
         return {"status": "disabled", "reason": "CLOUD_SESSION_MANAGER_ENABLED is false"}
 
+    resolved_workspace_id = str(workspace_id or "default").strip() or "default"
 
     external_message_id = str(message.get("external_message_id") or "").strip()
     remote_jid = str(message.get("sender_id") or "").strip()
     text = str(message.get("text") or "").strip()
     push_name = str(message.get("sender_name") or "").strip() or None
+    linked_username = str(message.get("linked_username") or "").strip() or None
 
     if not external_message_id or not text:
         raise ValueError("cloud_channel_inbound requires external_message_id and text")
 
     # Build Sage reply using the existing bridge — same as Gateway path
     reply = personal_channel_sage_bridge_service.build_telegram_personal_reply(
-        workspace_id="default",
+        workspace_id=resolved_workspace_id,
         gateway_id=f"cloud:{session_id}",
         remote_jid=remote_jid,
         text=text,
         push_name=push_name,
+        linked_user_name=linked_username,
         source_event_id=external_message_id,
+        channel_name="Telegram",
     )
 
     if not reply or not str(reply.get("text") or "").strip():
@@ -2109,3 +2132,30 @@ async def dispatch_cloud_channel_outbound(
             return {"ok": True, "status": response.status_code, "message_id": body.get("message_id")}
     except Exception as exc:
         return {"ok": False, "error": f"dispatch_error: {exc}"}
+def resolve_cloud_telegram_session_id() -> Optional[str]:
+    """Resolve the first connected cloud Telegram session ID.
+
+    Queries the cloud-session-manager for all sessions and returns
+    the ID of the first connected session. Used by heartbeat notify
+    to deliver proactive messages via cloud-session-manager.
+
+    Returns None if no connected session exists or cloud-session-manager
+    is unreachable.
+    """
+    if not _CLOUD_SESSION_MANAGER_ENABLED:
+        return None
+    try:
+        import httpx
+        url = f"{_CLOUD_SESSION_MANAGER_URL}/sessions"
+        response = httpx.get(url, timeout=5.0)
+        if response.status_code >= 400:
+            return None
+        body = response.json() if response.text else {}
+        sessions = body.get("sessions") if isinstance(body, dict) else []
+        for session in sessions:
+            if isinstance(session, dict) and session.get("status") == "connected":
+                return str(session.get("sessionId") or "").strip() or None
+        return None
+    except Exception:
+        return None
+

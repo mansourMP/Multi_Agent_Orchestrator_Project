@@ -1427,13 +1427,16 @@ async def _run_sage_action_loop_v3(
         for cap in tool_capabilities
         if isinstance(cap, dict) and _coerce_text(cap.get("label") or cap.get("id"))
     ]
-    trace_context = agent_trace_service.TraceContext(
-        trace_id=trace_id,
+    trace_context = await agent_trace_service.start_trace(
         workspace_id=workspace_id,
         tenant_id=tenant_id or "default",
+        root_agent_id=SAGE_MAIN_AGENT_ID,
+        surface="sage",
         thread_id=trace_id,
         run_id=None,
-        root_agent_id=SAGE_MAIN_AGENT_ID,
+        runtime_target=None,
+        provider=provider,
+        model=model,
     )
     def _collect_stream_events() -> List[Dict[str, Any]]:
         return list(

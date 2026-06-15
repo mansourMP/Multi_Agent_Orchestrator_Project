@@ -2049,15 +2049,13 @@ async def handle_cloud_channel_inbound(
         raise ValueError("cloud_channel_inbound requires external_message_id and text")
 
     # Build Sage reply using the existing bridge — same as Gateway path
-    reply = personal_channel_sage_bridge_service.build_telegram_personal_reply(
+    reply = await personal_channel_sage_bridge_service.build_telegram_personal_reply_async(
         workspace_id=resolved_workspace_id,
         gateway_id=f"cloud:{session_id}",
         remote_jid=remote_jid,
         text=text,
         push_name=push_name,
-        linked_user_name=linked_username,
         source_event_id=external_message_id,
-        channel_name="Telegram",
     )
 
     if not reply or not str(reply.get("text") or "").strip():

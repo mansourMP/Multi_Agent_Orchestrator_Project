@@ -40,12 +40,26 @@ async def execute_sage_turn(
     from server_modules.sage_agent_runtime_service import handle_sage_chat
     from server_modules.channel_adapter import normalize_sage_inbound
 
+    # Resolve tenant_id from workspace when not explicitly provided.
+    # Personal channel bridges (telegram_personal, whatsapp_personal) pass
+    # only workspace_id — tenant_id defaults to "" and becomes "default",
+    # which fails credit debit checks for non-default workspaces.
+    resolved_tenant_id = str(tenant_id or "").strip()
+    if not resolved_tenant_id or resolved_tenant_id == "default":
+        try:
+            from server_modules.control_plane_repository import get_workspace_by_id
+            ws_record = await get_workspace_by_id(workspace_id)
+            if isinstance(ws_record, dict):
+                resolved_tenant_id = str(ws_record.get("tenant_id") or "").strip() or resolved_tenant_id
+        except Exception:
+            pass
+
     normalized_mode = normalize_sage_mode(mode)
     normalized_surface = normalize_sage_surface(surface)
 
     turn = normalize_sage_inbound(
         workspace_id=workspace_id,
-        tenant_id=tenant_id,
+        tenant_id=resolved_tenant_id or tenant_id,
         message=message,
         surface=normalized_surface,
         mode=normalized_mode,

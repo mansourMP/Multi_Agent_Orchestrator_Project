@@ -47,11 +47,27 @@ export async function createTelegramClient({ sessionString, onInboundMessage, lo
     },
   );
 
+  // Linked username — captured by closure below, set after getMe()
+  let _linkedUsername = "";
+
   // Add NewMessage event handler BEFORE connecting
   client.addEventHandler((event) => {
     try {
       const message = event?.message;
       if (!message) return;
+
+      // Group detection: GramJS message.isGroup or chat className check
+      const isGroup = Boolean(
+        message.isGroup ||
+        (message.chat?.className === "Chat" && !message.chat?.isPrivate) ||
+        message.chat?.className === "Channel"
+      );
+
+      // Extract entities for mention detection
+      const entities = message.entities || message.raw?.entities || [];
+
+      // Reply-to tracking: capture the replied-to message ID
+      const replyToMsgId = message.replyTo?.replyToMsgId || message.replyToMsgId || null;
 
       const raw = {
         externalMessageId: String(message.id || ""),
@@ -61,6 +77,10 @@ export async function createTelegramClient({ sessionString, onInboundMessage, lo
         text: String(message.text || message.message || ""),
         receivedAt: new Date().toISOString(),
         fromMe: Boolean(message.out || message.outgoing),
+        isSelfChat: String(message.chatId || message.peerId || "") === String(message.senderId || message.sender?.userId || ""),
+        isGroup,
+        entities,
+        replyToMsgId,
       };
 
       const normalized = mapTelegramInboundMessage(raw);
@@ -81,6 +101,8 @@ export async function createTelegramClient({ sessionString, onInboundMessage, lo
   const linkedUsername = String(me?.username || me?.firstName || "").trim() || undefined;
   const linkedUserId = String(me?.id || "").trim() || undefined;
   const linkedPhone = String(me?.phone || "").trim() || undefined;
+  // Update closure-captured _linkedUsername for mention detection in event handler
+  _linkedUsername = linkedUsername || "";
 
   logger?.info?.({ linkedUsername, linkedUserId }, "telegram client connected");
 
@@ -274,6 +296,10 @@ export async function verifySignInCode({ tempSessionId, phoneCodeHash, phoneNumb
             text,
             received_at: String(rawMessage.receivedAt || "").trim() || new Date().toISOString(),
             from_me: Boolean(rawMessage.fromMe),
+            is_self_chat: Boolean(rawMessage.isSelfChat),
+            is_group: Boolean(rawMessage.isGroup),
+            entities: rawMessage.entities || [],
+            reply_to_msg_id: rawMessage.replyToMsgId || null,
           },
         };
       };
@@ -289,6 +315,14 @@ export async function verifySignInCode({ tempSessionId, phoneCodeHash, phoneNumb
             text: String(message.text || message.message || ""),
             receivedAt: new Date().toISOString(),
             fromMe: Boolean(message.out || message.outgoing),
+            isSelfChat: String(message.chatId || message.peerId || "") === String(message.senderId || message.sender?.userId || ""),
+            isGroup: Boolean(
+              message.isGroup ||
+              (message.chat?.className === "Chat" && !message.chat?.isPrivate) ||
+              message.chat?.className === "Channel"
+            ),
+            entities: message.entities || message.raw?.entities || [],
+            replyToMsgId: message.replyTo?.replyToMsgId || message.replyToMsgId || null,
           };
           const normalized = mapMsg(raw);
           if (normalized) onInboundMessage(normalized);

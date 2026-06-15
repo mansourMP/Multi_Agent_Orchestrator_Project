@@ -23,6 +23,10 @@ export function mapTelegramInboundMessage(rawMessage) {
       text,
       received_at: String(rawMessage.receivedAt || "").trim() || new Date().toISOString(),
       from_me: Boolean(rawMessage.fromMe),
+        is_self_chat: Boolean(rawMessage.isSelfChat),
+        is_group: Boolean(rawMessage.isGroup),
+        entities: rawMessage.entities || [],
+        reply_to_msg_id: rawMessage.replyToMsgId || null,
     },
   };
 }

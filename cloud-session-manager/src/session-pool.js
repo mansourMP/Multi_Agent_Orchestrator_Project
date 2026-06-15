@@ -72,8 +72,9 @@ export class SessionPool {
       logger: this.logger,
     });
 
-    // Update linkedUserId now that we have it from Telegram
+    // Update linkedUserId and linkedUsername now that we have them from Telegram
     inboundHandler.linkedUserId = connected.linkedUserId;
+    inboundHandler.linkedUsername = connected.linkedUsername || "";
 
     const now = Date.now();
     // Create outbox for this session
@@ -231,6 +232,7 @@ export class SessionPool {
     if (result.ok) {
       await session.outbox.acknowledge(requestId);
       this.logger?.info?.({ sessionId, messageId: result.messageId, tokensLeft: rateResult.tokensLeft }, "outbound message sent + acked");
+      session.inboundHandler?.addSentMessageId(result.messageId);
       return { ok: true, messageId: result.messageId, tokensLeft: rateResult.tokensLeft };
     }
 
@@ -326,6 +328,7 @@ export class SessionPool {
       sessionId,
       workspaceId: "default",
       linkedUserId: "",  // updated after sign-in
+      linkedUsername: "",  // updated after sign-in
       logger: this.logger,
     });
 
@@ -347,8 +350,9 @@ export class SessionPool {
       logger: this.logger,
     });
 
-    // Update linkedUserId now that we have it from Telegram
+    // Update linkedUserId and linkedUsername now that we have them from Telegram
     inboundHandler.linkedUserId = connected.linkedUserId;
+    inboundHandler.linkedUsername = connected.linkedUsername || "";
 
     const now = Date.now();
     const outbox = new CloudSessionOutbox(sessionId);

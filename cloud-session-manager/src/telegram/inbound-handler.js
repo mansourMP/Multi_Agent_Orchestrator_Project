@@ -6,12 +6,32 @@ import { buildSignedInbound } from "./hmac.js";
  * and forwards normalized messages to the Empyralis backend.
  */
 export class InboundHandler {
-  constructor({ sessionId, workspaceId, linkedUserId, logger }) {
+  constructor({ sessionId, workspaceId, linkedUserId, linkedUsername, logger }) {
     this.sessionId = sessionId;
     this.workspaceId = workspaceId || "default";
     this.linkedUserId = linkedUserId;
+    this.linkedUsername = linkedUsername || "";
     this.logger = logger;
     this.messageCount = 0;
+    /** @type {Set<string>} Telegram message IDs sent by Sage (for reply-to detection) */
+    this.sentMessageIds = new Set();
+  }
+
+  /**
+   * Track a message ID that Sage sent (called by session-pool after sendMessage).
+   * @param {string} messageId - Telegram message ID
+   */
+  addSentMessageId(messageId) {
+    if (messageId) {
+      this.sentMessageIds.add(String(messageId));
+      // Keep set bounded (last 500 sent messages)
+      if (this.sentMessageIds.size > 500) {
+        const iterator = this.sentMessageIds.values();
+        for (let i = 0; i < 100; i++) iterator.next();
+        // Can't easily trim oldest from Set — just clear and start over if too large
+        this.sentMessageIds.clear();
+      }
+    }
   }
 
   /**
@@ -25,11 +45,61 @@ export class InboundHandler {
       const text = String(msg.text || "").trim();
       if (!text) return { skipped: true, reason: "empty_text" };
 
-      // Skip our own messages to avoid echo loops
+      // Skip our own messages to avoid echo loops.
+      // Exception: self-chat (Saved Messages) where sender === chat owner.
+      // In self-chats, fromMe is always true but the user is intentionally
+      // messaging themselves — not an echo-loop risk.
       const fromMe = Boolean(msg.from_me ?? normalized?.fromMe ?? false);
-      if (fromMe) {
+      const isSelfChat = Boolean(msg.is_self_chat ?? normalized?.message?.is_self_chat ?? false);
+      if (fromMe && !isSelfChat) {
         this.logger?.info?.({ text: text.slice(0, 40) }, "skipping own message (fromMe)");
         return { skipped: true, reason: "from_me" };
+      }
+
+      // Group gate: skip group messages unless Sage is mentioned or replied to.
+      // Prevents credit drain and Telegram ban risk from replying to every message.
+      const isGroup = Boolean(msg.is_group ?? normalized?.message?.is_group ?? false);
+      if (isGroup) {
+        const entities = msg.entities || normalized?.message?.entities || [];
+
+        // Check if linked account is mentioned (via @username or user ID)
+        let isMentioned = false;
+        const linkedUser = String(this.linkedUsername || "").toLowerCase().trim();
+        const linkedId = String(this.linkedUserId || "").trim();
+        if (linkedUser || linkedId) {
+          for (const ent of entities) {
+            // MessageEntityMention: @username mention
+            if (ent?.className === "MessageEntityMention" || ent?._ === "messageEntityMention") {
+              // The mention offset/length refers to the text; check if linkedUsername is in that span
+              const offset = Number(ent.offset) || 0;
+              const length = Number(ent.length) || 0;
+              const mentioned = text.slice(offset, offset + length).toLowerCase().trim();
+              if (mentioned === linkedUser || mentioned === "@" + linkedUser) {
+                isMentioned = true;
+                break;
+              }
+            }
+            // MessageEntityMentionName: user ID mention
+            if (ent?.className === "MessageEntityMentionName" || ent?._ === "messageEntityMentionName") {
+              if (String(ent.userId || "") === linkedId) {
+                isMentioned = true;
+                break;
+              }
+            }
+          }
+        }
+
+        // Check if this message is a reply to one of Sage's prior messages
+        const replyToMsgId = String(msg.reply_to_msg_id ?? normalized?.message?.reply_to_msg_id ?? "").trim();
+        const isReplyToSage = replyToMsgId && this.sentMessageIds.has(replyToMsgId);
+
+        if (!isMentioned && !isReplyToSage) {
+          this.logger?.info?.(
+            { text: text.slice(0, 40), isGroup, isMentioned, isReplyToSage },
+            "skipping group message (no mention / not reply to Sage)"
+          );
+          return { skipped: true, reason: "group_no_mention" };
+        }
       }
 
       this.messageCount++;
@@ -45,6 +115,7 @@ export class InboundHandler {
         channelKey: "telegram_personal",
         senderId,
         senderName,
+        linkedUsername: this.linkedUsername,
         text,
         timestamp: receivedAt,
       });

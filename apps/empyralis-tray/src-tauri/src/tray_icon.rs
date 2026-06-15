@@ -157,25 +157,36 @@ pub fn install<R: Runtime>(
     let menu_for_timer = native_menu.clone();
     thread::spawn(move || {
         let frame = AtomicUsize::new(0);
+        let mut tick: u64 = 0;
         loop {
             let status = manager.status();
-            update_native_menu(&menu_for_timer, &status);
-            let icon = match status.state.as_str() {
-                "active" => icon_active(frame.fetch_add(1, Ordering::Relaxed) % ACTIVE_ICON_FRAMES),
-                "connecting" => {
-                    icon_connecting(frame.fetch_add(1, Ordering::Relaxed) % CONNECTING_ICON_FRAMES)
-                }
-                "connected" => icon_connected(),
-                "error" => icon_error(),
-                _ => icon_idle(),
-            };
-            if let Ok(icon) = icon {
-                tray.set_icon(Some(icon)).ok();
-            } else {
-                update_tray_icon(&app_for_timer, &manager, &status);
+            // Update menu text less often than icon animation to reduce IPC pressure
+            if tick % 4 == 0 {
+                update_native_menu(&menu_for_timer, &status);
             }
+            if status.state == "active" {
+                let idx = frame.fetch_add(1, Ordering::Relaxed) % ACTIVE_ICON_FRAMES;
+                if let Ok(icon) = icon_active(idx) {
+                    tray.set_icon(Some(icon)).ok();
+                }
+            } else if status.state == "connecting" {
+                let idx = frame.fetch_add(1, Ordering::Relaxed) % CONNECTING_ICON_FRAMES;
+                if let Ok(icon) = icon_connecting(idx) {
+                    tray.set_icon(Some(icon)).ok();
+                }
+            } else {
+                let icon = match status.state.as_str() {
+                    "connected" => icon_connected(),
+                    "error" => icon_error(),
+                    _ => icon_idle(),
+                };
+                if let Ok(icon) = icon {
+                    tray.set_icon(Some(icon)).ok();
+                }
+            }
+            tick += 1;
             thread::sleep(Duration::from_millis(match status.state.as_str() {
-                "active" => 75,
+                "active" => 200,
                 "connecting" => 500,
                 _ => 1400,
             }));

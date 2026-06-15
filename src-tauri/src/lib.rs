@@ -4,7 +4,6 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::sync::Mutex;
 use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
 
@@ -2349,6 +2348,7 @@ async fn desktop_app_update_install(app: tauri::AppHandle) -> Result<DesktopAppU
 
 pub fn run() {
     disable_macos_window_restoration();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -2363,7 +2363,7 @@ pub fn run() {
             openai_codex_oauth_login,
             bootstrap_machine_enrollment,
             desktop_app_update_check,
-            desktop_app_update_install
+            desktop_app_update_install,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -2508,6 +2508,8 @@ pub fn run() {
                     start_overlay_bridge(app_handle.clone());
                 }
                 RunEvent::Exit | RunEvent::ExitRequested { .. } => {
+                    let state = app_handle.state::<SidecarState>();
+
                     let state = app_handle.state::<SidecarState>();
                     stop_sidecars(&state);
                     let lock_state = app_handle.state::<DesktopShellLockState>();

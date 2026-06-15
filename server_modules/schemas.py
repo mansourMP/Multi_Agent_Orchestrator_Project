@@ -124,11 +124,21 @@ class SageProfileBootstrapAnswerRequest(BaseModel):
     answer: str = Field(min_length=1, max_length=8_000)
 
 
+class SageChatAttachment(BaseModel):
+    file_id: str
+    filename: str
+    safe_filename: str
+    content_type: str
+    size: int
+    url: str
+
+
 class SageChatRequest(BaseModel):
     workspace_id: str = Field(min_length=1, max_length=120)
     message: str = Field(min_length=1, max_length=32_000)
     surface: str = Field(default="chat", max_length=80)
     mode: Literal["owner_sage"] = "owner_sage"
+    attachments: list[SageChatAttachment] = Field(default_factory=list)
 
 
 class SageVoiceTaskRequest(BaseModel):

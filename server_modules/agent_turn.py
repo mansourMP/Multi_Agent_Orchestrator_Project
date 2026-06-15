@@ -601,15 +601,30 @@ def _attachments_from_payload(items: Any) -> List[TurnAttachment]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        uri = str(item.get("uri") or "").strip()
+        # Accept both "url" (SageChatAttachment from frontend) and "uri" (ApiTurnAttachment)
+        uri = str(item.get("uri") or item.get("url") or "").strip()
         if not uri:
             continue
+        name = str(item.get("name") or item.get("filename") or "").strip()
+        metadata = _metadata_dict(item.get("metadata"))
+        # Copy flat SageChatAttachment fields into metadata for downstream use
+        if "safe_filename" in item and "safe_filename" not in metadata:
+            metadata["safe_filename"] = str(item["safe_filename"]).strip() or name
+        if "content_type" in item and "content_type" not in metadata:
+            metadata["content_type"] = str(item["content_type"]).strip()
+        if "size" in item and "size" not in metadata:
+            try:
+                metadata["size"] = int(item["size"])
+            except (ValueError, TypeError):
+                pass
+        if "file_id" in item and "file_id" not in metadata:
+            metadata["file_id"] = str(item["file_id"]).strip()
         attachments.append(
             TurnAttachment(
                 kind=str(item.get("kind") or "file").strip() or "file",
                 uri=uri,
-                name=str(item.get("name") or "").strip(),
-                metadata=_metadata_dict(item.get("metadata")),
+                name=name,
+                metadata=metadata,
             )
         )
     return attachments

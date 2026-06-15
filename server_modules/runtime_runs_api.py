@@ -397,6 +397,7 @@ def normalize_thread_turn_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "approvals": _coerce_list_payload(payload.get("approvals")),
         "interventions": _coerce_list_payload(payload.get("interventions")),
         "metadata": _coerce_dict(payload.get("metadata")),
+        "attachments": _coerce_list_payload(_coerce_dict(payload.get("metadata")).get("attachments")),
         "created_at": str(payload.get("created_at") or "").strip() or None,
         "updated_at": str(payload.get("updated_at") or "").strip() or None,
     }

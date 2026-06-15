@@ -38,18 +38,30 @@ async def execute_sage_turn(
       - Audit (activity + security events)
     """
     from server_modules.sage_agent_runtime_service import handle_sage_chat
+    from server_modules.channel_adapter import normalize_sage_inbound
 
     normalized_mode = normalize_sage_mode(mode)
     normalized_surface = normalize_sage_surface(surface)
 
-    result = await handle_sage_chat(
+    turn = normalize_sage_inbound(
         workspace_id=workspace_id,
         tenant_id=tenant_id,
         message=message,
         surface=normalized_surface,
         mode=normalized_mode,
         current_user=current_user,
-        channel_context=channel_context,
+        channel_origin=str((channel_context or {}).get("surface_channel", "")).strip() or "personal_channel",
+        channel_sender_id=str((channel_context or {}).get("remote_jid", "")).strip(),
+        channel_sender_name=str((channel_context or {}).get("push_name", "")).strip(),
+    )
+    result = await handle_sage_chat(
+        workspace_id=turn.workspace_id,
+        tenant_id=turn.tenant_id,
+        message=turn.message,
+        surface=turn.surface,
+        mode=turn.mode,
+        current_user=turn.current_user,
+        channel_origin=turn.channel_origin,
     )
 
     return SageTurnResult(

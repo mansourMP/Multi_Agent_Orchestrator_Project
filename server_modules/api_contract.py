@@ -216,6 +216,7 @@ class ApiThreadTurnCreateRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     request_id: Optional[str] = None
     client_request_id: Optional[str] = None
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ApiThreadRecord(BaseModel):

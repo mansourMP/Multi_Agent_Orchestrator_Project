@@ -184,6 +184,13 @@ def workspace_knowledge_dir(*, workspace_id: str | None = None, agent_install_id
     return path
 
 
+def workspace_attachments_dir(workspace_id: str) -> Path:
+    scope_root = workspace_scope_dir(workspace_id)
+    path = scope_root / "attachments"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _validate_context_path(filename: str) -> str:
     normalized = str(filename or "").replace("\\", "/").strip()
 

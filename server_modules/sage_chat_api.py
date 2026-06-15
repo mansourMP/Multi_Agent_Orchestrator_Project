@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException
+import mimetypes
+import uuid
+from pathlib import Path
+
+from fastapi import Depends, File, HTTPException, Query, UploadFile
 
 from server_modules import activity_ledger_service, sage_proof_log_service, security_audit_service
 from server_modules.auth import enforce_workspace_access, workspace_tenant_id
@@ -10,12 +14,16 @@ from server_modules.sage_agent_runtime_contract import (
     normalize_sage_surface,
 )
 from server_modules.sage_agent_runtime_service import handle_sage_chat
+from server_modules.channel_adapter import normalize_sage_inbound, filter_outbound_reply
 from server_modules.voice_notification_policy_service import execute_voice_sage_task
 from server_modules.sage_approval_service import (
     resolve_approval,
     consume_approval,
 )
 from server_modules.schemas import SageChatRequest, SageVoiceTaskRequest, SageApprovalResolveRequest
+from server_modules.workspace_context import workspace_attachments_dir
+
+MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024  # 32 MB
 
 
 def _coerce_text(value) -> str:
@@ -174,23 +182,73 @@ def register_sage_chat_routes(app) -> None:
         tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
 
         try:
-            result = await handle_sage_chat(
+            turn = normalize_sage_inbound(
                 workspace_id=resolved_workspace_id,
                 tenant_id=tenant_id,
                 message=str(body.message).strip(),
                 surface=normalized_surface,
                 mode=normalized_mode,
+                attachments=[a.model_dump() for a in body.attachments],
                 current_user=current_user,
+                channel_origin="web",
+            )
+            result = await handle_sage_chat(
+                workspace_id=turn.workspace_id,
+                tenant_id=turn.tenant_id,
+                message=turn.message,
+                surface=turn.surface,
+                mode=turn.mode,
+                attachments=turn.attachments,
+                current_user=turn.current_user,
+                channel_origin=turn.channel_origin,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
+        # Filter silent/empty replies via shared adapter function
+        filtered = filter_outbound_reply(result.get("message"))
+        if filtered is None:
+            result["message"] = ""
+            result["suppressed"] = True
         return {
             "workspace_id": resolved_workspace_id,
             "tenant_id": tenant_id,
             **result,
+        }
+
+    @app.post("/api/sage-chat/attachments", dependencies=[Depends(member_dependency)])
+    async def upload_sage_chat_attachment(
+        workspace_id: str = Query(default=""),
+        file: UploadFile = File(...),
+        current_user=Depends(member_dependency),
+    ):
+        if not workspace_id:
+            raise HTTPException(status_code=400, detail="workspace_id is required.")
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id,
+            minimum_role="member",
+        )
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="filename is required.")
+        raw = await file.read()
+        if len(raw) > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds maximum size.")
+        file_id = str(uuid.uuid4())
+        attach_dir = workspace_attachments_dir(resolved_workspace_id)
+        safe_name = f"{file_id}_{Path(file.filename).name}"
+        dest = attach_dir / safe_name
+        dest.write_bytes(raw)
+        content_type = str(file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream")
+        return {
+            "file_id": file_id,
+            "filename": file.filename,
+            "safe_filename": safe_name,
+            "content_type": content_type,
+            "size": len(raw),
+            "url": f"/api/sage-chat/attachments/{file_id}/{safe_name}",
         }
 
     @app.post("/api/sage/voice-task", dependencies=[Depends(member_dependency)])
@@ -223,6 +281,11 @@ def register_sage_chat_routes(app) -> None:
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
+        # Filter silent/empty replies via shared adapter function
+        filtered = filter_outbound_reply(result.get("message"))
+        if filtered is None:
+            result["message"] = ""
+            result["suppressed"] = True
         return {
             "workspace_id": resolved_workspace_id,
             "tenant_id": tenant_id,

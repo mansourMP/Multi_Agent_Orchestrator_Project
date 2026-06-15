@@ -10360,9 +10360,14 @@ def _local_upsert_agent_turn(
     metadata: Optional[Dict[str, Any]],
     request_id: Optional[str],
     turn_id: Optional[str],
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     key = _local_agent_thread_key(tenant_id, workspace_id, thread_id)
     now = _utc_now_iso()
+    
+    metadata = _coerce_dict(metadata)
+    if attachments:
+        metadata["attachments"] = list(attachments)
     resolved_role = str(role or "assistant").strip().lower() or "assistant"
     resolved_request_id = str(request_id or "").strip() or None
     with _LOCAL_AGENT_THREAD_LOCK:
@@ -10798,6 +10803,7 @@ async def upsert_agent_turn(
     metadata: Optional[Dict[str, Any]] = None,
     request_id: Optional[str] = None,
     turn_id: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     now_ts = _utc_now_ts()
     resolved_turn_id = str(turn_id or uuid.uuid4()).strip() or str(uuid.uuid4())
@@ -10805,6 +10811,10 @@ async def upsert_agent_turn(
     resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
     resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
     resolved_thread_id = str(thread_id or "").strip()
+    
+    metadata = _coerce_dict(metadata)
+    if attachments:
+        metadata["attachments"] = list(attachments)
     _enforce_control_plane_service_decision(
         operation="agent_turn_upsert",
         tenant_id=resolved_tenant_id,
@@ -10843,6 +10853,7 @@ async def upsert_agent_turn(
                 metadata=metadata,
                 request_id=resolved_request_id,
                 turn_id=resolved_turn_id,
+                attachments=attachments,
             )
         turn_row = await connection.fetchrow(
             """

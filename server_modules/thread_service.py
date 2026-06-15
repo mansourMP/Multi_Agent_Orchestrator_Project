@@ -104,6 +104,7 @@ async def record_user_turn(
     content: str,
     runtime_profile_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     decision = _enforce_thread_record_decision(
         operation="create_turn",
@@ -128,6 +129,7 @@ async def record_user_turn(
         runtime_profile_id=runtime_profile_id,
         metadata=_coerce_dict(metadata),
         request_id=str(decision.get("request_id") or _request_id_from_metadata(metadata) or "").strip() or None,
+        attachments=list(attachments or []),
     )
 
 

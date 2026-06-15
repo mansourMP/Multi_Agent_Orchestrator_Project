@@ -189,8 +189,6 @@ async def send_message(chat_id: str, text: str, *, reply_to_message_id: Optional
     if not safe_text:
         safe_text = "I processed your request but couldn't generate a clean response. Try asking differently."
     formatted_text = _to_telegram_markdown(safe_text)
-    _sys.stderr.write(f"DEBUG SEND formatted_text={formatted_text[:120]!r}\n")
-    _sys.stderr.flush()
     body: dict = {
         "chat_id": chat_id,
         "text": formatted_text,
@@ -198,16 +196,10 @@ async def send_message(chat_id: str, text: str, *, reply_to_message_id: Optional
     }
     if reply_to_message_id is not None:
         body["reply_to_message_id"] = reply_to_message_id
-    _sys.stderr.write(f"DEBUG SEND calling sendMessage body keys={list(body.keys())}\n")
-    _sys.stderr.flush()
     try:
         result = await _telegram_api("sendMessage", body)
-        _sys.stderr.write(f"DEBUG SEND result ok={result.get('ok')} desc={result.get('description', '')[:80]}\n")
-        _sys.stderr.flush()
         return result
     except Exception as _exc:
-        _sys.stderr.write(f"DEBUG SEND EXCEPTION: {_exc}\n")
-        _sys.stderr.flush()
         import traceback as _tb
         _tb.print_exc()
         raise
@@ -437,7 +429,6 @@ def _should_skip_reply(reply: str) -> bool:
 
 async def _process_update(update: dict) -> bool:
     """Process a single Telegram update. Returns True if a Sage reply was sent."""
-    print(f"DEBUG telegram processing update: {update.get('update_id')}")
     parsed = parse_telegram_update(update)
     if parsed is None:
         return False

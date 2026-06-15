@@ -2197,6 +2197,33 @@ async def handle_sage_chat(
             "response_leak_guard": action_reply_guard_metadata,
         }
 
+
+        # --- Persist turns to shared thread (action-loop path) ---
+        try:
+            actor3 = {"user_id": actor_user_id or "sage", "name": actor_email or "sage"}
+            await thread_service.record_user_turn(
+                thread_id=SAGE_THREAD_ID,
+                tenant_id=effective_tenant_id,
+                workspace_id=normalized_workspace_id,
+                session_id=None,
+                actor=actor3,
+                content=normalized_message,
+                metadata={"channel": channel_origin or "sage"},
+            )
+            if reply and not (str(reply).strip() == _SILENT_REPLY_MARKER or str(reply).strip().startswith(_SILENT_REPLY_MARKER)):
+                await thread_service.record_assistant_turn(
+                    thread_id=SAGE_THREAD_ID,
+                    tenant_id=effective_tenant_id,
+                    workspace_id=normalized_workspace_id,
+                    session_id=None,
+                    actor={"user_id": "sage", "name": "Sage"},
+                    reply=reply,
+                    status="completed",
+                    run_id=trace_id,
+                )
+        except Exception:
+            pass  # never break a reply just because persistence failed
+        # --- End turn persistence (action-loop path) ---
         try:
             persist_interaction(
                 subject=ConversationMemorySubject(

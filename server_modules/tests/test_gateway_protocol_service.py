@@ -397,5 +397,136 @@ class GatewayProtocolServiceTests(unittest.TestCase):
         asyncio.run(run_test())
 
 
+    def test_live_connection_send_frame_same_loop_direct_write(self) -> None:
+        """Verify send_frame takes the direct-write branch when caller_loop is owner_loop.
+
+        This is the path exercised by the asyncio bridge fix: when a hardware
+        tool call runs on the same event loop as the WebSocket connection,
+        send_frame() must detect same-loop and write directly (no outbound
+        queue, no call_soon_threadsafe crossing). A deadlock here would mean
+        the fix (execute_single_direct_tool_call_async) is insufficient.
+        """
+        import asyncio
+
+        class FakeWebSocket:
+            def __init__(self) -> None:
+                self.frames: list[str] = []
+                self.send_count = 0
+
+            async def send_text(self, frame: str) -> None:
+                self.frames.append(str(frame))
+                self.send_count += 1
+
+            async def close(self, code: int = 1000, reason: str = "") -> None:
+                pass
+
+        async def run_test() -> None:
+            websocket = FakeWebSocket()
+            connection = gateway_protocol_service._LiveGatewayConnection(
+                websocket=websocket,
+                gateway_id="gateway-same-loop",
+                session_id="session-same-loop",
+                scope={"tenant_id": "tenant-1", "workspace_id": "workspace-1"},
+            )
+            connection.start_writer()
+
+            # Confirm same-loop: owner loop is the running loop
+            owner = connection._owner_loop
+            caller = asyncio.get_running_loop()
+            self.assertIs(owner, caller, "owner_loop must be the running loop for same-loop test")
+
+            # --- send_frame on same loop writes directly ---
+            # No outbound queue, no call_soon_threadsafe — the frame goes
+            # straight to websocket.send_text() via _write_frame_direct.
+            frame = {
+                "kind": "request",
+                "id": "direct-1",
+                "type": "tool.invoke",
+                "ts": "2026-01-01T00:00:00Z",
+                "scope": {},
+                "payload": {},
+            }
+            await connection.send_frame(frame)
+            self.assertEqual(websocket.send_count, 1, "send_frame should write directly on same loop")
+            self.assertEqual(len(websocket.frames), 1)
+            parsed = json.loads(websocket.frames[-1])
+            self.assertEqual(parsed["id"], "direct-1")
+
+            # --- Multiple send_frame calls on same loop ---
+            frame2 = {
+                "kind": "request",
+                "id": "direct-2",
+                "type": "tool.invoke",
+                "ts": "2026-01-01T00:00:01Z",
+                "scope": {},
+                "payload": {},
+            }
+            await connection.send_frame(frame2)
+            self.assertEqual(websocket.send_count, 2, "second send_frame should also write directly")
+            self.assertEqual(len(websocket.frames), 2)
+
+            # --- send_request round-trip with resolve_response ---
+            # send_request calls record_gateway_event which needs the real
+            # state repository — mock it for the round-trip test.
+            from unittest.mock import patch
+            from server_modules import gateway_state_repository as _gsr
+
+            with patch.object(_gsr, "record_gateway_event", return_value=None):
+                request_task = asyncio.create_task(
+                    connection.send_request(
+                        message_type="tool.invoke",
+                        payload={"capability_id": "shell.execute", "arguments": {"command": "echo hello"}},
+                        timeout_seconds=5,
+                        request_id="req-roundtrip-1",
+                    )
+                )
+
+                # Let the event loop run so send_frame completes inside send_request
+                await asyncio.sleep(0)
+
+                # Frame should have been written directly
+                self.assertEqual(websocket.send_count, 3, "send_request should write frame on same loop")
+                sent_frame = json.loads(websocket.frames[-1])
+                request_id = sent_frame["id"]
+                self.assertTrue(
+                    request_id.startswith("req-roundtrip-1") or request_id == "req-roundtrip-1"
+                )
+
+                # Resolve the response — the request task is awaiting it
+                connection.resolve_response({
+                    "kind": "response",
+                    "id": request_id,
+                    "ok": True,
+                    "payload": {
+                        "request_id": request_id,
+                        "run_id": "run-1",
+                        "capability_id": "shell.execute",
+                        "result": {"stdout": "hello from same-loop\n"},
+                    },
+                })
+
+                response = await asyncio.wait_for(request_task, timeout=2)
+                self.assertTrue(response.get("ok"))
+                self.assertEqual(
+                    response.get("payload", {}).get("result", {}).get("stdout"),
+                    "hello from same-loop\n",
+                )
+                self.assertEqual(len(connection._pending_requests), 0)
+
+            # --- Cleanup ---
+            connection.fail_pending("test complete")
+            self.assertTrue(connection._closed)
+
+            writer = connection._writer_task
+            if writer is not None and not writer.done():
+                writer.cancel()
+                try:
+                    await writer
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(run_test())
+
+
 if __name__ == "__main__":
     unittest.main()

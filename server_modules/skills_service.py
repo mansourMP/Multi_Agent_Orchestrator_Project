@@ -2262,6 +2262,66 @@ def _execute_direct_tool_via_gateway(
         }
     return payload
 
+async def _execute_direct_tool_via_gateway_async(
+    *,
+    gateway_id: Optional[str],
+    capability_id: str,
+    arguments: Dict[str, Any],
+    run_id: str,
+    trace_id: str,
+    workspace_id: str,
+    runtime_target: str = "user_device_gateway",
+    runtime_access_mode: str = "default_guarded",
+    agent_scope: str = "studio_agent",
+    tenant_id: str = "default",
+    thread_id: str = "",
+    request_id: str = "",
+    session_ctx: Dict[str, Any] | None = None,
+    require_approval: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Async version of _execute_direct_tool_via_gateway.
+
+    Directly awaits the hardware action broker instead of going through
+    callbacks.run_async_tool_call's thread.join() which deadlocks the
+    Uvicorn event loop when called from within an async context.
+    """
+    from server_modules import hardware_action_broker_service
+
+    trace_context = session_ctx.get("trace_context") if isinstance(session_ctx, dict) else None
+    response = await hardware_action_broker_service.execute_hardware_action(
+        tenant_id=str(tenant_id or "default").strip() or "default",
+        workspace_id=str(workspace_id or "default").strip() or "default",
+        action_id=capability_id,
+        runtime_target=runtime_target,
+        runtime_access_mode=runtime_access_mode,
+        agent_scope=agent_scope,
+        gateway_id=gateway_id,
+        capability_id=capability_id,
+        arguments=arguments,
+        run_id=run_id,
+        trace_id=trace_id,
+        thread_id=thread_id,
+        request_id=request_id,
+        trace_context=trace_context,
+        require_approval=require_approval,
+    )
+    payload = dict(response) if isinstance(response, dict) else {"result": response}
+    if isinstance(payload.get("execution"), dict):
+        return dict(payload["execution"])
+    status = str(payload.get("status") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    if status in {"waiting_approval", "offline", "degraded", "failed"}:
+        return {
+            "gateway_id": str(gateway_id or "").strip(),
+            "capability_id": str(capability_id or "").strip(),
+            "run_id": str(run_id or "").strip(),
+            "result": {
+                "summary": reason or status or "Gateway hardware action did not complete.",
+                "status": status,
+            },
+        }
+    return payload
+
 
 def _format_hardware_action_result(payload: Dict[str, Any]) -> str:
     runtime_session = payload.get("runtime_session") if isinstance(payload.get("runtime_session"), dict) else {}
@@ -2415,6 +2475,145 @@ def _execute_hardware_action_tool_call(
             request_id=request_id,
             trace_context=trace_context,
         )
+    )
+    return _format_hardware_action_result(dict(result) if isinstance(result, dict) else {"status": "completed", "execution": {"result": result}})
+
+async def _execute_hardware_action_tool_call_async(
+    *,
+    argument_payload: Dict[str, Any],
+    workspace_id: str,
+    thread_id: str,
+    index: int,
+    session_ctx: Dict[str, Any] | None,
+) -> str:
+    """Async version of _execute_hardware_action_tool_call.
+
+    Directly awaits the hardware action broker instead of going through
+    run_async_tool_call's thread.join() which deadlocks the Uvicorn event
+    loop when called from within an async context (e.g. Sage's action loop).
+    """
+    from server_modules import hardware_action_broker_service
+
+    payload = dict(argument_payload or {})
+    action_id = str(
+        payload.get("action")
+        or payload.get("capability_id")
+        or payload.get("tool")
+        or payload.get("operation")
+        or ""
+    ).strip()
+    if not action_id:
+        raise RuntimeError("Tool 'hardware__action' requires an action.")
+    action_arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+    action_data = payload.get("action_data")
+    if isinstance(action_data, str) and action_data.strip():
+        try:
+            parsed_action_data = json.loads(action_data)
+        except Exception:
+            parsed_action_data = None
+        action_data = parsed_action_data if isinstance(parsed_action_data, dict) else action_data
+    if isinstance(action_data, dict):
+        action_arguments = {**dict(action_data), **action_arguments}
+    if not action_arguments:
+        action_arguments = {
+            key: value
+            for key, value in payload.items()
+            if key
+            not in {
+                "action",
+                "capability_id",
+                "tool",
+                "operation",
+                "action_data",
+                "arguments",
+                "runtime_target",
+                "runtime_access_mode",
+                "execution_mode",
+                "permission_mode",
+                "gateway_id",
+                "device_id",
+                "node_id",
+                "request_id",
+                "client_request_id",
+            }
+        }
+    metadata = _direct_tool_session_metadata(session_ctx)
+    gateway_id = str(payload.get("gateway_id") or "").strip() or _resolve_direct_tool_gateway_id(
+        workspace_id,
+        session_ctx=session_ctx,
+    )
+    trace_context = session_ctx.get("trace_context") if isinstance(session_ctx, dict) else None
+    trace_id = (
+        str(getattr(trace_context, "trace_id", "") or "").strip()
+        or str(metadata.get("trace_id") or "").strip()
+        or f"trace_{uuid.uuid4().hex}"
+    )
+    run_id = str(payload.get("run_id") or "").strip() or (
+        f"direct_chat:{str(thread_id or 'thread').strip() or 'thread'}:hardware:{index}:{uuid.uuid4().hex}"
+    )
+    request_id = (
+        _request_id_from_direct_tool_context(session_ctx)
+        or str(payload.get("request_id") or payload.get("client_request_id") or "").strip()
+        or run_id
+    )
+    runtime_target = _runtime_target_from_direct_tool_context(
+        explicit_target=payload.get("runtime_target"),
+        gateway_id=gateway_id,
+        session_ctx=session_ctx,
+    )
+    normalized_action_id = action_id.strip().lower()
+    local_gateway_required = _hardware_action_requires_local_gateway(
+        action_id,
+        payload.get("capability_id"),
+    )
+    if local_gateway_required and not gateway_id:
+        return _hardware_action_offline_result(action_id)
+    if gateway_id and (
+        local_gateway_required
+        or normalized_action_id in {
+            "screenshot",
+            "screenshot.capture",
+            "screen.capture",
+            "screen.ocr",
+            "ocr",
+            "mouse",
+            "keyboard",
+            "mouse.click",
+            "mouse.move",
+            "keyboard.type",
+            "keyboard.press",
+            "input.click",
+            "input.type",
+            "app.focus",
+            "window.control",
+        }
+        or normalized_action_id.startswith("computer_control.")
+        or normalized_action_id.startswith("screenshot.")
+        or normalized_action_id.startswith("screen.")
+    ):
+        runtime_target = "user_device_gateway"
+    result = await hardware_action_broker_service.execute_hardware_action(
+        tenant_id=_tenant_id_from_direct_tool_context(session_ctx),
+        workspace_id=str(workspace_id or "default").strip() or "default",
+        action_id=action_id,
+        capability_id=payload.get("capability_id"),
+        arguments=action_arguments,
+        runtime_target=runtime_target,
+        runtime_access_mode=_runtime_access_mode_from_direct_tool_context(
+            explicit_mode=payload.get("runtime_access_mode") or payload.get("execution_mode") or payload.get("permission_mode"),
+            explicit_target=runtime_target,
+            gateway_id=gateway_id,
+            session_ctx=session_ctx,
+        ),
+        agent_scope=_agent_scope_from_direct_tool_context(session_ctx),
+        gateway_id=gateway_id,
+        device_id=str(payload.get("device_id") or "").strip() or None,
+        node_id=str(payload.get("node_id") or "").strip() or None,
+        run_id=run_id,
+        trace_id=trace_id,
+        thread_id=str(thread_id or "").strip(),
+        request_id=request_id,
+        trace_context=trace_context,
     )
     return _format_hardware_action_result(dict(result) if isinstance(result, dict) else {"status": "completed", "execution": {"result": result}})
 
@@ -2599,6 +2798,272 @@ def _execute_safe_direct_local_tool_call(
     normalized_action = str(action_id or "").strip().lower()
     if normalized_connector == "file" and normalized_action not in {"read", "write"}:
         _raise_direct_chat_tool_execution_blocked()
+
+
+_BUILTIN_DIRECT_TOOL_IDS: frozenset = frozenset(
+    {
+        "",
+        "http",
+        "llm",
+        "file",
+        "shell",
+        "screenshot",
+        "computer",
+        "hardware",
+        "memory",
+        "web",
+        "browser",
+        "image",
+        "sage_service",
+    }
+)
+
+
+def _execute_custom_connector_tool_call_sync(
+    *,
+    tool_call: Dict[str, Any],
+    workspace_id: str,
+    thread_id: str,
+    index: int = 1,
+    provider: Any = None,
+    model: Any = None,
+    credentials: Dict[str, Any] | None = None,
+    reasoning_effort: str = "",
+    session_ctx: Dict[str, Any] | None = None,
+    callbacks: Any = None,
+    connector_id: str = "",
+    action_id: str = "",
+) -> str:
+    """Execute a custom OAuth connector tool call synchronously inside a thread.
+
+    This mirrors direct_chat_operator_binding_service.execute_single_direct_tool_call's
+    gate for connector_id NOT in the built-in set — dispatches to
+    runs_execution._workflow_execute_connector_action which uses urllib.request.urlopen
+    (sync blocking I/O). Called via asyncio.to_thread() so the Uvicorn event loop
+    stays responsive.
+    """
+    import json as _json
+
+    from server_modules import runs_execution
+
+    if callbacks is None:
+        from server_modules.direct_chat_operator_binding_service import _direct_tool_execution_callbacks as _get_cb
+        callbacks = _get_cb()
+
+    argument_payload = callbacks.tool_arguments_payload(tool_call.get("arguments"))
+    if isinstance(argument_payload, dict):
+        tool_input = str(argument_payload.get("input") or "").strip()
+        if not tool_input:
+            try:
+                tool_input = _json.dumps(argument_payload, ensure_ascii=False)
+            except Exception:
+                tool_input = str(argument_payload)
+    else:
+        tool_input = str(argument_payload or "").strip()
+
+    config = callbacks.build_direct_tool_config(
+        connector_id,
+        action_id,
+        tool_input,
+    )
+    session_metadata = session_ctx if isinstance(session_ctx, dict) else {}
+    result = runs_execution._workflow_execute_connector_action(
+        "direct-chat-tool-call",
+        "direct_chat_tool_call",
+        {
+            "workspace_id": workspace_id,
+            "tenant_id": str(
+                session_metadata.get("tenant_id")
+                or (
+                    session_metadata.get("agent_turn_request", {}).get("tenant_id")
+                    if isinstance(session_metadata.get("agent_turn_request"), dict)
+                    else ""
+                )
+                or "default"
+            ).strip()
+            or "default",
+            "provider": provider,
+            "model": model,
+            "credentials": credentials if isinstance(credentials, dict) else None,
+            "metadata": {},
+        },
+        config,
+        current_text=str(config.get("text") or tool_input or "").strip(),
+    )
+    return callbacks.format_direct_tool_result(result)
+
+
+async def execute_single_direct_tool_call_async(
+    *,
+    tool_call: Dict[str, Any],
+    workspace_id: str,
+    thread_id: str,
+    index: int = 1,
+    provider: Any = None,
+    model: Any = None,
+    credentials: Dict[str, Any] | None = None,
+    reasoning_effort: str = "",
+    session_ctx: Dict[str, Any] | None = None,
+    callbacks: Any = None,
+) -> str:
+    """Async version of execute_single_direct_tool_call for hardware-bound connectors.
+
+    Hardware connectors (hardware, file, shell, screenshot, computer) go through
+    run_async_tool_call's thread.join() which deadlocks the Uvicorn event loop when
+    called from within an async context. This function directly awaits the async
+    operations, avoiding the deadlock.
+
+    Custom OAuth connectors (GitHub, Notion, Linear, Dropbox, Google Workspace,
+    etc.) are dispatched through asyncio.to_thread() to avoid blocking the Uvicorn
+    event loop with urllib.request.urlopen. Built-in connectors (memory, web,
+    browser, etc.) continue to use the sync path which is safe (callback-based).
+    """
+    if callbacks is None:
+        from server_modules.direct_chat_operator_binding_service import _direct_tool_execution_callbacks as _get_cb
+        callbacks = _get_cb()
+
+    connector_id, action_id = callbacks.parse_tool_name(str(tool_call.get("name") or ""))
+
+    # Hardware-bound connectors: async path (handled below)
+    if connector_id not in {"hardware", "file", "shell", "screenshot", "computer"}:
+        if connector_id in _BUILTIN_DIRECT_TOOL_IDS:
+            # Built-in connectors (memory, web, browser, image, etc.): use the
+            # sync path — these are callback-based and do not perform blocking I/O.
+            return execute_single_direct_tool_call(
+                tool_call=tool_call,
+                workspace_id=workspace_id,
+                thread_id=thread_id,
+                index=index,
+                provider=provider,
+                model=model,
+                credentials=credentials,
+                reasoning_effort=reasoning_effort,
+                session_ctx=session_ctx,
+                callbacks=callbacks,
+            )
+        # Custom OAuth connectors (GitHub, Notion, Linear, Dropbox, Google
+        # Workspace, and any future connector): execute in a thread to avoid
+        # blocking the Uvicorn event loop with urllib.request.urlopen.
+        import asyncio as _asyncio
+        return await _asyncio.to_thread(
+            _execute_custom_connector_tool_call_sync,
+            tool_call=tool_call,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            index=index,
+            provider=provider,
+            model=model,
+            credentials=credentials,
+            reasoning_effort=reasoning_effort,
+            session_ctx=session_ctx,
+            callbacks=callbacks,
+            connector_id=connector_id,
+            action_id=action_id,
+        )
+
+    argument_payload = callbacks.tool_arguments_payload(tool_call.get("arguments"))
+    session_metadata = session_ctx if isinstance(session_ctx, dict) else {}
+
+    if connector_id == "hardware" and action_id == "action":
+        return await _execute_hardware_action_tool_call_async(
+            argument_payload=argument_payload if isinstance(argument_payload, dict) else {},
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            index=index,
+            session_ctx=session_ctx,
+        )
+
+    if connector_id in {"file", "shell", "screenshot", "computer"}:
+        normalized_connector = str(connector_id or "").strip().lower()
+        normalized_action = str(action_id or "").strip().lower()
+        if normalized_connector == "file" and normalized_action not in {"read", "write"}:
+            _raise_direct_chat_tool_execution_blocked()
+        if normalized_connector == "shell":
+            if normalized_action != "exec":
+                _raise_direct_chat_tool_execution_blocked()
+        elif normalized_connector not in {"file", "screenshot", "computer"}:
+            _raise_direct_chat_tool_execution_blocked()
+
+        gateway_capability_id = _gateway_capability_for_direct_local_tool(
+            normalized_connector,
+            normalized_action,
+        )
+        gateway_id = _resolve_direct_tool_gateway_id(
+            workspace_id,
+            session_ctx=session_ctx,
+        )
+        if gateway_capability_id and gateway_id:
+            # Gateway path: use async to avoid deadlock
+            session_payload = session_ctx if isinstance(session_ctx, dict) else {}
+            metadata = _direct_tool_session_metadata(session_ctx)
+            tenant_id = _tenant_id_from_direct_tool_context(session_ctx)
+            trace_context = session_payload.get("trace_context")
+            gateway_arguments = _gateway_arguments_for_direct_local_tool(
+                normalized_connector,
+                normalized_action,
+                argument_payload if isinstance(argument_payload, dict) else {},
+            )
+            gateway_run_id = (
+                f"direct_chat:{str(thread_id or 'thread').strip() or 'thread'}:{index}:{uuid.uuid4().hex}"
+            )
+            gateway_request_id = _request_id_from_direct_tool_context(session_ctx) or gateway_run_id
+            gateway_trace_id = (
+                str(getattr(trace_context, "trace_id", "") or "").strip()
+                or str(metadata.get("trace_id") or "").strip()
+                or f"trace_{uuid.uuid4().hex}"
+            )
+            approval_override = None
+            if normalized_connector == "file" and normalized_action == "read":
+                approval_override = False
+            elif normalized_connector == "shell" and _safe_direct_shell_command(str(argument_payload.get("command") or "")):
+                approval_override = False
+            gateway_response = await _execute_direct_tool_via_gateway_async(
+                gateway_id=gateway_id,
+                capability_id=gateway_capability_id,
+                arguments=gateway_arguments,
+                run_id=gateway_run_id,
+                trace_id=gateway_trace_id,
+                workspace_id=str(workspace_id or "default").strip() or "default",
+                runtime_target=_runtime_target_from_direct_tool_context(
+                    gateway_id=gateway_id,
+                    session_ctx=session_ctx,
+                ),
+                runtime_access_mode=_runtime_access_mode_from_direct_tool_context(
+                    gateway_id=gateway_id,
+                    session_ctx=session_ctx,
+                ),
+                agent_scope=_agent_scope_from_direct_tool_context(session_ctx),
+                tenant_id=tenant_id,
+                thread_id=str(thread_id or "").strip(),
+                request_id=gateway_request_id,
+                session_ctx=session_ctx,
+                require_approval=approval_override,
+            )
+            return _format_gateway_direct_local_tool_result(
+                connector_id=normalized_connector,
+                action_id=normalized_action,
+                capability_id=gateway_capability_id,
+                gateway_response=gateway_response,
+                callbacks=callbacks,
+            )
+
+        # Gateway not available: fall through to the sync path
+        # (Supervisor, local dev, runs_execution — none of these deadlock)
+        return execute_single_direct_tool_call(
+            tool_call=tool_call,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            index=index,
+            provider=provider,
+            model=model,
+            credentials=credentials,
+            reasoning_effort=reasoning_effort,
+            session_ctx=session_ctx,
+            callbacks=callbacks,
+        )
+
+    _raise_direct_chat_tool_execution_blocked()
+
     if normalized_connector == "shell":
         if normalized_action != "exec":
             _raise_direct_chat_tool_execution_blocked()
@@ -2670,6 +3135,79 @@ def _execute_safe_direct_local_tool_call(
             callbacks=callbacks,
         )
 
+    # When Gateway is unavailable, try Supervisor directly for local tools.
+    if not (gateway_capability_id and gateway_id):
+        supervisor_available = False
+        try:
+            from server_modules.supervisor_client import _assert_direct_supervisor_allowed
+            _assert_direct_supervisor_allowed()
+            supervisor_available = True
+        except Exception:
+            pass
+        if supervisor_available:
+            from server_modules import supervisor_client
+            try:
+                if normalized_connector == "screenshot" and normalized_action == "capture":
+                    result = supervisor_client.capture_screenshot()
+                    return callbacks.format_direct_local_tool_result(result)
+                if normalized_connector == "shell" and normalized_action == "exec":
+                    command = str(argument_payload.get("command") or "").strip()
+                    if not command:
+                        raise RuntimeError("shell__exec requires a command")
+                    import subprocess as _sp, shlex as _sh
+                    try:
+                        completed = _sp.run(command, shell=True, capture_output=True, text=True, timeout=30)
+                        output = (completed.stdout or "") + (completed.stderr or "")
+                        if completed.returncode != 0:
+                            output = f"[exit {completed.returncode}]\n{output}"
+                        return output.strip() or "(no output)"
+                    except _sp.TimeoutExpired:
+                        return "Command timed out after 30 seconds."
+                if normalized_connector == "computer":
+                    if normalized_action == "click":
+                        result = supervisor_client.click(
+                            x=argument_payload.get("x"),
+                            y=argument_payload.get("y"),
+                            text=argument_payload.get("text"),
+                        )
+                        return callbacks.format_direct_local_tool_result(result)
+                    if normalized_action == "type":
+                        result = supervisor_client.type_text(str(argument_payload.get("text") or ""))
+                        return callbacks.format_direct_local_tool_result(result)
+                    if normalized_action == "clipboard_read":
+                        result = supervisor_client.clipboard_read()
+                        return callbacks.format_direct_local_tool_result(result)
+                    if normalized_action == "clipboard_write":
+                        result = supervisor_client.clipboard_write(str(argument_payload.get("text") or ""))
+                        return callbacks.format_direct_local_tool_result(result)
+                    if normalized_action == "applescript":
+                        result = supervisor_client._execute(
+                            "computer_control.applescript",
+                            {"script": str(argument_payload.get("script") or "")},
+                        )
+                        return callbacks.format_direct_local_tool_result(result)
+                if normalized_connector == "file" and normalized_action == "read":
+                    path = str(argument_payload.get("path") or "").strip()
+                    if not path:
+                        raise RuntimeError("file__read requires a path")
+                    import pathlib as _pl
+                    p = _pl.Path(path).expanduser().resolve()
+                    if not p.exists():
+                        return f"File not found: {path}"
+                    content = p.read_text()[:10000]
+                    return content
+                if normalized_connector == "file" and normalized_action == "write":
+                    path = str(argument_payload.get("path") or "").strip()
+                    content = str(argument_payload.get("content") or "")
+                    if not path:
+                        raise RuntimeError("file__write requires a path")
+                    import pathlib as _pl2
+                    p = _pl2.Path(path).expanduser().resolve()
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(content)
+                    return f"Written {len(content)} bytes to {path}"
+            except Exception as exc:
+                return f"Supervisor tool failed: {exc}"
     variant, config = callbacks.build_direct_local_tool_config(
         normalized_connector,
         normalized_action,

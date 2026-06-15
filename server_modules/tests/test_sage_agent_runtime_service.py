@@ -282,9 +282,9 @@ class SageAgentRuntimeSafetyTests(unittest.TestCase):
             system_prompt = mock_gen.call_args[0][3]
             self.assertNotIn("sk-", system_prompt)
             self.assertIn("what can you do", system_prompt)
-            self.assertIn("explain Sage's role in the current workspace", system_prompt)
-            self.assertIn("Do not dump a tool inventory", system_prompt)
-            self.assertIn("never write XML, DSML, tool_calls", system_prompt)
+            self.assertIn("user's personal AI assistant", system_prompt)
+            self.assertIn("never a bullet list", system_prompt)
+            self.assertIn("Never write XML, tool_calls, invoke tags", system_prompt)
 
     def test_chat_only_fullwidth_dsml_reply_is_sanitized_before_persisting(self):
         dsml_reply = (
@@ -721,7 +721,7 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
         self.assertFalse(mock_generate.called)
         self.assertTrue(mock_stream.called)
         stream_kwargs = mock_stream.call_args.kwargs
-        self.assertIn("You are Sage", stream_kwargs["system_prompt"])
+        self.assertIn("You're Sage", stream_kwargs["system_prompt"])
         self.assertEqual(stream_kwargs["session_ctx"]["agent_turn_request"]["policy_context"]["agent_scope"], "sage")
         self.assertEqual(stream_kwargs["session_ctx"]["agent_turn_request"]["policy_context"]["agent_id"], "sage_main_agent")
 
@@ -1014,10 +1014,18 @@ class SageAgentRuntimeResultShapeTests(unittest.TestCase):
                 message="open https://example.com in the browser",
             ))
 
+        # Wave 1: browser-unavailable no longer hard-blocks with a canned
+        # message. The general availability gate still fires (runtime_ok=False),
+        # but the SPECIFIC tool name is no longer hardcoded to "browser__navigate"
+        # — Sage receives context and can respond naturally when the runtime is
+        # available. In this test (runtime offline), the availability gate still
+        # produces tool_blocked, but NOT with the old browser-specific name.
         self.assertEqual(result["action_execution_mode"], "tool_blocked")
-        self.assertEqual(result["blocked_tools"][0]["name"], "browser__navigate")
-        self.assertEqual(result["blocked_tools"][0]["reason"], "agent_computer_unavailable")
-        self.assertFalse(mock_generate.called)
+        blocked_names = [t.get("name") for t in (result.get("blocked_tools") or [])]
+        self.assertNotIn(
+            "browser__navigate", blocked_names,
+            "Wave 1: browser-unavailable should not produce a hardcoded browser__navigate block",
+        )
         self.assertFalse(mock_execute.called)
 
     def test_main_sage_chat_requests_approval_for_unsafe_shell_tool(self):

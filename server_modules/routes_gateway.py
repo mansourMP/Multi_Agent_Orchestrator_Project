@@ -3256,6 +3256,7 @@ async def acp_turn_endpoint(
         build_acp_error,
     )
     from server_modules.sage_agent_runtime_service import handle_sage_chat
+    from server_modules.channel_adapter import normalize_sage_inbound, filter_outbound_reply
     from server_modules.sage_agent_runtime_contract import SageTurnResult
 
     resolved_workspace_id = enforce_workspace_access(
@@ -3303,17 +3304,32 @@ async def acp_turn_endpoint(
                 request_id=str(acp_msg.get("id") or "").strip(),
                 message=message,
             )
-            result = await handle_sage_chat(
+            turn = normalize_sage_inbound(
                 workspace_id=resolved_workspace_id,
                 tenant_id=tenant_id,
                 message=message,
                 surface="acp",
                 mode="owner_sage",
                 current_user=current_user,
+                channel_origin="acp",
             )
+            result = await handle_sage_chat(
+                workspace_id=turn.workspace_id,
+                tenant_id=turn.tenant_id,
+                message=turn.message,
+                surface=turn.surface,
+                mode=turn.mode,
+                current_user=turn.current_user,
+                channel_origin=turn.channel_origin,
+            )
+            # Filter silent replies before ACP response
+            raw_message = result.get("message") if isinstance(result, dict) else ""
+            if isinstance(result, SageTurnResult):
+                raw_message = result.reply
+            filtered_message = filter_outbound_reply(raw_message)
             if isinstance(result, SageTurnResult):
                 reply_data = {
-                    "reply": result.reply,
+                    "reply": filtered_message or result.reply,
                     "session_id": result.session_id or "",
                     "provider": result.provider or "",
                     "model": result.model or "",

@@ -11,6 +11,27 @@ from server_modules.runtime_config import *
 async def app_lifespan(_: Any):
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(empyralist_mcp_lifespan())
+        # Start Telegram background polling for local dev
+        try:
+            from server_modules import sage_telegram_hosted_service as _hosted
+            import os as _os
+            _base_url = _os.getenv("EMPYRALIS_BASE_URL", "http://127.0.0.1:8001")
+            _is_local = any(h in _base_url for h in ('127.0.0.1', 'localhost', '0.0.0.0', '::1'))
+            _deploy_env = _os.getenv("EMPYRALIS_DEPLOY_ENV", _os.getenv("NODE_ENV", "")).lower()
+            _is_prod = _deploy_env in ('production', 'prod', 'staging')
+            if (_is_local or not _is_prod) and _hosted.is_configured():
+                import logging as _logging
+                _log = _logging.getLogger("server_modules.sage_telegram_hosted_service")
+                _log.info("Sage Telegram hosted: local dev detected, starting background polling")
+                # Delete any stale webhook so getUpdates works
+                try:
+                    await _hosted.unregister_webhook()
+                except Exception:
+                    pass
+                _hosted.start_background_polling()
+        except Exception as _startup_exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning("Telegram background polling startup failed: %s", _startup_exc)
         yield
 
 # Compatibility alias assigned by server.py. shared.py does not own app construction.

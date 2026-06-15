@@ -14,15 +14,11 @@ ALLOWED_CONTEXT_FILENAMES = (
     "SOUL.md",
     "USER.md",
     "IDENTITY.md",
-    "HEARTBEAT.md",
     "AGENTS.md",
     "TOOLS.md",
     "MEMORY.md",
-    "SELF_MODEL.md",
-    "LIFE_STORY.md",
     "GOALS.md",
-    "PROCEDURES.md",
-    "REFLECTION.md",
+    "HEARTBEAT.md",
 )
 
 MAX_CONTEXT_ROOT_FILES = 12
@@ -46,18 +42,10 @@ DEFAULT_CONTEXT_FILE_CONTENTS: Dict[str, str] = {
         "Keep replies clear, useful, and free of product demos or setup chatter.\n"
     ),
     "USER.md": (
-        "# User Profile\n\n"
-        "- Capture durable user preferences here.\n"
-        "- Keep notes short, factual, and useful for future conversations.\n"
+        "",
     ),
     "IDENTITY.md": (
-        "# Identity\n\n"
-        "- Capture the user's role, active work, and durable responsibilities here.\n"
-        "- Keep this concise and factual.\n"
-    ),
-    "HEARTBEAT.md": (
-        "# Heartbeat\n\n"
-        "- Add recurring responsibilities Sage should keep track of here.\n"
+        "",
     ),
     "AGENTS.md": (
         "# Assistant\n\n"
@@ -71,28 +59,13 @@ DEFAULT_CONTEXT_FILE_CONTENTS: Dict[str, str] = {
         "- Keep sensitive actions approval-gated.\n"
     ),
     "MEMORY.md": (
-        "# Curated Memory\n\n"
-        "Store stable long-term facts that should remain visible across future sessions.\n"
-    ),
-    "SELF_MODEL.md": (
-        "# Self Model\n\n"
-        "- Capture how the user prefers to think, decide, and collaborate.\n"
-    ),
-    "LIFE_STORY.md": (
-        "# Life Story\n\n"
-        "- Capture durable background only when the user explicitly wants it saved.\n"
+        "",
     ),
     "GOALS.md": (
-        "# Goals\n\n"
-        "- Capture active projects, intentions, and future direction.\n"
+        "",
     ),
-    "PROCEDURES.md": (
-        "# Procedures\n\n"
-        "- Capture how the user likes work done.\n"
-    ),
-    "REFLECTION.md": (
-        "# Reflection\n\n"
-        "- Capture lessons and behavior improvements for future sessions.\n"
+    "HEARTBEAT.md": (
+        "",
     ),
 }
 

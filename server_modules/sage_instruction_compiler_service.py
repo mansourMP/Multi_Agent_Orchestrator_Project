@@ -10,29 +10,23 @@ from server_modules import workspace_context_memory_adapter
 
 OFFICIAL_ROOT_MEMORY_FILES: tuple[str, ...] = (
     "SOUL.md",
-    "USER.md",
     "IDENTITY.md",
-    "GOALS.md",
-    "PROCEDURES.md",
-    "TOOLS.md",
+    "USER.md",
     "AGENTS.md",
-    "REFLECTION.md",
+    "TOOLS.md",
     "MEMORY.md",
+    "GOALS.md",
 )
 LEGACY_ROOT_MEMORY_FILES: tuple[str, ...] = (
     "HEARTBEAT.md",
-    "SELF_MODEL.md",
-    "LIFE_STORY.md",
 )
 ROOT_MEMORY_BRIEF_PRIORITY: tuple[str, ...] = (
     "SOUL.md",
     "IDENTITY.md",
     "USER.md",
     "GOALS.md",
-    "PROCEDURES.md",
-    "TOOLS.md",
     "AGENTS.md",
-    "REFLECTION.md",
+    "TOOLS.md",
     "MEMORY.md",
 )
 ROOT_MEMORY_SECTION_CHAR_LIMIT = 12_000
@@ -221,6 +215,35 @@ def build_root_memory_sections(context_files: Mapping[str, Any] | None) -> tuple
     }
 
 
+
+# Phase 0.2: Per-session context cache — avoid rebuilding context every turn
+_SESSION_CONTEXT_CACHE: dict[tuple[str, str], tuple[list[str], dict[str, Any]]] = {}
+
+def _cached_build_root_memory_brief_sections(
+    context_files: Mapping[str, Any] | None,
+    *,
+    workspace_id: str = "",
+    session_id: str = "",
+) -> tuple[list[str], dict[str, Any]]:
+    """Cache-aware wrapper. On session start (empty session_id or cache miss),
+    builds context fresh. On subsequent turns, reuses cached result."""
+    cache_key = (workspace_id, session_id)
+    if cache_key in _SESSION_CONTEXT_CACHE:
+        return _SESSION_CONTEXT_CACHE[cache_key]
+    sections, diagnostics = build_root_memory_brief_sections(context_files)
+    if workspace_id and session_id:
+        _SESSION_CONTEXT_CACHE[cache_key] = (sections, diagnostics)
+    return sections, diagnostics
+
+def invalidate_session_context_cache(workspace_id: str, session_id: str = "") -> None:
+    """Invalidate cache on context file writes, daily reset, or /new."""
+    if session_id:
+        _SESSION_CONTEXT_CACHE.pop((workspace_id, session_id), None)
+    else:
+        keys_to_drop = [k for k in _SESSION_CONTEXT_CACHE if k[0] == workspace_id]
+        for k in keys_to_drop:
+            _SESSION_CONTEXT_CACHE.pop(k, None)
+
 def build_root_memory_brief_sections(context_files: Mapping[str, Any] | None) -> tuple[list[str], dict[str, Any]]:
     payload = dict(context_files or {})
     sections: list[str] = []
@@ -245,7 +268,7 @@ def build_root_memory_brief_sections(context_files: Mapping[str, Any] | None) ->
         clipped, was_truncated = _clip_text(
             content,
             min(ROOT_MEMORY_BRIEF_SECTION_CHAR_LIMIT, remaining),
-            "root memory brief truncated",
+            "content truncated due to length limit",
         )
         sanitized = workspace_context_memory_adapter.strip_red_facts_from_external_context(clipped)
         if not sanitized:

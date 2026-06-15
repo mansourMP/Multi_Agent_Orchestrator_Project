@@ -59,7 +59,8 @@ DEFAULT_CONTEXT_FILE_CONTENTS: Dict[str, str] = {
         "- Keep sensitive actions approval-gated.\n"
     ),
     "MEMORY.md": (
-        "",
+        "# Curated Memory\n\n"
+        "Store stable long-term facts that should remain visible across future sessions.\n"
     ),
     "GOALS.md": (
         "",

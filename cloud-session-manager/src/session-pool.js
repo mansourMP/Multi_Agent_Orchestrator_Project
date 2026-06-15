@@ -26,8 +26,9 @@ export class SessionPool {
     this.sessions = new Map();
 
     // Auto-cleanup every 60s
+    // Keep ref'd — Express app.listen() should keep the event loop alive,
+    // but Node 26 + ES modules can exit if only unref'd timers exist.
     this._cleanupInterval = setInterval(() => this._cleanupStale(), 60_000);
-    this._cleanupInterval.unref?.();
   }
 
   /**

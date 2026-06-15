@@ -70,7 +70,14 @@ function apiSecretMiddleware(req, res, next) {
 }
 
 async function main() {
-  const pool = new SessionPool({ logger });
+  let pool;
+  try {
+    pool = new SessionPool({ logger });
+    logger.info("SessionPool created");
+  } catch (err) {
+    logger.fatal({ err }, "SessionPool creation failed");
+    process.exit(1);
+  }
 
   const app = express();
   app.use(express.json());
@@ -83,6 +90,8 @@ async function main() {
     logger.info({ port: CONFIG.apiPort, maxSessions: CONFIG.maxSessions }, "cloud-session-manager started");
   });
 
+  // Heartbeat removed — root cause fixed in session-pool.js (unref'd timer)
+
   // Graceful shutdown
   const shutdown = async (signal) => {
     logger.info({ signal }, "shutting down");
@@ -94,6 +103,19 @@ async function main() {
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
+
+// Crash diagnostics — log before exit so silent deaths become visible
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] uncaughtException:", err.stack || err.message || err);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[FATAL] unhandledRejection at:", promise, "reason:", reason?.stack || reason?.message || reason);
+  process.exit(1);
+});
+process.on("exit", (code) => {
+  console.error("[EXIT] process exiting with code:", code);
+});
 
 main().catch((err) => {
   logger.fatal({ err }, "startup failed");

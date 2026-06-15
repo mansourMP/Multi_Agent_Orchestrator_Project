@@ -717,7 +717,7 @@ def test_sage_channel_catalog_exposes_cloud_telegram_bot_without_agent_computer(
     assert by_id["telegram_personal"]["requires_gateway"] is True
     assert "sage_telegram_hosted" in by_id
     assert by_id["sage_telegram_hosted"]["requires_gateway"] is False
-    assert by_id["sage_telegram_hosted"]["launch_status"] == connection_catalog_service.LAUNCH_PLANNED
+    assert by_id["sage_telegram_hosted"]["launch_status"] == connection_catalog_service.LAUNCH_LIVE_WHEN_CONFIGURED
 
 
 def test_sage_channel_status_marks_gateway_dependent_channels_from_backend(monkeypatch):

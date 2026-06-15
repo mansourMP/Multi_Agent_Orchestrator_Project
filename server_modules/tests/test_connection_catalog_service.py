@@ -45,5 +45,5 @@ def test_catalog_exposes_channel_certification_truth() -> None:
     assert by_id["signal_personal"]["certification_requirements"]
     assert by_id["apple_messages_business"]["readiness_status"] == "planned"
     assert by_id["apple_messages_business"]["requires_external_account"] is True
-    assert by_id["sage_telegram_hosted"]["readiness_status"] == "planned"
+    assert by_id["sage_telegram_hosted"]["readiness_status"] == "live_when_configured"
     assert by_id["sage_telegram_hosted"]["requires_gateway"] is False

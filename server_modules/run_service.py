@@ -119,7 +119,7 @@ RUN_STATES = (
     "canceled",
 )
 
-ROUTING_PROVIDER_ORDER: Tuple[str, ...] = ("openai", "anthropic", "gemini", "codex_cli", "ollama")
+ROUTING_PROVIDER_ORDER: Tuple[str, ...] = ("openai", "deepseek", "anthropic", "gemini", "codex_cli", "ollama")
 APPROVAL_SCOPE_ONCE = "once"
 APPROVAL_SCOPE_CONSEQUENCE = "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again."
 APPROVAL_APPROVE_TOKENS = {"proceed", "approve", "yes", "y", "continue", "ok"}

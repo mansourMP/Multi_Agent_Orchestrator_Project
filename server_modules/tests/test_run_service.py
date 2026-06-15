@@ -3983,6 +3983,15 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(context, {"provider": "anthropic", "model": "anthropic-model"})
 
+    def test_resolve_fastest_routing_context_includes_deepseek(self):
+        context = resolve_fastest_routing_context(
+            routing_provider_order=ROUTING_PROVIDER_ORDER,
+            provider_has_key_fn=lambda provider: provider in {"deepseek"},
+            resolve_requested_model_fn=lambda request, metadata, provider: f"{provider}-model",
+        )
+
+        self.assertEqual(context, {"provider": "deepseek", "model": "deepseek-model"})
+
     def test_resolve_fastest_routing_context_returns_none_without_available_provider(self):
         context = resolve_fastest_routing_context(
             routing_provider_order=ROUTING_PROVIDER_ORDER,

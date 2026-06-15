@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import os
+from pathlib import Path
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional
@@ -393,6 +395,58 @@ def assert_modality_configured(modality: Modality, *, provider: str = "auto") ->
     if modality in {"speech_to_text", "text_to_speech"}:
         return provider_metadata(modality=modality, provider=requested)
     raise UnsupportedModalityError(f"{modality} is interface-only and is not configured for production output.")
+
+
+
+
+async def describe_image(
+    *,
+    file_path: str,
+    filename: str,
+    content_type: str = "",
+    api_key: str | None = None,
+) -> str:
+    """Describe an image using Gemini API for text-only models like DeepSeek."""
+    import base64
+    import mimetypes
+    from pathlib import Path
+    
+    resolved_key = str(api_key or os.environ.get("EMPYRALIS_VISION_API_KEY") or "").strip()
+    if not resolved_key:
+        return f"(Image: {filename} — vision description unavailable.)"
+    
+    path = Path(file_path) if isinstance(file_path, str) else file_path
+    if not path.exists():
+        return f"(Image: {filename} — file not found.)"
+    
+    mime = content_type or mimetypes.guess_type(filename)[0] or "image/jpeg"
+    try:
+        raw = path.read_bytes()
+        encoded = base64.b64encode(raw).decode("utf-8")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={resolved_key}"
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": "Describe this image concisely for a text-only AI assistant. Focus on key visual elements, text content, people, objects, and context. If there is readable text, include it. Keep under 100 words."},
+                    {"inline_data": {"mime_type": mime, "data": encoded}}
+                ]
+            }]
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code != 200:
+                return f"(Image: {filename} — could not describe.)"
+            result = resp.json()
+            candidates = result.get("candidates", [])
+            if not candidates:
+                return f"(Image: {filename} — no description.)"
+            parts = candidates[0].get("content", {}).get("parts", [])
+            text = " ".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+            if text:
+                return f"(Image: {filename} — {text})"
+            return f"(Image: {filename} — no description.)"
+    except Exception:
+        return f"(Image: {filename} — description unavailable.)"
 
 
 async def generate_image(*_args: Any, provider: str = "auto", **_kwargs: Any) -> Dict[str, Any]:

@@ -113,21 +113,9 @@ def _browser_automation_unavailable_payload(
     base_context_used: Dict[str, Any],
     services: DirectChatRuntimeServices,
 ) -> Optional[Dict[str, Any]]:
-    if not direct_chat_tool_catalog_service.message_has_browser_automation_intent(message):
-        return None
-    status = _agent_computer_browser_status(availability_payload)
-    if status == "online":
-        return None
-    reply = "Selected Sage Agent Computer is offline." if status == "offline" else "Choose Sage Agent Computer."
-    return services.with_context_used(
-        {
-            "reply": reply,
-            "actions": [],
-            "mode": "answer",
-            "suggestions": proactive_suggestions,
-        },
-        base_context_used,
-    )
+    # Always return None — let Sage decide how to respond.
+    # Do not block with a hardcoded message.
+    return None
 
 
 def _turn_request_context_hints(turn_request: Any) -> Dict[str, Any]:

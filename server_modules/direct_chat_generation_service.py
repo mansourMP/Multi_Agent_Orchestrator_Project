@@ -543,6 +543,26 @@ def stream_provider_backed_direct_chat(
     conversation_messages: List[Dict[str, Any]] = []
     conversation_messages.extend(compacted_prior_messages)
     current_prompt = normalized_message
+
+    # --- Attachment context injection ---
+    attachment_context = ""
+    _attachments = []
+    if isinstance(session_ctx, dict):
+        _turn_req = session_ctx.get("agent_turn_request")
+        if _turn_req is not None:
+            if isinstance(_turn_req, dict):
+                _attachments = _turn_req.get("attachments", []) or []
+            else:
+                _attachments = getattr(_turn_req, "attachments", []) or []
+    if _attachments:
+        from server_modules.attachment_utils import build_attachment_context
+        attachment_context = build_attachment_context(normalized_workspace_id, _attachments)
+    if not current_prompt.strip() and _attachments:
+        current_prompt = "Please review the attached file(s)."
+    if attachment_context:
+        current_prompt = attachment_context + current_prompt
+    # --- End attachment injection ---
+
     max_iterations = resolved_chat_max_iterations
     trace_started_at = time.monotonic()
     hosted_usage_reservation = services.reserve_direct_chat_hosted_usage_best_effort(

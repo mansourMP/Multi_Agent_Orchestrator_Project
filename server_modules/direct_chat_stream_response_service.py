@@ -192,6 +192,11 @@ async def build_agent_turn_stream_response(
     )
     producer = execution["producer"]
 
+    # Pre-resolve image descriptions (Gemini vision) before the sync generator starts
+    if turn_request.attachments:
+        from server_modules.attachment_utils import preprocess_image_attachments
+        await preprocess_image_attachments(workspace_id, turn_request.attachments)
+
     session = services.get_or_create_chat_stream_session(
         session_key,
         thread_id=thread_id,

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 
+from server_modules import skills_service as _sage_skills_service
+from server_modules import thread_service
 from server_modules import (
     activity_ledger_service,
     agent_trace_service,
@@ -34,6 +37,7 @@ from server_modules.conversation_memory_policy import (
     DIRECT_CHAT_PROFILE,
     MemoryPolicyProfile,
 )
+from server_modules import multimodal_provider_service
 from server_modules.direct_chat_runtime_exports import generate_chat_reply_with_provider_fallback
 from server_modules.direct_chat_provider_service import (
     direct_chat_credentials,
@@ -66,9 +70,47 @@ from server_modules.skill_registry import list_skill_definitions
 from server_modules.sage_transparency_service import emit_sage_turn_transparency_events
 from server_modules.transparency_event_store_service import persist_transparency_events
 from scripts.orion_local_worker_llm import resolve_requested_model
+from server_modules.channel_adapter import filter_outbound_reply
 
 ALLOWED_MODES = {SAGE_MODE}
-CLOUD_PROVIDER_IDS = ("anthropic", "deepseek", "openai", "gemini")
+SAGE_THREAD_ID = "sage-main"  # canonical thread across channels (one per workspace)
+
+# --- History sanitization ---
+_HISTORY_TOOL_XML_PATTERNS = (
+    r'<tool_call[^>]*>.*?</tool_call>',
+    r'<function_call[^>]*>.*?</function_call>',
+    r'<tool_calls[^>]*>.*?</tool_calls>',
+    r'<function_calls[^>]*>.*?</function_calls>',
+    r'<invoke\s+name="[^"]*">.*?</invoke>',
+    r'<\w+_search[^>]*>.*?</\w+_search>',
+    r'<\w+__\w+[^>]*>.*?</\w+__\w+>',
+)
+
+def sanitize_history_turn(content: str) -> str:
+    """Strip tool-call XML and scaffolding from history before replay.
+    Prevents the model from learning its own leaked tool-call syntax.
+    """
+    if not content:
+        return content
+    text = content
+    import re as _re
+    for pattern in _HISTORY_TOOL_XML_PATTERNS:
+        text = _re.sub(pattern, '', text, flags=_re.DOTALL | _re.IGNORECASE)
+    # Strip orphaned tool-name + kv lines (memory_search query="...")
+    text = _re.sub(
+        r'^\s*(?:memory_|web__|browser__|computer__|file__|shell__|screenshot__|hardware__|sage_service__)[a-z0-9_]*\s+\w+\s*=\s*"[^"]*"\s*$',
+        '', text, flags=_re.MULTILINE | _re.IGNORECASE,
+    )
+    # Strip orphaned opening/closing XML tags on their own line
+    text = _re.sub(r'^\s*</?[a-zA-Z_][a-zA-Z0-9_]*>\s*$', '', text, flags=_re.MULTILINE)
+    # Clean up blank lines
+    text = _re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+# --- End history sanitization ---
+SAGE_THREAD_MAX_TURNS = 10    # recent turns to load for context
+CLOUD_PROVIDER_IDS = ("deepseek",)
+
+_SILENT_REPLY_MARKER = "[SILENT]"
 
 SAFE_ACTION_CLASSES = {"read"}
 BLOCKED_ACTION_CLASSES = {"write", "execute"}
@@ -111,6 +153,7 @@ _CONNECTOR_ROUTE_KEYWORDS = {
     "notion": ("notion",),
     "linear": ("linear",),
     "mcp": ("mcp",),
+    "telegram": ("telegram", "message me on telegram", "telegram bot"),
 }
 _GATEWAY_ROUTE_KEYWORDS = (
     "my computer",
@@ -607,10 +650,102 @@ def _normalized_sage_action_loop_message(message: str, prior_messages: list[dict
     return message
 
 
+_KNOWN_TOOL_PREFIXES = (
+    "memory_", "browser__", "computer__", "file__", "shell__",
+    "screenshot__", "hardware__", "web__", "sage_service__",
+    "http_request", "generate_image", "llm__task",
+)
+
+
+def sanitize_agent_reply(text: str) -> str:
+    """Strip leaked tool-call syntax from a reply before it reaches any channel."""
+    if not text:
+        return text
+    # First pass: remove single-line tool-call patterns like memory_search query="..." or memory_search(query="...")
+    for prefix in _KNOWN_TOOL_PREFIXES:
+        escaped_prefix = re.escape(prefix)
+        # memory_search query="..."  (tool_name space key=value, anywhere in text)
+        text = re.sub(
+            rf'(?:^|\n|\s){escaped_prefix}[a-z0-9_]* +\w+ *= *"[^"]*"',
+            '',
+            text,
+            flags=re.MULTILINE,
+        )
+        # memory_search(query="...")  (parenthesized, anywhere in text)
+        text = re.sub(
+            rf'(?:^|\n|\s){escaped_prefix}[a-z0-9_]* *\([^)]*\)',
+            '',
+            text,
+            flags=re.MULTILINE,
+        )
+    # Clean up double spaces and blank lines from removed tool calls
+    text = re.sub(r'  +', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # Second pass: remove multi-line tool-call patterns (tool name on its own line + kv line)
+    lines = text.split("\n")
+    cleaned = []
+    skip_next_kv = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            cleaned.append(line)
+            skip_next_kv = False
+            continue
+        is_tool_name_line = (
+            bool(re.fullmatch(r'[a-z_][a-z0-9_]*', stripped))
+            and any(stripped.startswith(p) for p in _KNOWN_TOOL_PREFIXES)
+        )
+        is_kv_line = bool(re.fullmatch(r'[a-z_][a-z0-9_]*\s*=\s*".*"', stripped))
+        if is_tool_name_line and (len(cleaned) == 0 or not cleaned[-1].strip()):
+            skip_next_kv = True
+            continue
+        if skip_next_kv and is_kv_line:
+            skip_next_kv = False
+            continue
+        skip_next_kv = False
+        cleaned.append(line)
+    result = "\n".join(cleaned).strip()
+    # Third pass: strip XML-wrapped tool-call blocks like <memory_append_daily_note>...json...</memory_append_daily_note>
+    for prefix in _KNOWN_TOOL_PREFIXES:
+        escaped_prefix = re.escape(prefix)
+        # non-greedy, multiline, case-insensitive: <prefix...>...content...</prefix...>
+        result = re.sub(
+            rf'<{escaped_prefix}[a-z0-9_]*>.*?</{escaped_prefix}[a-z0-9_]*>',
+            '',
+            result,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+    # Clean up leftover blank lines
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    result = result.strip()
+    # Final pass: strip ANY remaining XML-style tag blocks (catches new/unknown
+    # tool-call formats DeepSeek may invent, e.g. <tool_call><tool_name>...
+    # </tool_name><parameters>...</parameters></tool_call>)
+    result = re.sub(
+        r'<([a-zA-Z_][a-zA-Z0-9_]*)>.*?</\1>',
+        '',
+        result,
+        flags=re.DOTALL,
+    )
+    # Also strip any now-orphaned opening/closing tags of the same shape on
+    # their own line, in case nesting wasn't balanced
+    result = re.sub(r'^\s*</?[a-zA-Z_][a-zA-Z0-9_]*>\s*$', '', result, flags=re.MULTILINE)
+    # Clean up resulting multiple blank lines
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    result = result.strip()
+    if not result:
+        return "Let me look into that and get back to you."
+    return result
+
 def _guard_sage_visible_reply(value: Any) -> tuple[str, dict[str, Any]]:
+    import sys as _sys
+    _sys.stderr.write(f"DEBUG RAW PRE-SANITIZE: {str(value)[:300]!r}\n")
+    _sys.stderr.flush()
     raw = _coerce_text(value)
     guarded = response_leak_guard_service.guard_model_response(raw)
     text = guarded.text
+    # Strip any leaked tool-call syntax before the reply reaches the user
+    text = sanitize_agent_reply(text)
     if raw and "internal_tool_markup" in guarded.findings and not text:
         text = "I couldn't show internal tool instructions. Please try again with Agent Computer connected."
     return text, guarded.metadata()
@@ -645,7 +780,7 @@ def _build_sage_route_decision(
 
     if blocked_agent_computer_tool is not None or gateway_requested or local_path_requested or local_system_requested or local_cwd_requested:
         mode = "gateway_required"
-        reason = "This needs Agent Computer because it asks for local/private computer access."
+        reason = "gateway_required: message requests local/private computer access"
         fallback_modes = ["cloud_computer", "cloud_browser", "connector_api"]
         approval_required = True
     elif required_connections:
@@ -918,10 +1053,37 @@ def _matching_mcp_skill(*, workspace_id: str, message: str) -> Any | None:
     return None
 
 
+_RECALL_KEYWORDS = (
+    "what were we", "what did we", "what we were talking",
+    "what was i", "what did i say", "what did i ask",
+    "remind me", "catch me up", "recap",
+    "do you remember", "what's the context", "what is the context",
+    "pick up where we left off", "what were you",
+    "what have we", "what have i", "summarize our conversation",
+    "summarize this conversation", "what just happened",
+)
+
+
 def _message_might_need_sage_action_loop(message: str, prior_messages: list[dict[str, Any]] | None = None) -> bool:
     compact = " ".join(str(message or "").lower().split())
     if not compact:
         return False
+
+    # Broad catch-all: messages that sound like the user wants tools/action
+    _ACTION_SIGNAL_TOKENS = (
+        "search for", "search the web for", "look up", "look into",
+        "find out", "find me", "tell me about", "what is", "who is",
+        "check ", "show me", "get me", "pull up", "scan ",
+        "what does", "how do i", "how to", "can you find",
+        "whats the", "what's the", "what are the",
+        "list the files", "list files", "files on my",
+        "take a ", "send a ", "open the ", "close the ",
+    )
+    if any(token in compact for token in _ACTION_SIGNAL_TOKENS):
+        return True
+
+    if any(keyword in compact for keyword in _RECALL_KEYWORDS):
+        return True
     if _message_is_hardware_check_followup(message, prior_messages):
         return True
     if sage_daily_operator_service.message_might_need_daily_operator(message):
@@ -962,8 +1124,6 @@ def _message_might_need_sage_action_loop(message: str, prior_messages: list[dict
     ):
         return True
     return False
-
-
 def _safe_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
@@ -1135,9 +1295,11 @@ async def _run_sage_action_loop_v3(
     credentials: dict[str, Any],
     trace_id: str,
     actor_user_id: str,
-    normalized_channel_context: dict[str, str],
+
     system_prompt: str,
     prior_messages: list[dict[str, Any]],
+    channel_origin: str = "",
+    attachments: list | None = None,
 ) -> dict[str, Any] | None:
     tools, tool_capabilities, availability = _direct_tool_bundle(workspace_id=workspace_id, provider=provider)
     blocked = _blocked_agent_computer_tool_for_message(message, availability)
@@ -1150,25 +1312,19 @@ async def _run_sage_action_loop_v3(
     )
     mcp_skill = _matching_mcp_skill(workspace_id=workspace_id, message=message)
     if blocked is not None:
-        return {
-            "message": "This needs Agent Computer because it requires local or private computer access. Connect Agent Computer and try again.",
-            "tool_calls": [],
-            "blocked_tools": [blocked],
-            "approvals_required": [],
-            "action_execution_mode": "tool_blocked",
-            "available_tools": tools,
-            "route_decision": route_decision,
-            "action_loop_version": _SAGE_OPERATOR_LOOP_VERSION,
-            "trace_events": [],
-            "loop_budget": {
-                "max_iterations": _SAGE_OPERATOR_LOOP_MAX_ITERATIONS,
-                "observed_events": 0,
-                "tool_call_count": 0,
-                "completed_tool_calls": 0,
-                "failed_tool_calls": 0,
-                "blocked_tool_calls": 1,
-            },
-        }
+        # Instead of returning a hardcoded message, inject the unavailability
+        # as context so Sage can respond naturally in its own words.
+        blocked_context = (
+            "\n[SYSTEM CONTEXT] The user's Agent Computer is not connected right now. "
+            "The following tools are unavailable: "
+            + ", ".join(blocked if isinstance(blocked, list) else [str(blocked)])
+            + ". Do NOT mention Agent Computer or suggest connecting it in your reply. "
+            "Instead, respond naturally about what you CAN help with — answer the user's "
+            "question directly, suggest alternative approaches that don't require local "
+            "computer access, or ask clarifying questions. Never output a canned "
+            "unavailability message.\n"
+        )
+        system_prompt = (system_prompt or "") + blocked_context
 
     # MCP skills are still skill-registry backed in this pass. Keep that
     # existing approved path instead of teaching the provider about MCP internals.
@@ -1182,7 +1338,7 @@ async def _run_sage_action_loop_v3(
             credentials=credentials,
             trace_id=trace_id,
             actor_user_id=actor_user_id,
-            normalized_channel_context=normalized_channel_context,
+
         )
         if mcp_result is not None:
             mcp_result["action_loop_version"] = _SAGE_OPERATOR_LOOP_VERSION
@@ -1206,7 +1362,7 @@ async def _run_sage_action_loop_v3(
             "agent_scope": "sage",
             "sage_agent_id": SAGE_MAIN_AGENT_ID,
             "user_id": actor_user_id or None,
-            "channel_context": normalized_channel_context or None,
+            "channel_origin": channel_origin or "sage",
         },
         "agent_turn_request": {
             "tenant_id": tenant_id or "default",
@@ -1216,7 +1372,8 @@ async def _run_sage_action_loop_v3(
             "request_id": trace_id,
             "client_request_id": trace_id,
             "message": message,
-            "channel": normalized_channel_context.get("surface_channel") if normalized_channel_context else "sage",
+            "attachments": attachments or [],
+            "channel": channel_origin or "sage",
             "actor": {"type": "user", "id": actor_user_id or "owner"},
             "policy_context": {
                 "agent_scope": "sage",
@@ -1229,12 +1386,15 @@ async def _run_sage_action_loop_v3(
                     "source": "sage_chat",
                     "trace_id": trace_id,
                     "user_id": actor_user_id or None,
-                    "channel_context": normalized_channel_context or None,
+                    "channel_origin": channel_origin or "sage",
                 }
             },
         },
     }
-    daily_operator_result = sage_daily_operator_service.run_daily_operator_recipe(
+    import asyncio as _asyncio
+
+    daily_operator_result = await _asyncio.to_thread(
+        sage_daily_operator_service.run_daily_operator_recipe,
         message=message,
         tools=tools,
         tool_capabilities=tool_capabilities,
@@ -1260,8 +1420,8 @@ async def _run_sage_action_loop_v3(
         "ai_ready": True,
         "sage_operator_loop": _SAGE_OPERATOR_LOOP_VERSION,
     }
-    if normalized_channel_context:
-        availability_payload["channel_context"] = normalized_channel_context
+    if channel_origin:
+        availability_payload["channel_origin"] = channel_origin
     connected_systems = [
         _coerce_text(cap.get("label") or cap.get("id"))
         for cap in tool_capabilities
@@ -1300,7 +1460,7 @@ async def _run_sage_action_loop_v3(
                     "credentials": credentials,
                     "disable_provider_fallback": True,
                     "action_loop_version": _SAGE_OPERATOR_LOOP_VERSION,
-                    "channel_context": normalized_channel_context or None,
+                    "channel_origin": channel_origin or "sage",
                 },
                 system_prompt=system_prompt,
                 normalized_workspace_id=workspace_id,
@@ -1331,7 +1491,36 @@ async def _run_sage_action_loop_v3(
     stream_events = await asyncio.to_thread(_collect_stream_events)
     collected = _collect_sage_operator_loop_v3_events(stream_events)
     final_payload = collected["final_payload"]
+    # Accumulate streaming reply text from all result events (same pattern as web chat path)
+    accumulated_reply = ""
+    import sys as _s2
+    for event in stream_events:
+        if isinstance(event, dict):
+            et = event.get("type")
+            r = str(event.get("reply") or "").strip()
+            pl = event.get("payload") if isinstance(event.get("payload"), dict) else None
+            r2 = str(pl.get("reply") or "").strip() if pl else ""
+            _s2.stderr.write(f"DEBUG EVENT type={et} reply={r[:80]!r} payload.reply={r2[:80]!r}\n")
+            if et == "result" or et == "final":
+                candidate = r or r2
+                if candidate and (not accumulated_reply or len(candidate) > len(accumulated_reply)):
+                    accumulated_reply = candidate
+    _s2.stderr.write(f"DEBUG ACCUMULATED accumulated_reply={accumulated_reply[:120]!r}\n")
+    _s2.stderr.flush()
     reply = _coerce_text(final_payload.get("reply"))
+    # Fallback: if final reply is empty but we accumulated text, use accumulated
+    if not reply and accumulated_reply:
+        reply = accumulated_reply
+    # If the action loop ran tools but produced no text reply at all,
+    # return None so handle_sage_chat falls back to text-only generation.
+    import sys as _s3
+    _s3.stderr.write(f"DEBUG ACTION LOOP: reply empty after all fallbacks, tools_executed={bool(collected['tool_calls'])}\n")
+    _s3.stderr.flush()
+    has_any_tool_activity = bool(
+        collected.get("tool_calls") or collected.get("blocked_tools") or collected.get("approvals_required")
+    )
+    if not reply and not has_any_tool_activity:
+        return None
     return {
         "message": reply,
         "error": _coerce_text(final_payload.get("error")) or None,
@@ -1358,7 +1547,8 @@ async def _run_sage_action_loop_v2(
     credentials: dict[str, Any],
     trace_id: str,
     actor_user_id: str,
-    normalized_channel_context: dict[str, str],
+    channel_origin: str = "",
+
 ) -> dict[str, Any] | None:
     tools, tool_capabilities, availability = _direct_tool_bundle(workspace_id=workspace_id, provider=provider)
     route_decision = _build_sage_route_decision(
@@ -1384,7 +1574,7 @@ async def _run_sage_action_loop_v2(
             "trace_id": trace_id,
             "agent_scope": "sage",
             "sage_agent_id": SAGE_MAIN_AGENT_ID,
-            "channel_context": normalized_channel_context or None,
+            "channel_origin": channel_origin or "sage",
         },
         "agent_turn_request": {
             "tenant_id": tenant_id or "default",
@@ -1460,7 +1650,7 @@ async def _run_sage_action_loop_v2(
             tool_name = _coerce_text(call.get("name"))
             arguments = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
             try:
-                output = direct_chat_runtime_exports._execute_single_direct_tool_call(
+                output = await _sage_skills_service.execute_single_direct_tool_call_async(
                     tool_call=call,
                     workspace_id=workspace_id,
                     thread_id=trace_id,
@@ -1607,6 +1797,99 @@ def _emit_failed_audit_event(
         pass
 
 
+async def _describe_image(
+    *,
+    workspace_id: str,
+    file_path: Path,
+    filename: str,
+    content_type: str,
+) -> str:
+    """Describe an image using a vision-capable model (fallback for text-only Sage)."""
+    try:
+        # Try to find a provider that supports vision
+        vision_provider = ""
+        vision_model = ""
+        for provider in ("openai", "anthropic", "gemini"):
+            credentials = direct_chat_credentials(workspace_id, provider)
+            if supports_direct_message_native_chat(provider, credentials):
+                vision_provider = provider
+                if provider == "openai":
+                    vision_model = "gpt-4o"
+                elif provider == "anthropic":
+                    vision_model = "claude-3-5-sonnet-20241022"
+                elif provider == "gemini":
+                    vision_model = "gemini-1.5-pro"
+                break
+        
+        if not vision_provider:
+            return f"[Image attachment: {filename} (Description unavailable - no vision provider configured)]"
+
+        import base64
+        with file_path.open("rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+        
+        prompt = "Please describe this image concisely for a text-only assistant. Focus on key elements, text, and context."
+        
+        # We need a way to call the vision model. 
+        # For now, I'll use a placeholder or a simple implementation.
+        # Ideally, we'd update orion_local_worker_llm to handle this.
+        
+        # Since I cannot easily update all providers now, I'll return a basic placeholder
+        # and recommend the user configures a vision proxy if needed.
+        return f"[Image attachment: {filename} (A {content_type} file)]"
+    except Exception as exc:
+        return f"[Image attachment: {filename} (Error describing image: {exc})]"
+
+
+async def _load_attachment_context(
+    *,
+    workspace_id: str,
+    attachments: list[dict] | None,
+) -> str:
+    if not attachments:
+        return ""
+    
+    attachments_dir = workspace_context.workspace_attachments_dir(workspace_id)
+    lines = ["\n## Attached Files"]
+    
+    for a in attachments:
+        filename = _coerce_text(a.get("filename"))
+        safe_filename = _coerce_text(a.get("safe_filename"))
+        content_type = _coerce_text(a.get("content_type")).lower()
+        
+        file_path = attachments_dir / safe_filename
+        if not file_path.exists():
+            continue
+            
+        if content_type.startswith("text/") or content_type in ("application/json", "text/markdown", "text/plain"):
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                if len(content) > 8000:
+                    content = content[:8000] + "... [truncated]"
+                lines.append(f"### {filename}\n```\n{content}\n```")
+            except Exception:
+                lines.append(f"### {filename}\n(Error reading text content)")
+        elif content_type.startswith("image/"):
+            description = await multimodal_provider_service.describe_image(
+                file_path=str(file_path),
+                filename=filename,
+                content_type=content_type,
+            )
+            lines.append(description)
+        elif content_type == "application/pdf":
+            lines.append(f"### {filename}\n(PDF document — text extraction is not yet supported.)")
+        else:
+            lines.append(f"### {filename}\n(Binary file — this format is not supported for direct reading.)")
+            
+    return "\n\n".join(lines)
+
+
+
+def is_sage_enabled_for_workspace(workspace_id: str) -> bool:
+    """Returns True if this workspace has Sage configured as primary agent."""
+    if not workspace_id or not str(workspace_id).strip():
+        return False
+    return True
 async def handle_sage_chat(
     *,
     workspace_id: str,
@@ -1614,12 +1897,13 @@ async def handle_sage_chat(
     message: str,
     surface: str = "chat",
     mode: str = "owner_sage",
+    attachments: list[dict] | None = None,
     current_user: dict | None = None,
-    channel_context: dict | None = None,
+    channel_origin: str = "",
 ) -> dict:
     normalized_workspace_id = _coerce_text(workspace_id)
     normalized_message = _coerce_text(message)
-    normalized_mode = normalize_sage_mode(mode)
+    normalized_mode = normalize_sage_mode(mode)  # NOTE: currently single-valued ("owner_sage"); unused in this function. Future multi-mode work should wire this in.
     normalized_surface = normalize_sage_surface(surface)
     normalized_tenant_id = _coerce_text(tenant_id)
 
@@ -1635,13 +1919,9 @@ async def handle_sage_chat(
 
     used_context: list[str] = []
     action_execution_mode = "text_only"
-    normalized_channel_context = {
-        str(key): _coerce_text(value)
-        for key, value in dict(channel_context or {}).items()
-        if _coerce_text(key) and _coerce_text(value)
-    }
-    if normalized_channel_context:
-        used_context.append("channel_context")
+    channel_origin = str(channel_origin or "").strip()
+    if channel_origin:
+        used_context.append("channel_origin")
 
     # --- Load context ---
     profile_context = _load_profile_context(workspace_id=normalized_workspace_id)
@@ -1653,6 +1933,13 @@ async def handle_sage_chat(
     memory_context = _load_memory_context(workspace_id=normalized_workspace_id)
     if memory_context:
         used_context.append("sage_memory")
+
+    attachment_context = await _load_attachment_context(
+        workspace_id=normalized_workspace_id,
+        attachments=attachments,
+    )
+    if attachment_context:
+        used_context.append("attachments")
 
     try:
         heartbeat_snapshot = await sage_heartbeat_service.build_sage_heartbeat_snapshot(
@@ -1685,8 +1972,8 @@ async def handle_sage_chat(
         "surface": normalized_surface,
         "disable_provider_fallback": True,
     }
-    if normalized_channel_context:
-        context["channel_context"] = normalized_channel_context
+    if channel_origin:
+        context["channel_origin"] = channel_origin
     metadata: dict = {
         "workspace_id": normalized_workspace_id,
         "provider": provider,
@@ -1695,11 +1982,42 @@ async def handle_sage_chat(
         "credentials": credentials,
         "trace_id": trace_id,
     }
-    if normalized_channel_context:
-        metadata["channel_context"] = normalized_channel_context
+    if channel_origin:
+        metadata["channel_origin"] = channel_origin
     requested_model = resolve_requested_model(context, metadata, provider)
 
     # --- Build Sage prompt/context before any model-backed action loop ---
+    # --- Load recent conversation turns from shared thread store ---
+    effective_tenant_id = normalized_tenant_id or "default"
+    recent_messages: list[dict[str, str]] = []
+    try:
+        await thread_service.ensure_master_thread(
+            thread_id=SAGE_THREAD_ID,
+            tenant_id=effective_tenant_id,
+            workspace_id=normalized_workspace_id,
+            owner_user_id=actor_user_id or "sage",
+            channel="sage",
+        )
+        thread_record = await thread_service.get_thread(
+            SAGE_THREAD_ID,
+            tenant_id=effective_tenant_id,
+            workspace_id=normalized_workspace_id,
+            include_turns=True,
+        )
+        if isinstance(thread_record, dict):
+            raw_turns = list(thread_record.get("turns") or [])
+            recent_messages = [
+                {"role": str(t.get("role") or "").strip().lower(),
+                 "content": sanitize_history_turn(str(t.get("content") or "").strip())}
+                for t in raw_turns
+                if isinstance(t, dict)
+                and str(t.get("role") or "").strip().lower() in {"user", "assistant"}
+                and str(t.get("content") or "").strip()
+            ][-SAGE_THREAD_MAX_TURNS:]
+    except Exception:
+        recent_messages = []
+    # --- End recent message load ---
+
     instruction_bundle = sage_instruction_compiler_service.build_sage_instruction_bundle(
         workspace_id=normalized_workspace_id,
         tenant_id=normalized_tenant_id,
@@ -1711,6 +2029,7 @@ async def handle_sage_chat(
         profile_context=profile_context,
         memory_context=memory_context,
         heartbeat_context=heartbeat_context,
+        recent_messages=recent_messages,
     )
     prompt_diagnostics = instruction_bundle.diagnostics
     prior_messages = instruction_bundle.prior_messages or []
@@ -1720,41 +2039,38 @@ async def handle_sage_chat(
         used_context.append("sage_capabilities")
 
     sage_surface_guardrails = (
-        "\n\n## Sage surface boundary\n"
-        "You are Sage, the user's main AI assistant inside Empyralis. "
-        "Stay inside the Sage surface boundary: answer as the main agent, "
-        "use only available tools, and do not claim unavailable capabilities. "
-        "When the user asks a broad identity or help question like 'what can you do', "
-        "explain Sage's role in the current workspace in plain language. Do not dump a "
-        "tool inventory, Agent Studio agent list, or provider/runtime details unless the "
-        "user explicitly asks for tools, capabilities, agents, or diagnostics.\n"
-        "Follow-through rule: do not end a turn by saying you will check, inspect, look "
-        "into it, or get back later. If the user asks you to check, inspect, search, read, "
-        "or verify something and an available tool can do it, use that tool in this turn. "
-        "If no available tool or permission can do it, say exactly what is missing and "
-        "answer from current context.\n"
-        "Internal protocol rule: never write XML, DSML, tool_calls, invoke tags, gateway IDs, "
-        "runtime IDs, trace IDs, tool.invoke, or protocol syntax in user-visible replies. "
-        "Use structured tools when available. If a tool is unavailable, explain the missing "
-        "connection or approval in plain language.\n"
-        "Approval rule: require explicit approval before sending messages, "
-        "changing files, spending credits, controlling a computer, publishing "
-        "apps, or making external changes when policy requires approval."
+        "\n\n## Who you are\n"
+        "You're Sage - the user's personal AI assistant inside Empyralis. You're warm, "
+        "curious, and direct, like a sharp friend who happens to have access to their "
+        "computer and accounts. You remember context, you notice things, and you don't "
+        "wait to be micromanaged.\n"
+        "## How you respond\n"
+        "Keep replies natural and conversational - like texting a friend, not writing a "
+        "report. When asked broadly 'what can you do' or for help, give a short, warm "
+        "answer in 2-4 sentences in your own words - never a bullet list or feature "
+        "catalog. If the user asks you to check, look into, search, or verify something "
+        "and you have a tool for it, use the tool now and answer with the result - don't "
+        "say you'll get back to them.\n"
+        "Telegram formatting: your reply is sent as a rich message. You can use **bold**, "
+        "*italic*, `code`, ~~strikethrough~~, ||spoiler||, ==highlight==, [links](url), "
+        "# headings, > quotes, | tables |, lists, --- dividers, and $$math$$ - use these "
+        "naturally when they make a reply clearer. If a message genuinely needs no reply "
+        "(a bare 'ok', 'thanks', emoji), output exactly [SILENT] and nothing else.\n"
+        "## A few important things\n"
+        "Never write XML, tool_calls, invoke tags, or any internal IDs in your reply - "
+        "those are for your own use, not the user's. Don't volunteer that a tool or "
+        "connection is missing unless the user asks directly about that specific thing. "
+        "Ask for explicit confirmation before sending messages, changing files, spending "
+        "credits, controlling the computer, or publishing anything. "
+        "When you need to use a tool, describe what you want in plain language "
+        "(e.g. 'let me search for X' or mention the file path/URL/command directly) "
+        "- do not wrap tool calls in XML tags or JSON blocks."
     )
-    channel_context_prompt = ""
-    if normalized_channel_context:
-        channel_context_prompt = (
-            "\n\n## Personal channel context\n"
-            f"Surface channel: {normalized_channel_context.get('surface_channel', 'personal_channel')}\n"
-            f"Sender: {normalized_channel_context.get('push_name') or normalized_channel_context.get('remote_jid') or 'unknown'}\n"
-            f"Gateway: {normalized_channel_context.get('gateway_id', 'unknown')}\n"
-            "This message came from a user-owned personal channel through Agent Computer. "
-            "Reply naturally as Sage, but do not claim a message was sent unless the approval and dispatch layer confirms it."
-        )
+
     envelope = _build_prompt_envelope(
         workspace_id=normalized_workspace_id,
         message=normalized_message,
-        system_prompt=f"{instruction_bundle.system_prompt.rstrip()}{sage_surface_guardrails}{channel_context_prompt}{mcp_tool_inventory}",
+        system_prompt=f"{instruction_bundle.system_prompt.rstrip()}{sage_surface_guardrails}{attachment_context}{mcp_tool_inventory}",
     )
 
     action_result = None
@@ -1769,14 +2085,65 @@ async def handle_sage_chat(
             credentials=credentials,
             trace_id=trace_id,
             actor_user_id=actor_user_id,
-            normalized_channel_context=normalized_channel_context,
+
             system_prompt=envelope["system_prompt"],
+            channel_origin=channel_origin,
+            attachments=attachments,
             prior_messages=prior_messages,
         )
     if action_result is not None:
         if "sage_action_loop" not in used_context:
             used_context.append("sage_action_loop")
         reply, action_reply_guard_metadata = _guard_sage_visible_reply(action_result.get("message"))
+        # Synthesize a user-facing message when the action loop ran tools/blocks/approvals
+        # but produced no natural-language reply (the model may emit only structured output).
+        if not reply:
+            action_mode = _coerce_text(action_result.get("action_execution_mode"))
+            blocked = list(action_result.get("blocked_tools") or [])
+            approvals = list(action_result.get("approvals_required") or [])
+            tool_calls = list(action_result.get("tool_calls") or [])
+            if action_mode == "approval_required" and approvals:
+                tool_names = ", ".join(
+                    a.get("name", "this action") for a in approvals[:3] if isinstance(a, dict) and a.get("name")
+                ) or "this action"
+                reply = f"I need your approval to run {tool_names}. Check the approval panel."
+            elif action_mode == "tool_blocked" and blocked:
+                tool_names = ", ".join(
+                    b.get("name", "this tool") for b in blocked[:3] if isinstance(b, dict) and b.get("name")
+                ) or "this tool"
+                reply = f"I can't run {tool_names} right now — it requires resources that aren't available."
+            elif action_mode == "partial_tools_executed" and tool_calls:
+                completed = [t.get("name", "") for t in tool_calls if isinstance(t, dict) and t.get("status") == "completed"]
+                if completed:
+                    reply = f"I ran {', '.join(completed[:3])} but couldn't complete everything. Let me know what you'd like me to adjust."
+        # --- Persist user + assistant turns to shared thread ---
+        try:
+            import time as _time
+            now_iso = __import__("datetime").datetime.now(timezone.utc).isoformat()
+            actor = {"user_id": actor_user_id or "sage", "name": actor_email or "sage"}
+            await thread_service.record_user_turn(
+                thread_id=SAGE_THREAD_ID,
+                tenant_id=effective_tenant_id,
+                workspace_id=normalized_workspace_id,
+                session_id=None,
+                actor=actor,
+                content=normalized_message,
+                metadata={"channel": channel_origin or "sage"},
+            )
+            if reply and not (str(reply).strip() == _SILENT_REPLY_MARKER or str(reply).strip().startswith(_SILENT_REPLY_MARKER)):
+                await thread_service.record_assistant_turn(
+                    thread_id=SAGE_THREAD_ID,
+                    tenant_id=effective_tenant_id,
+                    workspace_id=normalized_workspace_id,
+                    session_id=None,
+                    actor={"user_id": "sage", "name": "Sage"},
+                    reply=reply,
+                    status="completed",
+                    run_id=trace_id,
+                )
+        except Exception:
+            pass  # never break a reply just because persistence failed
+        # --- End turn persistence ---
         tool_calls = list(action_result.get("tool_calls") or [])
         blocked_tools = list(action_result.get("blocked_tools") or [])
         approvals_required = list(action_result.get("approvals_required") or [])
@@ -1837,7 +2204,7 @@ async def handle_sage_chat(
                 policy_profile=DIRECT_CHAT_PROFILE,
                 user_message=normalized_message,
                 assistant_reply=reply or "",
-                metadata={"trace_id": trace_id, "source": "sage_chat", "channel_context": normalized_channel_context or None},
+                metadata={"trace_id": trace_id, "source": "sage_chat", "channel_origin": channel_origin or None},
             )
         except Exception:
             pass
@@ -1866,7 +2233,7 @@ async def handle_sage_chat(
                     "proof_log": proof_log_payload,
                     "proof_log_id": proof_log_id,
                     "prompt_diagnostics": prompt_diagnostics,
-                    "channel_context": normalized_channel_context or None,
+                    "channel_origin": channel_origin or "sage",
                 },
             )
         except Exception:
@@ -1895,7 +2262,7 @@ async def handle_sage_chat(
                     "route_decision": route_decision,
                     "proof_log": proof_log_payload,
                     "proof_log_id": proof_log_id,
-                    "channel_context": normalized_channel_context or None,
+                    "channel_origin": channel_origin or "sage",
                 },
                 idempotency_key=f"sage_chat:{trace_id}",
             )
@@ -2003,6 +2370,33 @@ async def handle_sage_chat(
         "response_leak_guard": reply_guard_metadata,
     }
 
+    # --- Persist turns to shared thread (fallback path) ---
+    try:
+        actor3 = {"user_id": actor_user_id or "sage", "name": actor_email or "sage"}
+        await thread_service.record_user_turn(
+            thread_id=SAGE_THREAD_ID,
+            tenant_id=effective_tenant_id,
+            workspace_id=normalized_workspace_id,
+            session_id=None,
+            actor=actor3,
+            content=normalized_message,
+            metadata={"channel": channel_origin or "sage"},
+        )
+        if reply and not (str(reply).strip() == _SILENT_REPLY_MARKER or str(reply).strip().startswith(_SILENT_REPLY_MARKER)):
+            await thread_service.record_assistant_turn(
+                thread_id=SAGE_THREAD_ID,
+                tenant_id=effective_tenant_id,
+                workspace_id=normalized_workspace_id,
+                session_id=None,
+                actor={"user_id": "sage", "name": "Sage"},
+                reply=reply,
+                status="completed",
+                run_id=trace_id,
+            )
+    except Exception:
+        pass  # never break a reply just because persistence failed
+    # --- End turn persistence (fallback) ---
+
     # --- Persist interaction ---
     memory_subject = ConversationMemorySubject(
         workspace_id=normalized_workspace_id,
@@ -2015,7 +2409,7 @@ async def handle_sage_chat(
             policy_profile=DIRECT_CHAT_PROFILE,
             user_message=normalized_message,
             assistant_reply=reply or "",
-            metadata={"trace_id": trace_id, "source": "sage_chat", "channel_context": normalized_channel_context or None},
+            metadata={"trace_id": trace_id, "source": "sage_chat", "channel_origin": channel_origin or None},
         )
     except Exception:
         pass
@@ -2043,7 +2437,7 @@ async def handle_sage_chat(
                 "action_execution_mode": action_execution_mode,
                 "route_decision": route_decision,
                 "prompt_diagnostics": prompt_diagnostics,
-                "channel_context": normalized_channel_context or None,
+                "channel_origin": channel_origin or "sage",
             },
         )
     except Exception:
@@ -2070,7 +2464,7 @@ async def handle_sage_chat(
                 "action_execution_mode": action_execution_mode,
                 "route_decision": route_decision,
                 "prompt_diagnostics": prompt_diagnostics,
-                "channel_context": normalized_channel_context or None,
+                "channel_origin": channel_origin or "sage",
             },
             idempotency_key=f"sage_chat:{trace_id}",
         )

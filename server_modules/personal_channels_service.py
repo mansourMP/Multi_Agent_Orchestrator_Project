@@ -1986,3 +1986,126 @@ async def configure_telegram_personal_gateway(
         "channel_key": TELEGRAM_PERSONAL_CHANNEL_KEY,
         **result,
     }
+
+# ── Stage 2: Cloud Session Manager integration ──────────────────
+
+import os
+import hashlib
+import hmac as _hmac_module
+
+_CLOUD_SESSION_MANAGER_URL = os.getenv("CLOUD_SESSION_MANAGER_URL", "http://localhost:3400")
+_CLOUD_SESSION_HMAC_SECRET = os.getenv("CLOUD_SESSION_HMAC_SECRET", os.getenv("API_SECRET", "dev-secret-change-me"))
+_CLOUD_SESSION_MANAGER_ENABLED = os.getenv("CLOUD_SESSION_MANAGER_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def handle_cloud_channel_inbound(
+    *,
+    session_id: str,
+    channel_key: str,
+    message: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Handle inbound message from cloud session manager (Stage 2).
+
+    Follows the same pattern as _handle_telegram_gateway_channel_inbound
+    but dispatches replies via HTTP to the cloud session manager instead of
+    through the Gateway WebSocket.
+
+    Args:
+        session_id: cloud session manager session ID
+        channel_key: "telegram_personal" or "whatsapp_personal"
+        message: {external_message_id, sender_id, sender_name, text, received_at}
+    """
+    if not _CLOUD_SESSION_MANAGER_ENABLED:
+        return {"status": "disabled", "reason": "CLOUD_SESSION_MANAGER_ENABLED is false"}
+
+
+    external_message_id = str(message.get("external_message_id") or "").strip()
+    remote_jid = str(message.get("sender_id") or "").strip()
+    text = str(message.get("text") or "").strip()
+    push_name = str(message.get("sender_name") or "").strip() or None
+
+    if not external_message_id or not text:
+        raise ValueError("cloud_channel_inbound requires external_message_id and text")
+
+    # Build Sage reply using the existing bridge — same as Gateway path
+    reply = personal_channel_sage_bridge_service.build_telegram_personal_reply(
+        workspace_id="default",
+        gateway_id=f"cloud:{session_id}",
+        remote_jid=remote_jid,
+        text=text,
+        push_name=push_name,
+        source_event_id=external_message_id,
+    )
+
+    if not reply or not str(reply.get("text") or "").strip():
+        return {
+            "status": "no_reply",
+            "session_id": session_id,
+            "external_message_id": external_message_id,
+        }
+
+    # Dispatch the reply to the cloud session manager
+    reply_text = str(reply.get("text") or "").strip()
+    dispatch_result = await dispatch_cloud_channel_outbound(
+        session_id=session_id,
+        text=reply_text,
+        remote_jid=remote_jid,
+    )
+
+    return {
+        "status": "replied",
+        "session_id": session_id,
+        "external_message_id": external_message_id,
+        "reply_text": reply_text[:200],
+        "dispatch": dispatch_result,
+    }
+
+
+async def dispatch_cloud_channel_outbound(
+    *,
+    session_id: str,
+    text: str,
+    remote_jid: str = "",
+) -> Dict[str, Any]:
+    """Send an outbound reply to the cloud session manager via HTTP (Stage 2).
+
+    The cloud session manager delivers the message through its GramJS client.
+    Request is HMAC-signed for authentication.
+    """
+    if not _CLOUD_SESSION_MANAGER_ENABLED:
+        return {"ok": False, "error": "CLOUD_SESSION_MANAGER_ENABLED is false"}
+
+    import httpx
+    import json as _json
+
+    if not session_id or not text or not text.strip():
+        return {"ok": False, "error": "session_id and text are required"}
+
+    url = f"{_CLOUD_SESSION_MANAGER_URL}/sessions/{session_id}/inbound"
+
+    payload = {
+        "text": text.strip(),
+        "remote_jid": remote_jid or "me",
+    }
+
+    # HMAC sign the request
+    signature = _hmac_module.new(
+        _CLOUD_SESSION_HMAC_SECRET.encode("utf-8"),
+        _json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Signature": signature,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            body = response.json() if response.text else {}
+            if response.status_code >= 400:
+                return {"ok": False, "status": response.status_code, "error": body.get("error", "dispatch_failed")}
+            return {"ok": True, "status": response.status_code, "message_id": body.get("message_id")}
+    except Exception as exc:
+        return {"ok": False, "error": f"dispatch_error: {exc}"}

@@ -702,3 +702,65 @@ async def send_local_bridge_personal_message(
         )
         status_code = 409 if "not currently connected" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+# ── Stage 2: Cloud Session Manager inbound ──────────────────────
+
+import hashlib
+import hmac
+import os
+
+_CLOUD_HMAC_SECRET = os.getenv("CLOUD_SESSION_HMAC_SECRET", os.getenv("API_SECRET", "dev-secret-change-me"))
+
+
+class CloudChannelInboundRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+    channel_key: str = Field(default="telegram_personal")
+    message: dict
+    signature: str = Field(min_length=1)
+    signed_fields: str = Field(default="sessionId,messageId,timestamp")
+    signed_payload: dict = Field(default_factory=dict)
+
+
+def _verify_cloud_hmac(signature: str, payload: dict) -> bool:
+    """Verify HMAC-SHA256 signature from cloud session manager."""
+    if not signature or not payload:
+        return False
+    expected = hmac.new(
+        _CLOUD_HMAC_SECRET.encode("utf-8"),
+        json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+import json
+
+
+@router.post("/personal-channels/cloud/inbound")
+async def cloud_channel_inbound(
+    request: Request,
+    body: CloudChannelInboundRequest,
+):
+    """Receive inbound messages from the cloud session manager (Stage 2).
+
+    The cloud session manager forwards Telegram/WhatsApp messages here.
+    HMAC-signed for authentication (system-to-system, no user API key).
+    """
+    # Verify HMAC signature
+    signed_payload = body.signed_payload or {}
+    if not signed_payload:
+        raise HTTPException(status_code=401, detail="Missing signed_payload for HMAC verification")
+    if not _verify_cloud_hmac(body.signature, signed_payload):
+        raise HTTPException(status_code=401, detail="HMAC signature verification failed")
+
+    # Verify session_id matches
+    if signed_payload.get("sessionId") != body.session_id:
+        raise HTTPException(status_code=400, detail="session_id mismatch in signed payload")
+
+    result = await personal_channels_service.handle_cloud_channel_inbound(
+        session_id=body.session_id,
+        channel_key=body.channel_key,
+        message=body.message,
+    )
+    return JSONResponse(content=result)

@@ -1432,7 +1432,7 @@ async def _run_sage_action_loop_v3(
         tenant_id=tenant_id or "default",
         root_agent_id=SAGE_MAIN_AGENT_ID,
         surface="sage",
-        thread_id=trace_id,
+        thread_id=SAGE_THREAD_ID,
         run_id=None,
         runtime_target=None,
         provider=provider,

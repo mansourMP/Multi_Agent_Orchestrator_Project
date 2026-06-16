@@ -389,12 +389,30 @@ def build_heartbeat_notify_callback(
     *,
     handle_telegram_send_message: Callable[..., Any],
     workspace_id: Optional[str],
+    dispatch_cloud_channel_outbound_fn: Optional[Callable[..., Any]] = None,
+    resolve_cloud_telegram_session_id_fn: Optional[Callable[[], Optional[str]]] = None,
 ) -> Callable[[str], None]:
     scoped_workspace_id = str(workspace_id or "").strip() or None
 
     def _heartbeat_notify(message: str) -> None:
         if not scoped_workspace_id:
             return
+
+        # Stage 6: Try cloud-session-manager path first (proactive delivery via GramJS)
+        if callable(resolve_cloud_telegram_session_id_fn) and callable(dispatch_cloud_channel_outbound_fn):
+            try:
+                session_id = resolve_cloud_telegram_session_id_fn()
+                if session_id:
+                    asyncio.run(dispatch_cloud_channel_outbound_fn(
+                        session_id=session_id,
+                        text=message,
+                        remote_jid="me",
+                    ))
+                    return
+            except Exception:
+                pass
+
+        # Fall back to old Telegram bot path
         try:
             asyncio.run(handle_telegram_send_message(message, workspace_id=scoped_workspace_id))
         except Exception:

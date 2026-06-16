@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -731,6 +732,8 @@ async def workspace_member_invites(
     body: WorkspaceInviteRequest,
     current_user=Depends(get_current_user),
 ):
+    if str(os.getenv("EMPYRALIS_ENABLE_WORKSPACE_INVITES", "0")).strip().lower() not in {"1", "true", "yes", "on"}:
+        raise HTTPException(status_code=404, detail="Not available")
     resolved_workspace_id = auth_module.enforce_workspace_access(
         current_user,
         workspace_id,
@@ -768,6 +771,8 @@ async def workspace_member_invite_revoke(
     invite_id: str,
     current_user=Depends(get_current_user),
 ):
+    if str(os.getenv("EMPYRALIS_ENABLE_WORKSPACE_INVITES", "0")).strip().lower() not in {"1", "true", "yes", "on"}:
+        raise HTTPException(status_code=404, detail="Not available")
     resolved_workspace_id = auth_module.enforce_workspace_access(
         current_user,
         workspace_id,
@@ -804,6 +809,8 @@ async def workspace_member_update(
     body: WorkspaceMemberUpdateRequest,
     current_user=Depends(get_current_user),
 ):
+    if str(os.getenv("EMPYRALIS_ENABLE_WORKSPACE_INVITES", "0")).strip().lower() not in {"1", "true", "yes", "on"}:
+        raise HTTPException(status_code=404, detail="Not available")
     return await workspace_admin_service.update_workspace_member_role(
         workspace_id=workspace_id,
         current_user=current_user,
@@ -818,6 +825,8 @@ async def workspace_member_remove(
     user_id: str,
     current_user=Depends(get_current_user),
 ):
+    if str(os.getenv("EMPYRALIS_ENABLE_WORKSPACE_INVITES", "0")).strip().lower() not in {"1", "true", "yes", "on"}:
+        raise HTTPException(status_code=404, detail="Not available")
     return await workspace_admin_service.remove_workspace_member(
         workspace_id=workspace_id,
         current_user=current_user,

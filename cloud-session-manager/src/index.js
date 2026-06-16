@@ -90,6 +90,12 @@ async function main() {
     logger.info({ port: CONFIG.apiPort, maxSessions: CONFIG.maxSessions }, "cloud-session-manager started");
   });
 
+  // Node 26 keepalive: prevent event loop from draining.
+  // Node 26 (V8 13.6) has a known edge case where the event loop
+  // can exit prematurely even with an active HTTP server.
+  const _keepalive = setInterval(() => {}, 30_000);
+  _keepalive.unref = () => _keepalive;  // prevent accidental unref
+
   // Heartbeat removed — root cause fixed in session-pool.js (unref'd timer)
 
   // Graceful shutdown

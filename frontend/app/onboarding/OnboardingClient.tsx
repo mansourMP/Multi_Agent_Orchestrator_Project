@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import {
@@ -127,23 +127,15 @@ export function OnboardingClient({
     );
   }
 
-  return (
-    <main className="app-auth-page">
-      <div>
-        <WorkspaceSetupForm
-          workspaceId={membership.workspace.id}
-          title="Finish workspace setup"
-          description="Name the workspace and choose where Empyralis should open first."
-          submitLabel="Save workspace setup"
-          initialValues={{
-            ...initialValuesForMembership(membership),
-            defaultRoute: membership.defaultRoute || `/w/${encodeURIComponent(membership.workspace.id)}${DEFAULT_ROUTE_BY_PROFILE.personal_shell}`,
-          }}
-          submitting={submitting}
-          errorMessage={errorMessage}
-          onSubmit={handleSubmit}
-        />
-      </div>
-    </main>
-  );
+  // Auto-submit with defaults for single-user platform — skip the setup form.
+  useEffect(() => {
+    handleSubmit(createDefaultWorkspaceSetupValues(membership.workspace.id, {
+      name: membership.workspace.label || 'My Workspace',
+      workspaceType: 'personal',
+      preferredShellProfileId: 'personal_shell',
+      defaultRoute: membership.defaultRoute || `/w/${encodeURIComponent(membership.workspace.id)}/sage/chat`,
+    }));
+  }, []);
+
+  return null;
 }

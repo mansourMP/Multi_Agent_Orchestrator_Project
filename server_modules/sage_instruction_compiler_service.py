@@ -490,11 +490,23 @@ def _normalize_recent_messages(value: Sequence[Mapping[str, Any]] | None) -> lis
     return normalized
 
 
+
+# Per-channel format guidance injected into the system prompt.
+# Keys match channel_origin values set by each ingress path.
+CHANNEL_FORMAT_HINTS: dict[str, str] = {
+    "web": "Full markdown and tables are supported. Longer responses are acceptable.",
+    "telegram_hosted": "Markdown is supported (no HTML). Keep responses concise — under ~800 chars unless detail is needed.",
+    "telegram_personal": "Markdown is supported (no HTML). Keep responses concise — under ~800 chars unless detail is needed.",
+    "whatsapp_personal": "Plain text preferred with minimal markdown. Keep responses short and conversational.",
+    "discord_personal": "Markdown is supported. Embeds are not available via DM.",
+}
+
 def build_sage_instruction_bundle(
     *,
     workspace_id: str,
     message: str,
     tenant_id: str = "",
+    channel_origin: str = "",
     provider: str = "",
     model: str | None = None,
     billing_source: str | None = None,
@@ -582,6 +594,15 @@ def build_sage_instruction_bundle(
         )
     elif _coerce_text(memory_context):
         skipped_sections.append("retrieved_memory:not_relevant")
+
+    # Inject channel context so Sage knows which surface it's responding on
+    _ch = str(channel_origin or "").strip()
+    if _ch:
+        _hint = CHANNEL_FORMAT_HINTS.get(_ch, "")
+        _channel_block = f"Current channel: {_ch}."
+        if _hint:
+            _channel_block += f" {_hint}"
+        append_section("channel_context", _channel_block)
 
     system_prompt = "\n\n".join(section for section in sections if _coerce_text(section)).strip()
     messages = [

@@ -45,6 +45,16 @@ export class InboundHandler {
       const text = String(msg.text || "").trim();
       if (!text) return { skipped: true, reason: "empty_text" };
 
+      // Handle /compact command — trigger compaction without a full Sage turn.
+      // The backend routes_sage_telegram_hosted.py also handles this, but doing
+      // it here avoids forwarding the message to Sage at all.
+      if (text.toLowerCase().startsWith("/compact")) {
+        // Forward to backend as a normal message — the backend's /compact handler
+        // in routes_sage_telegram_hosted.py will process it.
+        // We still forward so the backend can access the workspace thread/turns.
+        this.logger?.info?.("forwarding /compact command to backend");
+      }
+
       // Skip our own messages to avoid echo loops.
       // Exception: self-chat (Saved Messages) where sender === chat owner.
       // In self-chats, fromMe is always true but the user is intentionally
@@ -54,6 +64,16 @@ export class InboundHandler {
       if (fromMe && !isSelfChat) {
         this.logger?.info?.({ text: text.slice(0, 40) }, "skipping own message (fromMe)");
         return { skipped: true, reason: "from_me" };
+      }
+
+      // Skip messages from the hosted bot to avoid dual-path processing.
+      // The hosted bot handles its own messages via Telegram polling;
+      // the CSM should only process personal DMs / Saved Messages.
+      const HOSTED_BOT_ID = "8870032163";
+      const senderJid = String(msg.sender_jid || msg.senderJid || msg.remote_jid || msg.remoteJid || "").trim();
+      if (senderJid === HOSTED_BOT_ID) {
+        this.logger?.info?.("skipping message from hosted bot (dual-path prevention)");
+        return { skipped: true, reason: "hosted_bot_message" };
       }
 
       // Group gate: skip group messages unless Sage is mentioned or replied to.

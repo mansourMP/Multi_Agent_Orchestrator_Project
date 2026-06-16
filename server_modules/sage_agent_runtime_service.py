@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import uuid
 from typing import Any, Dict, List, Optional
@@ -1910,6 +1911,20 @@ async def handle_sage_chat(
     normalized_surface = normalize_sage_surface(surface)
     normalized_tenant_id = _coerce_text(tenant_id)
 
+    # Resolve tenant_id from workspace when not explicitly provided or "default".
+    # Callers like the hosted Telegram bot only pass workspace_id, and the
+    # fallback "default" tenant fails credit debit checks for real workspaces.
+    if not normalized_tenant_id or normalized_tenant_id == "default":
+        try:
+            from server_modules.control_plane_repository import get_workspace_by_id
+            ws_record = await get_workspace_by_id(normalized_workspace_id)
+            if isinstance(ws_record, dict):
+                resolved = str(ws_record.get("tenant_id") or "").strip()
+                if resolved:
+                    normalized_tenant_id = resolved
+        except Exception:
+            pass
+
     if not normalized_workspace_id:
         raise ValueError("workspace_id is required")
     if not normalized_message:
@@ -2017,7 +2032,11 @@ async def handle_sage_chat(
                 and str(t.get("role") or "").strip().lower() in {"user", "assistant"}
                 and str(t.get("content") or "").strip()
             ][-SAGE_THREAD_MAX_TURNS:]
-    except Exception:
+    except Exception as _thread_load_err:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "sage_agent_runtime: failed to load thread turns: %s", _thread_load_err
+        )
         recent_messages = []
     # --- End recent message load ---
 
@@ -2033,6 +2052,7 @@ async def handle_sage_chat(
         memory_context=memory_context,
         heartbeat_context=heartbeat_context,
         recent_messages=recent_messages,
+        channel_origin=channel_origin,
     )
     prompt_diagnostics = instruction_bundle.diagnostics
     prior_messages = instruction_bundle.prior_messages or []

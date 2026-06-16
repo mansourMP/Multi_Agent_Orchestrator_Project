@@ -1136,6 +1136,21 @@ async def _deliver_whatsapp_personal_reply(
 
     if outbound is None:
         # Resolve linked user name from WhatsApp state for identity context
+        # Validate workspace_id from registration exists before proceeding
+        try:
+            from server_modules.control_plane_repository import get_workspace_by_id
+            _ws_id = str(registration.get("workspace_id") or "").strip()
+            if _ws_id and _ws_id != "default":
+                ws_check = await get_workspace_by_id(_ws_id)
+                if not ws_check:
+                    _ws_logger = __import__('logging').getLogger(__name__)
+                    _ws_logger.error(
+                        "whatsapp_personal: invalid workspace_id=%s in registration — message will be ignored",
+                        _ws_id,
+                    )
+                    return {"ignored": True, "reason": "invalid_workspace_id", "workspace_id": _ws_id}
+        except Exception:
+            pass
         _wa_state = personal_channels_repository.get_whatsapp_state(
             str(gateway_id or "").strip(),
             channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
@@ -2039,6 +2054,21 @@ async def handle_cloud_channel_inbound(
 
     resolved_workspace_id = str(workspace_id or "default").strip() or "default"
 
+    # Validate workspace_id exists before processing
+    if resolved_workspace_id and resolved_workspace_id != "default":
+        try:
+            from server_modules.control_plane_repository import get_workspace_by_id
+            _ws_check = await get_workspace_by_id(resolved_workspace_id)
+            if not _ws_check:
+                _csm_logger = __import__('logging').getLogger(__name__)
+                _csm_logger.error(
+                    "cloud_channel_inbound: invalid workspace_id=%s — message dropped",
+                    resolved_workspace_id,
+                )
+                return {"status": "invalid_workspace", "workspace_id": resolved_workspace_id}
+        except Exception:
+            pass
+
     external_message_id = str(message.get("external_message_id") or "").strip()
     remote_jid = str(message.get("sender_id") or "").strip()
     text = str(message.get("text") or "").strip()
@@ -2047,6 +2077,62 @@ async def handle_cloud_channel_inbound(
 
     if not external_message_id or not text:
         raise ValueError("cloud_channel_inbound requires external_message_id and text")
+
+    # Handle /compact command — trigger compaction without a full Sage turn
+    if text.strip().lower().startswith("/compact"):
+        from server_modules import thread_service
+        from server_modules.compaction_service import (
+            compact_turns, find_cut_point, should_compact, load_previous_summary,
+            DEFAULT_CONTEXT_WINDOW,
+        )
+        from server_modules.sage_agent_runtime_service import SAGE_THREAD_ID
+
+        tenant_id = "default"
+        await thread_service.ensure_master_thread(
+            thread_id=SAGE_THREAD_ID,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            owner_user_id="sage",
+            channel="sage",
+        )
+        thread_record = await thread_service.get_thread(
+            SAGE_THREAD_ID,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            include_turns=True,
+        )
+        raw_turns = list(thread_record.get("turns") or []) if isinstance(thread_record, dict) else []
+        _ctx_window = DEFAULT_CONTEXT_WINDOW
+        if raw_turns and should_compact(raw_turns, context_window=_ctx_window):
+            cut_idx = find_cut_point(raw_turns)
+            if cut_idx > 0:
+                prev = await load_previous_summary(
+                    workspace_id=resolved_workspace_id, tenant_id=tenant_id,
+                    thread_id=SAGE_THREAD_ID,
+                )
+                await compact_turns(
+                    turns=raw_turns[:cut_idx],
+                    workspace_id=resolved_workspace_id,
+                    tenant_id=tenant_id,
+                    thread_id=SAGE_THREAD_ID,
+                    previous_summary=prev,
+                )
+            compact_reply = "Context compacted."
+        else:
+            compact_reply = "Nothing to compact — context is still small."
+
+        # Send reply via cloud session manager
+        await dispatch_cloud_channel_outbound(
+            session_id=session_id,
+            text=compact_reply,
+            remote_jid=remote_jid,
+        )
+        return {
+            "status": "compacted",
+            "session_id": session_id,
+            "external_message_id": external_message_id,
+            "reply_text": compact_reply,
+        }
 
     # Build Sage reply using the existing bridge — same as Gateway path
     reply = await personal_channel_sage_bridge_service.build_telegram_personal_reply_async(

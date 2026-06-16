@@ -105,6 +105,7 @@ export class WhatsAppPersonalRuntime {
   private pairingCodeRequested = false;
   private connectPromise: Promise<void> | null = null;
   private reconnectAttempts = 0;
+  private sentMessageIds = new Set<string>();
   private readonly draftManager = new DraftManager();
 
   constructor(
@@ -333,6 +334,12 @@ export class WhatsAppPersonalRuntime {
         idempotencyKey,
         String(mapped.external_message_id || "").trim() || undefined,
       );
+      // Track sent message ID for reply-to detection in group gate
+      const sentId = String(mapped.external_message_id || "").trim();
+      if (sentId) {
+        this.sentMessageIds.add(sentId);
+        if (this.sentMessageIds.size > 500) this.sentMessageIds.clear();
+      }
       return mapped;
     } finally {
       await typing.stop();
@@ -465,13 +472,22 @@ export class WhatsAppPersonalRuntime {
   }
 
   private async handleMessagesUpsert(event: Record<string, unknown>): Promise<void> {
+    const ownedJid = String(this.socket?.user?.id ?? "").trim() || undefined;
     const messages = Array.isArray(event.messages) ? event.messages : [];
     for (const entry of messages) {
       if (!entry || typeof entry !== "object") {
         continue;
       }
-      const mapped = mapWhatsAppInboundMessage(entry as Record<string, unknown>);
-      if (!mapped || mapped.message.from_me) {
+      const mapped = mapWhatsAppInboundMessage(entry as Record<string, unknown>, { ownedJid });
+      if (!mapped || (mapped.message.from_me && !mapped.message.is_self_chat)) {
+        continue;
+      }
+      // Resolve is_reply_to_sage: quoted stanza was sent by Sage
+      if (mapped.message.is_group && mapped.message.quoted_stanza_id) {
+        mapped.message.is_reply_to_sage = this.sentMessageIds.has(String(mapped.message.quoted_stanza_id));
+      }
+      // Group gate: skip group messages unless mentioned or replying to Sage
+      if (mapped.message.is_group && !mapped.message.is_mentioned && !mapped.message.is_reply_to_sage) {
         continue;
       }
       await this.publishInbound(mapped);

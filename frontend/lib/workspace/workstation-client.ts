@@ -64,6 +64,15 @@ export type WorkstationTurnResponse = {
   metadata?: Record<string, unknown>;
 };
 
+export type SageChatAttachment = {
+  file_id: string;
+  filename: string;
+  safe_filename: string;
+  content_type: string;
+  size: number;
+  url: string;
+};
+
 export type WorkstationTurnStreamEvent = {
   id?: string | null;
   event: string;
@@ -945,6 +954,7 @@ export type WorkstationClientPaths = {
   connectorVaultCredential: (credentialId: string) => string;
   workspaceProviderCredentials: string;
   sageToolPolicy: string;
+  sageChatAttachments: string;
   runInstalledAgent: (installId: string) => string;
   agentTraces: (filters?: WorkstationAgentTraceListFilters) => string;
   agentTraceDetail: (traceId: string) => string;
@@ -1074,6 +1084,7 @@ export type WorkstationClient = {
     runtimeProfileId?: string | null;
     metadata?: Record<string, unknown>;
     clientRequestId?: string | null;
+    attachments?: SageChatAttachment[];
   }) => Promise<Record<string, unknown>>;
   listRuns: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
   getRunDetail: (options: { runId: string; allowMissing?: boolean }) => Promise<Record<string, unknown> | null>;
@@ -1513,6 +1524,10 @@ export type WorkstationClient = {
   getCreditBalance: () => Promise<Record<string, unknown>>;
   getCreditUsageHistory: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
   getCreditUsage: (options?: CreditUsageQueryOptions) => Promise<Record<string, unknown>>;
+  uploadSageChatAttachment: (options: {
+    file: File;
+    onProgress?: (progress: number) => void;
+  }) => Promise<SageChatAttachment>;
   createSession: (options: {
     actor: WorkstationSessionActor;
     threadId: string;
@@ -1535,6 +1550,7 @@ export type WorkstationClient = {
     reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
     clientRequestId?: string | null;
+    attachments?: SageChatAttachment[];
   }) => Promise<WorkstationTurnResponse>;
   submitTurnStream: (options: {
     actor: WorkstationSessionActor;
@@ -1552,6 +1568,7 @@ export type WorkstationClient = {
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
     clientRequestId?: string | null;
     abortHandle?: WorkstationTurnStreamAbortHandle | null;
+    attachments?: SageChatAttachment[];
   }) => Promise<WorkstationTurnResponse>;
   submitTurnWithSessionRetry: (options: {
     actor: WorkstationSessionActor;
@@ -1567,6 +1584,7 @@ export type WorkstationClient = {
     policyContext?: Record<string, unknown>;
     existingSession?: WorkstationSessionRecord | null;
     clientRequestId?: string | null;
+    attachments?: SageChatAttachment[];
   }) => Promise<{
     response: WorkstationTurnResponse;
     session: WorkstationSessionRecord;
@@ -1588,6 +1606,7 @@ export type WorkstationClient = {
     existingSession?: WorkstationSessionRecord | null;
     clientRequestId?: string | null;
     abortHandle?: WorkstationTurnStreamAbortHandle | null;
+    attachments?: SageChatAttachment[];
   }) => Promise<{
     response: WorkstationTurnResponse;
     session: WorkstationSessionRecord;
@@ -1754,6 +1773,7 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/connectors/vault/${encodeURIComponent(credentialId)}${buildQueryString({ workspace_id: workspaceId })}`,
     workspaceProviderCredentials: `/api/workspaces/${encodeURIComponent(workspaceId)}/providers/credentials`,
     sageToolPolicy: `/api/workspaces/${encodeURIComponent(workspaceId)}/sage/tool-policy`,
+    sageChatAttachments: `/api/sage-chat/attachments${buildQueryString({ workspace_id: workspaceId })}`,
     runInstalledAgent: (installId) => `/agents/${encodeURIComponent(installId)}/run`,
     agentTraces: (filters = {}) =>
       `/api/agent-traces${buildQueryString({
@@ -2232,6 +2252,21 @@ function appendWorkspaceScope(path: string, workspaceId: string): string {
   return `${path}${separator}workspace_id=${encodeURIComponent(workspaceId)}`;
 }
 
+function readCsrfTokenFromCookie(): string | null {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  const prefix = 'empyralis_csrf_token=';
+  for (const chunk of document.cookie.split(';')) {
+    const part = chunk.trim();
+    if (part.startsWith(prefix)) {
+      const value = part.slice(prefix.length).trim();
+      return value ? decodeURIComponent(value) : null;
+    }
+  }
+  return null;
+}
+
 function resolveAbsoluteUrl(baseUrl: string, path: string): string {
   if (/^https?:\/\//.test(path)) {
     return path;
@@ -2371,6 +2406,7 @@ export function createWorkstationClient(
     runtimeProfileId = null,
     metadata = {},
     clientRequestId = null,
+    attachments = [],
   }: {
     actor: WorkstationSessionActor;
     sessionId: string;
@@ -2380,6 +2416,7 @@ export function createWorkstationClient(
     runtimeProfileId?: string | null;
     metadata?: Record<string, unknown>;
     clientRequestId?: string | null;
+    attachments?: SageChatAttachment[];
   }): Promise<Record<string, unknown>> {
     const resolvedRequestId = readString(clientRequestId) || createClientRequestId();
     return (await requestJson<Record<string, unknown>>({
@@ -2397,6 +2434,7 @@ export function createWorkstationClient(
           runtime_profile_id: runtimeProfileId ?? undefined,
           metadata,
           client_request_id: resolvedRequestId,
+          attachments,
         }),
       },
       policy: CHAT_TURN_PERSIST_REQUEST_POLICY,
@@ -2417,6 +2455,7 @@ export function createWorkstationClient(
     reasoningEffort = null,
     policyContext = {},
     clientRequestId = null,
+    attachments = [],
   }: {
     actor: WorkstationSessionActor;
     sessionId: string;
@@ -2431,6 +2470,7 @@ export function createWorkstationClient(
     reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
     clientRequestId?: string | null;
+    attachments?: SageChatAttachment[];
   }): Promise<WorkstationTurnResponse> {
     const resolvedRequestId = readString(clientRequestId) || createClientRequestId();
     return (await requestJson<WorkstationTurnResponse>({
@@ -2451,7 +2491,7 @@ export function createWorkstationClient(
           model: model ?? undefined,
           reasoning_effort: reasoningEffort ?? undefined,
           machine_target: machineTarget ?? undefined,
-          attachments: [],
+          attachments: attachments ?? [],
           context_hints: {
             source,
             thread_id: threadId,
@@ -2578,6 +2618,7 @@ export function createWorkstationClient(
     onEvent,
     clientRequestId = null,
     abortHandle = null,
+    attachments = [],
   }: {
     actor: WorkstationSessionActor;
     sessionId: string;
@@ -2594,6 +2635,7 @@ export function createWorkstationClient(
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
     clientRequestId?: string | null;
     abortHandle?: WorkstationTurnStreamAbortHandle | null;
+    attachments?: SageChatAttachment[];
   }): Promise<WorkstationTurnResponse> {
     const resolvedRequestId = readString(clientRequestId) || createClientRequestId();
     let response: Response;
@@ -2617,7 +2659,7 @@ export function createWorkstationClient(
             model: model ?? undefined,
             reasoning_effort: reasoningEffort ?? undefined,
             machine_target: machineTarget ?? undefined,
-            attachments: [],
+            attachments: attachments ?? [],
             context_hints: {
               source,
               thread_id: threadId,
@@ -4192,6 +4234,57 @@ export function createWorkstationClient(
         path: paths.billingCreditUsage(options),
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    uploadSageChatAttachment: async ({ file, onProgress }) => {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const csrfToken = readCsrfTokenFromCookie();
+
+      // We use XMLHttpRequest for progress tracking
+      return new Promise<SageChatAttachment>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', resolveAbsoluteUrl(getApiBaseUrl(), paths.sageChatAttachments));
+        xhr.withCredentials = true;
+
+        if (csrfToken) {
+          xhr.setRequestHeader('x-csrf-token', csrfToken);
+        }
+
+        if (xhr.upload && onProgress) {
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              onProgress((event.loaded / event.total) * 100);
+            }
+          };
+        }
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              const response = JSON.parse(xhr.responseText);
+              resolve(response as SageChatAttachment);
+            } catch (err) {
+              reject(new WorkstationClientError('Failed to parse upload response.', xhr.status, null, 'parse_error'));
+            }
+          } else {
+            let detail = xhr.responseText;
+            try {
+              const parsed = JSON.parse(xhr.responseText);
+              detail = parsed.detail || parsed.message || xhr.responseText;
+            } catch {
+              // Not JSON
+            }
+            reject(new WorkstationClientError(`Upload failed (${xhr.status}): ${detail}`, xhr.status, detail, 'upload_failure'));
+          }
+        };
+
+        xhr.onerror = () => {
+          reject(new WorkstationClientError('Network error during upload.', 0, null, 'network_error'));
+        };
+
+        xhr.send(formData);
+      });
+    },
     createSession,
     persistUserTurn,
     submitTurn,
@@ -4209,7 +4302,9 @@ export function createWorkstationClient(
       policyContext = {},
       existingSession = null,
       clientRequestId = null,
-    }) => {
+      attachments = [],
+      }) => {
+
       let session = await createSession({
         actor,
         threadId,
@@ -4234,6 +4329,7 @@ export function createWorkstationClient(
           reasoningEffort,
           policyContext,
           clientRequestId,
+          attachments,
         });
         return { response, session, renewed: false };
       } catch (error) {
@@ -4263,6 +4359,7 @@ export function createWorkstationClient(
           reasoningEffort,
           policyContext,
           clientRequestId,
+          attachments,
         });
         return { response, session, renewed: true };
       }
@@ -4284,6 +4381,7 @@ export function createWorkstationClient(
     existingSession = null,
     clientRequestId = null,
     abortHandle = null,
+    attachments = [],
   }) => {
       let session = await createSession({
         actor,
@@ -4313,7 +4411,9 @@ export function createWorkstationClient(
             onEvent,
             clientRequestId,
             abortHandle,
-          });
+            attachments,
+            });
+
           return { response, session, renewed: false };
         } catch (error) {
           if (error instanceof WorkstationClientError && error.status === 409) {
@@ -4342,7 +4442,9 @@ export function createWorkstationClient(
                 onEvent,
                 clientRequestId,
                 abortHandle,
-              });
+                attachments,
+                });
+
               return { response, session, renewed: true };
             } catch (renewedError) {
               if (shouldRetryTurnStreamFailure(renewedError, streamTransportRetryCount)) {

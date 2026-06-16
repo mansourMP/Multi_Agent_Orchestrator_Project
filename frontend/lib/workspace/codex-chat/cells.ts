@@ -1,7 +1,7 @@
 'use client';
 
 export type TimelineProjectionEvent =
-  | { type: 'user'; payload: { content: string } }
+  | { type: 'user'; payload: { content: string; attachments?: any[] } }
   | { type: 'step'; payload: Record<string, unknown> }
   | { type: 'trace'; payload: Record<string, unknown> }
   | { type: 'typed'; payload: Record<string, unknown> & { event_type?: string } }
@@ -55,6 +55,7 @@ type CodexCellBase = {
 export type CodexUserCell = CodexCellBase & {
   kind: 'user';
   content: string;
+  attachments?: any[];
 };
 
 export type CodexAssistantCell = CodexCellBase & {
@@ -208,7 +209,7 @@ export type CodexTimelineProjection = {
 };
 
 export type CodexChatEvent =
-  | { type: 'user'; id: string; content: string }
+  | { type: 'user'; id: string; content: string; attachments?: any[] }
   | { type: 'reasoning_delta'; id: string; text: string; isStreaming: boolean }
   | { type: 'assistant_delta'; id: string; delta: string; provider: string | null; model: string | null }
   | { type: 'assistant_final'; id: string; content: string; isIncomplete: boolean; provider: string | null; model: string | null }

@@ -14,6 +14,7 @@ import { WorkstationSplitWorkbench } from '@/lib/workspace/workstation-split-wor
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { emitWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
+import { buildCookieAuthHeaders } from '@/lib/auth/csrf';
 import type {
   ProviderCatalogModelRecord,
   ConnectionStatusItem,
@@ -458,6 +459,260 @@ const DEFAULT_MCP_SERVER_DRAFT: McpServerDraft = {
   endpoint: '',
 };
 
+type McpMarketplaceApp = {
+  serverId: string;
+  name: string;
+  description: string;
+  endpoint: string;
+  toolCount: string;
+  authType: string;
+  apiKey?: boolean;
+};
+
+const MCP_MARKETPLACE_APPS: McpMarketplaceApp[] = [
+  {
+    serverId: 'canva',
+    name: 'Canva',
+    description: 'Search, read, export, and generate designs. Create folders, manage assets, and more.',
+    endpoint: 'https://server.smithery.ai/canva/mcp',
+    toolCount: '17+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'figma',
+    name: 'Figma',
+    description: 'Extract design tokens, discover components, export assets, analyze design files.',
+    endpoint: 'https://server.smithery.ai/figma/mcp',
+    toolCount: '10+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'slack',
+    name: 'Slack',
+    description: 'Send messages, read channels, search history, manage workspace.',
+    endpoint: 'https://server.smithery.ai/slack/mcp',
+    toolCount: '12+',
+    authType: 'OAuth',
+  },
+  {
+    serverId: 'discord',
+    name: 'Discord',
+    description: 'Read and send messages, manage channels, interact with servers.',
+    endpoint: 'https://server.smithery.ai/discord/mcp',
+    toolCount: '8+',
+    authType: 'Bot token',
+  },
+  {
+    serverId: 'jira',
+    name: 'Jira',
+    description: 'Create and search issues, manage projects, read boards and sprints.',
+    endpoint: 'https://server.smithery.ai/jira/mcp',
+    toolCount: '15+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'stripe',
+    name: 'Stripe',
+    description: 'Read charges, manage customers, create invoices, search payments.',
+    endpoint: 'https://server.smithery.ai/stripe/mcp',
+    toolCount: '20+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'hubspot',
+    name: 'HubSpot',
+    description: 'Manage contacts, deals, tickets, and read CRM data.',
+    endpoint: 'https://server.smithery.ai/hubspot/mcp',
+    toolCount: '15+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'salesforce',
+    name: 'Salesforce',
+    description: 'Query objects, manage leads, opportunities, and accounts.',
+    endpoint: 'https://server.smithery.ai/salesforce/mcp',
+    toolCount: '20+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'gitlab',
+    name: 'GitLab',
+    description: 'Manage repos, MRs, pipelines, issues, and CI/CD.',
+    endpoint: 'https://server.smithery.ai/gitlab/mcp',
+    toolCount: '15+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'confluence',
+    name: 'Confluence',
+    description: 'Read and search pages, manage spaces, create content.',
+    endpoint: 'https://server.smithery.ai/confluence/mcp',
+    toolCount: '10+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'miro',
+    name: 'Miro',
+    description: 'Read and create boards, manage widgets, export content.',
+    endpoint: 'https://server.smithery.ai/miro/mcp',
+    toolCount: '10+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'asana',
+    name: 'Asana',
+    description: 'Manage tasks, projects, teams, and portfolios.',
+    endpoint: 'https://server.smithery.ai/asana/mcp',
+    toolCount: '10+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'clickup',
+    name: 'ClickUp',
+    description: 'Manage tasks, docs, goals, and workspaces.',
+    endpoint: 'https://server.smithery.ai/clickup/mcp',
+    toolCount: '12+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'monday',
+    name: 'monday.com',
+    description: 'Manage boards, items, groups, and workspaces.',
+    endpoint: 'https://server.smithery.ai/monday/mcp',
+    toolCount: '10+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'todoist',
+    name: 'Todoist',
+    description: 'Create and manage tasks, projects, and filters.',
+    endpoint: 'https://server.smithery.ai/todoist/mcp',
+    toolCount: '8+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'airtable',
+    name: 'Airtable',
+    description: 'Read and write bases, tables, records, and views.',
+    endpoint: 'https://server.smithery.ai/airtable/mcp',
+    toolCount: '10+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'zoom',
+    name: 'Zoom',
+    description: 'Schedule meetings, manage participants, list recordings.',
+    endpoint: 'https://server.smithery.ai/zoom/mcp',
+    toolCount: '8+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'calendly',
+    name: 'Calendly',
+    description: 'Manage scheduling, read event types, list scheduled events.',
+    endpoint: 'https://server.smithery.ai/calendly/mcp',
+    toolCount: '6+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'mailchimp',
+    name: 'Mailchimp',
+    description: 'Manage campaigns, lists, audiences, and analytics.',
+    endpoint: 'https://server.smithery.ai/mailchimp/mcp',
+    toolCount: '12+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'webflow',
+    name: 'Webflow',
+    description: 'Manage sites, collections, CMS items, and publishing.',
+    endpoint: 'https://server.smithery.ai/webflow/mcp',
+    toolCount: '10+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'intercom',
+    name: 'Intercom',
+    description: 'Manage conversations, contacts, articles, and help center.',
+    endpoint: 'https://server.smithery.ai/intercom/mcp',
+    toolCount: '10+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'zendesk',
+    name: 'Zendesk',
+    description: 'Manage tickets, users, articles, and support workflows.',
+    endpoint: 'https://server.smithery.ai/zendesk/mcp',
+    toolCount: '12+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'docusign',
+    name: 'Docusign',
+    description: 'Send envelopes, manage signatures, check document status.',
+    endpoint: 'https://server.smithery.ai/docusign/mcp',
+    toolCount: '8+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'quickbooks',
+    name: 'QuickBooks',
+    description: 'Manage invoices, customers, payments, and accounting.',
+    endpoint: 'https://server.smithery.ai/quickbooks/mcp',
+    toolCount: '15+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'xero',
+    name: 'Xero',
+    description: 'Manage accounting, invoices, bank transactions, contacts.',
+    endpoint: 'https://server.smithery.ai/xero/mcp',
+    toolCount: '12+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'vercel',
+    name: 'Vercel',
+    description: 'Manage deployments, projects, domains, and team config.',
+    endpoint: 'https://server.smithery.ai/vercel/mcp',
+    toolCount: '10+',
+    authType: 'API key',
+    apiKey: true,
+  },
+  {
+    serverId: 'box',
+    name: 'Box',
+    description: 'Manage files, folders, collaborations, and content.',
+    endpoint: 'https://server.smithery.ai/box/mcp',
+    toolCount: '10+',
+    authType: 'API key',
+    apiKey: true,
+  },
+];
+
 const SAMPLE_PROVIDER_IDS = [
   'deepseek',
   'gemini',
@@ -552,8 +807,8 @@ const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
     image: '/brand-assets/channels/telegram.svg?v=3',
     connectorIds: ['sage_telegram_hosted'],
     capabilityTags: ['Hosted channel', 'Bot replies'],
-    summary: 'Sage on Telegram is the hosted Telegram path. Users open Sage from Telegram without bringing their own bot token.',
-    setupHint: 'Connect the hosted Sage Telegram channel when it is enabled for this environment.',
+    summary: 'Sage on Telegram is the official Empyralis Telegram bot. Open Telegram, send the pairing code from your settings, and start messaging Sage instantly.',
+    setupHint: 'Open the official Empyralis bot on Telegram and send your pairing code to connect.',
     surfaceScope: 'all',
   },
   {
@@ -1024,6 +1279,8 @@ const CONNECTOR_AUTH_FIELD_FALLBACKS: Record<string, string[]> = {
   whatsapp_twilio: ['account_sid', 'auth_token', 'from_number', 'to_number'],
   wechat_work: ['webhook_url'],
   instagram_business: ['access_token', 'instagram_account_id', 'page_id'],
+  discord_bot: ['bot_token', 'application_id', 'public_key', 'channel_id', 'guild_id'],
+  slack: ['bot_token', 'user_token', 'team_id', 'channel_id'],
 };
 
 const MANAGED_OAUTH_PROVIDER_IDS = new Set([
@@ -1066,6 +1323,8 @@ const MANAGED_OAUTH_PROVIDER_IDS = new Set([
   'xero',
   'freshbooks',
   'vercel',
+  'discord_bot',
+  'slack',
 ]);
 
 const CONNECTOR_STATIC_LOCKED_IDS = new Set<string>();
@@ -2514,6 +2773,10 @@ export function WorkstationSageConnectorsPane({
   const [, setStatus] = useState<string | null>(null);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [telegramChannelMode, setTelegramChannelMode] = useState<'bot' | 'personal'>('bot');
+  const [telegramHostedPairing, setTelegramHostedPairing] = useState<{ pairingCode: string; deepLink: string } | null>(null);
+  const [telegramHostedPairingLoading, setTelegramHostedPairingLoading] = useState(false);
+  const [telegramHostedPaired, setTelegramHostedPaired] = useState(false);
+  const [telegramHostedPolling, setTelegramHostedPolling] = useState(false);
   const [whatsappChannelMode, setWhatsappChannelMode] = useState<ChannelRouteMode>('cloud');
   const [selectedIntegrationId, setSelectedIntegrationId] = useState<IntegrationWorkbenchCategoryId>(() => (
     normalizeIntegrationCategoryId(searchParams.get('section') ?? searchParams.get('connection'))
@@ -3587,6 +3850,60 @@ export function WorkstationSageConnectorsPane({
     }
   }
 
+  async function startTelegramHostedPairing() {
+    setTelegramHostedPairingLoading(true);
+    try {
+      const resp = await fetch('/api/sage/telegram-hosted/pair/start', {
+        method: 'POST',
+        headers: buildCookieAuthHeaders('POST', { 'Content-Type': 'application/json' }),
+        credentials: 'include',
+        body: JSON.stringify({ workspace_id: bootstrap.workspace.id }),
+      });
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error((errData as any)?.detail || 'Failed to start pairing');
+      }
+      const data = await resp.json() as { pairing_code: string; deep_link: string; status: string };
+      if (data.deep_link) {
+        setTelegramHostedPairing({ pairingCode: data.pairing_code, deepLink: data.deep_link });
+        window.open(data.deep_link, '_blank');
+        // Poll for pairing completion
+        setTelegramHostedPolling(true);
+        const poll = async () => {
+          try {
+            // First, poll Telegram for pending messages (local dev — webhook can't reach us)
+            await fetch('/api/sage/telegram-hosted/dev-poll', {
+              method: 'POST',
+              headers: buildCookieAuthHeaders('POST'),
+              credentials: 'include',
+            }).catch(() => {});
+            // Then check if pairing completed
+            const statusResp = await fetch('/api/sage/telegram-hosted/pair/status?workspace_id=' + encodeURIComponent(bootstrap.workspace.id), {
+              headers: buildCookieAuthHeaders('GET'),
+              credentials: 'include',
+            });
+            if (statusResp.ok) {
+              const statusData = await statusResp.json() as { paired: boolean };
+              if (statusData.paired) {
+                setTelegramHostedPaired(true);
+                setTelegramHostedPolling(false);
+                return;
+              }
+            }
+          } catch { /* ignore polling errors */ }
+          setTimeout(poll, 3000);
+        };
+        setTimeout(poll, 2000);
+      } else if (data.pairing_code) {
+        setTelegramHostedPairing({ pairingCode: data.pairing_code, deepLink: '' });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start Telegram pairing.');
+    } finally {
+      setTelegramHostedPairingLoading(false);
+    }
+  }
+
   async function handleConnectionSetupStart(record: ExternalIntegrationCardRecord) {
     const connectionId = readString(record.connectionId);
     if (!connectionId) {
@@ -3910,7 +4227,7 @@ export function WorkstationSageConnectorsPane({
     const draft = connectorDraftCredentials[record.id] ?? {};
     const credentials: Record<string, string | number | boolean> = {};
     const missing: string[] = [];
-    const optionalFields = new Set(['port', 'use_tls', 'region', 'page_id', 'application_id', 'public_key', 'application_public_key']);
+    const optionalFields = new Set(['port', 'use_tls', 'region', 'page_id', 'application_id', 'public_key', 'application_public_key', 'channel_id', 'guild_id', 'user_token', 'team_id', 'team_name']);
     fields.forEach((field) => {
       const value = readString(draft[field]);
       if (!value) {
@@ -4747,7 +5064,9 @@ export function WorkstationSageConnectorsPane({
             return;
           }
           if (record.actionTarget === 'connection') {
-            void handleConnectionSetupStart(record);
+            // Expand card first to show details and a Connect button,
+            // rather than redirecting to the provider immediately.
+            setExpandedCardId(isExpanded ? null : record.id);
             return;
           }
           if (record.id === 'telegram' && !isExpanded) {
@@ -5374,7 +5693,63 @@ export function WorkstationSageConnectorsPane({
             {!showBotCredentialForm ? (
               <>
                 <div className="sage-unified-expand__text">{botSetupRecord.summary}</div>
-                {botSetupRecord.nextStep ? <div className="sage-unified-expand__text">{botSetupRecord.nextStep}</div> : null}
+                {telegramHostedPaired ? (
+                  <div className="sage-unified-expand__pairing">
+                    <div className="sage-unified-expand__pairing-code" style={{ color: 'var(--app-color-success, #22c55e)' }}>
+                      <span className="sage-unified-expand__pairing-label">Status</span>
+                      <code className="sage-unified-expand__pairing-value" style={{ fontSize: 16 }}>✓ Connected to Telegram</code>
+                    </div>
+                    <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <button
+                        type="button"
+                        className="connector-disconnect-btn"
+                        onClick={async () => {
+                          try {
+                            await fetch(
+                              '/api/sage/telegram-hosted/pair?workspace_id=' + encodeURIComponent(bootstrap.workspace.id),
+                              {
+                                method: 'DELETE',
+                                headers: buildCookieAuthHeaders('DELETE'),
+                                credentials: 'include',
+                              }
+                            );
+                          } catch { /* ignore */ }
+                          setTelegramHostedPaired(false);
+                          setTelegramHostedPairing(null);
+                        }}
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                    <p className="sage-unified-expand__text" style={{ marginTop: 8, fontSize: 13, opacity: 0.7 }}>
+                      Sage is now available on Telegram. Send a message to @EmpyralisSageBot.
+                    </p>
+                  </div>
+                ) : telegramHostedPairing ? (
+                  <div className="sage-unified-expand__pairing">
+                    <div className="sage-unified-expand__pairing-code">
+                      <span className="sage-unified-expand__pairing-label">Pairing code</span>
+                      <code className="sage-unified-expand__pairing-value">{telegramHostedPairing.pairingCode}</code>
+                    </div>
+                    {telegramHostedPairing.deepLink ? (
+                      <a
+                        href={telegramHostedPairing.deepLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="app-button app-button--primary"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10 }}
+                      >
+                        {telegramHostedPolling ? 'Waiting for you in Telegram...' : 'Open Telegram to Pair'}
+                      </a>
+                    ) : null}
+                    <p className="sage-unified-expand__text" style={{ marginTop: 8, fontSize: 13, opacity: 0.7 }}>
+                      {telegramHostedPolling
+                        ? 'Checking for your pairing message every few seconds...'
+                        : 'Send the code above or click the link to instantly connect your Telegram account to Sage.'}
+                    </p>
+                  </div>
+                ) : null}
+                {!telegramHostedPairing && botSetupRecord.nextStep ? <div className="sage-unified-expand__text">{botSetupRecord.nextStep}</div> : null}
                 {botSetupRecord.locked ? <AppNotice tone="warning">Hosted Telegram is not enabled in this environment yet.</AppNotice> : null}
               </>
             ) : null}
@@ -5385,7 +5760,11 @@ export function WorkstationSageConnectorsPane({
                   type="button"
                   className="app-button app-button--primary"
                   onClick={() => {
-                    void handleConnectionSetupStart(botSetupRecord);
+                    if (botSetupRecord.connectionId === 'sage_telegram_hosted' || botSetupRecord.connectionProvider === 'sage_telegram_hosted_bot') {
+                      void startTelegramHostedPairing();
+                    } else {
+                      void handleConnectionSetupStart(botSetupRecord);
+                    }
                   }}
                 >
                   {botSetupRecord.actionLabel}
@@ -6431,12 +6810,108 @@ export function WorkstationSageConnectorsPane({
   }
 
   function renderAppsOverview() {
-    return renderExternalCollection(
-      'Apps',
-      'Connect work apps here. These are external services Sage can read or act inside.',
-      appCards,
-      'No app connectors are available for this surface yet.',
+    return (
+      <>
+        {renderExternalCollection(
+          'Apps',
+          'Connect work apps here. These are external services Sage can read or act inside.',
+          appCards,
+          'No app connectors are available for this surface yet.',
+        )}
+        <section className="sage-unified-section">
+          <p className="sage-unified-section__label">MCP Apps</p>
+          <p className="sage-unified-section__description">
+            Install more apps through MCP servers — Canva, Figma, Slack, Jira, and 30+ more. Tools are auto-discovered after install.
+          </p>
+          {renderMcpMarketplace()}
+        </section>
+      </>
     );
+  }
+
+  function renderMcpMarketplace() {
+    const installedServerIds = new Set(
+      mcpServers.map((s) => readString(s.id).toLowerCase().replace(/[^a-z0-9]/g, '_'))
+    );
+    const marketplaceApps = MCP_MARKETPLACE_APPS.filter(
+      (app) => !installedServerIds.has(app.serverId)
+    );
+    if (marketplaceApps.length === 0) {
+      return (
+        <div className="sage-integrations-detail-card">
+          <strong>All MCP apps installed</strong>
+          <span>Browse the MCP section under Advanced to manage installed servers and discover more.</span>
+        </div>
+      );
+    }
+    return (
+      <div className="sage-unified-grid sage-unified-grid--3">
+        {marketplaceApps.map((app) => {
+          const isBusy = busyCardId === `mcp:marketplace:${app.serverId}`;
+          const alreadyInstalled = installedServerIds.has(app.serverId);
+          return (
+            <article key={app.serverId} className="sage-integrations-detail-card" style={{ opacity: alreadyInstalled ? 0.5 : 1 }}>
+              <strong>{app.name}</strong>
+              <span>{app.description}</span>
+              <div className="sage-unified-card__tags" aria-label={`${app.name} details`}>
+                {app.toolCount ? <span>{app.toolCount} tools</span> : null}
+                <span>{app.authType}</span>
+              </div>
+              {alreadyInstalled ? (
+                <span style={{ fontSize: '0.85em', color: 'var(--sage-text-secondary)' }}>Installed</span>
+              ) : (
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  disabled={isBusy}
+                  onClick={() => {
+                    void installMcpMarketplaceApp(app);
+                  }}
+                >
+                  {isBusy ? 'Installing...' : app.apiKey ? 'Set up' : 'Install'}
+                </AppButton>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    );
+  }
+
+  async function installMcpMarketplaceApp(app: typeof MCP_MARKETPLACE_APPS[number]) {
+    setBusyCardId(`mcp:marketplace:${app.serverId}`);
+    setError(null);
+    try {
+      const result = await services.client.saveMcpServer({
+        serverId: app.serverId,
+        label: app.name,
+        endpoint: app.endpoint,
+        discoverTools: true,
+      });
+      // Auto-approve all discovered tools from the save response
+      const tools = result && typeof result === 'object'
+        ? (result as Record<string, unknown>).tools
+        : null;
+      if (Array.isArray(tools)) {
+        for (const tool of tools) {
+          const toolName = tool && typeof tool === 'object'
+            ? readString((tool as Record<string, unknown>).name || (tool as Record<string, unknown>).toolName)
+            : '';
+          if (toolName) {
+            try {
+              await services.client.approveMcpTool({ serverId: app.serverId, toolName });
+            } catch {
+              // Individual tool approval failure shouldn't block the whole install
+            }
+          }
+        }
+      }
+      await refreshAfterMutation(`${app.name} installed. Tools are auto-approved. Sage can use them now.`);
+    } catch (installError) {
+      setError(installError instanceof Error ? installError.message : `${app.name} could not be installed.`);
+    } finally {
+      setBusyCardId(null);
+    }
   }
 
   function renderRecipesOverview() {

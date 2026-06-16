@@ -1149,6 +1149,7 @@ export function projectRawEventToCodexEvents(
       type: 'user',
       id: `user:${fallbackIndex}`,
       content: readString(event.payload.content),
+      attachments: Array.isArray(event.payload.attachments) ? event.payload.attachments : [],
     }];
   }
 

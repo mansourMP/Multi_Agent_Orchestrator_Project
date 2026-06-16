@@ -265,6 +265,7 @@ function applyCodexEvent(
       id: event.id,
       kind: 'user',
       content: event.content,
+      attachments: event.attachments,
       createdAt: nowIso(),
     };
     cells.push(cell);

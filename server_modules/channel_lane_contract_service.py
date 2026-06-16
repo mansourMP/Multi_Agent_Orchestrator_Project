@@ -47,6 +47,13 @@ PERSONAL_CHANNEL_SPECS: Dict[str, Dict[str, str]] = {
         "stage": "planned",
         "live_capable": "false",
     },
+    "discord_personal": {
+        "provider": "discord_bot",
+        "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
+        "memory_surface": DIRECT_CHAT_MEMORY_SURFACE,
+        "stage": "live",
+        "live_capable": "true",
+    },
 }
 
 PERSONAL_CHANNEL_ROADMAP: tuple[Dict[str, str], ...] = (
@@ -99,6 +106,16 @@ PERSONAL_CHANNEL_ROADMAP: tuple[Dict[str, str], ...] = (
         "live_capable": "false",
         "family": "personal",
         "session_owner": "paired_gateway",
+    },
+    {
+        "channel_key": "discord_personal",
+        "label": "Discord",
+        "provider": "discord_bot",
+        "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
+        "stage": "live",
+        "live_capable": "true",
+        "family": "personal",
+        "session_owner": "cloud_connector",
     },
 )
 
@@ -553,6 +570,23 @@ CHANNEL_PLATFORM_CATALOG: tuple[Dict[str, Any], ...] = (
         "connector_id": None,
         "surface_support": ["sage"],
         "capabilities": ["inbound", "outbound", "personal_session"],
+    },
+    {
+        "channel_key": "discord_personal",
+        "binding_channel_key": "discord_personal",
+        "label": "Discord Personal DM",
+        "provider": "discord_bot",
+        "runtime_lane": PERSONAL_GATEWAY_RUNTIME_LANE,
+        "category": "personal_runtime",
+        "stage": "live",
+        "status": "personal_dm",
+        "live_capable": True,
+        "launch_allowed": True,
+        "requires_agent_computer": False,
+        "account_provider": "discord_bot",
+        "connector_id": "discord_bot",
+        "surface_support": ["sage"],
+        "capabilities": ["inbound", "outbound", "personal_dm"],
     },
     {
         "channel_key": "signal_personal",

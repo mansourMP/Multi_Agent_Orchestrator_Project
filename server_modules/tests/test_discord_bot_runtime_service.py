@@ -86,7 +86,7 @@ class DiscordBotRuntimeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["statuses"][1]["reason"], "missing_bot_token")
         self.assertEqual(FakeDiscordListener.instances, [])
 
-    async def test_matching_message_routes_with_master_fallback_disabled(self):
+    async def test_guild_mention_routes_to_studio_with_master_fallback_disabled(self):
         route_message = AsyncMock(return_value={"ok": True, "triggered": True, "run_id": "run-1"})
         service = self._service(rows=[], route_message=route_message)
 
@@ -94,8 +94,9 @@ class DiscordBotRuntimeServiceTests(unittest.IsolatedAsyncioTestCase):
             {
                 "kind": "event",
                 "event_type": "message_create",
-                "message_type": "direct_message",
+                "message_type": "mention",
                 "channel_id": "123",
+                "guild_id": "456",
                 "message_id": "msg-1",
                 "user_id": "user-1",
                 "username": "Mansur",
@@ -164,7 +165,7 @@ class DiscordBotRuntimeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["reason"], "connector_mismatch")
         route_message.assert_not_awaited()
 
-    async def test_sync_listener_callback_schedules_inside_running_loop(self):
+    async def test_sync_listener_callback_for_mention_schedules_inside_running_loop(self):
         route_message = AsyncMock(return_value={"ok": True, "triggered": True, "run_id": "run-1"})
         service = self._service(rows=[], route_message=route_message)
 
@@ -172,8 +173,9 @@ class DiscordBotRuntimeServiceTests(unittest.IsolatedAsyncioTestCase):
             {
                 "kind": "event",
                 "event_type": "message_create",
-                "message_type": "direct_message",
+                "message_type": "mention",
                 "channel_id": "123",
+                "guild_id": "456",
                 "message_id": "msg-1",
                 "text": "hello",
             },

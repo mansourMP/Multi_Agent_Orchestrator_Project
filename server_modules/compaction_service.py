@@ -1,0 +1,271 @@
+"""
+Compaction engine — OpenClaw-style summarization for long conversations.
+
+Triggered when context tokens exceed (context_window - reserve_tokens).
+Walks back from newest turn, keeps ~KEEP_RECENT_TOKENS of recent messages,
+serializes older turns as structured text, calls LLM for summary, appends
+CompactionEntry to agent_turns, and reloads context from summary + recent.
+
+No memory flush. No dedicated model. No recursive summarization.
+Matches OpenClaw's compaction.ts design.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from scripts.orion_local_worker_llm import openai_chat_text
+
+# ── Step 1: Token estimation ──────────────────────────────────────────
+
+def estimate_tokens(text: str) -> int:
+    """Fast heuristic: ~4 chars per token. Sufficient for threshold checks."""
+    return max(0, len(text or "") // 4)
+
+
+def estimate_turn_tokens(turn: Dict[str, Any]) -> int:
+    """Estimate tokens for a single turn dict (from agent_turns row)."""
+    content = str(turn.get("content") or "")
+    return estimate_tokens(content)
+
+
+def estimate_turns_tokens(turns: List[Dict[str, Any]]) -> int:
+    """Estimate total tokens across a list of turns."""
+    return sum(estimate_turn_tokens(t) for t in turns)
+
+
+# ── Step 3: Compaction trigger ────────────────────────────────────────
+
+# Matches OpenClaw defaults
+COMPACTION_RESERVE_TOKENS = 16384
+KEEP_RECENT_TOKENS = 20000
+TOOL_RESULT_MAX_CHARS = 2000
+DEFAULT_CONTEXT_WINDOW = 128000  # fallback when model context window is unknown
+
+
+def should_compact(
+    turns: List[Dict[str, Any]],
+    *,
+    context_window: int,
+    reserve_tokens: int = COMPACTION_RESERVE_TOKENS,
+) -> bool:
+    """Check if total turn tokens exceed the safe threshold.
+    
+    Args:
+        turns: list of turn dicts from agent_turns
+        context_window: the ACTUAL context window of the model in use (REQUIRED — no default)
+        reserve_tokens: tokens to reserve for system prompt + reply (default 16384)
+    """
+    total = estimate_turns_tokens(turns)
+    threshold = max(1, context_window - reserve_tokens)
+    return total > threshold
+
+
+def find_cut_point(
+    turns: List[Dict[str, Any]],
+    keep_recent_tokens: int = KEEP_RECENT_TOKENS,
+) -> int:
+    """Walk backwards from newest turn. Return index of first turn to KEEP.
+    Turns BEFORE this index get summarized. Turns AT and AFTER stay raw.
+    Returns 0 if everything fits (no cut needed).
+    """
+    accumulated = 0
+    for i in range(len(turns) - 1, -1, -1):
+        accumulated += estimate_turn_tokens(turns[i])
+        if accumulated >= keep_recent_tokens:
+            return i
+    return 0
+
+
+# ── Step 2: Tool-result pruning ───────────────────────────────────────
+
+def prune_tool_result(turn: Dict[str, Any]) -> str:
+    """Prune verbose tool results for context assembly.
+    Returns the (possibly pruned) content string.
+    The actual result stays intact in agent_turns — this is in-memory only.
+    """
+    role = str(turn.get("role") or "").strip().lower()
+    content = str(turn.get("content") or "")
+
+    if role == "tool_result" and len(content) > TOOL_RESULT_MAX_CHARS:
+        tool_name = "unknown"
+        meta = turn.get("metadata")
+        if isinstance(meta, dict):
+            tool_name = str(meta.get("tool_name") or meta.get("name") or "unknown")
+        return (
+            f"[tool result: {tool_name} — {len(content)} chars"
+            f" — pruned for context]"
+        )
+
+    return content
+
+
+# ── Step 4: Serialize for summarization ───────────────────────────────
+
+def serialize_turns_for_compaction(turns: List[Dict[str, Any]]) -> str:
+    """Convert turns to structured text — NOT conversation format.
+    Prevents the model from treating it as a chat to continue.
+    Matches OpenClaw's serializeConversation().
+    """
+    lines: List[str] = []
+    for t in turns:
+        role = str(t.get("role") or "").strip().lower()
+        content = str(t.get("content") or "").strip()
+        if not content:
+            continue
+
+        if role == "user":
+            lines.append(f"[User]: {content}")
+        elif role == "assistant":
+            lines.append(f"[Assistant]: {content}")
+        elif role == "tool_result":
+            pruned = prune_tool_result(t)
+            tool_name = "unknown"
+            meta = t.get("metadata")
+            if isinstance(meta, dict):
+                tool_name = str(meta.get("tool_name") or meta.get("name") or "unknown")
+            lines.append(f"[Tool result: {tool_name}]: {pruned}")
+        elif role == "compaction_summary":
+            lines.append(f"[Previous summary]: {content}")
+        elif role == "system":
+            lines.append(f"[System]: {content}")
+        else:
+            lines.append(f"[{role}]: {content}")
+
+    return "\n\n".join(lines)
+
+
+COMPACTION_PROMPT = """Summarize this conversation segment concisely. Preserve:
+- Decisions made and their outcomes
+- User preferences and stated requirements  
+- Active tasks and their current status
+- Pending items that need follow-up
+- Important facts about the user or their work
+
+Do not invent. Do not speculate. Be factual and dense.
+
+Previous summary (if any):
+{previous_summary}
+
+Conversation to summarize:
+{conversation_text}"""
+
+
+async def compact_turns(
+    turns: List[Dict[str, Any]],
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    thread_id: str = "sage-main",
+    session_id: str = "",
+    previous_summary: str = "",
+    provider: str = "",
+    model: str = "",
+) -> str:
+    """Summarize turns and persist as a CompactionEntry in agent_turns.
+    Returns the summary text.
+    """
+    from server_modules import control_plane_repository
+
+    text = serialize_turns_for_compaction(turns)
+
+    prompt = COMPACTION_PROMPT.format(
+        previous_summary=previous_summary or "(none — this is the first compaction)",
+        conversation_text=text,
+    )
+
+    # Use the existing generation pipeline with a short, focused prompt
+    # Use openai_chat_text directly (sync call, same as generate_chat_reply_with_provider_fallback)
+    text, _usage, _model, _error = openai_chat_text(
+        system_prompt=prompt,
+        user_prompt="",  # all instructions are in the system prompt
+        provider=str(provider or "deepseek").strip() or "deepseek",
+        model_override=str(model or "").strip() or None,
+    )
+    summary = (text or "").strip()
+
+    if not summary:
+        return ""
+
+    # Persist as agent_turn
+    try:
+        await control_plane_repository.upsert_agent_turn(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            session_id=session_id or None,
+            role="compaction_summary",
+            content=summary,
+            status="completed",
+        )
+    except Exception:
+        pass  # never break the main turn for persistence failures
+
+    return summary
+
+
+# ── Step 5: Context assembly after compaction ─────────────────────────
+
+def build_context_from_compaction(
+    summary: str,
+    kept_turns: List[Dict[str, Any]],
+) -> List[Dict[str, str]]:
+    """Assemble context after compaction: summary first, then recent raw turns."""
+    messages: List[Dict[str, str]] = []
+
+    if summary:
+        messages.append({
+            "role": "system",
+            "content": (
+                "[Compacted context from earlier in this conversation]:\n"
+                + summary
+            ),
+        })
+
+    for t in kept_turns:
+        role = str(t.get("role") or "").strip().lower()
+        content = str(t.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+
+    return messages
+
+
+# ── Step 6: Previous summary carry-forward ────────────────────────────
+
+async def load_previous_summary(
+    workspace_id: str,
+    tenant_id: str,
+    thread_id: str = "sage-main",
+) -> str:
+    """Load the most recent compaction summary for iterative context."""
+    from server_modules import control_plane_repository
+
+    turns = await control_plane_repository.list_agent_turns(
+        thread_id=thread_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        limit=10,
+    )
+    for t in (turns or []):
+        if isinstance(t, dict) and t.get("role") == "compaction_summary":
+            return str(t.get("content") or "")
+    return ""
+
+
+# ── Overflow check ────────────────────────────────────────────────────
+
+OVERFLOW_KEYWORDS = (
+    "context_length_exceeded",
+    "request_too_large",
+    "maximum context length",
+    "context window",
+    "token limit",
+    "too many tokens",
+)
+
+
+def is_context_overflow_error(error_message: str) -> bool:
+    """Check if a provider error is a context overflow."""
+    msg = error_message.lower()
+    return any(kw in msg for kw in OVERFLOW_KEYWORDS)

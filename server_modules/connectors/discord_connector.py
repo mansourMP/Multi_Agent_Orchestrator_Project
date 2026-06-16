@@ -735,6 +735,13 @@ def event_matches_connector(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> bool:
     metadata_value = metadata if isinstance(metadata, dict) else {}
+    # OAuth identity match — if this credential is linked to a specific Discord user,
+    # only match events from that user (used for one-click "Connect Discord" OAuth flow).
+    configured_discord_user_id = str(credentials.get("discord_user_id") or "").strip()
+    if configured_discord_user_id:
+        event_user_id = str(parsed.get("user_id") or "").strip()
+        return event_user_id == configured_discord_user_id
+    # Channel/guild match — legacy manual credential flow.
     channel_id = str(parsed.get("channel_id") or "").strip()
     guild_id = str(parsed.get("guild_id") or "").strip()
     configured_channel = str(credentials.get("channel_id") or "").strip()

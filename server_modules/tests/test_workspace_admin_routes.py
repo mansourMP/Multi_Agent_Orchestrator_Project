@@ -335,6 +335,7 @@ async def test_workspace_members_route_returns_members_and_invites(monkeypatch: 
 
 @pytest.mark.anyio
 async def test_workspace_invite_route_passes_email_and_role(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("EMPYRALIS_ENABLE_WORKSPACE_INVITES", "1")
     app = _build_app()
     app.dependency_overrides[routes_workspaces.get_current_user] = lambda: {"user_id": "user-1"}
 
@@ -363,6 +364,7 @@ async def test_workspace_invite_route_passes_email_and_role(monkeypatch: pytest.
 
 @pytest.mark.anyio
 async def test_workspace_invite_revoke_route_delegates_to_admin_service(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("EMPYRALIS_ENABLE_WORKSPACE_INVITES", "1")
     app = _build_app()
     app.dependency_overrides[routes_workspaces.get_current_user] = lambda: {"user_id": "user-1"}
 

@@ -74,9 +74,9 @@ _CERTIFICATION_REQUIREMENTS: Dict[str, list[str]] = {
         "Pass mailbox identity, inbound polling/webhook, outbound send, attachment, and approval tests.",
     ],
     "sage_telegram_hosted": [
-        "Provision the official Empyralis Telegram bot.",
-        "Implement user pairing, workspace binding, signed inbound events, and outbound replies.",
-        "Pass pairing, inbound, outbound, approval, rate-limit, and replay certification tests.",
+        "Provision the official Empyralis Telegram bot (set EMPYRALIS_TELEGRAM_HOSTED_BOT_TOKEN).",
+        "User pairing via 6-digit code exchange.",
+        "Pass inbound, outbound, and rate-limit certification tests.",
     ],
 }
 

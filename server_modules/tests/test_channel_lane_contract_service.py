@@ -56,18 +56,18 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
 
         self.assertEqual(
             [entry["channel_key"] for entry in personal_catalog],
-            ["telegram_personal", "whatsapp_personal", "signal_personal", "imessage_personal", "wechat_personal"],
+            ["telegram_personal", "whatsapp_personal", "signal_personal", "imessage_personal", "wechat_personal", "discord_personal"],
         )
         self.assertEqual(
             [entry["stage"] for entry in personal_catalog],
-            ["live", "live", "planned", "planned", "planned"],
+            ["live", "live", "planned", "planned", "planned", "live"],
         )
         self.assertTrue(
             all(entry["runtime_lane"] == service.PERSONAL_GATEWAY_RUNTIME_LANE for entry in personal_catalog)
         )
         self.assertEqual(
             [entry["live_capable"] for entry in personal_catalog],
-            ["true", "true", "false", "false", "false"],
+            ["true", "true", "false", "false", "false", "true"],
         )
 
         self.assertEqual(
@@ -104,7 +104,7 @@ class ChannelLaneContractServiceTests(unittest.TestCase):
         catalog = service.platform_channel_catalog()
         by_key = {entry["channel_key"]: entry for entry in catalog}
 
-        self.assertEqual(len(catalog), 24)
+        self.assertEqual(len(catalog), 25)
         self.assertEqual(by_key["telegram_bot"]["binding_channel_key"], "telegram")
         self.assertEqual(by_key["telegram_bot"]["runtime_lane"], service.STUDIO_CONNECTOR_RUNTIME_LANE)
         self.assertEqual(by_key["telegram_personal"]["runtime_lane"], service.PERSONAL_GATEWAY_RUNTIME_LANE)

@@ -303,6 +303,35 @@ async def build_telegram_personal_reply_async(
         source_event_id=source_event_id,
     )
     return unified
+
+
+async def build_discord_personal_reply_async(
+    *,
+    workspace_id: str,
+    gateway_id: str,
+    remote_jid: str,
+    text: str,
+    push_name: Optional[str] = None,
+    source_event_id: Optional[str] = None,
+    linked_user_name: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Build a Sage reply for a Discord personal DM.
+
+    Follows the same unified path as WhatsApp and Telegram personal channels.
+    linked_user_name is accepted for future identity-context injection but
+    not yet threaded into _build_unified_sage_personal_reply_async.
+    """
+    unified = await _build_unified_sage_personal_reply_async(
+        surface_channel="discord_personal",
+        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+        remote_jid=remote_jid,
+        text=text,
+        push_name=push_name,
+        fallback_label="Discord",
+        source_event_id=source_event_id,
+    )
+    return unified
     return _build_personal_reply(
         surface_channel="telegram_personal",
         workspace_id=workspace_id,

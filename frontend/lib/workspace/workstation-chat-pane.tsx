@@ -54,6 +54,7 @@ import {
   useWorkstationStreamSelector,
 } from '@/lib/workspace/workspace-services';
 import {
+  type SageChatAttachment,
   WorkstationClientError,
   type WorkstationAgentTraceEvent,
   type WorkstationAgentTraceRecord,
@@ -601,6 +602,8 @@ export function WorkstationChatPane() {
   const {
     draft,
     setDraft,
+    attachments,
+    setAttachments,
     statusMessage,
     setStatusMessage,
     sendFailureNotice,
@@ -711,6 +714,8 @@ export function WorkstationChatPane() {
   const streamAbortRequestedRef = useRef(false);
   const streamInFlightRef = useRef(false);
   const activeTurnRequestIdRef = useRef<string | null>(null);
+  const streamBufferRef = useRef("");
+  const rafHandleRef = useRef<number | null>(null);
 
   useEffect(() => {
     setTitlebarActionsHost(document.getElementById('workstation-titlebar-brand-actions-slot'));
@@ -2343,23 +2348,38 @@ export function WorkstationChatPane() {
   const seedDraftIfEmpty = useCallback((nextDraft: string) => {
     setDraft((current) => (current.trim() ? current : nextDraft));
   }, [setDraft]);
-  const handleComposerFilesSelected = useCallback((selectedFiles: File[]) => {
+  const handleComposerFilesSelected = useCallback(async (selectedFiles: File[]) => {
     if (selectedFiles.length === 0) {
       return;
     }
-    const fileNames = selectedFiles.map((file) => file.name.trim()).filter(Boolean);
-    const visibleNames = fileNames.slice(0, 3).join(', ');
-    const extraCount = Math.max(0, fileNames.length - 3);
-    const fileLabel = extraCount > 0 ? `${visibleNames}, +${extraCount} more` : visibleNames || `${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'}`;
-    seedDraftIfEmpty(`Use ${fileLabel} as context: `);
-    setStatusMessage(`${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'} selected. Tell Sage what to do with them.`);
-  }, [seedDraftIfEmpty, setStatusMessage]);
+    
+    const textTypes = /\.(md|txt|json|csv|xml|yaml|yml|toml|ini|cfg|log|sh|bash|py|js|ts|jsx|tsx|rb|go|rs|java|c|cpp|h|hpp|swift|php|pl|lua|r|sql|css|scss|less|html|htm|svg|env|gitignore|dockerfile|Makefile|cmake|gradle|tf|hcl)$/i;
+    const imageTypes = /\.(png|jpg|jpeg|gif|webp|bmp)$/i;
+    const parts: string[] = [];
+    const names: string[] = [];
+
+    for (const file of selectedFiles) {
+      names.push(file.name.trim());
+      if (textTypes.test(file.name)) {
+        try {
+          const text = await file.text();
+          const truncated = text.length > 10000 ? text.slice(0, 10000) + "\n...[truncated]" : text;
+          parts.push(truncated);
+        } catch {
+          parts.push("(Could not read " + file.name + ")");
+        }
+      } else {
+        // Images and other binary files — do not inject anything into the draft.
+        // The user must describe what they uploaded or type their request manually.
+      }
+    }
+
+    const content = parts.join("\n\n");
+    seedDraftIfEmpty(content ? content + "\n\n" : "");
+  }, [seedDraftIfEmpty]);
   const sageCapabilityItems = useMemo<ComposerCapabilityItem[]>(() => {
     const openApps = () => {
       router.push(`${integrationsHref}?section=apps`);
-    };
-    const openRecipes = () => {
-      router.push(`${integrationsHref}?section=recipes`);
     };
     const openComputer = () => {
       router.push(hardwareHref);
@@ -2367,15 +2387,9 @@ export function WorkstationChatPane() {
     return [
       {
         id: 'connect_apps',
-        title: 'Connect apps',
-        detail: 'Gmail, Calendar, Drive, GitHub, Slack, and more',
+        title: 'Apps',
+        detail: 'Connect and manage your apps',
         onSelect: openApps,
-      },
-      {
-        id: 'use_recipe',
-        title: 'Use a recipe',
-        detail: 'Morning brief, email triage, meeting prep',
-        onSelect: openRecipes,
       },
       {
         id: 'use_my_computer',
@@ -2676,7 +2690,7 @@ export function WorkstationChatPane() {
 
   const sendMessage = async () => {
     const outboundMessage = draft.trim();
-    if (!outboundMessage || isSending || submitInFlightRef.current) {
+    if ((!outboundMessage && attachments.length === 0) || isSending || submitInFlightRef.current) {
       return;
     }
     const sessionCommand = resolveSageCommandBySlash(outboundMessage);
@@ -2704,7 +2718,7 @@ export function WorkstationChatPane() {
       }
       return;
     }
-    const displayMessage = outboundMessage;
+    const displayMessage = outboundMessage || "";
     submitInFlightRef.current = true;
     transcriptForceStickRef.current = true;
     transcriptShouldStickRef.current = true;
@@ -2732,6 +2746,7 @@ export function WorkstationChatPane() {
       }
     }
     setDraft('');
+    setAttachments([]);
     setHasEnteredConversationFlow(true);
     setSendFailureNotice(null);
     setStatusMessage(null);
@@ -2770,7 +2785,10 @@ export function WorkstationChatPane() {
     setLiveTimelineEvents([
       {
         type: 'user',
-        payload: { content: displayMessage },
+        payload: {
+          content: displayMessage,
+          attachments,
+        },
       },
       {
         type: 'step',
@@ -2953,6 +2971,7 @@ export function WorkstationChatPane() {
         clientRequestId,
         abortHandle: streamAbortHandle,
         policyContext: permissionPolicyContext,
+        attachments,
         onEvent: (event) => {
           if (activeTurnRequestIdRef.current !== clientRequestId || streamAbortRequestedRef.current) {
             return;
@@ -2999,7 +3018,16 @@ export function WorkstationChatPane() {
                 type: 'chunk',
                 payload: { delta },
               }]);
-              setStreamingAssistantText((current) => stripInternalToolMarkup(`${current}${delta}`));
+              streamBufferRef.current += delta;
+              if (rafHandleRef.current === null) {
+                rafHandleRef.current = requestAnimationFrame(() => {
+                  setStreamingAssistantText((current) =>
+                    stripInternalToolMarkup(`${current}${streamBufferRef.current}`)
+                  );
+                  streamBufferRef.current = "";
+                  rafHandleRef.current = null;
+                });
+              }
               setLiveActivitySteps((current) => {
                 const thinkingIndex = current.findIndex((item) => item.kind === 'thinking');
                 if (thinkingIndex < 0) {
@@ -3027,8 +3055,19 @@ export function WorkstationChatPane() {
               || readString(event.payload.content);
             const visibleFinalReply = stripInternalToolMarkup(finalReply);
             if (visibleFinalReply && !isProviderRuntimeGateMessage(visibleFinalReply)) {
-              observedFinalReply = visibleFinalReply;
-              setStreamingAssistantText(visibleFinalReply);
+              // Flush any remaining rAF-buffered chunks before setting final text
+              if (rafHandleRef.current !== null) {
+                cancelAnimationFrame(rafHandleRef.current);
+                rafHandleRef.current = null;
+              }
+              if (streamBufferRef.current) {
+                setStreamingAssistantText((current) =>
+                  stripInternalToolMarkup(`${current}${streamBufferRef.current}`)
+                );
+                streamBufferRef.current = "";
+              } else {
+                setStreamingAssistantText(visibleFinalReply);
+              }
               setStatusMessage(null);
               setSendFailureNotice(null);
             }
@@ -3829,6 +3868,16 @@ export function WorkstationChatPane() {
                 />
               ) : null}
 
+              {chatActivityBusy ? (
+                <div className="app-chat-agent-status">
+                  {unifiedAgentActivityState === 'thinking' ? 'Thinking...' :
+                   unifiedAgentActivityState === 'connecting' ? 'Connecting...' :
+                   unifiedAgentActivityState === 'running_tool' ? 'Running tool...' :
+                   unifiedAgentActivityState === 'finalizing' ? 'Finalizing...' :
+                   'Working...'}
+                </div>
+              ) : null}
+
               {visibleTranscriptCells.map((cell, index) => (
                 <CodexChatCell
                   key={`${cell.kind}:${cell.id}:${index}`}
@@ -3950,6 +3999,10 @@ export function WorkstationChatPane() {
         slashCommands={sageSlashCommands}
         onSlashCommandSelect={handleSlashCommandSelect}
         capabilityItems={sageCapabilityItems}
+        attachments={attachments}
+        onRemoveAttachment={(attachment) => {
+          setAttachments((current) => current.filter((a) => a.file_id !== attachment.file_id));
+        }}
         onFilesSelected={handleComposerFilesSelected}
         modelControl={sageModelControl}
         modelControlOpen={modelCanvasPickerOpen}

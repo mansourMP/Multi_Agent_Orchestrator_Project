@@ -45,6 +45,7 @@ export type WorkstationChatMessageRecord = {
   approvals: Record<string, unknown>[];
   interventions: Record<string, unknown>[];
   artifacts: WorkstationChatArtifactReference[];
+  attachments?: any[];
   metadata: Record<string, unknown>;
 };
 

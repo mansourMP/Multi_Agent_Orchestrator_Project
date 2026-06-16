@@ -30,9 +30,10 @@ export function buildWhatsAppClientMessageId(idempotencyKey: string): string {
   return `3EB0${digest.slice(0, 18)}`;
 }
 
-export function mapWhatsAppInboundMessage(rawMessage: Record<string, unknown>): WhatsAppInboundEventPayload | null {
+export function mapWhatsAppInboundMessage(rawMessage: Record<string, unknown>, opts?: { ownedJid?: string }): WhatsAppInboundEventPayload | null {
   const key = rawMessage.key as { id?: unknown; remoteJid?: unknown; participant?: unknown; fromMe?: unknown } | undefined;
   const message = rawMessage.message as Record<string, unknown> | undefined;
+  const ownedJid = String(opts?.ownedJid ?? "").trim();
   const externalMessageId = String(key?.id ?? "").trim();
   const remoteJid = String(key?.remoteJid ?? "").trim();
   const senderJid = String(key?.participant ?? remoteJid).trim() || undefined;
@@ -40,6 +41,31 @@ export function mapWhatsAppInboundMessage(rawMessage: Record<string, unknown>): 
   if (!externalMessageId || !remoteJid || !text) {
     return null;
   }
+  // Group detection: Baileys group JIDs end with "@g.us"
+  const isGroup = remoteJid.endsWith("@g.us");
+
+  // Mention and reply detection from extendedTextMessage contextInfo
+  let isMentioned = false;
+  let quotedStanzaId: string | undefined;
+  const mentionedJids: string[] = [];
+  const contextInfo = (message as Record<string, unknown> | undefined)
+    ?.extendedTextMessage as { contextInfo?: { mentionedJid?: string[]; participant?: string; stanzaId?: string } } | undefined;
+  if (isGroup && ownedJid) {
+    if (contextInfo?.contextInfo?.mentionedJid) {
+      for (const jid of contextInfo.contextInfo.mentionedJid) {
+        mentionedJids.push(String(jid));
+        if (String(jid) === ownedJid) {
+          isMentioned = true;
+        }
+      }
+    }
+    // Reply-to detection: quoted message participant matches ownedJid
+    // Final verification against sentMessageIds happens in handleMessagesUpsert
+    if (contextInfo?.contextInfo?.participant === ownedJid) {
+      quotedStanzaId = contextInfo?.contextInfo?.stanzaId;
+    }
+  }
+
   return {
     channel_key: WHATSAPP_PERSONAL_CHANNEL_KEY,
     provider: WHATSAPP_PERSONAL_PROVIDER,
@@ -53,6 +79,11 @@ export function mapWhatsAppInboundMessage(rawMessage: Record<string, unknown>): 
         Number(rawMessage.messageTimestamp ?? Date.now() / 1000) * 1000,
       ).toISOString(),
       from_me: Boolean(key?.fromMe),
+      is_self_chat: ownedJid ? remoteJid === ownedJid : false,
+      is_group: isGroup,
+      is_mentioned: isMentioned,
+      quoted_stanza_id: quotedStanzaId,
+      is_reply_to_sage: false,  // resolved in handleMessagesUpsert with sentMessageIds
     },
   };
 }

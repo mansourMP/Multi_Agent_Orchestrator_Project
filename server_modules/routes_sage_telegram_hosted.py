@@ -115,11 +115,55 @@ async def telegram_webhook(request: Request) -> dict:
     try:
         from server_modules.sage_agent_runtime_service import handle_sage_chat
 
+        message_text = str(parsed.get("text") or "").strip()
+
+        # Handle /compact command — trigger compaction without a full Sage turn
+        if message_text.lower().startswith("/compact"):
+            from server_modules.compaction_service import (
+                compact_turns, build_context_from_compaction,
+                find_cut_point, should_compact, load_previous_summary,
+                DEFAULT_CONTEXT_WINDOW,
+            )
+            from server_modules import thread_service
+            from server_modules.sage_agent_runtime_service import SAGE_THREAD_ID
+
+            tenant_id = "default"
+            await thread_service.ensure_master_thread(
+                thread_id=SAGE_THREAD_ID,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                owner_user_id="sage",
+                channel="sage",
+            )
+            thread_record = await thread_service.get_thread(
+                SAGE_THREAD_ID,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                include_turns=True,
+            )
+            raw_turns = list(thread_record.get("turns") or []) if isinstance(thread_record, dict) else []
+            _ctx_window = DEFAULT_CONTEXT_WINDOW
+            if raw_turns and should_compact(raw_turns, context_window=_ctx_window):
+                cut_idx = find_cut_point(raw_turns)
+                if cut_idx > 0:
+                    prev = await load_previous_summary(workspace_id=workspace_id, tenant_id=tenant_id)
+                    await compact_turns(
+                        turns=raw_turns[:cut_idx],
+                        workspace_id=workspace_id,
+                        tenant_id=tenant_id,
+                        thread_id=SAGE_THREAD_ID,
+                        previous_summary=prev,
+                    )
+                await hosted.send_sage_reply(chat_id, "Context compacted.")
+            else:
+                await hosted.send_sage_reply(chat_id, "Nothing to compact — context is still small.")
+            return {"ok": True}
+
         await hosted.send_chat_action(chat_id, "typing")
 
         turn = normalize_sage_inbound(
             workspace_id=workspace_id,
-            message=parsed["text"],
+            message=message_text,
             surface="chat",
             mode="owner_sage",
             channel_origin="telegram_hosted",
@@ -132,6 +176,8 @@ async def telegram_webhook(request: Request) -> dict:
             surface=turn.surface,
             mode=turn.mode,
             channel_origin=turn.channel_origin,
+            sender_id=str(chat_id),
+            sender_name=str(parsed.get("from_first_name", "")).strip(),
         )
 
         reply = str(result.get("message") or "").strip()
@@ -172,10 +218,52 @@ async def dev_poll_once() -> dict:
             continue
         try:
             from server_modules.sage_agent_runtime_service import handle_sage_chat
+
+            message_text = str(parsed.get("text") or "").strip()
+
+            # Handle /compact in dev-poll path
+            if message_text.lower().startswith("/compact"):
+                from server_modules.compaction_service import (
+                    compact_turns, find_cut_point, should_compact, load_previous_summary,
+                    DEFAULT_CONTEXT_WINDOW,
+                )
+                from server_modules import thread_service
+                from server_modules.sage_agent_runtime_service import SAGE_THREAD_ID
+
+                tenant_id = "default"
+                await thread_service.ensure_master_thread(
+                    thread_id=SAGE_THREAD_ID,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    owner_user_id="sage",
+                    channel="sage",
+                )
+                thread_record = await thread_service.get_thread(
+                    SAGE_THREAD_ID, tenant_id=tenant_id,
+                    workspace_id=workspace_id, include_turns=True,
+                )
+                raw_turns = list(thread_record.get("turns") or []) if isinstance(thread_record, dict) else []
+                _ctx_window = DEFAULT_CONTEXT_WINDOW
+                if raw_turns and should_compact(raw_turns, context_window=_ctx_window):
+                    cut_idx = find_cut_point(raw_turns)
+                    if cut_idx > 0:
+                        prev = await load_previous_summary(workspace_id=workspace_id, tenant_id=tenant_id)
+                        await compact_turns(
+                            turns=raw_turns[:cut_idx],
+                            workspace_id=workspace_id,
+                            tenant_id=tenant_id,
+                            thread_id=SAGE_THREAD_ID,
+                            previous_summary=prev,
+                        )
+                    await hosted.send_sage_reply(chat_id, "Context compacted.")
+                else:
+                    await hosted.send_sage_reply(chat_id, "Nothing to compact — context is still small.")
+                continue
+
             await hosted.send_chat_action(chat_id, "typing")
             turn = normalize_sage_inbound(
                 workspace_id=workspace_id,
-                message=parsed["text"],
+                message=message_text,
                 surface="chat",
                 mode="owner_sage",
                 channel_origin="telegram_hosted",

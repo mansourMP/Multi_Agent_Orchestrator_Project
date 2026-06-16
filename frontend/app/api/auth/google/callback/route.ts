@@ -155,8 +155,10 @@ export async function GET(request: NextRequest) {
     completionUrl.searchParams.set('provider', 'google');
     completionUrl.searchParams.set('next', '/');
     const response = NextResponse.redirect(completionUrl);
-    appendUpstreamCookies(response, upstream.headers);
+    // Delete state cookie BEFORE appending auth cookies to avoid
+    // Next.js cookies.delete() overwriting set-cookie headers.
     response.cookies.delete(GOOGLE_OAUTH_STATE_COOKIE);
+    appendUpstreamCookies(response, upstream.headers);
     return response;
   } catch (error) {
     logGoogleAuthFailure('Google OAuth callback failed.', {

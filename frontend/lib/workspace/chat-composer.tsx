@@ -240,6 +240,8 @@ export function ChatComposer({
   slashCommands = [],
   onSlashCommandSelect,
   onVoiceTranscribe,
+  attachments = [],
+  onRemoveAttachment,
 }: {
   draft: string;
   onDraftChange: (nextDraft: string) => void;
@@ -270,6 +272,8 @@ export function ChatComposer({
   onSlashCommandSelect?: (command: ComposerSlashCommand) => void;
   actionMenuItems?: readonly ComposerActionMenuItem[];
   onVoiceTranscribe?: (audio: Blob) => Promise<string>;
+  attachments?: any[];
+  onRemoveAttachment?: (attachment: any) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -285,8 +289,8 @@ export function ChatComposer({
   const [fileDragActive, setFileDragActive] = useState(false);
   const [commandPaletteDismissed, setCommandPaletteDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
-  const hasDraft = draft.trim().length > 0;
-  const canSend = !busy && !sendDisabled && hasDraft;
+  const hasDraft = draft.trim().length > 0 || attachments.length > 0;
+  const canSend = !busy && !sendDisabled && (hasDraft);
   const canStop = busy && typeof onStop === 'function';
   const showSendButton = busy || hasDraft;
   const selectedReasoningLabel = composerOptionLabel(reasoningOptions, reasoningEffort) || reasoningEffort || 'Auto';
@@ -587,11 +591,11 @@ export function ChatComposer({
   }, []);
   const eventHasFiles = (event: DragEvent<HTMLElement>) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
   const handleFilesSelected = (files: FileList | null) => {
-    const selectedFiles = Array.from(files ?? []);
-    if (selectedFiles.length === 0) {
+    const incomingFiles = Array.from(files ?? []);
+    if (incomingFiles.length === 0) {
       return;
     }
-    void onFilesSelected?.(selectedFiles);
+    void onFilesSelected?.(incomingFiles);
   };
   const handleFileDragEnter = (event: DragEvent<HTMLFormElement>) => {
     if (!fileDropEnabled || !eventHasFiles(event)) {
@@ -641,6 +645,24 @@ export function ChatComposer({
         onDragLeave={handleFileDragLeave}
         onDrop={handleFileDrop}
       >
+        {attachments.length > 0 ? (
+          <div className="app-chat-composer__attachments">
+            {attachments.map((attachment, index) => (
+              <span key={`${attachment.file_id}-${index}`} className="app-chat-composer__attachment-chip">
+                <Paperclip size={12} strokeWidth={2} aria-hidden="true" />
+                <span>{attachment.filename}</span>
+                <button
+                  type="button"
+                  className="app-chat-composer__attachment-remove"
+                  aria-label={`Remove ${attachment.filename}`}
+                  onClick={() => onRemoveAttachment?.(attachment)}
+                >
+                  <X size={12} strokeWidth={2} />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <textarea
           ref={textareaRef}
           value={draft}

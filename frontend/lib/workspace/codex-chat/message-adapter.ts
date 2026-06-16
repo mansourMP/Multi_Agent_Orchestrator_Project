@@ -145,6 +145,7 @@ export function workstationMessageToCodexCell(message: WorkstationChatMessageRec
       id: message.id,
       kind: 'user',
       content: message.content,
+      attachments: Array.isArray(message.attachments) ? message.attachments : [],
       createdAt: message.createdAt,
       metadata,
     };

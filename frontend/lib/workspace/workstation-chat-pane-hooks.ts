@@ -219,6 +219,7 @@ export function useChatThreadState(options: ThreadStateOptions) {
 
 export function useChatComposerState() {
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState<any[]>([]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [sendFailureNotice, setSendFailureNotice] = useState<SendFailureNotice | null>(null);
   const [isSending, setIsSending] = useState(false);
@@ -226,6 +227,8 @@ export function useChatComposerState() {
   return {
     draft,
     setDraft,
+    attachments,
+    setAttachments,
     statusMessage,
     setStatusMessage,
     sendFailureNotice,

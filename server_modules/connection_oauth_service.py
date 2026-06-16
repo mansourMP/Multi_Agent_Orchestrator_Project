@@ -157,6 +157,19 @@ OAUTH_PROVIDER_CONFIGS: Dict[str, OAuthProviderConfig] = {
         profile_probe="https://api.dropboxapi.com/2/users/get_current_account",
         auth_params={"token_access_type": "offline"},
     ),
+    "discord": OAuthProviderConfig(
+        label="Discord",
+        env_vars={
+            "client_id": ("EMPYRALIS_DISCORD_APPLICATION_ID", "DISCORD_CLIENT_ID"),
+            "client_secret": ("DISCORD_CLIENT_SECRET",),
+        },
+        scopes=("identify",),
+        auth_url="https://discord.com/oauth2/authorize",
+        token_url="https://discord.com/api/oauth2/token",
+        auth_method="authorization_code",
+        token_parser="standard",
+        profile_probe="https://discord.com/api/users/@me",
+    ),
     "figma": OAuthProviderConfig(
         label="Figma",
         env_vars={
@@ -606,6 +619,8 @@ _CONNECTION_PROVIDER_ALIASES = {
     "notion": "notion",
     "linear": "linear",
     "dropbox": "dropbox",
+    "discord_bot": "discord",
+    "discord": "discord",
     "figma": "figma",
     "todoist": "todoist",
     "airtable": "airtable",
@@ -1190,6 +1205,46 @@ def _exchange_dropbox(code: str, redirect_uri: str) -> Dict[str, Any]:
     return credentials
 
 
+def _exchange_discord(code: str, redirect_uri: str) -> Dict[str, Any]:
+    config = _provider_config("discord")
+    client_id, client_secret = ensure_oauth_configured("discord")
+    payload = _post_form_json(
+        _provider_url("discord", config.token_url),
+        {
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        },
+    )
+    access_token = str(payload.get("access_token") or "").strip()
+    if not access_token:
+        raise RuntimeError(str(payload.get("error_description") or payload.get("error") or "Discord token exchange failed."))
+    # Call /users/@me to get the Discord user ID
+    me_req = urlrequest.Request(
+        "https://discord.com/api/users/@me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    try:
+        with urlrequest.urlopen(me_req, timeout=15) as resp:
+            me_data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"Discord user lookup failed: {exc}") from exc
+    discord_user_id = str(me_data.get("id") or "").strip()
+    if not discord_user_id:
+        raise RuntimeError("Discord user ID not found in profile response.")
+    discord_username = str(me_data.get("username") or "").strip()
+    return {
+        "auth_mode": "oauth",
+        "access_token": access_token,
+        "discord_user_id": discord_user_id,
+        "discord_username": discord_username,
+        "scope": str(payload.get("scope") or "").strip(),
+        "token_type": str(payload.get("token_type") or "Bearer").strip() or "Bearer",
+    }
+
+
 async def complete_oauth_callback(
     *,
     provider: str,
@@ -1234,6 +1289,8 @@ async def complete_oauth_callback(
             credentials = _exchange_linear(normalized_code, redirect_uri)
         elif normalized_provider == "dropbox":
             credentials = _exchange_dropbox(normalized_code, redirect_uri)
+        elif normalized_provider == "discord":
+            credentials = _exchange_discord(normalized_code, redirect_uri)
         elif provider_config.token_parser == "standard":
             credentials = _exchange_standard_oauth(normalized_provider, normalized_code, redirect_uri, code_verifier=code_verifier)
         else:

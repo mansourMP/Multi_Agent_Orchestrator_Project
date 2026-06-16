@@ -10,14 +10,13 @@ import type { LucideIcon } from 'lucide-react';
 
 import { logout } from '@/lib/auth/auth-client';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
-import { AppDrawer, joinClassNames } from '@/lib/ui/primitives';
+import { joinClassNames } from '@/lib/ui/primitives';
 import {
   APPLICATION_TITLEBAR_TABS,
   buildApplicationTabHref,
 } from '@/lib/workspace/application-surface-tabs';
 import { WorkstationHardwareStatus } from '@/lib/workspace/workstation-hardware-status';
 import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
-import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
 import type { ConnectedExternalAgentRecord, DeployedAgentRecord } from '@/lib/workspace/workstation-client';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
@@ -90,18 +89,6 @@ const DISCOVER_FILTERS: readonly {
   { id: 'marketplace', label: 'MCP', filter: 'connector' },
   { id: 'marketplace', label: 'Skills', filter: 'skill' },
   { id: 'marketplace', label: 'Bundles', filter: 'bundle' },
-];
-
-const SAGE_MOBILE_DRAWER_ROUTE_IDS: readonly {
-  routeId: WorkspaceRouteId;
-  label: string;
-  icon: LucideIcon;
-}[] = [
-  { routeId: 'chat', label: 'Chat', icon: MessageSquare },
-  { routeId: 'integrations', label: 'Connectors', icon: Link2 },
-  { routeId: 'memory', label: 'Memory', icon: Brain },
-  { routeId: 'tasks', label: 'Tasks', icon: ListTodo },
-  { routeId: 'artifacts', label: 'Library', icon: BookOpen },
 ];
 
 const SAGE_SIDEBAR_NAV_ITEMS: readonly {
@@ -605,109 +592,11 @@ function toHistoryItems(threads: ThreadRecord[]): ChatHistoryItem[] {
     .sort((left, right) => parseTimestamp(right.occurredAt) - parseTimestamp(left.occurredAt));
 }
 
-function MainAgentMobileHistoryList({
-  chatHref,
-  client,
-  workspaceId,
-  onNavigate,
-}: {
-  chatHref: string;
-  client: {
-    listThreads: (options?: { includeTurns?: boolean; limit?: number }) => Promise<Record<string, unknown>>;
-  };
-  workspaceId: string;
-  onNavigate: () => void;
-}) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const [items, setItems] = useState<ChatHistoryItem[]>([]);
-  const [activeThreadId, setActiveThreadId] = useState<string | null>(() => readActiveThreadId(workspaceId));
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [historyRefreshVersion, setHistoryRefreshVersion] = useState(0);
-
-  useEffect(() => subscribeWorkstationChatHistoryInvalidated((detail) => {
-    if (detail.workspaceId === workspaceId) {
-      setHistoryRefreshVersion((current) => current + 1);
-    }
-  }), [workspaceId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-    client.listThreads({ includeTurns: true, limit: 80 })
-      .then((payload) => {
-        if (!cancelled) {
-          setItems(toHistoryItems(normalizeThreadItems(payload)));
-          setActiveThreadId(readActiveThreadId(workspaceId));
-        }
-      })
-      .catch((loadError) => {
-        if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, workspaceId, historyRefreshVersion]);
-
-  const openThread = (threadId: string) => {
-    persistActiveThread(workspaceId, threadId);
-    emitWorkstationChatThreadSelected({ workspaceId, threadId, force: true });
-    setActiveThreadId(threadId);
-    onNavigate();
-    router.push(chatHref);
-  };
-
-  const createThread = () => {
-    clearPersistedActiveThread(workspaceId);
-    emitWorkstationChatNewThreadRequested({ workspaceId });
-    setActiveThreadId(null);
-    onNavigate();
-    router.push(chatHref);
-  };
-
-  return (
-    <section className="workstation-mobile-sidebar__history" aria-label="Chat history">
-      <div className="workstation-mobile-sidebar__history-head">
-        <strong>History</strong>
-        <button type="button" onClick={createThread}>
-          <Plus size={16} aria-hidden="true" />
-          <span>New chat</span>
-        </button>
-      </div>
-      <div className="workstation-mobile-sidebar__history-list">
-        {isLoading ? (
-          <div className="workstation-mobile-sidebar__history-state">Loading chats...</div>
-        ) : error ? (
-          <div className="workstation-mobile-sidebar__history-state">Chat history could not refresh.</div>
-        ) : items.length === 0 ? (
-          <div className="workstation-mobile-sidebar__history-state">No chat history yet.</div>
-        ) : items.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={joinClassNames(
-              'workstation-mobile-sidebar__history-row',
-              activeThreadId === item.id && 'workstation-mobile-sidebar__history-row--active',
-            )}
-            onClick={() => openThread(item.id)}
-          >
-            <span>{item.title}</span>
-            <small>{formatHistoryDate(item.occurredAt)}</small>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
+function _normalizeSurfaceLabel(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (raw === 'sage') return 'Sage';
+  if (raw === 'studio') return 'Agents';
+  return raw;
 }
 
 function AssistantPanelContent({
@@ -1349,7 +1238,6 @@ export function WorkstationKernelShell({
   const searchParams = useSearchParams();
   const { bootstrap, routeManifest, workspaceId } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [panelPreferenceLoaded, setPanelPreferenceLoaded] = useState(false);
   const [panelStack, setPanelStack] = useState<PanelStackLevel[]>(['assistant']);
@@ -1476,16 +1364,6 @@ export function WorkstationKernelShell({
       return [route];
     });
   }, [activeDestinationId, routeManifest.routeIndex]);
-  const sageMobileDrawerRoutes = useMemo(
-    () => SAGE_MOBILE_DRAWER_ROUTE_IDS.flatMap((entry) => {
-      const route = routeManifest.routeIndex[entry.routeId];
-      if (!route) {
-        return [];
-      }
-      return [{ ...entry, href: route.href }];
-    }),
-    [routeManifest.routeIndex],
-  );
 
   useEffect(() => {
     return subscribeStudioPaneCache((updatedWorkspaceId) => {
@@ -1643,7 +1521,6 @@ export function WorkstationKernelShell({
       className={joinClassNames(
         'workstation-shell',
         activePanelDestinationId === 'sage' && 'workstation-shell--sage',
-        isSidebarOpen && 'workstation-shell--mobile-sidebar-open',
         studioAgentDetailActive && 'workstation-shell--studio-agent-detail',
         activeRouteId === 'chat' && 'workstation-shell--chat',
         panelCollapsed && 'workstation-shell--panel-collapsed',
@@ -1793,23 +1670,10 @@ export function WorkstationKernelShell({
         <div className="workstation-shell__topbar" data-workstation-main-pane="topbar">
           <WorkstationTitlebar
             surfaceLabel=""
-            surfaceControl={activePanelDestinationId === 'sage' ? (
-              <span className="workstation-titlebar__mobile-surface-label">Sage</span>
-            ) : (
-              <span className="workstation-titlebar__surface-empty" aria-hidden="true" />
-            )}
+            surfaceControl={null}
             diagnosticsVisible={false}
             onToggleDiagnostics={() => {}}
-            leftAction={(
-              <button
-                type="button"
-                className="workstation-titlebar__mobile-menu-trigger"
-                aria-label="Open sidebar"
-                onClick={() => setIsSidebarOpen(true)}
-              >
-                <Menu size={20} />
-              </button>
-            )}
+            leftAction={null}
             actions={(
               <>
                 <WorkstationHardwareStatus
@@ -1841,78 +1705,6 @@ export function WorkstationKernelShell({
             navigation={titlebarNavigation}
           />
         </div>
-
-        <AppDrawer
-          open={isSidebarOpen}
-          onOpenChange={setIsSidebarOpen}
-          title={activePanelDestinationId === 'sage' ? 'Sage' : workspaceLabel}
-          className="workstation-mobile-sidebar"
-        >
-          {isSidebarOpen && (
-            <div
-              className={joinClassNames(
-                'workstation-mobile-sidebar__content',
-                activePanelDestinationId === 'sage' && 'workstation-mobile-sidebar__content--sage',
-              )}
-            >
-              {activePanelDestinationId === 'sage' ? (
-                <>
-                  <nav className="workstation-mobile-sidebar__sage-nav" aria-label="Sage navigation">
-                    {sageMobileDrawerRoutes.map((route) => (
-                      <Link
-                        key={route.routeId}
-                        href={route.href}
-                        prefetch
-                        aria-current={isContextRouteActive(route.routeId) ? 'page' : undefined}
-                        className={joinClassNames(
-                          'workstation-mobile-sidebar__sage-link',
-                          isContextRouteActive(route.routeId) && 'workstation-mobile-sidebar__sage-link--active',
-                        )}
-                        onClick={() => setIsSidebarOpen(false)}
-                      >
-                        <route.icon size={20} aria-hidden="true" />
-                        <span>{route.label}</span>
-                      </Link>
-                    ))}
-                  </nav>
-                  <MainAgentMobileHistoryList
-                    chatHref={chatHref}
-                    client={services.client}
-                    workspaceId={workspaceId}
-                    onNavigate={() => setIsSidebarOpen(false)}
-                  />
-                  <nav className="workstation-mobile-sidebar__sage-nav workstation-mobile-sidebar__sage-nav--footer" aria-label="Workspace tools">
-                    {SAGE_FOOTER_NAV_ITEMS.map((item) => {
-                      const href = routeManifest.routeIndex[item.routeId]?.href
-                        ?? buildWorkspaceRouteHref(workspaceId, item.routeId);
-                      const active = isFooterNavItemActive(item.id);
-                      return (
-                        <Link
-                          key={item.id}
-                          href={href}
-                          prefetch
-                          aria-current={active ? 'page' : undefined}
-                          className={joinClassNames(
-                            'workstation-mobile-sidebar__sage-link',
-                            active && 'workstation-mobile-sidebar__sage-link--active',
-                          )}
-                          onClick={() => {
-                            setIsSidebarOpen(false);
-                            replacePanelStack(item.id === 'agents' ? ['studio'] : ['assistant']);
-                          }}
-                        >
-                          <item.icon size={20} aria-hidden="true" />
-                          <span>{item.label}</span>
-                        </Link>
-                      );
-                    })}
-                  </nav>
-                </>
-              ) : null}
-              {activePanelDestinationId === 'sage' ? null : <AccountTenantSwitcher />}
-            </div>
-          )}
-        </AppDrawer>
 
         <div className="workstation-shell__body" data-workstation-main-pane="content-body">
           <div

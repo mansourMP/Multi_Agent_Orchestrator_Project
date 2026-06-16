@@ -272,6 +272,43 @@ class DiscordBotRuntimeService:
             return {"ok": True, "handled": False, "triggered": False, "reason": "connector_mismatch"}
         if not should_trigger_agent_run(parsed, credentials, metadata=metadata):
             return {"ok": True, "handled": True, "triggered": False, "reason": "not_triggered"}
+        # ── Personal DM routing (cloud-hosted, no Gateway required) ──
+        message_type = str(parsed.get("message_type") or "").strip().lower()
+        if message_type == "direct_message":
+            try:
+                from server_modules import personal_channel_sage_bridge_service as _pc_svc
+                from server_modules.connectors.discord_connector import send_dm as _send_dm
+
+                _discord_user_id = str(parsed.get("user_id") or "").strip()
+                _push_name = str(parsed.get("username") or "").strip()
+                _text = str(parsed.get("text") or "").strip()
+                _workspace_id = _normalize_workspace_id(connector_entry.get("workspace_id"))
+
+                if not _discord_user_id or not _text:
+                    return {"ok": True, "handled": True, "triggered": False, "reason": "empty_dm"}
+
+                _reply = await _pc_svc.build_discord_personal_reply_async(
+                    workspace_id=_workspace_id,
+                    gateway_id=f"discord:{_workspace_id}",
+                    remote_jid=_discord_user_id,
+                    text=_text,
+                    push_name=_push_name or None,
+                    source_event_id=str(parsed.get("message_id") or "").strip() or None,
+                    linked_user_name=str(connector_entry.get("metadata", {}).get("linked_user_name") or "").strip() or None,
+                )
+
+                if _reply and str(_reply.get("text") or "").strip():
+                    _send_dm(
+                        credentials=dict(credentials),
+                        user_id=_discord_user_id,
+                        content=str(_reply.get("text") or "").strip(),
+                    )
+                    return {"ok": True, "handled": True, "triggered": True, "reason": "personal_dm_replied"}
+                else:
+                    return {"ok": True, "handled": True, "triggered": False, "reason": "personal_dm_no_reply"}
+            except Exception as _dm_exc:
+                return {"ok": True, "handled": True, "triggered": False, "reason": f"personal_dm_error: {_dm_exc}"}
+
         goal = build_run_goal_from_event(parsed)
         if not goal:
             return {"ok": True, "handled": True, "triggered": False, "reason": "empty_goal"}

@@ -317,8 +317,15 @@ def parse_telegram_update(body: dict) -> Optional[Dict[str, Any]]:
         return None
     chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
     text = _text(message.get("text") or message.get("caption"))
+    has_photo = bool(message.get("photo"))
+    has_document = bool(message.get("document"))
     if not text:
-        return None
+        if has_photo:
+            text = "[📷 Photo]"
+        elif has_document:
+            text = "[📄 Document]"
+        else:
+            return None
     return {
         "message_id": message.get("message_id"),
         "chat_id": str(chat.get("id", "")),
@@ -432,6 +439,16 @@ async def _process_update(update: dict) -> bool:
     parsed = parse_telegram_update(update)
     if parsed is None:
         return False
+    # Skip messages from the bot itself to prevent echo loops.
+    # The bot's user ID equals the numeric part of the bot token.
+    _bot_own_id = str(os.getenv("SAGE_TELEGRAM_HOSTED_BOT_USER_ID", "8870032163")).strip()
+    from_id = str(parsed.get("from_id", "")).strip()
+    LOGGER.info("Sage Telegram hosted: from_id=%s bot_id=%s match=%s text=%s",
+                from_id, _bot_own_id, from_id == _bot_own_id,
+                (parsed.get("text") or "")[:60])
+    if _bot_own_id and from_id == _bot_own_id:
+        LOGGER.info("Sage Telegram hosted: skipping own message (fromMe)")
+        return False
     chat_id = await handle_inbound_message(parsed)
     if chat_id is None:
         return False
@@ -441,10 +458,57 @@ async def _process_update(update: dict) -> bool:
     try:
         from server_modules.sage_agent_runtime_service import handle_sage_chat
         from server_modules.channel_adapter import normalize_sage_inbound, filter_outbound_reply
+
+        message_text = str(parsed.get("text") or "").strip()
+
+        # Handle /compact command — trigger compaction without a full Sage turn
+        if message_text.lower().startswith("/compact"):
+            from server_modules.compaction_service import (
+                compact_turns, find_cut_point, should_compact, load_previous_summary,
+                DEFAULT_CONTEXT_WINDOW,
+            )
+            from server_modules import thread_service
+            from server_modules.sage_agent_runtime_service import SAGE_THREAD_ID
+
+            tenant_id = "default"
+            await thread_service.ensure_master_thread(
+                thread_id=SAGE_THREAD_ID,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                owner_user_id="sage",
+                channel="sage",
+            )
+            thread_record = await thread_service.get_thread(
+                SAGE_THREAD_ID,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                include_turns=True,
+            )
+            raw_turns = list(thread_record.get("turns") or []) if isinstance(thread_record, dict) else []
+            _ctx_window = DEFAULT_CONTEXT_WINDOW
+            if raw_turns and should_compact(raw_turns, context_window=_ctx_window):
+                cut_idx = find_cut_point(raw_turns)
+                if cut_idx > 0:
+                    prev = await load_previous_summary(
+                        workspace_id=workspace_id, tenant_id=tenant_id,
+                        thread_id=SAGE_THREAD_ID,
+                    )
+                    await compact_turns(
+                        turns=raw_turns[:cut_idx],
+                        workspace_id=workspace_id,
+                        tenant_id=tenant_id,
+                        thread_id=SAGE_THREAD_ID,
+                        previous_summary=prev,
+                    )
+                await send_sage_reply(chat_id, "Context compacted.")
+            else:
+                await send_sage_reply(chat_id, "Nothing to compact — context is still small.")
+            return True
+
         await send_chat_action(chat_id, "typing")
         turn = normalize_sage_inbound(
             workspace_id=workspace_id,
-            message=parsed["text"],
+            message=message_text,
             surface="chat",
             mode="owner_sage",
             channel_origin="telegram_hosted",

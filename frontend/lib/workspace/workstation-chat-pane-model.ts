@@ -85,7 +85,7 @@ export type ChatPermissionPolicyContext = {
 
 export const VALID_REASONING_LEVELS: ChatReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-export const PRIMARY_THREAD_ID = 'primary';
+export const PRIMARY_THREAD_ID = 'sage-main';
 export const CHAT_READ_TIMEOUT_MS = 8_000;
 export const SAGE_SETUP_TIMEOUT_MS = 8_000;
 export const CHAT_THINKING_RECOVERY_MS = 120_000;
@@ -882,6 +882,7 @@ export function normalizeCanonicalChatThread(
       approvals,
       interventions,
       artifacts: normalizeArtifactReferences(nextMetadata),
+      attachments: Array.isArray(entry.attachments) ? entry.attachments : [],
       metadata: nextMetadata,
     }].filter((message) => !isSyntheticTranscriptMessage(message));
   });

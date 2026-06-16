@@ -14,6 +14,7 @@ import {
   Search,
   ShieldCheck,
   Terminal,
+  User,
   Wrench,
 } from 'lucide-react';
 
@@ -170,7 +171,7 @@ function isLeakedMachineResultJson(text: string): boolean {
 
 function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  const pattern = /(`[^`]+`|\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|\*[^*]+\*|__[^_]+__|_[^_]+_)/g;
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
@@ -181,8 +182,16 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
     const key = `${keyPrefix}-${nodes.length}`;
     if (token.startsWith('`') && token.endsWith('`')) {
       nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
+    } else if (token.startsWith('***') && token.endsWith('***')) {
+      nodes.push(<strong key={key}><em>{token.slice(3, -3)}</em></strong>);
     } else if (token.startsWith('**') && token.endsWith('**')) {
       nodes.push(<strong key={key}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      nodes.push(<em key={key}>{token.slice(1, -1)}</em>);
+    } else if (token.startsWith('__') && token.endsWith('__')) {
+      nodes.push(<strong key={key}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith('_') && token.endsWith('_')) {
+      nodes.push(<em key={key}>{token.slice(1, -1)}</em>);
     } else {
       nodes.push(token);
     }
@@ -192,6 +201,31 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
     nodes.push(text.slice(cursor));
   }
   return nodes;
+}
+
+function CodeBlock({ text, language }: { text: string; language: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    }).catch(() => undefined);
+  };
+
+  return (
+    <div className="app-chat-markdown__code-container">
+      <div className="app-chat-markdown__code-header">
+        <span className="app-chat-markdown__code-language">{language || 'code'}</span>
+        <button type="button" className="app-chat-markdown__code-copy" onClick={handleCopy}>
+          {copied ? <Check size={12} strokeWidth={2.5} /> : <Copy size={12} strokeWidth={2.5} />}
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <pre className="app-chat-markdown__code">
+        <code>{text}</code>
+      </pre>
+    </div>
+  );
 }
 
 function MarkdownMessage({ text }: { text: string }) {
@@ -207,8 +241,16 @@ function MarkdownMessage({ text }: { text: string }) {
       continue;
     }
 
+    const hr = line.match(/^([-*_])\1{2,}\s*$/);
+    if (hr) {
+      blocks.push(<hr key={`hr-${index}`} className="app-chat-markdown__hr" />);
+      index += 1;
+      continue;
+    }
+
     const codeFence = line.match(/^```([\w-]+)?\s*$/);
     if (codeFence) {
+      const language = codeFence[1] || '';
       const codeLines: string[] = [];
       index += 1;
       while (index < lines.length && !(lines[index] ?? '').trim().startsWith('```')) {
@@ -219,9 +261,11 @@ function MarkdownMessage({ text }: { text: string }) {
         index += 1;
       }
       blocks.push(
-        <pre key={`code-${index}`} className="app-chat-markdown__code">
-          <code>{codeLines.join('\n')}</code>
-        </pre>,
+        <CodeBlock
+          key={`code-${index}`}
+          text={codeLines.join('\n')}
+          language={language}
+        />,
       );
       continue;
     }
@@ -862,16 +906,32 @@ function SystemInlineRow({
 
 export function UserCell({ cell }: { cell: Extract<CodexTranscriptCell, { kind: 'user' }> }) {
   const timestamp = formatTimestamp(cell.createdAt);
+  const text = cell.content.trim();
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    }).catch(() => undefined);
+  };
   return (
     <article data-chat-role="user" className="app-chat-message">
-      <div className="app-chat-message__content">{cell.content.trim()}</div>
-      {timestamp ? (
-        <div className="app-chat-message__meta">
+      <div className="app-chat-message__content">{text}</div>
+      <div className="app-chat-message__footer">
+        {timestamp ? (
           <time className="app-chat-message__timestamp" dateTime={cell.createdAt ?? undefined}>
             {timestamp}
           </time>
-        </div>
-      ) : null}
+        ) : null}
+        <button
+          type="button"
+          className="app-chat-message__copy-button"
+          onClick={handleCopy}
+          title="Copy message"
+        >
+          {copied ? <Check size={12} strokeWidth={2.5} /> : <Copy size={12} strokeWidth={2.5} />}
+        </button>
+      </div>
     </article>
   );
 }
@@ -881,17 +941,24 @@ export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
   const effectiveLabel = providerLabel(cell);
   const taskRouteLabel = routeLabel(cell);
   const text = stripInternalToolMarkup(cell.content);
+  const [copied, setCopied] = useState(false);
   if ((!text && !cell.isStreaming) || isLeakedMachineResultJson(text)) {
     return null;
   }
+  const handleCopy = () => {
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    }).catch(() => undefined);
+  };
 
   return (
     <article data-chat-role="assistant" className="app-chat-message">
       <div className="app-chat-message__content">
         <MarkdownMessage text={text} />
       </div>
-      {(timestamp || effectiveLabel || taskRouteLabel || cell.isIncomplete) ? (
-        <div className={`app-chat-message__meta${effectiveLabel || taskRouteLabel || cell.isIncomplete ? ' app-chat-message__meta--visible' : ''}`}>
+      <div className="app-chat-message__footer">
+        <div className="app-chat-message__meta">
           {effectiveLabel ? (
             <span className="app-chat-message__provider">{effectiveLabel}</span>
           ) : null}
@@ -901,11 +968,21 @@ export function AssistantCell({ cell }: { cell: Extract<CodexTranscriptCell, { k
           {cell.isIncomplete ? (
             <span className="app-chat-message__status">Incomplete</span>
           ) : null}
-          <time className="app-chat-message__timestamp" dateTime={cell.createdAt ?? undefined}>
-            {timestamp}
-          </time>
+          {timestamp ? (
+            <time className="app-chat-message__timestamp" dateTime={cell.createdAt ?? undefined}>
+              {timestamp}
+            </time>
+          ) : null}
         </div>
-      ) : null}
+        <button
+          type="button"
+          className="app-chat-message__copy-button"
+          onClick={handleCopy}
+          title="Copy message"
+        >
+          {copied ? <Check size={12} strokeWidth={2.5} /> : <Copy size={12} strokeWidth={2.5} />}
+        </button>
+      </div>
     </article>
   );
 }

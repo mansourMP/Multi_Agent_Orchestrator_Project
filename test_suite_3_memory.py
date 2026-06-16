@@ -37,7 +37,7 @@ report("3.3c: Dead files not loaded", not dead_loaded,
 
 # ── 3.1: memory_write_file append ──
 print("\n--- Test 3.1: memory_write_file append ---")
-from memory_service import _append_daily_note, _normalize_workspace_id
+from memory_service import memory_append_daily_note, _normalize_workspace_id
 mem_path = workspace_scope_dir(WS) / "MEMORY.md"
 original_content = mem_path.read_text() if mem_path.exists() else ""
 test_fact = "TEST_INTEGRATION_FACT: Mansur prefers dark mode at 2026-06-16"

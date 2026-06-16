@@ -48,9 +48,9 @@ report("4.1: should_compact False for short thread", result_short is False,
 
 # ── 4.2: should_compact with long thread ──
 print("\n--- Test 4.2: should_compact (long thread) ---")
-lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. " * 10  # ~500 tokens
+lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. " * 8
 long_turns = []
-for i in range(200):
+for i in range(400):
     long_turns.append({"role": "user", "content": f"message {i}: {lorem}"})
     long_turns.append({"role": "assistant", "content": f"reply {i}: understood, processing {lorem}"})
 

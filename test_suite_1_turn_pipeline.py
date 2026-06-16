@@ -67,11 +67,11 @@ except Exception as e:
 print("\n--- Test 1.1: Web chat turn (structural) ---")
 try:
     from sage_agent_runtime_service import handle_sage_chat
-    sig = handle_sage_chat.__code__
-    params = [sig.co_varnames[i] for i in range(sig.co_argcount)]
-    has_thread_id = 'thread_id' in params
+    import inspect
+    sig = inspect.signature(handle_sage_chat)
+    has_thread_id = "thread_id" in sig.parameters
     report("1.1: handle_sage_chat has thread_id param", has_thread_id,
-           f"Params: {params}")
+           f"Params: {list(sig.parameters.keys())}")
 except Exception as e:
     report("1.1: handle_sage_chat import", False, str(e))
 

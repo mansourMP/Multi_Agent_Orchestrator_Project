@@ -8,14 +8,34 @@ import { Router } from "express";
 export function createRoutes(pool, logger) {
   const router = Router();
 
-  // Health check
-  router.get("/health", (_req, res) => {
-    res.json({
-      ok: true,
-      version: "0.1.0",
-      sessionCount: pool.sessionCount,
-      uptimeMs: process.uptime() * 1000,
-    });
+  // Health check — includes connected/disconnected session counts for backend health verification
+  router.get("/health", async (_req, res) => {
+    try {
+      const { CloudSessionStore } = await import("../session-store.js");
+      const allSessions = await CloudSessionStore.listAllSessionIds();
+      const connected = allSessions.filter(s => s.meta?.status === "connected").length;
+      const disconnected = allSessions.filter(s => s.meta?.status === "disconnected").length;
+      res.json({
+        ok: true,
+        version: "0.1.0",
+        liveSessionCount: pool.sessionCount,
+        sessions: {
+          connected,
+          disconnected,
+          total: allSessions.length,
+        },
+        uptimeMs: process.uptime() * 1000,
+      });
+    } catch (_err) {
+      // Fallback if Redis is unreachable
+      res.json({
+        ok: true,
+        version: "0.1.0",
+        liveSessionCount: pool.sessionCount,
+        sessions: { connected: pool.sessionCount, disconnected: 0, total: pool.sessionCount },
+        uptimeMs: process.uptime() * 1000,
+      });
+    }
   });
 
   // Provision a new session from a sessionString

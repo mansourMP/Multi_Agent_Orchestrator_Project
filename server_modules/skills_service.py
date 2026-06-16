@@ -1141,6 +1141,26 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
             capability_id="browser_automation.interactive",
             parameters={"type": "object", "properties": {"output_path": {"type": "string"}}},
         ),
+        ToolDescriptor(
+            tool_name="send_image",
+            label="Send image",
+            connector_id="messaging",
+            action_id="send_image",
+            description=(
+                "Send an image or file through the current messaging channel. "
+                "Use this to share screenshots, generated images, documents, or other files. "
+                "url should be a publicly accessible image/file URL. "
+                "caption is an optional text to send alongside the image."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Public URL of the image or file to send."},
+                    "caption": {"type": "string", "description": "Optional caption text for the image."},
+                },
+                "required": ["url"],
+            },
+        ),
     ]
 
 
@@ -3417,6 +3437,45 @@ def execute_single_direct_tool_call(
                 "new_hash": saved.get("new_hash") if isinstance(saved, dict) else None,
                 "version_id": saved.get("version_id") if isinstance(saved, dict) else None,
             },
+            ensure_ascii=False,
+        )
+    if connector_id == "memory" and action_id == "read":
+        filename = str(argument_payload.get("file") or argument_payload.get("path") or "").strip()
+        if not filename:
+            raise RuntimeError("Tool 'memory_read' requires a file path.")
+        result = callbacks.memory_read_file(
+            workspace_id,
+            filename,
+            agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+        )
+        return json.dumps(result, ensure_ascii=False)
+    if connector_id == "memory" and action_id == "write":
+        filename = str(argument_payload.get("file") or argument_payload.get("path") or "").strip()
+        content = str(argument_payload.get("content") or "")
+        mode = str(argument_payload.get("mode") or "replace").strip().lower() or "replace"
+        if not filename:
+            raise RuntimeError("Tool 'memory_write' requires a file path.")
+        if not content.strip():
+            raise RuntimeError("Tool 'memory_write' requires non-empty content.")
+        actor = str(
+            session_metadata.get("user_id")
+            or session_metadata.get("actor")
+            or session_metadata.get("agent_install_id")
+            or session_metadata.get("active_agent_install_id")
+            or "direct_tool"
+        ).strip()
+        saved = callbacks.memory_write_file(
+            workspace_id,
+            filename,
+            content,
+            mode=mode,
+            agent_install_id=session_metadata.get("agent_install_id") or session_metadata.get("active_agent_install_id") or None,
+            actor=actor,
+            reason="memory_write",
+            run_id=str(session_metadata.get("run_id") or session_metadata.get("request_id") or "").strip() or None,
+        )
+        return json.dumps(
+            {"ok": True, "file": saved.get("file"), "chars_written": saved.get("chars_written"), "mode": saved.get("mode")},
             ensure_ascii=False,
         )
     if connector_id == "memory" and action_id == "stage_edit":

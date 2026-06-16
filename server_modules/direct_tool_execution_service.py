@@ -164,6 +164,18 @@ def _default_rollback_memory_file_version(*args: Any, **kwargs: Any) -> Any:
     return rollback_memory_file_version(*args, **kwargs)
 
 
+def _default_memory_read_file(*args: Any, **kwargs: Any) -> Any:
+    from server_modules.memory_service import memory_read_file
+
+    return memory_read_file(*args, **kwargs)
+
+
+def _default_memory_write_file(*args: Any, **kwargs: Any) -> Any:
+    from server_modules.memory_service import memory_write_file
+
+    return memory_write_file(*args, **kwargs)
+
+
 @dataclass(frozen=True)
 class DirectToolExecutionCallbacks:
     compact_step_detail: Callable[[Any], Optional[str]]
@@ -190,6 +202,8 @@ class DirectToolExecutionCallbacks:
     apply_memory_consolidation_staging: Callable[..., Any] = _default_apply_memory_consolidation_staging
     list_memory_file_versions: Callable[..., Any] = _default_list_memory_file_versions
     rollback_memory_file_version: Callable[..., Any] = _default_rollback_memory_file_version
+    memory_read_file: Callable[..., Any] = _default_memory_read_file
+    memory_write_file: Callable[..., Any] = _default_memory_write_file
 
 
 def direct_tool_step_payload(

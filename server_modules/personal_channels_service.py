@@ -1156,6 +1156,34 @@ async def _deliver_whatsapp_personal_reply(
             channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
         )
         linked_user_name = str((_wa_state or {}).get("linked_name") or "").strip() or None
+        # ── Shared command dispatcher ──
+        from server_modules.sage_command_dispatcher import dispatch_command as _dispatch_cmd
+        _ws_id = str(registration.get("workspace_id") or "").strip()
+        _cmd_reply = await _dispatch_cmd(
+            command=text,
+            workspace_id=_ws_id,
+            thread_id="sage-main",
+            channel_origin="whatsapp_personal",
+            sender_id=remote_jid or None,
+        )
+        if _cmd_reply is not None:
+            _cmd_key = f"whatsapp_personal:cmd:{external_message_id}"
+            outbound_cmd, _ = personal_channels_repository.create_or_get_outbound_message(
+                gateway_id=str(gateway_id or "").strip(),
+                channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+                idempotency_key=_cmd_key,
+                remote_jid=remote_jid,
+                text=_cmd_reply,
+                reply_to_external_message_id=external_message_id,
+            )
+            personal_channels_repository.mark_inbound_processed(
+                gateway_id=str(gateway_id or "").strip(),
+                channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+                external_message_id=external_message_id,
+                reply_idempotency_key=_cmd_key,
+            )
+            return {"duplicate": duplicate, "inbound": inbound, "outbound": outbound_cmd}
+
         reply = personal_channel_sage_bridge_service.build_whatsapp_personal_reply(
             workspace_id=str(registration.get("workspace_id") or "").strip(),
             gateway_id=str(gateway_id or "").strip(),
@@ -2078,61 +2106,22 @@ async def handle_cloud_channel_inbound(
     if not external_message_id or not text:
         raise ValueError("cloud_channel_inbound requires external_message_id and text")
 
-    # Handle /compact command — trigger compaction without a full Sage turn
-    if text.strip().lower().startswith("/compact"):
-        from server_modules import thread_service
-        from server_modules.compaction_service import (
-            compact_turns, find_cut_point, should_compact, load_previous_summary,
-            DEFAULT_CONTEXT_WINDOW,
-        )
-        from server_modules.sage_agent_runtime_service import SAGE_THREAD_ID
-
-        tenant_id = "default"
-        await thread_service.ensure_master_thread(
-            thread_id=SAGE_THREAD_ID,
-            tenant_id=tenant_id,
-            workspace_id=resolved_workspace_id,
-            owner_user_id="sage",
-            channel="sage",
-        )
-        thread_record = await thread_service.get_thread(
-            SAGE_THREAD_ID,
-            tenant_id=tenant_id,
-            workspace_id=resolved_workspace_id,
-            include_turns=True,
-        )
-        raw_turns = list(thread_record.get("turns") or []) if isinstance(thread_record, dict) else []
-        _ctx_window = DEFAULT_CONTEXT_WINDOW
-        if raw_turns and should_compact(raw_turns, context_window=_ctx_window):
-            cut_idx = find_cut_point(raw_turns)
-            if cut_idx > 0:
-                prev = await load_previous_summary(
-                    workspace_id=resolved_workspace_id, tenant_id=tenant_id,
-                    thread_id=SAGE_THREAD_ID,
-                )
-                await compact_turns(
-                    turns=raw_turns[:cut_idx],
-                    workspace_id=resolved_workspace_id,
-                    tenant_id=tenant_id,
-                    thread_id=SAGE_THREAD_ID,
-                    previous_summary=prev,
-                )
-            compact_reply = "Context compacted."
-        else:
-            compact_reply = "Nothing to compact — context is still small."
-
-        # Send reply via cloud session manager
+    # ── Shared command dispatcher ──
+    from server_modules.sage_command_dispatcher import dispatch_command as _dispatch_cmd
+    _cmd_reply = await _dispatch_cmd(
+        command=text,
+        workspace_id=resolved_workspace_id,
+        thread_id="sage-main",
+        channel_origin="telegram_personal",
+        sender_id=remote_jid or None,
+    )
+    if _cmd_reply is not None:
         await dispatch_cloud_channel_outbound(
             session_id=session_id,
-            text=compact_reply,
+            text=_cmd_reply,
             remote_jid=remote_jid,
         )
-        return {
-            "status": "compacted",
-            "session_id": session_id,
-            "external_message_id": external_message_id,
-            "reply_text": compact_reply,
-        }
+        return {"status": "command_handled", "session_id": session_id, "reply_text": _cmd_reply[:200]}
 
     # Build Sage reply using the existing bridge — same as Gateway path
     reply = await personal_channel_sage_bridge_service.build_telegram_personal_reply_async(

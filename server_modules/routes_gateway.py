@@ -2010,6 +2010,57 @@ async def stream_gateway_hardware_activity(
         ping=15,
     )
 
+@router.get("/workstation/{workspace_id}/sage/turns/stream")
+async def workstation_sage_turns_sse(
+    workspace_id: str,
+    current_user=Depends(require_api_key),
+):
+    """SSE stream that emits events when new turns appear in sage-main."""
+    resolved_workspace_id = enforce_workspace_access(
+        current_user, workspace_id, minimum_role="member",
+    )
+    from server_modules.sage_agent_runtime_service import SAGE_THREAD_ID
+
+    async def _turn_event_generator():
+        import asyncio as _asyncio
+        from server_modules import thread_service as _ts
+        import time as _time
+        last_seen_created_at = None
+        while True:
+            try:
+                thread_record = await _ts.get_thread(
+                    SAGE_THREAD_ID,
+                    tenant_id="default",
+                    workspace_id=resolved_workspace_id,
+                    include_turns=True,
+                )
+                if isinstance(thread_record, dict):
+                    raw_turns = list(thread_record.get("turns") or [])
+                    if raw_turns:
+                        # Find newest turn by created_at
+                        newest = max(raw_turns, key=lambda t: str(t.get("created_at") or ""))
+                        new_created = str(newest.get("created_at") or "")
+                        if last_seen_created_at is not None and new_created > last_seen_created_at:
+                            # New turn detected — emit event
+                            import json as _json
+                            yield {
+                                "event": "new_turn",
+                                "data": _json.dumps({
+                                    "thread_id": SAGE_THREAD_ID,
+                                    "workspace_id": resolved_workspace_id,
+                                    "role": newest.get("role"),
+                                    "created_at": new_created,
+                                }),
+                            }
+                        last_seen_created_at = new_created
+            except Exception:
+                pass
+            await _asyncio.sleep(2)
+
+    return EventSourceResponse(_turn_event_generator(), ping=15)
+
+
+
 
 @router.post("/gateway/registrations/{gateway_id}/rotate-token")
 async def rotate_gateway_registration_token(

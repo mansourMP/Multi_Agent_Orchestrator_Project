@@ -959,6 +959,7 @@ export type WorkstationClientPaths = {
   agentTraces: (filters?: WorkstationAgentTraceListFilters) => string;
   agentTraceDetail: (traceId: string) => string;
   agentTraceStream: (traceId: string) => string;
+  sageTurnsStream: (workspaceId: string) => string;
   deployedAgents: (deploymentState?: string | null) => string;
   deployedAgentTelegramReadiness: (deployedAgentId?: string | null) => string;
   deployedAgentDetail: (deployedAgentId: string) => string;
@@ -1620,6 +1621,7 @@ export type WorkstationClient = {
   openTraceStream: (traceId: string) => EventSource;
   openNotificationsStream: (options?: WorkstationClientStreamOptions) => EventSource;
   openChannelEventsStream: (options?: WorkstationClientStreamOptions) => EventSource;
+  openSageTurnStream: (workspaceId: string) => EventSource;
   snapshot: () => {
     scope: WorkstationClientScope;
     paths: {
@@ -1634,6 +1636,7 @@ export type WorkstationClient = {
       agentTraceStream: string;
       notificationsStream: string;
       channelEventsStream: string;
+      sageTurnsStream: string;
     };
   };
 };
@@ -1959,6 +1962,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
         include_backlog: options.includeBacklog ? 'true' : undefined,
         limit: options.limit ?? 120,
       })}`,
+    sageTurnsStream: (workspaceId: string) =>
+      `/api/workstation/${encodeURIComponent(workspaceId)}/sage/turns/stream`,
     channelEventsStream: (options = {}) =>
       `/api/events/inbox/stream${buildQueryString({
         workspace_id: workspaceId,
@@ -4493,6 +4498,13 @@ export function createWorkstationClient(
           { withCredentials: true },
         ),
       ),
+    openSageTurnStream: (workspaceId) =>
+      realtime.trackEventSource(
+        new EventSource(
+          resolveAbsoluteUrl(getApiBaseUrl(), paths.sageTurnsStream(workspaceId)),
+          { withCredentials: true },
+        ),
+      ),
     snapshot: () => ({
       scope,
       paths: {
@@ -4507,6 +4519,7 @@ export function createWorkstationClient(
         agentTraceStream: paths.agentTraceStream(':traceId'),
         notificationsStream: paths.notificationsStream(),
         channelEventsStream: paths.channelEventsStream(),
+        sageTurnsStream: paths.sageTurnsStream(':workspaceId'),
       },
     }),
   };

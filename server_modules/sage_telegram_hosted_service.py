@@ -14,6 +14,8 @@ import asyncio
 
 LOGGER = logging.getLogger(__name__)
 
+from server_modules.sage_command_dispatcher import SAGE_ERROR_REPLY  # noqa: E402
+
 PAIRING_CODE_LENGTH = 6
 PAIRING_TOKEN_BYTES = 24
 TELEGRAM_API_BASE = "https://api.telegram.org"
@@ -319,13 +321,34 @@ def parse_telegram_update(body: dict) -> Optional[Dict[str, Any]]:
     text = _text(message.get("text") or message.get("caption"))
     has_photo = bool(message.get("photo"))
     has_document = bool(message.get("document"))
-    if not text:
-        if has_photo:
+    has_voice = bool(message.get("voice"))
+    media_files: list[dict] = []
+    if has_photo:
+        photos = message.get("photo") or []
+        if isinstance(photos, list) and photos:
+            largest = max(photos, key=lambda p: (p.get("width", 0) or 0) * (p.get("height", 0) or 0))
+            media_files.append({"type": "image", "file_id": str(largest.get("file_id", "")), "mime": "image/jpeg"})
+        if not text:
             text = "[📷 Photo]"
-        elif has_document:
+    if has_document:
+        doc = message.get("document") or {}
+        if isinstance(doc, dict):
+            media_files.append({
+                "type": "document",
+                "file_id": str(doc.get("file_id", "")),
+                "mime": str(doc.get("mime_type", "application/octet-stream")),
+                "filename": str(doc.get("file_name", "file")),
+            })
+        if not text:
             text = "[📄 Document]"
-        else:
-            return None
+    if has_voice:
+        voice = message.get("voice") or {}
+        if isinstance(voice, dict):
+            media_files.append({"type": "audio", "file_id": str(voice.get("file_id", "")), "mime": "audio/ogg"})
+        if not text:
+            text = "[🎤 Voice message]"
+    if not text and not media_files:
+        return None
     return {
         "message_id": message.get("message_id"),
         "chat_id": str(chat.get("id", "")),
@@ -335,6 +358,7 @@ def parse_telegram_update(body: dict) -> Optional[Dict[str, Any]]:
         "from_username": _text((message.get("from") or {}).get("username")),
         "from_first_name": _text((message.get("from") or {}).get("first_name")),
         "date": message.get("date"),
+        "media": media_files,
     }
 
 
@@ -378,6 +402,53 @@ async def handle_inbound_message(parsed: dict) -> Optional[str]:
 
 async def send_sage_reply(chat_id: str, text: str, *, reply_to_message_id: Optional[int] = None) -> dict:
     return await send_message(chat_id, text, reply_to_message_id=reply_to_message_id)
+
+
+
+async def send_photo(chat_id: str, photo: str, *, caption: str | None = None, reply_to_message_id: int | None = None) -> dict:
+    """Send a photo to a Telegram chat.
+
+    photo can be:
+    - A file_id string (already uploaded to Telegram)
+    - A URL string (Telegram will download it)
+    """
+    body: dict = {"chat_id": chat_id, "photo": photo, "parse_mode": "MarkdownV2"}
+    if caption:
+        body["caption"] = _to_telegram_markdown(str(caption))
+    if reply_to_message_id is not None:
+        body["reply_to_message_id"] = reply_to_message_id
+    return await _telegram_api("sendPhoto", body)
+
+
+async def send_document(chat_id: str, document: str, *, caption: str | None = None, filename: str | None = None, reply_to_message_id: int | None = None) -> dict:
+    """Send a document/file to a Telegram chat.
+
+    document can be:
+    - A file_id string (already uploaded to Telegram)
+    - A URL string (Telegram will download it)
+    """
+    body: dict = {"chat_id": chat_id, "document": document, "parse_mode": "MarkdownV2"}
+    if caption:
+        body["caption"] = _to_telegram_markdown(str(caption))
+    if filename:
+        body["caption"] = (body.get("caption", "") + f"\n_{filename}_").strip()
+    if reply_to_message_id is not None:
+        body["reply_to_message_id"] = reply_to_message_id
+    return await _telegram_api("sendDocument", body)
+
+
+async def get_file(file_id: str) -> dict:
+    """Get file info from Telegram. Returns {"file_path": str, ...} or empty dict."""
+    result = await _telegram_api("getFile", {"file_id": file_id})
+    if result.get("ok") and isinstance(result.get("result"), dict):
+        return dict(result["result"])
+    return {}
+
+
+def build_file_url(file_path: str) -> str:
+    """Build a download URL for a Telegram file."""
+    token = str(os.environ.get("EMPYRALIS_TELEGRAM_HOSTED_BOT_TOKEN", "")).strip()
+    return f"https://api.telegram.org/file/bot{token}/{file_path}"
 
 
 async def register_webhook_if_configured(*, base_url: str) -> bool:
@@ -533,7 +604,7 @@ async def _process_update(update: dict) -> bool:
     except Exception as exc:
         LOGGER.warning("Sage Telegram hosted: error processing update: %s", exc)
         try:
-            await send_sage_reply(chat_id, "Sorry, I ran into an issue. Please try again.", reply_to_message_id=parsed.get("message_id"))
+            await send_sage_reply(chat_id, SAGE_ERROR_REPLY, reply_to_message_id=parsed.get("message_id"))
         except Exception:
             pass
     return False

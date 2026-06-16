@@ -611,6 +611,8 @@ export function WorkstationChatPane() {
     isSending,
     setIsSending,
   } = useChatComposerState();
+  const isSendingRef = useRef(isSending);
+  useEffect(() => { isSendingRef.current = isSending; }, [isSending]);
   const { runs, setRuns, approvals, setApprovals } = useChatRunAndApprovalState(
     services.queryClient,
     RUNS_QUERY_KEY,
@@ -1104,6 +1106,31 @@ export function WorkstationChatPane() {
     ]);
     return nextThread;
   };
+
+  // ── SSE: live refresh when channel messages arrive on sage-main ──
+  useEffect(() => {
+    const workspaceId = bootstrap.workspace.id;
+    if (!workspaceId) return;
+    let es: EventSource | null = null;
+    try {
+      es = services.client.openSageTurnStream(workspaceId);
+      es.addEventListener('new_turn', () => {
+        // Only refresh if user is not mid-turn (no pending message, not sending)
+        if (!pendingUserMessageRef.current && !isSendingRef.current) {
+          refreshCanonicalState('sage-main').catch(() => {});
+        }
+      });
+      es.addEventListener('error', () => {
+        // EventSource will auto-reconnect; no action needed
+      });
+    } catch {
+      // SSE not supported or connection failed — silently degrade
+    }
+    return () => {
+      try { es?.close(); } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrap.workspace.id]);
 
   const submitBootstrapResponse = async () => {
     const answer = bootstrapAnswer.trim();

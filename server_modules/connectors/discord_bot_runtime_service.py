@@ -216,6 +216,17 @@ class DiscordBotRuntimeService:
                 self._threads.append(thread)
             started += 1
             self._statuses.append(DiscordBotRuntimeStatus(connector_id, workspace_id, "online"))
+
+            # Register slash commands with Discord (fire-and-forget)
+            try:
+                import asyncio as _asyncio_disc
+                _token = str((credentials or {}).get("bot_token") or "").strip()
+                _asyncio_disc.ensure_future(
+                    _register_discord_slash_commands(bot_token=_token)
+                )
+            except Exception:
+                pass
+
         return {"ok": True, "started": started, "statuses": self.statuses()}
 
     def stop(self) -> Dict[str, Any]:
@@ -272,6 +283,14 @@ class DiscordBotRuntimeService:
             return {"ok": True, "handled": False, "triggered": False, "reason": "connector_mismatch"}
         if not should_trigger_agent_run(parsed, credentials, metadata=metadata):
             return {"ok": True, "handled": True, "triggered": False, "reason": "not_triggered"}
+        # ── Slash command (INTERACTION_CREATE) handling ──
+        event_type_raw = str(parsed.get("event_type") or "").strip().lower()
+        if event_type_raw == "interaction_create":
+            return await _handle_discord_interaction(
+                parsed=parsed,
+                connector_entry=connector_entry,
+            )
+
         # ── Personal DM routing (cloud-hosted, no Gateway required) ──
         message_type = str(parsed.get("message_type") or "").strip().lower()
         if message_type == "direct_message":
@@ -286,6 +305,23 @@ class DiscordBotRuntimeService:
 
                 if not _discord_user_id or not _text:
                     return {"ok": True, "handled": True, "triggered": False, "reason": "empty_dm"}
+
+                # ── Shared command dispatcher ──
+                from server_modules.sage_command_dispatcher import dispatch_command as _dispatch_cmd
+                _cmd_reply = await _dispatch_cmd(
+                    command=_text,
+                    workspace_id=_workspace_id,
+                    thread_id="sage-main",
+                    channel_origin="discord_personal",
+                    sender_id=_discord_user_id or None,
+                )
+                if _cmd_reply is not None:
+                    _send_dm(
+                        credentials=dict(credentials),
+                        user_id=_discord_user_id,
+                        content=_cmd_reply,
+                    )
+                    return {"ok": True, "handled": True, "triggered": True, "reason": "command_dispatched"}
 
                 _reply = await _pc_svc.build_discord_personal_reply_async(
                     workspace_id=_workspace_id,
@@ -368,3 +404,84 @@ class DiscordBotRuntimeService:
 
 
 __all__ = ["DiscordBotRuntimeService", "DiscordBotRuntimeStatus"]
+
+
+# ── Discord slash command registration ──
+
+DISCORD_SLASH_COMMANDS = [
+    {"name": "compact", "description": "Summarize and clear conversation context"},
+    {"name": "memory", "description": "Show what Sage remembers about you"},
+    {"name": "help", "description": "Show available commands"},
+    {"name": "new", "description": "Start a new task session"},
+    {"name": "approve", "description": "Approve pending action"},
+    {"name": "deny", "description": "Deny pending action"},
+]
+
+
+async def _register_discord_slash_commands(bot_token: str) -> None:
+    """Register slash commands with Discord via REST API."""
+    if not bot_token:
+        return
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            # Register globally (no guild_id = global commands)
+            resp = await client.put(
+                f"https://discord.com/api/v10/applications/@me/commands",
+                headers={"Authorization": f"Bot {bot_token}"},
+                json=DISCORD_SLASH_COMMANDS,
+            )
+            if resp.status_code == 200:
+                import logging
+                _log = logging.getLogger(__name__)
+                _log.info("Discord slash commands registered: %d commands", len(DISCORD_SLASH_COMMANDS))
+    except Exception:
+        pass
+
+
+async def _handle_discord_interaction(
+    *,
+    parsed: dict,
+    connector_entry: dict,
+) -> dict:
+    """Handle Discord INTERACTION_CREATE (slash command) events."""
+    interaction = parsed.get("raw_event") if isinstance(parsed.get("raw_event"), dict) else {}
+    interaction_id = str(interaction.get("id") or "").strip()
+    interaction_token = str(interaction.get("token") or "").strip()
+    command_data = interaction.get("data") if isinstance(interaction.get("data"), dict) else {}
+    command_name = str(command_data.get("name") or "").strip().lower()
+
+    if not command_name or not interaction_id or not interaction_token:
+        return {"ok": True, "handled": False, "reason": "invalid_interaction"}
+
+    workspace_id = _normalize_workspace_id(connector_entry.get("workspace_id"))
+    user_id = str((interaction.get("user") or interaction.get("member", {}).get("user") or {}).get("id") or "").strip()
+
+    # Dispatch via shared command dispatcher
+    from server_modules.sage_command_dispatcher import dispatch_command as _dispatch_cmd
+    reply = await _dispatch_cmd(
+        command=f"/{command_name}",
+        workspace_id=workspace_id,
+        thread_id="sage-main",
+        channel_origin="discord_personal",
+        sender_id=user_id or None,
+    )
+
+    if reply is None:
+        reply = "Command not recognized."
+
+    # Respond to interaction via Discord REST API
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://discord.com/api/v10/interactions/{interaction_id}/{interaction_token}/callback",
+                json={
+                    "type": 4,  # CHANNEL_MESSAGE_WITH_SOURCE
+                    "data": {"content": str(reply)[:2000]},
+                },
+            )
+    except Exception:
+        pass
+
+    return {"ok": True, "handled": True, "triggered": True, "reason": "interaction_handled"}

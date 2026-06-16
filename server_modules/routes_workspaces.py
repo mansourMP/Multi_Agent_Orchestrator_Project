@@ -1025,3 +1025,65 @@ async def workspace_provider_models_refresh(
         current_user=current_user,
         provider=provider_id,
     )
+
+
+# ── Identity Links ───────────────────────────────────────────────
+
+class IdentityLinkEntry(BaseModel):
+    name: str
+    channel_ids: list[str]
+
+
+class IdentityLinksResponse(BaseModel):
+    identity_links: dict[str, list[str]]
+
+
+@router.get("/workspaces/{workspace_id}/identity-links")
+async def get_workspace_identity_links(
+    workspace_id: str,
+    current_user=Depends(get_current_user),
+) -> IdentityLinksResponse:
+    """Return the workspace identity_links mapping."""
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        minimum_role="member",
+    )
+    ws_record = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    raw_links = (ws_record or {}).get("identity_links")
+    if isinstance(raw_links, dict):
+        return IdentityLinksResponse(identity_links=raw_links)
+    return IdentityLinksResponse(identity_links={})
+
+
+@router.post("/workspaces/{workspace_id}/identity-links")
+async def upsert_workspace_identity_link(
+    workspace_id: str,
+    body: IdentityLinkEntry,
+    current_user=Depends(get_current_user),
+) -> IdentityLinksResponse:
+    """Upsert an identity link entry for a canonical name."""
+    resolved_workspace_id = auth_module.enforce_workspace_access(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        minimum_role="owner",
+    )
+    name = str(body.name or "").strip()
+    channel_ids = [str(cid).strip() for cid in (body.channel_ids or []) if str(cid).strip()]
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    if not channel_ids:
+        raise HTTPException(status_code=400, detail="at least one channel_id is required")
+
+    # Load current links, upsert entry, save back
+    ws_record = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    raw_links = (ws_record or {}).get("identity_links")
+    current_links: dict[str, list[str]] = dict(raw_links) if isinstance(raw_links, dict) else {}
+    current_links[name] = channel_ids
+
+    await control_plane_repository.update_workspace_identity_links(
+        workspace_id=resolved_workspace_id,
+        identity_links=current_links,
+    )
+    return IdentityLinksResponse(identity_links=current_links)
+

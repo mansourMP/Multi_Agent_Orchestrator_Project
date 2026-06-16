@@ -518,6 +518,10 @@ def build_sage_instruction_bundle(
     heartbeat_context: str = "",
     capability_payload: Mapping[str, Any] | None = None,
     recent_messages: Sequence[Mapping[str, Any]] | None = None,
+    sender_name: str | None = None,
+    sender_id: str | None = None,
+    canonical_name: str | None = None,
+    linked_channels: list[str] | None = None,
 ) -> SageInstructionBundle:
     normalized_workspace_id = _coerce_text(workspace_id)
     normalized_message = _coerce_text(message)
@@ -602,6 +606,21 @@ def build_sage_instruction_bundle(
         _channel_block = f"Current channel: {_ch}."
         if _hint:
             _channel_block += f" {_hint}"
+        # Inject sender identity alongside channel context
+        _cn = str(canonical_name or "").strip()
+        _sn = str(sender_name or "").strip()
+        _lc = list(linked_channels or [])
+        if _cn:
+            # Cross-channel identity link resolved
+            _other = [c for c in _lc if c != _ch]
+            if _other:
+                _channel_block += f"\nThe person messaging you right now: {_cn} (via {_ch} — also known to you from: {', '.join(_other)})"
+            else:
+                _channel_block += f"\nThe person messaging you right now: {_cn} (via {_ch})"
+        elif _sn:
+            _channel_block += f"\nThe person messaging you right now: {_sn} (via {_ch})"
+        else:
+            _channel_block += "\nThe person messaging you right now: workspace owner (via web)"
         append_section("channel_context", _channel_block)
 
     system_prompt = "\n\n".join(section for section in sections if _coerce_text(section)).strip()

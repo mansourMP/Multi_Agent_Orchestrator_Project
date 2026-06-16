@@ -1,0 +1,66 @@
+{
+  "display_information": {
+    "name": "Empyralis Sage",
+    "description": "Your personal AI assistant — responds in DMs and mentions.",
+    "background_color": "#0a0a0a"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Sage",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/compact",
+        "description": "Summarize and clear conversation context",
+        "should_escape": false
+      },
+      {
+        "command": "/memory",
+        "description": "Show what Sage remembers about you",
+        "should_escape": false
+      },
+      {
+        "command": "/help",
+        "description": "Show available commands",
+        "should_escape": false
+      },
+      {
+        "command": "/new",
+        "description": "Start a new task session",
+        "should_escape": false
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "im:read",
+        "im:history",
+        "app_mentions:read",
+        "users:read",
+        "channels:history",
+        "commands"
+      ]
+    },
+    "redirect_urls": [
+      "https://empyralis.ai/api/channels/slack/oauth/callback"
+    ]
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://empyralis.ai/api/sage/slack/inbound",
+      "bot_events": [
+        "message.im",
+        "app_mention"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": false
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

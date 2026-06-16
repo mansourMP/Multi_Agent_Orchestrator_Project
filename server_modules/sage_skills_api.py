@@ -389,7 +389,7 @@ def _health_checks(items: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
     return [
         {"id": "model_route", "label": "Model route", "status": "ready", "surface": "sage"},
         {"id": "memory_retrieval", "label": "Memory retrieval", "status": "ready" if has_memory else "needs_setup", "surface": "sage"},
-        {"id": "memory_write", "label": "Memory writes", "status": "approval_required" if has_memory else "needs_setup", "surface": "sage"},
+        {"id": "memory_write", "label": "Memory writes", "status": "allowed" if has_memory else "needs_setup", "surface": "sage"},
         {"id": "skill_scanner", "label": "Skill scanner", "status": "ready" if has_skill_scanner else "needs_setup", "surface": "skills"},
         {"id": "mcp_endpoint_safety", "label": "MCP endpoint safety", "status": "ready" if has_mcp else "available", "surface": "mcp"},
         {"id": "local_companion", "label": "Local companion", "status": "setup_required", "surface": "runtime"},

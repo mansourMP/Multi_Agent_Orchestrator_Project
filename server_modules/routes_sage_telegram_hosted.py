@@ -117,53 +117,49 @@ async def telegram_webhook(request: Request) -> dict:
 
         message_text = str(parsed.get("text") or "").strip()
 
-        # Handle /compact command — trigger compaction without a full Sage turn
-        if message_text.lower().startswith("/compact"):
-            from server_modules.compaction_service import (
-                compact_turns, build_context_from_compaction,
-                find_cut_point, should_compact, load_previous_summary,
-                DEFAULT_CONTEXT_WINDOW,
-            )
-            from server_modules import thread_service
-            from server_modules.sage_agent_runtime_service import SAGE_THREAD_ID
+        # ── Resolve media attachments (photo, document, voice) ──
+        _attachments: list[dict] = []
+        _media = parsed.get("media")
+        if isinstance(_media, list) and _media:
+            for _m in _media:
+                _fid = str(_m.get("file_id") or "").strip()
+                if _fid:
+                    try:
+                        _finfo = await hosted.get_file(_fid)
+                        _fpath = str(_finfo.get("file_path") or "").strip()
+                        _furl = hosted.build_file_url(_fpath) if _fpath else ""
+                        _attachments.append({
+                            "type": str(_m.get("type") or "file"),
+                            "url": _furl,
+                            "mime": str(_m.get("mime") or "application/octet-stream"),
+                            "filename": str(_m.get("filename") or ""),
+                            "file_id": _fid,
+                        })
+                    except Exception:
+                        _attachments.append({"type": str(_m.get("type") or "file"), "file_id": _fid})
 
-            tenant_id = "default"
-            await thread_service.ensure_master_thread(
-                thread_id=SAGE_THREAD_ID,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                owner_user_id="sage",
-                channel="sage",
-            )
-            thread_record = await thread_service.get_thread(
-                SAGE_THREAD_ID,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                include_turns=True,
-            )
-            raw_turns = list(thread_record.get("turns") or []) if isinstance(thread_record, dict) else []
-            _ctx_window = DEFAULT_CONTEXT_WINDOW
-            if raw_turns and should_compact(raw_turns, context_window=_ctx_window):
-                cut_idx = find_cut_point(raw_turns)
-                if cut_idx > 0:
-                    prev = await load_previous_summary(workspace_id=workspace_id, tenant_id=tenant_id)
-                    await compact_turns(
-                        turns=raw_turns[:cut_idx],
-                        workspace_id=workspace_id,
-                        tenant_id=tenant_id,
-                        thread_id=SAGE_THREAD_ID,
-                        previous_summary=prev,
-                    )
-                await hosted.send_sage_reply(chat_id, "Context compacted.")
-            else:
-                await hosted.send_sage_reply(chat_id, "Nothing to compact — context is still small.")
+        # ── Shared command dispatcher ──
+        from server_modules.sage_command_dispatcher import dispatch_command
+        cmd_reply = await dispatch_command(
+            command=message_text,
+            workspace_id=workspace_id,
+            thread_id="sage-main",
+            channel_origin="telegram_hosted",
+            sender_id=str(chat_id),
+        )
+        if cmd_reply is not None:
+            await hosted.send_sage_reply(chat_id, cmd_reply)
             return {"ok": True}
 
         await hosted.send_chat_action(chat_id, "typing")
 
+        # Resolve active thread (may be task thread if /new was used)
+        from server_modules.sage_command_dispatcher import get_active_thread as _gat
+        _active_thread = await _gat(workspace_id, "telegram_hosted")
+
         turn = normalize_sage_inbound(
             workspace_id=workspace_id,
-            message=message_text,
+            message=message_text if message_text else "[Media]",
             surface="chat",
             mode="owner_sage",
             channel_origin="telegram_hosted",
@@ -174,6 +170,8 @@ async def telegram_webhook(request: Request) -> dict:
             workspace_id=turn.workspace_id,
             message=turn.message,
             surface=turn.surface,
+            attachments=_attachments if _attachments else None,
+            thread_id=_active_thread,
             mode=turn.mode,
             channel_origin=turn.channel_origin,
             sender_id=str(chat_id),
@@ -188,9 +186,10 @@ async def telegram_webhook(request: Request) -> dict:
                 reply_to_message_id=parsed.get("message_id"),
             )
     except Exception:
+        from server_modules.sage_command_dispatcher import SAGE_ERROR_REPLY as _err
         await hosted.send_sage_reply(
             chat_id,
-            "Sorry, I ran into an issue processing your message. Please try again.",
+            _err,
             reply_to_message_id=parsed.get("message_id"),
         )
 
@@ -261,6 +260,9 @@ async def dev_poll_once() -> dict:
                 continue
 
             await hosted.send_chat_action(chat_id, "typing")
+            # Resolve active thread (may be task thread if /new was used)
+            from server_modules.sage_command_dispatcher import get_active_thread as _gat2
+            _active_thread2 = await _gat2(workspace_id, "telegram_hosted")
             turn = normalize_sage_inbound(
                 workspace_id=workspace_id,
                 message=message_text,
@@ -276,6 +278,7 @@ async def dev_poll_once() -> dict:
                 surface=turn.surface,
                 mode=turn.mode,
                 channel_origin=turn.channel_origin,
+                thread_id=_active_thread2,
             )
             reply = str(result.get("message") or "").strip()
             if reply:

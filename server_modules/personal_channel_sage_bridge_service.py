@@ -3,6 +3,11 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+
+from server_modules.sage_command_dispatcher import SAGE_ERROR_REPLY  # noqa: E402
+
 from server_modules import channel_lane_contract_service
 
 
@@ -188,8 +193,11 @@ async def _build_unified_sage_personal_reply_async(
                 "trace_id": (result or {}).get("trace_id", ""),
                 "raw": dict(result or {}),
             }
-    except Exception:
-        pass
+    except Exception as _exc:
+        _logger.warning(
+            "_build_unified_sage_personal_reply_async failed for workspace=%s channel=%s: %s",
+            workspace_id, surface_channel, _exc
+        )
 
     return None
 
@@ -260,17 +268,24 @@ async def build_whatsapp_personal_reply_async(
     push_name: Optional[str] = None,
     source_event_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    unified = await _build_unified_sage_personal_reply_async(
-        surface_channel="whatsapp_personal",
-        workspace_id=workspace_id,
-        gateway_id=gateway_id,
-        remote_jid=remote_jid,
-        text=text,
-        push_name=push_name,
-        fallback_label="WhatsApp",
-        source_event_id=source_event_id,
-    )
-    return unified
+    try:
+        unified = await _build_unified_sage_personal_reply_async(
+            surface_channel="whatsapp_personal",
+            workspace_id=workspace_id,
+            gateway_id=gateway_id,
+            remote_jid=remote_jid,
+            text=text,
+            push_name=push_name,
+            fallback_label="WhatsApp",
+            source_event_id=source_event_id,
+        )
+        return unified
+    except Exception as _exc:
+        _logger.warning(
+            "WhatsApp turn failed for workspace=%s: %s",
+            workspace_id, _exc
+        )
+        return None
     return _build_personal_reply(
         surface_channel="whatsapp_personal",
         workspace_id=workspace_id,
@@ -292,17 +307,36 @@ async def build_telegram_personal_reply_async(
     push_name: Optional[str] = None,
     source_event_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    unified = await _build_unified_sage_personal_reply_async(
-        surface_channel="telegram_personal",
-        workspace_id=workspace_id,
-        gateway_id=gateway_id,
-        remote_jid=remote_jid,
-        text=text,
-        push_name=push_name,
-        fallback_label="Telegram",
-        source_event_id=source_event_id,
-    )
-    return unified
+    try:
+        unified = await _build_unified_sage_personal_reply_async(
+            surface_channel="telegram_personal",
+            workspace_id=workspace_id,
+            gateway_id=gateway_id,
+            remote_jid=remote_jid,
+            text=text,
+            push_name=push_name,
+            fallback_label="Telegram",
+            source_event_id=source_event_id,
+        )
+        return unified
+    except Exception as _exc:
+        _logger.warning(
+            "CSM turn failed for workspace=%s: %s",
+            workspace_id, _exc
+        )
+        # Extract session_id from gateway_id (format: "cloud:{session_id}")
+        _session_id = str(gateway_id or "").replace("cloud:", "", 1).strip()
+        if _session_id and remote_jid:
+            try:
+                from server_modules.personal_channels_service import dispatch_cloud_channel_outbound as _cs_dispatch
+                await _cs_dispatch(
+                    session_id=_session_id,
+                    text=SAGE_ERROR_REPLY,
+                    remote_jid=remote_jid,
+                )
+            except Exception:
+                pass
+        return None
 
 
 async def build_discord_personal_reply_async(

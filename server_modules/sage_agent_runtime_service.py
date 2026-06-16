@@ -1894,6 +1894,114 @@ def is_sage_enabled_for_workspace(workspace_id: str) -> bool:
     if not workspace_id or not str(workspace_id).strip():
         return False
     return True
+async def _run_memory_flush_before_compaction(
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    thread_id: str,
+    provider: str = "",
+    model: str | None = None,
+) -> None:
+    """B3: Silent memory flush turn before compaction.
+    
+    Injects a system message telling Sage to save important facts to MEMORY.md
+    before the conversation is summarized.
+    """
+    try:
+        from server_modules.sage_instruction_compiler_service import build_sage_instruction_bundle
+
+        flush_prompt = (
+            "Before this conversation is summarized, save any important facts "
+            "about the user or ongoing tasks to MEMORY.md using memory_write in append mode. "
+            "Focus on: user preferences, decisions, ongoing projects, important context "
+            "that should survive across sessions. Be concise and factual. "
+            "Do NOT save casual conversation, greetings, or transient remarks."
+        )
+
+        instruction_bundle = build_sage_instruction_bundle(
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+            user_id="sage",
+            message=flush_prompt,
+            provider=provider,
+            model=model,
+        )
+
+        import uuid as _uuid
+        context = {
+            "workspace_id": workspace_id,
+            "provider": provider,
+            "source": "memory_flush",
+            "surface": "chat",
+            "disable_provider_fallback": True,
+        }
+        metadata = {
+            "workspace_id": workspace_id,
+            "provider": provider,
+            "source": "memory_flush",
+            "surface": "chat",
+            "credentials": {},
+            "trace_id": "memory_flush_" + str(_uuid.uuid4()),
+        }
+
+        reply, _usage, _attempted, _error = generate_chat_reply_with_provider_fallback(
+            context,
+            metadata,
+            flush_prompt,
+            instruction_bundle.system_prompt,
+            prior_messages=[],
+        )
+        if reply:
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                "memory_flush: Sage wrote %d chars to memory before compaction", len(reply)
+            )
+    except Exception:
+        pass
+
+
+def resolve_canonical_sender(
+    identity_links: dict | None,
+    channel_origin: str,
+    sender_id: str | None,
+) -> tuple[str | None, list[str]]:
+    """Resolve a canonical sender identity from cross-channel identity links.
+
+    Returns (canonical_name, linked_channels) where linked_channels lists ALL
+    channels the sender is known across (not just the matched one), including
+    the current channel_origin.
+    Returns (None, []) if no match.
+    """
+    if not identity_links or not sender_id:
+        return None, []
+    candidates = {sender_id, f"{channel_origin}:{sender_id}"}
+    for canonical, ids in identity_links.items():
+        # Check if any id matches the current sender
+        matched = False
+        for nid in ids:
+            nid_str = str(nid).strip()
+            if nid_str in candidates:
+                matched = True
+                break
+        if matched:
+            # Collect ALL channel prefixes from ALL ids (not just matching ones)
+            all_channels: list[str] = []
+            for nid in ids:
+                nid_str = str(nid).strip()
+                if ":" in nid_str:
+                    ch = nid_str.split(":", 1)[0]
+                    if ch not in all_channels:
+                        all_channels.append(ch)
+                elif channel_origin not in all_channels:
+                    all_channels.append(channel_origin)
+            # Ensure current channel_origin is present
+            if channel_origin not in all_channels:
+                all_channels.append(channel_origin)
+            return canonical, all_channels
+    return None, []
+
+
+
 async def handle_sage_chat(
     *,
     workspace_id: str,
@@ -1904,6 +2012,9 @@ async def handle_sage_chat(
     attachments: list[dict] | None = None,
     current_user: dict | None = None,
     channel_origin: str = "",
+    sender_name: str | None = None,
+    sender_id: str | None = None,
+    thread_id: str = "sage-main",
 ) -> dict:
     normalized_workspace_id = _coerce_text(workspace_id)
     normalized_message = _coerce_text(message)
@@ -1914,12 +2025,13 @@ async def handle_sage_chat(
     # Resolve tenant_id from workspace when not explicitly provided or "default".
     # Callers like the hosted Telegram bot only pass workspace_id, and the
     # fallback "default" tenant fails credit debit checks for real workspaces.
+    _ws_record: dict | None = None
     if not normalized_tenant_id or normalized_tenant_id == "default":
         try:
             from server_modules.control_plane_repository import get_workspace_by_id
-            ws_record = await get_workspace_by_id(normalized_workspace_id)
-            if isinstance(ws_record, dict):
-                resolved = str(ws_record.get("tenant_id") or "").strip()
+            _ws_record = await get_workspace_by_id(normalized_workspace_id)
+            if isinstance(_ws_record, dict):
+                resolved = str(_ws_record.get("tenant_id") or "").strip()
                 if resolved:
                     normalized_tenant_id = resolved
         except Exception:
@@ -1940,6 +2052,37 @@ async def handle_sage_chat(
     channel_origin = str(channel_origin or "").strip()
     if channel_origin:
         used_context.append("channel_origin")
+    if sender_name:
+        used_context.append("sender_identity")
+
+    # --- Resolve cross-channel sender identity ---
+    canonical_name: str | None = None
+    linked_channels: list[str] = []
+    identity_links: dict | None = None
+    try:
+        if _ws_record is None:
+            from server_modules.control_plane_repository import get_workspace_by_id
+            _ws_record = await get_workspace_by_id(normalized_workspace_id)
+        if isinstance(_ws_record, dict):
+            raw_links = _ws_record.get("identity_links")
+            if isinstance(raw_links, dict):
+                identity_links = raw_links
+            elif isinstance(raw_links, str) and raw_links.strip():
+                import json as _json
+                try:
+                    parsed = _json.loads(raw_links)
+                    if isinstance(parsed, dict):
+                        identity_links = parsed
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    if identity_links and sender_id and channel_origin:
+        canonical_name, linked_channels = resolve_canonical_sender(
+            identity_links, channel_origin, sender_id
+        )
+    if canonical_name:
+        used_context.append("identity_link")
 
     # --- Load context ---
     profile_context = _load_profile_context(workspace_id=normalized_workspace_id)
@@ -2010,14 +2153,14 @@ async def handle_sage_chat(
     recent_messages: list[dict[str, str]] = []
     try:
         await thread_service.ensure_master_thread(
-            thread_id=SAGE_THREAD_ID,
+            thread_id=thread_id,
             tenant_id=effective_tenant_id,
             workspace_id=normalized_workspace_id,
             owner_user_id=actor_user_id or "sage",
             channel="sage",
         )
         thread_record = await thread_service.get_thread(
-            SAGE_THREAD_ID,
+            thread_id,
             tenant_id=effective_tenant_id,
             workspace_id=normalized_workspace_id,
             include_turns=True,
@@ -2040,20 +2183,40 @@ async def handle_sage_chat(
         recent_messages = []
     # --- End recent message load ---
 
-    instruction_bundle = sage_instruction_compiler_service.build_sage_instruction_bundle(
-        workspace_id=normalized_workspace_id,
-        tenant_id=normalized_tenant_id,
-        user_id=actor_user_id,
-        message=normalized_message,
-        provider=provider,
-        model=requested_model,
-        root_context_files=context_files_payload,
-        profile_context=profile_context,
-        memory_context=memory_context,
-        heartbeat_context=heartbeat_context,
-        recent_messages=recent_messages,
-        channel_origin=channel_origin,
-    )
+    try:
+        instruction_bundle = sage_instruction_compiler_service.build_sage_instruction_bundle(
+            workspace_id=normalized_workspace_id,
+            tenant_id=normalized_tenant_id,
+            user_id=actor_user_id,
+            message=normalized_message,
+            provider=provider,
+            model=requested_model,
+            root_context_files=context_files_payload,
+            profile_context=profile_context,
+            memory_context=memory_context,
+            heartbeat_context=heartbeat_context,
+            recent_messages=recent_messages,
+            channel_origin=channel_origin,
+            sender_name=sender_name,
+            sender_id=sender_id,
+            canonical_name=canonical_name,
+            linked_channels=linked_channels if linked_channels else None,
+        )
+    except Exception as _exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "build_sage_instruction_bundle failed for workspace=%s: %s — using minimal fallback",
+            normalized_workspace_id, _exc
+        )
+        instruction_bundle = sage_instruction_compiler_service.SageInstructionBundle(
+            messages=[{"role": "system", "content": "You are Sage, a helpful AI assistant."},
+                       {"role": "user", "content": normalized_message}],
+            diagnostics={"error": "bundle_build_failed", "workspace_id": normalized_workspace_id},
+            capability_manifest=[],
+            system_prompt="You are Sage, a helpful AI assistant.",
+            user_message=normalized_message,
+            prior_messages=[],
+        )
     prompt_diagnostics = instruction_bundle.diagnostics
     prior_messages = instruction_bundle.prior_messages or []
     if prompt_diagnostics.get("included_root_files") or prompt_diagnostics.get("available_memory_file_count"):
@@ -2145,7 +2308,7 @@ async def handle_sage_chat(
             now_iso = __import__("datetime").datetime.now(timezone.utc).isoformat()
             actor = {"user_id": actor_user_id or "sage", "name": actor_email or "sage"}
             await thread_service.record_user_turn(
-                thread_id=SAGE_THREAD_ID,
+                thread_id=thread_id,
                 tenant_id=effective_tenant_id,
                 workspace_id=normalized_workspace_id,
                 session_id=None,
@@ -2155,7 +2318,7 @@ async def handle_sage_chat(
             )
             if reply and not (str(reply).strip() == _SILENT_REPLY_MARKER or str(reply).strip().startswith(_SILENT_REPLY_MARKER)):
                 await thread_service.record_assistant_turn(
-                    thread_id=SAGE_THREAD_ID,
+                    thread_id=thread_id,
                     tenant_id=effective_tenant_id,
                     workspace_id=normalized_workspace_id,
                     session_id=None,
@@ -2222,7 +2385,7 @@ async def handle_sage_chat(
         try:
             actor3 = {"user_id": actor_user_id or "sage", "name": actor_email or "sage"}
             await thread_service.record_user_turn(
-                thread_id=SAGE_THREAD_ID,
+                thread_id=thread_id,
                 tenant_id=effective_tenant_id,
                 workspace_id=normalized_workspace_id,
                 session_id=None,
@@ -2232,7 +2395,7 @@ async def handle_sage_chat(
             )
             if reply and not (str(reply).strip() == _SILENT_REPLY_MARKER or str(reply).strip().startswith(_SILENT_REPLY_MARKER)):
                 await thread_service.record_assistant_turn(
-                    thread_id=SAGE_THREAD_ID,
+                    thread_id=thread_id,
                     tenant_id=effective_tenant_id,
                     workspace_id=normalized_workspace_id,
                     session_id=None,
@@ -2375,26 +2538,71 @@ async def handle_sage_chat(
             "proof_log_id": proof_log_id,
         }
 
-    try:
-        reply, usage, attempted_providers, last_error = generate_chat_reply_with_provider_fallback(
-            context,
-            metadata,
-            envelope["user_message"],
-            envelope["system_prompt"],
-            prior_messages=prior_messages or None,
-        )
-    except Exception as exc:
-        _emit_failed_audit_event(
-            tenant_id=normalized_tenant_id,
-            workspace_id=normalized_workspace_id,
-            actor_user_id=actor_user_id,
-            actor_email=actor_email,
-            actor_auth_type=actor_auth_type,
-            trace_id=trace_id,
-            surface=normalized_surface,
-            error=str(exc),
-        )
-        raise
+    # ── B2: Overflow error recovery ──
+    _compaction_retries = 0
+    _MAX_COMPACTION_RETRIES = 2
+    while True:
+        try:
+            reply, usage, attempted_providers, last_error = generate_chat_reply_with_provider_fallback(
+                context,
+                metadata,
+                envelope["user_message"],
+                envelope["system_prompt"],
+                prior_messages=prior_messages or None,
+            )
+            break  # success
+        except Exception as exc:
+            _exc_msg = str(exc)
+            # Check if this is a context overflow error
+            try:
+                from server_modules.compaction_service import is_context_overflow_error, compact_turns as _compact_now
+                if is_context_overflow_error(_exc_msg) and _compaction_retries < _MAX_COMPACTION_RETRIES:
+                    _compaction_retries += 1
+                    import logging as _logging
+                    _log = _logging.getLogger(__name__)
+                    _log.warning(
+                        "sage_agent_runtime: context overflow detected (retry %d/%d) — compacting and retrying",
+                        _compaction_retries, _MAX_COMPACTION_RETRIES,
+                    )
+                    try:
+                        # Memory flush before compaction
+                        await _run_memory_flush_before_compaction(
+                            workspace_id=normalized_workspace_id,
+                            tenant_id=effective_tenant_id,
+                            thread_id=thread_id,
+                            provider=provider,
+                            model=requested_model,
+                        )
+                        # Reload turns from DB for compaction (recent_messages is {role,content} only)
+                        _thread_rec = await thread_service.get_thread(
+                            thread_id,
+                            tenant_id=effective_tenant_id,
+                            workspace_id=normalized_workspace_id,
+                            include_turns=True,
+                        )
+                        _raw_turns = list((_thread_rec or {}).get("turns") or []) if isinstance(_thread_rec, dict) else []
+                        await _compact_now(
+                            turns=_raw_turns,
+                            workspace_id=normalized_workspace_id,
+                            tenant_id=effective_tenant_id,
+                            thread_id=thread_id,
+                        )
+                    except Exception as _compact_err:
+                        _log.warning("sage_agent_runtime: compaction during overflow recovery failed: %s", _compact_err)
+                    continue  # retry the LLM call
+            except Exception:
+                pass
+            _emit_failed_audit_event(
+                tenant_id=normalized_tenant_id,
+                workspace_id=normalized_workspace_id,
+                actor_user_id=actor_user_id,
+                actor_email=actor_email,
+                actor_auth_type=actor_auth_type,
+                trace_id=trace_id,
+                surface=normalized_surface,
+                error=str(exc),
+            )
+            raise
 
     if not reply and last_error:
         _emit_failed_audit_event(
@@ -2424,7 +2632,7 @@ async def handle_sage_chat(
     try:
         actor3 = {"user_id": actor_user_id or "sage", "name": actor_email or "sage"}
         await thread_service.record_user_turn(
-            thread_id=SAGE_THREAD_ID,
+            thread_id=thread_id,
             tenant_id=effective_tenant_id,
             workspace_id=normalized_workspace_id,
             session_id=None,
@@ -2434,7 +2642,7 @@ async def handle_sage_chat(
         )
         if reply and not (str(reply).strip() == _SILENT_REPLY_MARKER or str(reply).strip().startswith(_SILENT_REPLY_MARKER)):
             await thread_service.record_assistant_turn(
-                thread_id=SAGE_THREAD_ID,
+                thread_id=thread_id,
                 tenant_id=effective_tenant_id,
                 workspace_id=normalized_workspace_id,
                 session_id=None,
@@ -2443,8 +2651,12 @@ async def handle_sage_chat(
                 status="completed",
                 run_id=trace_id,
             )
-    except Exception:
-        pass  # never break a reply just because persistence failed
+    except Exception as _exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Turn persistence failed for workspace=%s thread=%s: %s",
+            normalized_workspace_id, thread_id, _exc
+        )
     # --- End turn persistence (fallback) ---
 
     # --- Persist interaction ---
@@ -2556,6 +2768,48 @@ async def handle_sage_chat(
             )
         except Exception:
             pass
+
+    # ── B1: Auto-compaction after turn completion (background, non-blocking) ──
+    try:
+        from server_modules.compaction_service import should_compact as _should_compact
+        from server_modules.compaction_service import compact_turns as _auto_compact
+        import asyncio as _asyncio
+        _ws = normalized_workspace_id
+        _tid = effective_tenant_id
+        _thid = thread_id
+        _prov = provider
+        _mod = requested_model
+        async def _auto_compact_background():
+            try:
+                from server_modules.compaction_service import DEFAULT_CONTEXT_WINDOW
+                # Reload turns from DB for accurate token count
+                _thread_rec = await thread_service.get_thread(
+                    thread_id,
+                    tenant_id=_tid,
+                    workspace_id=_ws,
+                    include_turns=True,
+                )
+                _raw_turns = list((_thread_rec or {}).get("turns") or []) if isinstance(_thread_rec, dict) else []
+                if _should_compact(_raw_turns, context_window=DEFAULT_CONTEXT_WINDOW):
+                    # B3: Memory flush before compaction
+                    await _run_memory_flush_before_compaction(
+                        workspace_id=_ws,
+                        tenant_id=_tid,
+                        thread_id=_thid,
+                        provider=_prov,
+                        model=_mod,
+                    )
+                    await _auto_compact(
+                        turns=_raw_turns,
+                        workspace_id=_ws,
+                        tenant_id=_tid,
+                        thread_id=_thid,
+                    )
+            except Exception:
+                pass
+        _asyncio.ensure_future(_auto_compact_background())
+    except Exception:
+        pass
 
     return {
         "message": reply or "",

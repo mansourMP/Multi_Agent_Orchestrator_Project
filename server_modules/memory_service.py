@@ -690,6 +690,104 @@ def update_memory_context_file(
     }
 
 
+
+def memory_read_file(
+    workspace_id: str,
+    filename: str,
+    *,
+    agent_install_id: str | None = None,
+) -> Dict[str, Any]:
+    """Read a memory file on demand. Used by Sage when MEMORY.md is not in bootstrap context.
+
+    Returns {file, content, chars} so Sage can consume the file contents.
+    """
+    from server_modules.workspace_context import (
+        read_workspace_context_file,
+        normalize_workspace_context_filename,
+    )
+    normalized_filename = normalize_workspace_context_filename(filename)
+    content = read_workspace_context_file(
+        normalized_filename,
+        workspace_id=_normalize_workspace_id(workspace_id),
+        agent_install_id=str(agent_install_id or '').strip() or None,
+    )
+    return {
+        'file': normalized_filename,
+        'content': str(content or ''),
+        'chars': len(str(content or '')),
+    }
+
+
+def memory_write_file(
+    workspace_id: str,
+    filename: str,
+    content: str,
+    *,
+    mode: str = 'replace',
+    agent_install_id: str | None = None,
+    actor: str = _MEMORY_DEFAULT_ACTOR,
+    reason: str = 'memory_write',
+    run_id: str | None = None,
+) -> Dict[str, Any]:
+    """Write to a memory file. Used by Sage to update MEMORY.md (append new facts)
+    or edit bootstrap files (SOUL.md, AGENTS.md, TOOLS.md, IDENTITY.md) via replace.
+
+    mode='append': adds content to end of file (for MEMORY.md facts)
+    mode='replace': overwrites entire file (for bootstrap file edits)
+    """
+    from server_modules.workspace_context import (
+        read_workspace_context_file,
+        write_workspace_context_file,
+        normalize_workspace_context_filename,
+    )
+    normalized_filename = normalize_workspace_context_filename(filename)
+    normalized_mode = str(mode or 'replace').strip().lower() or 'replace'
+
+    if normalized_mode == 'append':
+        existing = read_workspace_context_file(
+            normalized_filename,
+            workspace_id=_normalize_workspace_id(workspace_id),
+            agent_install_id=str(agent_install_id or '').strip() or None,
+        )
+        combined = str(existing or '').rstrip() + '\n' + str(content or '').strip()
+        final_content = combined.strip()
+    else:
+        final_content = str(content or '')
+
+    _enforce_memory_state_decision(
+        operation='update_workspace_context_file',
+        workspace_id=_normalize_workspace_id(workspace_id),
+        actor_id=actor,
+        payload={
+            'filename': normalized_filename,
+            'content': final_content,
+            'agent_install_id': str(agent_install_id or '').strip() or None,
+            'run_id': run_id,
+        },
+    )
+    saved = write_workspace_context_file(
+        normalized_filename,
+        final_content,
+        workspace_id=_normalize_workspace_id(workspace_id),
+        agent_install_id=str(agent_install_id or '').strip() or None,
+    )
+    _append_memory_file_version_record(
+        _normalize_workspace_id(workspace_id),
+        agent_install_id=str(agent_install_id or '').strip() or None,
+        actor=actor,
+        filename=normalized_filename,
+        old_content='',
+        new_content=str(saved.get('content') or ''),
+        reason=reason,
+        run_id=run_id,
+        metadata={'mode': normalized_mode},
+    )
+    return {
+        'file': saved.get('filename'),
+        'chars_written': len(str(saved.get('content', ''))),
+        'mode': normalized_mode,
+    }
+
 def memory_append_daily_note(
     workspace_id: str,
     note: str,

@@ -86,8 +86,22 @@ async function main() {
   const routes = createRoutes(pool, logger);
   app.use(routes);
 
+  // Restore previously stored sessions BEFORE accepting HTTP requests.
+  // This ensures the session pool is warm when the first inbound message arrives.
+  let restoreSummary = { restored: 0, failed: 0 };
+  try {
+    restoreSummary = await pool.restoreSessions();
+  } catch (err) {
+    logger.warn({ err }, "session restore sweep failed (non-fatal) — starting without restored sessions");
+  }
+
   const server = app.listen(CONFIG.apiPort, () => {
-    logger.info({ port: CONFIG.apiPort, maxSessions: CONFIG.maxSessions }, "cloud-session-manager started");
+    logger.info({
+      port: CONFIG.apiPort,
+      maxSessions: CONFIG.maxSessions,
+      restoredSessions: restoreSummary.restored,
+      failedRestores: restoreSummary.failed,
+    }, "cloud-session-manager started");
   });
 
   // Node 26 keepalive: prevent event loop from draining.

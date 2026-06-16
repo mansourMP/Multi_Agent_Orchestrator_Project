@@ -68,6 +68,9 @@ async def execute_sage_turn(
         channel_sender_id=str((channel_context or {}).get("remote_jid", "")).strip(),
         channel_sender_name=str((channel_context or {}).get("push_name", "")).strip(),
     )
+    # Resolve active thread (may be task thread if /new was used on this channel)
+    from server_modules.sage_command_dispatcher import get_active_thread as _gat_adapter
+    _active_thread_adapter = await _gat_adapter(turn.workspace_id, turn.channel_origin)
     result = await handle_sage_chat(
         workspace_id=turn.workspace_id,
         tenant_id=turn.tenant_id,
@@ -76,6 +79,9 @@ async def execute_sage_turn(
         mode=turn.mode,
         current_user=turn.current_user,
         channel_origin=turn.channel_origin,
+        sender_name=turn.channel_sender_name or None,
+        sender_id=turn.channel_sender_id or None,
+        thread_id=_active_thread_adapter,
     )
 
     return SageTurnResult(

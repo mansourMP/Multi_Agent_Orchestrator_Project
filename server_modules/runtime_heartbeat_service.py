@@ -205,6 +205,67 @@ def trigger_heartbeat_payload(*, scheduler: Optional[Any]) -> dict[str, Any]:
     }
 
 
+def _append_heartbeat_entry(workspace_id: str, result: dict) -> None:
+    """Append a timestamped entry to HEARTBEAT.md after a heartbeat run."""
+    try:
+        from server_modules.workspace_context import (
+            read_workspace_context_file,
+            write_workspace_context_file,
+        )
+        from datetime import datetime, timezone
+
+        acted = bool(result.get("acted"))
+        summary = str(result.get("summary") or "").strip()
+        scheduler_mode = str(result.get("scheduler_mode") or "heartbeat").strip()
+        run_id = str(result.get("run_id") or "").strip() or None
+
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        date_str = now.strftime("%Y-%m-%d")
+
+        status_icon = "✅" if acted else "⏸️"
+
+        entry = (
+            f"### {status_icon} {timestamp}\n"
+            f"- **Mode**: {scheduler_mode}\n"
+            f"- **Summary**: {summary}\n"
+        )
+        if run_id:
+            entry += f"- **Run**: {run_id}\n"
+        entry += "\n"
+
+        existing = read_workspace_context_file(
+            "HEARTBEAT.md",
+            workspace_id=workspace_id,
+        )
+
+        # Keep last 50 entries — split on ### markers
+        parts = (existing or "").split("### ")
+        # parts[0] is the header/content before first ###
+        header = parts[0].strip() if parts else ""
+        entries = []
+        for p in parts[1:]:
+            p = p.strip()
+            if p:
+                entries.append("### " + p)
+
+        # Add new entry, trim to 50
+        entries.append(entry.strip())
+        if len(entries) > 50:
+            entries = entries[-50:]
+
+        new_content = header + "\n\n" + "\n".join(entries) if header else "\n".join(entries)
+        new_content = new_content.strip() + "\n"
+
+        write_workspace_context_file(
+            "HEARTBEAT.md",
+            new_content,
+            workspace_id=workspace_id,
+        )
+    except Exception:
+        pass
+
+
 def build_heartbeat_run_callback(
     *,
     build_inbound_agent_turn_request: Callable[..., Any],
@@ -319,7 +380,7 @@ def build_heartbeat_run_callback(
                     metadata_patch={"run_id": str(result_payload.get("run_id") or "").strip() or None},
                 )
             )
-        return {
+        _heartbeat_result = {
             "acted": True,
             **result_payload,
             "summary": (
@@ -342,6 +403,8 @@ def build_heartbeat_run_callback(
             ],
             "context_event_ids": list(execution_bundle.get("metadata", {}).get("context_event_ids") or []) if isinstance(execution_bundle, dict) else [],
         }
+        _append_heartbeat_entry(workspace_id, _heartbeat_result)
+        return _heartbeat_result
 
     def _start_heartbeat_run(tasks: list[str], metadata: dict[str, Any]) -> dict[str, Any]:
         scoped_metadata = dict(metadata or {})

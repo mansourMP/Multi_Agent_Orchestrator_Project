@@ -182,16 +182,46 @@ def register_sage_chat_routes(app) -> None:
         tenant_id = _resolve_tenant_id(current_user, resolved_workspace_id)
 
         try:
+            # ── Shared command dispatcher ──
+            _msg_text = str(body.message).strip()
+            from server_modules.sage_command_dispatcher import dispatch_command as _dispatch_cmd
+            _cmd_reply = await _dispatch_cmd(
+                command=_msg_text,
+                workspace_id=resolved_workspace_id,
+                thread_id="sage-main",
+                channel_origin="web",
+            )
+            if _cmd_reply is not None:
+                return {
+                    "workspace_id": resolved_workspace_id,
+                    "tenant_id": tenant_id,
+                    "message": _cmd_reply,
+                    "error": None,
+                    "used_context": [],
+                    "tool_calls": [],
+                    "available_tools": [],
+                    "blocked_tools": [],
+                    "approvals_required": [],
+                    "memory_updates": [],
+                    "trace_id": "",
+                    "provider": "",
+                    "model": None,
+                    "suppressed": False,
+                }
+
             turn = normalize_sage_inbound(
                 workspace_id=resolved_workspace_id,
                 tenant_id=tenant_id,
-                message=str(body.message).strip(),
+                message=_msg_text,
                 surface=normalized_surface,
                 mode=normalized_mode,
                 attachments=[a.model_dump() for a in body.attachments],
                 current_user=current_user,
                 channel_origin="web",
             )
+            # Resolve active thread (may be task thread if /new was used)
+            from server_modules.sage_command_dispatcher import get_active_thread as _gat_web
+            _active_thread_web = await _gat_web(turn.workspace_id, "web")
             result = await handle_sage_chat(
                 workspace_id=turn.workspace_id,
                 tenant_id=turn.tenant_id,
@@ -201,6 +231,7 @@ def register_sage_chat_routes(app) -> None:
                 attachments=turn.attachments,
                 current_user=turn.current_user,
                 channel_origin=turn.channel_origin,
+                thread_id=_active_thread_web,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

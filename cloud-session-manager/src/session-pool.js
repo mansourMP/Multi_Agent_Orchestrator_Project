@@ -123,6 +123,18 @@ export class SessionPool {
       this.logger?.warn?.({ err }, "failed to save session string to store (non-fatal)");
     });
 
+    // Save session metadata for auto-reconnect on startup
+    store.saveMetadata({
+      workspaceId: opts.workspaceId || "default",
+      linkedUsername: connected.linkedUsername || "",
+      linkedUserId: connected.linkedUserId || "",
+      status: "connected",
+      createdAt: new Date(now).toISOString(),
+      lastConnectedAt: new Date().toISOString(),
+    }).catch((err) => {
+      this.logger?.warn?.({ err }, "failed to save session metadata to store (non-fatal)");
+    });
+
     // Drain replay on connect (async, non-blocking)
     replayLoop.drain().catch((err) => {
       this.logger?.warn?.({ err }, "initial replay drain failed (non-fatal)");
@@ -401,6 +413,18 @@ export class SessionPool {
       this.logger?.warn?.({ err }, "failed to save session string to store (non-fatal)");
     });
 
+    // Save session metadata for auto-reconnect on startup
+    store.saveMetadata({
+      workspaceId: "default",
+      linkedUsername: connected.linkedUsername || "",
+      linkedUserId: connected.linkedUserId || "",
+      status: "connected",
+      createdAt: new Date(now).toISOString(),
+      lastConnectedAt: new Date().toISOString(),
+    }).catch((err) => {
+      this.logger?.warn?.({ err }, "failed to save session metadata to store (non-fatal)");
+    });
+
     replayLoop.drain().catch((err) => {
       this.logger?.warn?.({ err }, "initial replay drain failed (non-fatal)");
     });
@@ -413,6 +437,202 @@ export class SessionPool {
       linkedUsername: connected.linkedUsername,
       linkedPhone: connected.linkedPhone,
     };
+  }
+
+
+  /**
+   * Restore all previously stored sessions on startup.
+   * Scans Redis for stored session strings, attempts to reconnect each.
+   * Runs BEFORE the HTTP server starts accepting requests.
+   *
+   * @returns {Promise<{restored: number, failed: number, failures: Array<{sessionId, workspaceId, error}>}>}
+   */
+  async restoreSessions() {
+    const summary = { restored: 0, failed: 0, failures: [] };
+    let storedSessions = [];
+    try {
+      storedSessions = await CloudSessionStore.listAllSessionIds();
+    } catch (err) {
+      this.logger?.warn?.({ err }, "failed to scan Redis for stored sessions");
+      return summary;
+    }
+
+    if (storedSessions.length === 0) {
+      this.logger?.info?.("no stored sessions to restore");
+      return summary;
+    }
+
+    this.logger?.info?.({ count: storedSessions.length }, "restoring stored sessions");
+
+    for (const { sessionId, meta } of storedSessions) {
+      const workspaceId = meta?.workspaceId || "default";
+      const storedStatus = meta?.status || "unknown";
+
+      // Skip sessions that were already marked disconnected (user explicitly removed)
+      if (storedStatus === "disconnected") {
+        this.logger?.info?.({ sessionId, workspaceId }, "skipping disconnected session");
+        continue;
+      }
+
+      const store = new CloudSessionStore(sessionId);
+      let sessionString;
+      try {
+        sessionString = await store.loadSessionString();
+      } catch (err) {
+        this.logger?.warn?.({ sessionId, workspaceId, err }, "failed to load stored session string");
+        summary.failed++;
+        summary.failures.push({ sessionId, workspaceId, error: "load_failed: " + (err?.message || "unknown") });
+        continue;
+      }
+
+      if (!sessionString) {
+        this.logger?.warn?.({ sessionId, workspaceId }, "stored session has no session string — skipping");
+        continue;
+      }
+
+      // Attempt reconnect with exponential backoff (3 retries: 1s, 2s, 4s)
+      let connected = null;
+      let lastError = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const delay = 1000 * Math.pow(2, attempt);
+          if (attempt > 0) {
+            this.logger?.info?.({ sessionId, attempt: attempt + 1, delayMs: delay }, "retrying session reconnect");
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+
+          // Check max sessions
+          if (this.sessions.size >= CONFIG.maxSessions) {
+            throw new Error("max_sessions_reached");
+          }
+
+          // Create inbound handler BEFORE connect
+          const inboundHandler = new InboundHandler({
+            sessionId,
+            workspaceId,
+            linkedUserId: meta?.linkedUserId || "",
+            linkedUsername: meta?.linkedUsername || "",
+            logger: this.logger,
+          });
+
+          const inboundMessages = [];
+
+          const result = await createTelegramClient({
+            sessionString,
+            onInboundMessage: (msg) => {
+              inboundMessages.push({ receivedAt: new Date().toISOString(), ...msg });
+              if (inboundMessages.length > 50) inboundMessages.shift();
+              if (inboundHandler) {
+                inboundHandler.handleMessage(msg).catch((err) => {
+                  this.logger?.warn?.({ err }, "inbound handler error (non-fatal)");
+                });
+              }
+            },
+            logger: this.logger,
+          });
+
+          // Update handler with actual linked info
+          inboundHandler.linkedUserId = result.linkedUserId;
+          inboundHandler.linkedUsername = result.linkedUsername || "";
+
+          connected = result;
+          break; // success
+        } catch (err) {
+          lastError = err;
+          this.logger?.warn?.({ sessionId, attempt: attempt + 1, err }, "session reconnect attempt failed");
+        }
+      }
+
+      if (!connected) {
+        // All retries exhausted — mark as disconnected
+        this.logger?.error?.({ sessionId, workspaceId, err: lastError }, "session reconnect failed after 3 retries");
+        await store.markDisconnected().catch(() => {});
+        summary.failed++;
+        summary.failures.push({
+          sessionId,
+          workspaceId,
+          error: "reconnect_failed: " + (lastError?.message || "unknown"),
+        });
+        continue;
+      }
+
+      // Success — add to pool
+      const now = Date.now();
+      const outbox = new CloudSessionOutbox(sessionId);
+      const rateLimiter = new PerSessionRateLimiter(sessionId);
+      const replayLoop = new ReplayLoop({
+        sessionId,
+        outbox,
+        send: async (item) => {
+          return this._sendViaGramJS(sessionId, item.payload);
+        },
+        isConnected: () => {
+          const s = this.sessions.get(sessionId);
+          return s?.status === "connected";
+        },
+        logger: this.logger,
+      });
+
+      this.sessions.set(sessionId, {
+        client: connected.client,
+        sessionString: connected.sessionString(),
+        linkedUsername: connected.linkedUsername,
+        linkedUserId: connected.linkedUserId,
+        linkedPhone: connected.linkedPhone,
+        workspaceId,
+        status: "connected",
+        createdAt: meta?.createdAt ? new Date(meta.createdAt).getTime() : now,
+        lastActivityAt: now,
+        inboundMessages: [],
+        inboundHandler: null, // handler is created above but we recreate on messages
+        outbox,
+        replayLoop,
+        rateLimiter,
+        store,
+      });
+
+      // Wire inbound handler from the connect step
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        // Recreate inbound handler with the restored session
+        const restoredHandler = new InboundHandler({
+          sessionId,
+          workspaceId,
+          linkedUserId: connected.linkedUserId || "",
+          linkedUsername: connected.linkedUsername || "",
+          logger: this.logger,
+        });
+        session.inboundHandler = restoredHandler;
+      }
+
+      // Update metadata status
+      store.saveMetadata({
+        workspaceId,
+        linkedUsername: connected.linkedUsername || "",
+        linkedUserId: connected.linkedUserId || "",
+        status: "connected",
+        createdAt: meta?.createdAt || new Date(now).toISOString(),
+        lastConnectedAt: new Date().toISOString(),
+      }).catch(() => {});
+
+      // Save refreshed session string (may have changed after reconnect)
+      store.saveSessionString(connected.sessionString()).catch(() => {});
+
+      // Drain replay queue
+      replayLoop.drain().catch((err) => {
+        this.logger?.warn?.({ err, sessionId }, "restored session replay drain failed (non-fatal)");
+      });
+
+      summary.restored++;
+      this.logger?.info?.({
+        sessionId,
+        workspaceId,
+        username: connected.linkedUsername,
+      }, "session restored");
+    }
+
+    this.logger?.info?.(summary, "CSM startup: session restore sweep complete");
+    return summary;
   }
 
   /**

@@ -3320,6 +3320,15 @@ async def ensure_control_plane_schema() -> Any:
         if _SCHEMA_READY:
             return pool
         await pool.execute(CONTROL_PLANE_SCHEMA_SQL)
+        # ── Migrations: add columns not in original schema ──
+        await pool.execute(
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS "
+            "channel_active_threads JSONB DEFAULT '{}'::jsonb"
+        )
+        await pool.execute(
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS "
+            "slack_team_id VARCHAR(64)"
+        )
         _SCHEMA_READY = True
     return pool
 
@@ -4120,6 +4129,29 @@ async def create_workspace_for_user(
     )
     _workspace_lookup_cache_drop(resolved_workspace_id)
     return await get_workspace_by_id(resolved_workspace_id)
+
+
+async def update_workspace_identity_links(workspace_id: str, identity_links: dict) -> bool:
+    """Update only the identity_links JSONB column on a workspace."""
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return False
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return False
+        result = await connection.execute(
+            """
+            UPDATE workspaces
+            SET identity_links = $2::jsonb,
+                updated_at = NOW()
+            WHERE workspace_id = $1
+            """,
+            clean_workspace_id,
+            _to_json(identity_links, default={}),
+        )
+    _workspace_lookup_cache_drop(clean_workspace_id)
+    return True
+
 
 
 async def update_workspace_profile(workspace_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -11,14 +11,20 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _WORKSPACE_DIR = _REPO_ROOT / ".orion-stack" / "workspace"
 
 ALLOWED_CONTEXT_FILENAMES = (
+    # Bootstrap: loaded every turn in the system prompt
     "SOUL.md",
-    "USER.md",
-    "IDENTITY.md",
     "AGENTS.md",
     "TOOLS.md",
-    "MEMORY.md",
-    "GOALS.md",
+    "IDENTITY.md",
     "HEARTBEAT.md",
+)
+
+# On-demand files: not loaded every turn. Sage fetches via memory_read tool.
+# These files still exist on disk but are NOT injected into the bootstrap context.
+ON_DEMAND_MEMORY_FILENAMES = (
+    "MEMORY.md",
+    "USER.md",
+    "GOALS.md",
 )
 
 MAX_CONTEXT_ROOT_FILES = 12
@@ -36,37 +42,66 @@ USER_MEMORY_FILE_RE = re.compile(r"^memory/files/([A-Za-z0-9][A-Za-z0-9._-]*)\.m
 
 DEFAULT_CONTEXT_FILE_CONTENTS: Dict[str, str] = {
     "SOUL.md": (
+        "---\n"
+        "Purpose: Sage's core personality, tone, and values.\n"
+        "Edit when your persona, communication style, or fundamental approach changes.\n"
+        "Do not put factual memories or user preferences here.\n"
+        "---\n\n"
         "# Empyralis\n\n"
         "Empyralis is a calm mobile-first AI product.\n"
         "Its job is to help the user through one personal assistant named Sage.\n"
         "Keep replies clear, useful, and free of product demos or setup chatter.\n"
     ),
-    "USER.md": (
-        "",
-    ),
-    "IDENTITY.md": (
-        "",
-    ),
     "AGENTS.md": (
+        "---\n"
+        "Purpose: Operating rules and priorities for how Sage behaves.\n"
+        "Edit when you learn new behavioral rules or the user changes how they want you to operate.\n"
+        "Do not put personality or factual memories here.\n"
+        "---\n\n"
         "# Assistant\n\n"
         "- Sage is the only visible assistant in the mobile product.\n"
         "- Do not introduce hidden roles, internal specialists, or routing language to the user.\n"
     ),
     "TOOLS.md": (
+        "---\n"
+        "Purpose: Notes about tools, integrations, and how to use them in this workspace.\n"
+        "Edit when you learn new tool patterns or discover integration-specific behavior.\n"
+        "---\n\n"
         "# Tools\n\n"
         "- Use tools only when they materially help the user.\n"
         "- Do not describe tools, runtimes, or internal execution unless the user explicitly asks.\n"
         "- Keep sensitive actions approval-gated.\n"
     ),
+    "IDENTITY.md": (
+        "---\n"
+        "Purpose: Sage's name, channel presence, and surface-level identity.\n"
+        "Edit during onboarding or when identity details change.\n"
+        "---\n"
+    ),
     "MEMORY.md": (
+        "---\n"
+        "Purpose: Curated long-term facts about the user — preferences, relationships,\n"
+        "projects, important context. This is your primary memory store.\n"
+        "Edit after conversations where important facts emerge.\n"
+        "Delete outdated facts when they change.\n"
+        "Loaded on-demand, not every turn — keep it dense and factual, no filler.\n"
+        "---\n\n"
         "# Curated Memory\n\n"
         "Store stable long-term facts that should remain visible across future sessions.\n"
+    ),
+    "USER.md": (
+        "",
     ),
     "GOALS.md": (
         "",
     ),
     "HEARTBEAT.md": (
-        "",
+        "---\n"
+        "Purpose: A running log of what Sage did during heartbeat runs —\n"
+        "tasks checked, reminders sent, actions taken, anomalies noticed.\n"
+        "Sage writes here after every heartbeat. Do not edit manually.\n"
+        "Read this to understand what happened while the user was away.\n"
+        "---\n"
     ),
 }
 

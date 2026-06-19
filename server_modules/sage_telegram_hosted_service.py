@@ -15,6 +15,7 @@ import asyncio
 LOGGER = logging.getLogger(__name__)
 
 from server_modules.sage_command_dispatcher import SAGE_ERROR_REPLY  # noqa: E402
+from server_modules import runtime_config as runtime_config
 
 PAIRING_CODE_LENGTH = 6
 PAIRING_TOKEN_BYTES = 24
@@ -189,7 +190,7 @@ async def send_message(chat_id: str, text: str, *, reply_to_message_id: Optional
     safe_text = _re.sub(r'\n?```[^`]*```', '', safe_text)
     safe_text = safe_text.strip()
     if not safe_text:
-        safe_text = "I processed your request but couldn't generate a clean response. Try asking differently."
+        safe_text = "[SILENT]"  # Suppressed — empty LLM output, agent handles naturally
     formatted_text = _to_telegram_markdown(safe_text)
     body: dict = {
         "chat_id": chat_id,
@@ -411,7 +412,40 @@ async def send_photo(chat_id: str, photo: str, *, caption: str | None = None, re
     photo can be:
     - A file_id string (already uploaded to Telegram)
     - A URL string (Telegram will download it)
+    - A file:// URL — reads the local file and uploads as multipart
+    - A local filesystem path — reads and uploads as multipart
     """
+    import pathlib as _pl
+    token = _bot_token()
+    if not token:
+        raise RuntimeError("EMPYRALIS_TELEGRAM_HOSTED_BOT_TOKEN is not configured")
+    # Resolve file:// URLs and local paths to actual file bytes
+    file_bytes: bytes | None = None
+    filename: str | None = None
+    resolved_path: _pl.Path | None = None
+    if photo.startswith("file://"):
+        resolved_path = _pl.Path(photo[7:]).expanduser().resolve()
+    elif not photo.startswith("http://") and not photo.startswith("https://") and _pl.Path(photo).expanduser().exists():
+        resolved_path = _pl.Path(photo).expanduser().resolve()
+    if resolved_path is not None and resolved_path.is_file():
+        file_bytes = resolved_path.read_bytes()
+        filename = resolved_path.name
+    url = f"{TELEGRAM_API_BASE}/bot{token}/sendPhoto"
+    if file_bytes:
+        # Send as multipart/form-data with file bytes
+        data: dict = {"chat_id": chat_id}
+        if caption:
+            data["caption"] = _to_telegram_markdown(str(caption))
+        if reply_to_message_id is not None:
+            data["reply_to_message_id"] = str(reply_to_message_id)
+        import io as _io
+        files = {"photo": (filename or "photo.png", _io.BytesIO(file_bytes), "image/png")}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+            resp = await client.post(url, data=data, files=files)
+            result = resp.json()
+            if not result.get("ok"):
+                LOGGER.warning("Telegram API error: sendPhoto %s", result.get("description", "unknown"))
+            return result
     body: dict = {"chat_id": chat_id, "photo": photo, "parse_mode": "MarkdownV2"}
     if caption:
         body["caption"] = _to_telegram_markdown(str(caption))
@@ -426,7 +460,44 @@ async def send_document(chat_id: str, document: str, *, caption: str | None = No
     document can be:
     - A file_id string (already uploaded to Telegram)
     - A URL string (Telegram will download it)
+    - A file:// URL — reads the local file and uploads as multipart
+    - A local filesystem path — reads and uploads as multipart
     """
+    import pathlib as _pl
+    token = _bot_token()
+    if not token:
+        raise RuntimeError("EMPYRALIS_TELEGRAM_HOSTED_BOT_TOKEN is not configured")
+    # Resolve file:// URLs and local paths to actual file bytes
+    file_bytes: bytes | None = None
+    resolved_path: _pl.Path | None = None
+    if document.startswith("file://"):
+        resolved_path = _pl.Path(document[7:]).expanduser().resolve()
+    elif not document.startswith("http://") and not document.startswith("https://") and _pl.Path(document).expanduser().exists():
+        resolved_path = _pl.Path(document).expanduser().resolve()
+    if resolved_path is not None and resolved_path.is_file():
+        file_bytes = resolved_path.read_bytes()
+        filename = filename or resolved_path.name
+    url = f"{TELEGRAM_API_BASE}/bot{token}/sendDocument"
+    if file_bytes:
+        # Send as multipart/form-data with file bytes
+        data: dict = {"chat_id": chat_id}
+        if caption:
+            data["caption"] = _to_telegram_markdown(str(caption))
+        if reply_to_message_id is not None:
+            data["reply_to_message_id"] = str(reply_to_message_id)
+        import io as _io
+        mime = "application/octet-stream"
+        if filename and filename.endswith(".pdf"):
+            mime = "application/pdf"
+        elif filename and filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+            mime = "image/" + filename.rsplit(".", 1)[-1]
+        files = {"document": (filename or "document", _io.BytesIO(file_bytes), mime)}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+            resp = await client.post(url, data=data, files=files)
+            result = resp.json()
+            if not result.get("ok"):
+                LOGGER.warning("Telegram API error: sendDocument %s", result.get("description", "unknown"))
+            return result
     body: dict = {"chat_id": chat_id, "document": document, "parse_mode": "MarkdownV2"}
     if caption:
         body["caption"] = _to_telegram_markdown(str(caption))
@@ -504,6 +575,292 @@ def _should_skip_reply(reply: str) -> bool:
         return True
     return False
 
+
+
+async def _run_agent_machine_shortcut(
+    *,
+    workspace_id: str,
+    message: str,
+    chat_id: str,
+    parsed: dict,
+) -> dict | None:
+    """Simple agentic loop for local dev — bypasses the full runtime stack.
+
+    LLM call → tool call → execute locally → feed result back → repeat.
+    Gated on AGENT_MACHINE_MODE == "agent".
+    Screenshots are routed through empyralis-supervisor (port 7788).
+    Generated images are always sent to Telegram via sendPhoto.
+    """
+    LOGGER.info("Agent machine shortcut: ENTERED for message=%s", str(message)[:80])
+    import json as _json
+    import os as _os
+
+    _deepseek_key = _os.getenv("DEEPSEEK_API_KEY", "").strip()
+    if not _deepseek_key:
+        LOGGER.warning("Agent machine shortcut: DEEPSEEK_API_KEY not set, falling through to full runtime")
+        return None
+
+    try:
+        from openai import AsyncOpenAI
+    except ImportError:
+        LOGGER.warning("Agent machine shortcut: openai not installed, falling through")
+        return None
+
+    from server_modules.local_tool_executor import shell_execute, filesystem_read, filesystem_write
+    from server_modules.supervisor_client import capture_screenshot as _supervisor_screenshot
+
+    client = AsyncOpenAI(
+        api_key=_deepseek_key,
+        base_url="https://api.deepseek.com",
+    )
+    LOGGER.info("Agent machine shortcut: DeepSeek client created, starting loop")
+
+    thread_id = f"sage-main-{workspace_id}"
+
+    # ── Load prior turns from thread_service ──
+    prior_messages: list[dict[str, str]] = []
+    try:
+        from server_modules import thread_service as _ts
+        print(f"[SHORTCUT_LOAD] Loading thread_id={thread_id} ws={workspace_id}", flush=True)
+        await _ts.ensure_master_thread(
+            thread_id=thread_id,
+            tenant_id=workspace_id,
+            workspace_id=workspace_id,
+            owner_user_id="sage",
+            channel="telegram_hosted",
+        )
+        thread_record = await _ts.get_thread(
+            thread_id,
+            tenant_id=workspace_id,
+            workspace_id=workspace_id,
+            include_turns=True,
+        )
+        raw_turns = list((thread_record or {}).get("turns") or [])
+        prior_messages = [
+            {"role": str(t.get("role", "")).strip().lower(),
+             "content": str(t.get("content", "")).strip()}
+            for t in raw_turns
+            if str(t.get("role", "")).strip().lower() in {"user", "assistant"}
+            and str(t.get("content", "")).strip()
+        ][-16:]  # last 16 turns
+        print(f"[SHORTCUT_LOAD] Loaded {len(prior_messages)} prior turns", flush=True)
+        LOGGER.info("Shortcut: loaded %d prior turns for thread %s", len(prior_messages), thread_id)
+    except Exception as _e:
+        print(f"[SHORTCUT_LOAD] FAILED: {type(_e).__name__}: {_e}", flush=True)
+        LOGGER.warning("Shortcut: failed to load thread history: %s", _e)
+
+    async def _save_turn_and_return(reply_text: str) -> dict:
+        """Persist user + assistant turns, then return the result dict."""
+        try:
+            from server_modules import thread_service as _ts
+            print(f"[SHORTCUT_SAVE] Saving turn to thread_id={thread_id} ws={workspace_id}", flush=True)
+            await _ts.ensure_master_thread(
+                thread_id=thread_id, tenant_id=workspace_id,
+                workspace_id=workspace_id, owner_user_id="sage", channel="telegram_hosted",
+            )
+            await _ts.record_user_turn(
+                thread_id=thread_id,
+                tenant_id=workspace_id,
+                workspace_id=workspace_id,
+                session_id=None,
+                actor={"role": "user"},
+                content=message,
+            )
+            await _ts.record_assistant_turn(
+                thread_id=thread_id,
+                tenant_id=workspace_id,
+                workspace_id=workspace_id,
+                session_id=None,
+                actor={"role": "assistant"},
+                reply=reply_text,
+                status="completed",
+            )
+            print(f"[SHORTCUT_SAVE] DONE", flush=True)
+        except Exception as _e:
+            print(f"[SHORTCUT_SAVE] FAILED: {type(_e).__name__}: {_e}", flush=True)
+            import traceback; traceback.print_exc()
+            LOGGER.warning("Shortcut: failed to save thread turn: %s", _e)
+        return {"message": reply_text}
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "shell_exec",
+                "description": "Execute a shell command on the local machine. Returns stdout, stderr, and exit_code.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "The shell command to execute"}
+                    },
+                    "required": ["command"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "file_read",
+                "description": "Read the contents of a file from the local filesystem.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Absolute path to the file"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "file_write",
+                "description": "Write content to a file on the local filesystem.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Absolute path to the file"},
+                        "content": {"type": "string", "description": "Content to write"}
+                    },
+                    "required": ["path", "content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "screenshot",
+                "description": "Take a screenshot of the current screen. The image is always sent to the chat — no need to describe it. Call this, then give a short caption.",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        },
+    ]
+
+    sender_name = str(parsed.get("from_first_name", "")).strip()
+    system_prompt = (
+        f"You are Sage, the user's personal AI assistant running locally on their machine. "
+        f"You are chatting with {sender_name or 'the user'} via Telegram. "
+        f"You have direct shell, file, and screenshot access — no approval needed. "
+        f"Execute commands immediately when asked. Keep replies concise and conversational. "
+        f"Telegram markdown is supported (**bold**, *italic*, `code`, etc). "
+        f"IMPORTANT: When you call screenshot(), the image is always sent to the chat automatically. "
+        f"Just give a short caption about what you see — do NOT describe the screenshot contents in detail."
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        *prior_messages,
+        {"role": "user", "content": message},
+    ]
+
+    screenshot_paths: list[str] = []
+    max_turns = 5
+
+    print(f"[SHORTCUT_SYSTEM_PROMPT] {system_prompt[:2000]}", flush=True)
+    print(f"[SHORTCUT_MESSAGES] len={len(messages)} prior_turns={len(prior_messages)} last3={messages[-3:] if len(messages)>=3 else messages}", flush=True)
+
+    for _turn in range(max_turns):
+        try:
+            response = await client.chat.completions.create(
+                model="deepseek-chat",
+                messages=messages,
+                tools=tools,
+                temperature=0.7,
+                max_tokens=2000,
+            )
+        except Exception as exc:
+            LOGGER.warning("Agent machine shortcut: LLM call failed: %s", exc)
+            return None
+
+        msg = response.choices[0].message
+
+        # If the LLM produced text and no tool calls → done
+        if msg.content and not msg.tool_calls:
+            # Send any accumulated screenshots
+            for sp in screenshot_paths:
+                try:
+                    await send_photo(chat_id, sp, caption=None)
+                except Exception as _pexc:
+                    LOGGER.warning("Agent machine shortcut: send_photo failed: %s", _pexc)
+            return await _save_turn_and_return(msg.content)
+
+        # If tool calls, execute them
+        if msg.tool_calls:
+            messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments}
+                    }
+                    for tc in msg.tool_calls
+                ]
+            })
+            for tc in msg.tool_calls:
+                args = _json.loads(tc.function.arguments or "{}")
+                tool_name = tc.function.name
+                try:
+                    if tool_name == "shell_exec":
+                        result = shell_execute(str(args.get("command", "")))
+                    elif tool_name == "file_read":
+                        result = filesystem_read(str(args.get("path", "")))
+                    elif tool_name == "file_write":
+                        result = filesystem_write(
+                            str(args.get("path", "")),
+                            str(args.get("content", ""))
+                        )
+                    elif tool_name == "screenshot":
+                        # Route through empyralis-supervisor on :7788
+                        ss_result = _supervisor_screenshot()
+                        if isinstance(ss_result, dict) and ss_result.get("images"):
+                            import base64 as _b64, tempfile as _tempfile
+                            for img in ss_result["images"]:
+                                b64_data = str(img.get("data_base64") or "")
+                                if b64_data:
+                                    img_bytes = _b64.b64decode(b64_data)
+                                    # Write to temp file so send_photo can read it
+                                    with _tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _tf:
+                                        _tf.write(img_bytes)
+                                        tmp_path = _tf.name
+                                    screenshot_paths.append(tmp_path)
+                            if screenshot_paths:
+                                result = {"status": "captured", "note": "Screenshot will be sent to chat"}
+                            else:
+                                result = {"error": "screenshot produced no usable image data"}
+                        else:
+                            result = {"error": "screenshot failed", "detail": str(ss_result)}
+                    else:
+                        result = {"error": f"Unknown tool: {tool_name}"}
+                except Exception as exc:
+                    result = {"error": str(exc)}
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": _json.dumps(result, ensure_ascii=False)[:8000]
+                })
+            continue
+
+        # No content and no tool calls — shouldn't happen, but handle it
+        return await _save_turn_and_return(msg.content or "I processed that but have nothing to add.")
+
+    # Max turns exceeded — get final response
+    for sp in screenshot_paths:
+        try:
+            await send_photo(chat_id, sp, caption=None)
+        except Exception:
+            pass
+    try:
+        response = await client.chat.completions.create(
+            model="deepseek-chat",
+            messages=messages + [{"role": "user", "content": "Please summarize what you did in one concise reply."}],
+            max_tokens=500,
+        )
+        return await _save_turn_and_return(response.choices[0].message.content or "Done.")
+    except Exception:
+        return await _save_turn_and_return("I ran several tools. Let me know if you need anything else.")
 
 async def _process_update(update: dict) -> bool:
     """Process a single Telegram update. Returns True if a Sage reply was sent."""
@@ -586,6 +943,24 @@ async def _process_update(update: dict) -> bool:
             channel_sender_id=str(chat_id),
             channel_sender_name=str(parsed.get("from_first_name", "")).strip(),
         )
+        # ── AGENT MACHINE SHORTCUT: bypass full agent runtime stack in local dev ──
+        if False:  # shortcut retired - full runtime works  # DISABLED - testing full path
+            _shortcut_result = await _run_agent_machine_shortcut(
+                workspace_id=workspace_id,
+                message=message_text,
+                chat_id=chat_id,
+                parsed=parsed,
+            )
+            if _shortcut_result is not None:
+                reply = str(_shortcut_result.get("message") or "").strip()
+                filtered = filter_outbound_reply(reply)
+                if filtered:
+                    await send_sage_reply(chat_id, filtered, reply_to_message_id=parsed.get("message_id"))
+                    return True
+                else:
+                    LOGGER.info("Sage Telegram hosted: shortcut reply suppressed (silent/empty)")
+                    return False
+        # ── END SHORTCUT ──
         result = await handle_sage_chat(
             workspace_id=turn.workspace_id,
             message=turn.message,
@@ -621,11 +996,57 @@ async def _background_polling_loop() -> None:
                 continue
             offset = _last_update_id + 1 if _last_update_id > 0 else None
             updates = await poll_updates(limit=10, timeout=5, offset=offset)
-            for update in updates:
-                uid = int(update.get("update_id", 0))
-                if uid > _last_update_id:
-                    _last_update_id = uid
-                await _process_update(update)
+            # ── Batch incoming messages with a short delay buffer ──
+            if updates:
+                # Collect all updates from this batch
+                buffered: list[dict] = list(updates)
+                # Wait 2.5s for any additional updates to arrive
+                await asyncio.sleep(2.5)
+                # Poll once more to catch late-arriving messages
+                extra = await poll_updates(limit=10, timeout=3, offset=_last_update_id + 1 if _last_update_id > 0 else None)
+                for ue in (extra or []):
+                    eid = int(ue.get("update_id", 0))
+                    if eid > _last_update_id:
+                        _last_update_id = eid
+                    buffered.append(ue)
+                # Extract text from all buffered updates (skip own messages, duplicates)
+                messages: list[str] = []
+                seen_ids: set[int] = set()
+                for u in buffered:
+                    uid = int(u.get("update_id", 0))
+                    if uid in seen_ids:
+                        continue
+                    seen_ids.add(uid)
+                    if uid > _last_update_id:
+                        _last_update_id = uid
+                    parsed = parse_telegram_update(u)
+                    if parsed is None:
+                        continue
+                    _bot_own_id = str(os.getenv("SAGE_TELEGRAM_HOSTED_BOT_USER_ID", "8870032163")).strip()
+                    if _bot_own_id and str(parsed.get("from_id", "")).strip() == _bot_own_id:
+                        continue
+                    text = str(parsed.get("text") or "").strip()
+                    if text:
+                        messages.append(text)
+                    # Also handle inbound message tracking (pairing, etc.)
+                    await handle_inbound_message(parsed)
+                # If we collected multiple messages, combine them
+                if len(messages) > 1:
+                    combined = "\n---\n".join(messages)
+                    # Create a synthetic update from the first update's metadata
+                    first = buffered[0]
+                    first_parsed = parse_telegram_update(first)
+                    if first_parsed:
+                        first_parsed["text"] = combined
+                        first_parsed["batched_count"] = len(messages)
+                        await _process_update(first_parsed)
+                elif len(messages) == 1:
+                    # Single message — process normally via the first update
+                    for u in buffered:
+                        parsed = parse_telegram_update(u)
+                        if parsed and str(parsed.get("text") or "").strip():
+                            await _process_update(u)
+                            break
         except Exception as exc:
             LOGGER.warning("Sage Telegram hosted: polling loop error: %s", exc)
         await asyncio.sleep(_BG_POLL_INTERVAL)

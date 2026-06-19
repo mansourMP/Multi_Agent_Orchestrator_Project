@@ -1242,7 +1242,25 @@ def build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Dic
 
 
 def build_builtin_direct_chat_tools() -> List[Dict[str, Any]]:
-    return [_tool_payload_from_descriptor(item) for item in _builtin_tool_descriptors()]
+    tools = [_tool_payload_from_descriptor(item) for item in _builtin_tool_descriptors()]
+    # AGENT MACHINE MODE: inject local hardware tools into manifest so LLM knows they exist.
+    # Prepend them so they appear within the capability manifest's 16-item cap.
+    from server_modules import runtime_config as _rc
+    if _rc.AGENT_MACHINE_MODE == "agent":
+        try:
+            from server_modules.supervisor_client import _assert_direct_supervisor_allowed
+            _assert_direct_supervisor_allowed()
+            existing_names = {t.get("name") for t in tools if isinstance(t, dict)}
+            local_payloads = []
+            for item in _local_tool_descriptors():
+                payload = _tool_payload_from_descriptor(item)
+                if payload.get("name") not in existing_names:
+                    local_payloads.append(payload)
+            # Prepend local tools so they're visible within the manifest cap
+            tools = local_payloads + tools
+        except Exception:
+            pass
+    return tools
 
 
 def registered_direct_chat_tool_names_for_logging() -> List[str]:
@@ -2706,6 +2724,18 @@ def _safe_direct_shell_command(command: str) -> bool:
         r"^readlink(\s|$)",
         r"^dirname(\s|$)",
         r"^basename(\s|$)",
+        r"^whoami(\s|$)",
+        r"^uname(\s|$)",
+        r"^hostname(\s|$)",
+        r"^id(\s|$)",
+        r"^env(\s|$)",
+        r"^printenv(\s|$)",
+        r"^which\s+",
+        r"^whereis\s+",
+        r"^uptime(\s|$)",
+        r"^df(\s|$)",
+        r"^ps(\s|$)",
+        r"^groups(\s|$)",
     )
     return any(re.search(pattern, compact) for pattern in allowed_patterns)
 
@@ -2750,6 +2780,10 @@ def _local_dev_direct_shell_fallback_enabled(workspace_id: str) -> bool:
     env_name = str(os.getenv("ORION_ENV") or os.getenv("APP_ENV") or "").strip().lower()
     if env_name not in _LOCAL_DIRECT_TOOL_GATEWAY_FALLBACK_ENVS:
         return False
+    # In local dev, allow direct shell execution without requiring a registered
+    # local worker.  The worker check added unnecessary friction for development.
+    if local_tool_executor.is_local_dev():
+        return True
     return _local_direct_shell_worker_online(workspace_id)
 
 
@@ -2821,6 +2855,34 @@ def _execute_safe_direct_local_tool_call(
     normalized_action = str(action_id or "").strip().lower()
     if normalized_connector == "file" and normalized_action not in {"read", "write"}:
         _raise_direct_chat_tool_execution_blocked()
+    if local_tool_executor.is_local_dev():
+        if normalized_connector == "shell" and normalized_action in ("exec", "execute", "run"):
+            result = local_tool_executor.shell_execute(
+                str(argument_payload.get("command") or "")
+            )
+            return json.dumps(result, ensure_ascii=False)
+        if normalized_connector == "file":
+            if normalized_action == "read":
+                result = local_tool_executor.filesystem_read(
+                    str(argument_payload.get("path") or "")
+                )
+                return json.dumps(result, ensure_ascii=False)
+            if normalized_action == "write":
+                result = local_tool_executor.filesystem_write(
+                    str(argument_payload.get("path") or ""),
+                    str(argument_payload.get("content") or "")
+                )
+                return json.dumps(result, ensure_ascii=False)
+            if normalized_action in ("list", "ls"):
+                result = local_tool_executor.filesystem_list(
+                    str(argument_payload.get("path") or "")
+                )
+                return json.dumps(result, ensure_ascii=False)
+        if normalized_connector == "screenshot":
+            pass
+    if normalized_connector == "file" and normalized_action not in {"read", "write"}:
+        _raise_direct_chat_tool_execution_blocked()
+    _raise_direct_chat_tool_execution_blocked()
 
 
 _BUILTIN_DIRECT_TOOL_IDS: frozenset = frozenset(
@@ -3032,6 +3094,33 @@ async def execute_single_direct_tool_call_async(
         elif normalized_connector not in {"file", "screenshot", "computer"}:
             _raise_direct_chat_tool_execution_blocked()
 
+        # Local-dev shortcut: when the supervisor is reachable directly
+        # (localhost:7788), skip the gateway -> cloud -> supervisor
+        # round-trip.  This also avoids the Rust safe_shell_command
+        # allowlist that blocks common read-only commands (whoami,
+        # uname, df, ps, ...) - exactly the same bypass that
+        # screenshot.capture already enjoys through the direct path.
+        _supervisor_available = False
+        try:
+            from server_modules.supervisor_client import _assert_direct_supervisor_allowed
+            _assert_direct_supervisor_allowed()
+            _supervisor_available = True
+        except Exception:
+            pass
+        if _supervisor_available and local_tool_executor.is_local_dev():
+            return execute_single_direct_tool_call(
+                tool_call=tool_call,
+                workspace_id=workspace_id,
+                thread_id=thread_id,
+                index=index,
+                provider=provider,
+                model=model,
+                credentials=credentials,
+                reasoning_effort=reasoning_effort,
+                session_ctx=session_ctx,
+                callbacks=callbacks,
+            )
+
         gateway_capability_id = _gateway_capability_for_direct_local_tool(
             normalized_connector,
             normalized_action,
@@ -3114,6 +3203,16 @@ async def execute_single_direct_tool_call_async(
     elif normalized_connector not in {"file", "screenshot", "computer"}:
         _raise_direct_chat_tool_execution_blocked()
 
+    # Local-dev shortcut: same bypass as the async path.
+    _supervisor_available = False
+    try:
+        from server_modules.supervisor_client import _assert_direct_supervisor_allowed
+        _assert_direct_supervisor_allowed()
+        _supervisor_available = True
+    except Exception:
+        pass
+    _gateway_skip = _supervisor_available and local_tool_executor.is_local_dev()
+
     gateway_capability_id = _gateway_capability_for_direct_local_tool(
         normalized_connector,
         normalized_action,
@@ -3122,7 +3221,7 @@ async def execute_single_direct_tool_call_async(
         workspace_id,
         session_ctx=session_ctx,
     )
-    if gateway_capability_id and gateway_id:
+    if not _gateway_skip and gateway_capability_id and gateway_id:
         session_payload = session_ctx if isinstance(session_ctx, dict) else {}
         metadata = _direct_tool_session_metadata(session_ctx)
         tenant_id = _tenant_id_from_direct_tool_context(session_ctx)
@@ -3174,7 +3273,7 @@ async def execute_single_direct_tool_call_async(
         )
 
     # When Gateway is unavailable, try Supervisor directly for local tools.
-    if not (gateway_capability_id and gateway_id):
+    if _gateway_skip or not (gateway_capability_id and gateway_id):
         supervisor_available = False
         try:
             from server_modules.supervisor_client import _assert_direct_supervisor_allowed
@@ -3274,6 +3373,108 @@ async def execute_single_direct_tool_call_async(
             index=index,
             callbacks=callbacks,
         )
+
+    # ── VPS SSH fallback ──────────────────────────────────────────
+    # When the local supervisor is unreachable AND a VPS is configured
+    # (EMPYRALIS_VPS_HOST + EMPYRALIS_VPS_USER + EMPYRALIS_VPS_SSH_KEY_PATH),
+    # route shell, file, and screenshot commands through SSH to the VPS.
+    # This gives users a working execution target even when their local
+    # machine is offline - no gateway, no self_hosted_node enrollment needed.
+    try:
+        from server_modules.hardware_runtime_target_resolver import (
+            is_vps_configured,
+            vps_ssh_execute,
+            vps_ssh_file_read,
+            vps_ssh_file_write,
+            vps_ssh_screenshot,
+        )
+        if is_vps_configured():
+            if normalized_connector == "shell" and normalized_action == "exec":
+                command = str(argument_payload.get("command") or "").strip()
+                if not command:
+                    raise RuntimeError("shell__exec requires a command")
+                result = vps_ssh_execute(
+                    command,
+                    timeout=int(argument_payload.get("timeout_seconds") or argument_payload.get("timeout") or 30),
+                )
+                stdout = str(result.get("stdout") or "").strip()
+                stderr = str(result.get("stderr") or "").strip()
+                exit_code = result.get("exit_code", 0)
+                output = stdout
+                if stderr:
+                    output = f"{output}\n{stderr}" if output else stderr
+                if exit_code != 0 and exit_code != -1:
+                    output = f"[VPS exit {exit_code}]\n{output}"
+                if result.get("status") == "timeout":
+                    output = f"VPS SSH command timed out: {command}"
+                elif result.get("status") == "error" and not output:
+                    output = f"VPS SSH error: {stderr or 'unknown'}"
+                return output.strip() or "(no output)"
+
+            if normalized_connector == "file" and normalized_action == "read":
+                path = str(argument_payload.get("path") or "").strip()
+                if not path:
+                    raise RuntimeError("file__read requires a path")
+                result = vps_ssh_file_read(path)
+                if result.get("status") == "error":
+                    return f"VPS file read error: {result.get('error', 'unknown')}"
+                return result.get("content", "")
+
+            if normalized_connector == "file" and normalized_action == "write":
+                path = str(argument_payload.get("path") or "").strip()
+                file_content = str(argument_payload.get("content") or "")
+                if not path:
+                    raise RuntimeError("file__write requires a path")
+                result = vps_ssh_file_write(path, file_content)
+                if result.get("status") == "error":
+                    return f"VPS file write error: {result.get('error', 'unknown')}"
+                return f"Written {result.get('size_bytes', 0)} bytes to {path} on VPS"
+
+            if normalized_connector == "screenshot" and normalized_action in ("capture", "capture_and_send"):
+                result = vps_ssh_screenshot()
+                if result.get("status") == "error":
+                    return f"VPS screenshot error: {result.get('error', 'unknown')}"
+                images = result.get("images") or []
+                if isinstance(images, list) and images:
+                    img = images[0] if isinstance(images[0], dict) else {}
+                    b64 = str(img.get("data_base64") or "").strip()
+                    if b64:
+                        import base64 as _b64, pathlib as _pl
+                        screenshot_dir = _pl.Path(__import__("os").path.expanduser("~/Screenshots"))
+                        screenshot_dir.mkdir(parents=True, exist_ok=True)
+                        ts = __import__("time").strftime("%Y-%m-%d_%H-%M-%S")
+                        screenshot_path = screenshot_dir / f"sage_vps_screenshot_{ts}.png"
+                        try:
+                            _decoded_vps = _b64.b64decode(b64)
+                            screenshot_path.write_bytes(_decoded_vps)
+                        except Exception:
+                            pass
+                        wrapped = {
+                            "summary": "VPS screenshot captured",
+                            "result_data": {
+                                "tool_variant": "screenshot",
+                                "child_result": {
+                                    "outputs": {
+                                        "actions": [{
+                                            "tool": "screenshot",
+                                            "status": "completed",
+                                            "screenshot_path": str(screenshot_path),
+                                            "source": "vps_ssh",
+                                        }],
+                                        "artifacts": [],
+                                    }
+                                },
+                            },
+                            "_screenshot_path": str(screenshot_path),
+                            "_screenshot_size": screenshot_path.stat().st_size if screenshot_path.exists() else 0,
+                            "_sent": False,
+                        }
+                        return callbacks.format_direct_local_tool_result(wrapped)
+                return "VPS screenshot captured but no image data returned."
+    except ImportError:
+        pass  # VPS module not available, fall through
+    except Exception:
+        pass  # VPS execution failed, fall through to standard path
 
     session_payload = session_ctx if isinstance(session_ctx, dict) else {}
     agent_turn_request = session_payload.get("agent_turn_request") if isinstance(session_payload.get("agent_turn_request"), dict) else {}

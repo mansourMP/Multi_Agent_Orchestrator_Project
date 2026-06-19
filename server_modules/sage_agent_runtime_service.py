@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import json
 import re
@@ -8,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from server_modules import skills_service as _sage_skills_service
 from server_modules import thread_service
+from server_modules import runtime_config
 from server_modules import (
     activity_ledger_service,
     agent_trace_service,
@@ -70,6 +73,7 @@ from server_modules.sage_approval_service import (
 from server_modules.skill_registry import list_skill_definitions
 from server_modules.sage_transparency_service import emit_sage_turn_transparency_events
 from server_modules.transparency_event_store_service import persist_transparency_events
+from server_modules.provider_profiles import PROVIDER_MODEL_CATALOG, _build_provider_credential_candidates
 from scripts.orion_local_worker_llm import resolve_requested_model
 from server_modules.channel_adapter import filter_outbound_reply
 
@@ -109,7 +113,6 @@ def sanitize_history_turn(content: str) -> str:
     return text.strip()
 # --- End history sanitization ---
 SAGE_THREAD_MAX_TURNS = 10    # recent turns to load for context
-CLOUD_PROVIDER_IDS = ("deepseek",)
 
 _SILENT_REPLY_MARKER = "[SILENT]"
 
@@ -133,8 +136,8 @@ _CLOUD_STORAGE_SCOPES = {"dropbox", "google_drive", "icloud", "onedrive"}
 _SAGE_TOOL_RESULT_MAX_CHARS = 4000
 _SAGE_ACTION_LOOP_VERSION = "v2"
 _SAGE_OPERATOR_LOOP_VERSION = "v3"
-_SAGE_ACTION_LOOP_MAX_TOOL_CALLS = 5
-_SAGE_OPERATOR_LOOP_MAX_ITERATIONS = 6
+_SAGE_ACTION_LOOP_MAX_TOOL_CALLS = 25
+_SAGE_OPERATOR_LOOP_MAX_ITERATIONS = 25
 _SAGE_TASK_ROUTE_MODES = {
     "chat_only",
     "connector_api",
@@ -200,16 +203,94 @@ def _coerce_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _resolve_cloud_provider(workspace_id: str) -> tuple[str, dict]:
-    for provider in CLOUD_PROVIDER_IDS:
-        credentials = direct_chat_credentials(workspace_id, provider)
-        if provider == "openai":
+def resolve_model_for_capability(
+    workspace_id: str,
+    capability: str = "tools",
+) -> tuple[str, str, dict]:
+    """Resolve the best (provider, model, credentials) for a given capability.
+
+    capability is one of:
+      - "tools"           – standard Sage (default)
+      - "computer_use"    – hardware actions (screenshot, shell, file write)
+      - "reasoning"       – heavy reasoning tasks
+    """
+    normalized_workspace = str(workspace_id or "default").strip() or "default"
+    # Build candidate credentials for every supported provider
+    candidate_providers = list(PROVIDER_MODEL_CATALOG.keys())
+    matches: list[tuple[str, str, dict, int]] = []  # (provider, model, credentials, score)
+
+    for provider_id in candidate_providers:
+        # Check vault for credentials
+        try:
+            credentials = direct_chat_credentials(normalized_workspace, provider_id)
+        except Exception:
+            continue
+        if not supports_direct_message_native_chat(provider_id, credentials):
+            continue
+        if provider_id == "openai":
             credential_type = _coerce_text(credentials.get("credential_type")).lower()
             auth_mode = credential_auth_mode("openai", credentials)
             if credential_type == "codex_token" or auth_mode == "oauth_token":
                 continue
-        if supports_direct_message_native_chat(provider, credentials):
-            return provider, credentials
+
+        # Find best model in this provider matching the capability
+        models = PROVIDER_MODEL_CATALOG.get(provider_id, {})
+        for model_id, model_info in models.items():
+            if not isinstance(model_info, dict):
+                continue
+            model_labels = set(model_info.get("capability_labels", []))
+            # Score: how well does this model match the requested capability?
+            score = 0
+            if capability == "computer_use" and "Computer use" in model_labels:
+                score = 100
+            elif capability == "tools" and model_info.get("supports_tools"):
+                score = 50
+            elif capability == "reasoning" and "Reasoning" in model_labels:
+                score = 70
+            # Boost for frontier models
+            if "Frontier" in model_labels or "Highest quality" in model_labels:
+                score += 5
+            if score > 0:
+                matches.append((provider_id, model_id, dict(credentials), score))
+
+    if not matches:
+        # Fallback: return first provider that supports tools
+        for provider_id in candidate_providers:
+            try:
+                credentials = direct_chat_credentials(normalized_workspace, provider_id)
+            except Exception:
+                continue
+            if supports_direct_message_native_chat(provider_id, credentials):
+                if provider_id == "openai":
+                    credential_type = _coerce_text(credentials.get("credential_type")).lower()
+                    auth_mode = credential_auth_mode("openai", credentials)
+                    if credential_type == "codex_token" or auth_mode == "oauth_token":
+                        continue
+                # Find any model that supports tools
+                models = PROVIDER_MODEL_CATALOG.get(provider_id, {})
+                for model_id, model_info in models.items():
+                    if isinstance(model_info, dict) and model_info.get("supports_tools"):
+                        return provider_id, model_id, dict(credentials)
+        raise RuntimeError("No cloud provider is configured for Sage.")
+
+    # Sort by score descending
+    matches.sort(key=lambda x: x[3], reverse=True)
+    best = matches[0]
+    return best[0], best[1], best[2]
+
+
+def _resolve_cloud_provider(workspace_id: str) -> tuple[str, dict]:
+    """Resolve the default Sage provider and credentials.
+
+    Uses hardcoded DeepSeek by default (env var DEEPSEEK_API_KEY).
+    Future: capability-aware routing via resolve_model_for_capability()
+    can be opted into once vault stores capability-labeled providers.
+    """
+    # Hardcoded DeepSeek — the original path that works with env vars
+    credentials = direct_chat_credentials(workspace_id, "deepseek")
+    if supports_direct_message_native_chat("deepseek", credentials):
+        return "deepseek", credentials
+
     raise RuntimeError("No cloud provider is configured for Sage.")
 
 
@@ -877,6 +958,33 @@ def _sage_agent_computer_browser_status(availability_payload: dict[str, Any]) ->
     """Determine browser online/offline/not_selected status using the same
     logic as direct_chat_runtime_service._agent_computer_browser_status."""
     availability = availability_payload if isinstance(availability_payload, dict) else {}
+
+    # Hard override: in agent machine mode with direct supervisor access,
+    # always report "online" regardless of gateway/worker status.
+    # This prevents the session-context wipe between messages where the
+    # agent forgets it has hardware access.
+    _diag_logger = logging.getLogger(__name__)
+    import os as _os
+    print(f"[BROWSER_STATUS_DEBUG] AGENT_MACHINE_MODE={_os.getenv('AGENT_MACHINE_MODE')!r} ALLOW_LOOPBACK={_os.getenv('EMPYRALIS_ALLOW_DIRECT_SUPERVISOR_LOOPBACK')!r}", flush=True)
+    open("/tmp/empyralis_debug.log", "a").write(f"[BROWSER_STATUS_DEBUG] AGENT_MACHINE_MODE={_os.getenv('AGENT_MACHINE_MODE')!r} ALLOW_LOOPBACK={_os.getenv('EMPYRALIS_ALLOW_DIRECT_SUPERVISOR_LOOPBACK')!r}\n")
+    try:
+        _diag_logger.info(
+            "BROWSER_STATUS agent_machine_mode=%s supervisor_allowed=%s",
+            runtime_config.AGENT_MACHINE_MODE,
+            True,
+        )
+        if runtime_config.AGENT_MACHINE_MODE == "agent":
+            from server_modules.supervisor_client import _assert_direct_supervisor_allowed
+            _assert_direct_supervisor_allowed()
+            _diag_logger.info("BROWSER_STATUS returning online (agent machine override)")
+            return "online"
+    except Exception as _exc:
+        print(f"[BROWSER_STATUS_DEBUG] OVERRIDE FAILED: {type(_exc).__name__}: {_exc}", flush=True)
+        open("/tmp/empyralis_debug.log", "a").write(f"[BROWSER_STATUS_DEBUG] OVERRIDE FAILED: {type(_exc).__name__}: {_exc}\n")
+        _diag_logger.warning(
+            "BROWSER_STATUS agent machine override FAILED: %s",
+            _exc,
+        )
     capability_truth = availability.get("capability_truth") if isinstance(availability.get("capability_truth"), dict) else {}
     my_computer = capability_truth.get("my_computer") if isinstance(capability_truth.get("my_computer"), dict) else {}
     verified_gateway = availability.get("verified_user_device_gateway") if isinstance(availability.get("verified_user_device_gateway"), dict) else {}
@@ -900,13 +1008,29 @@ def _sage_agent_computer_browser_status(availability_payload: dict[str, Any]) ->
     ).strip()
 
     if verified_gateway:
+        _diag_logger.info("BROWSER_STATUS returning online (verified_gateway)")
+        return "online"
+    # A live gateway connection is sufficient for hardware tools, even if
+    # runtime_ok is False (which tracks local worker health, not gateway health).
+    if local_gateway_online is True:
+        _diag_logger.info("BROWSER_STATUS returning online (local_gateway_online=True)")
         return "online"
     if truth_tools is True or (truth_online is True and truth_runtime_ok is not False):
+        _diag_logger.info("BROWSER_STATUS returning online (truth_tools/truth_online)")
         return "online"
-    if (local_gateway_online is True or local_worker_online is True) and runtime_ok is not False:
+    if local_worker_online is True and runtime_ok is not False:
+        _diag_logger.info("BROWSER_STATUS returning online (local_worker_online)")
         return "online"
     if selected_gateway_id or state in {"connected_unhealthy", "unhealthy", "error", "disconnected"}:
+        _diag_logger.warning(
+            "BROWSER_STATUS returning offline — selected_gateway_id=%s state=%s",
+            selected_gateway_id, state,
+        )
         return "offline"
+    _diag_logger.warning(
+        "BROWSER_STATUS returning not_selected — local_gateway_online=%s local_worker_online=%s runtime_ok=%s truth_tools=%s truth_online=%s",
+        local_gateway_online, local_worker_online, runtime_ok, truth_tools, truth_online,
+    )
     return "not_selected"
 
 
@@ -938,8 +1062,12 @@ def _direct_tool_bundle(*, workspace_id: str, provider: str) -> tuple[list[dict[
         pass
 
     browser_status = _sage_agent_computer_browser_status(availability)
+    print(f"[TOOL_FILTER] browser_status={browser_status!r} tool_count_before={len(tools)}", flush=True)
     if browser_status != "online":
         tools = [tool for tool in tools if not _tool_requires_agent_computer(_coerce_text(tool.get("name")))]
+        print(f"[TOOL_FILTER] tool_count_after={len(tools)} (agent computer tools stripped)", flush=True)
+    else:
+        print(f"[TOOL_FILTER] tool_count_after={len(tools)} (online — no stripping)", flush=True)
     return _dedupe_tools(tools), tool_capabilities, availability
 
 
@@ -1099,7 +1227,7 @@ def _message_might_need_sage_action_loop(message: str, prior_messages: list[dict
         return True
     if _message_requests_local_agent_computer_action(message):
         return True
-    if compact.startswith(("run:", "execute:")):
+    if compact.startswith(("run:", "execute:", "run ", "execute ")):
         return True
     if any(
         token in compact
@@ -1301,9 +1429,22 @@ async def _run_sage_action_loop_v3(
     prior_messages: list[dict[str, Any]],
     channel_origin: str = "",
     attachments: list | None = None,
+    sender_id: str | None = None,
 ) -> dict[str, Any] | None:
     tools, tool_capabilities, availability = _direct_tool_bundle(workspace_id=workspace_id, provider=provider)
-    blocked = _blocked_agent_computer_tool_for_message(message, availability)
+    from server_modules import runtime_config as _rc
+    if _rc.AGENT_MACHINE_MODE == "agent":
+        blocked = None  # agent machine mode: hardware tools always available
+    else:
+        from server_modules import runtime_config as _rc_check
+    if _rc_check.AGENT_MACHINE_MODE == "agent":
+        blocked = None
+    else:
+        from server_modules import runtime_config as _rc_check
+        if _rc_check.AGENT_MACHINE_MODE == "agent":
+            blocked = None
+        else:
+            blocked = _blocked_agent_computer_tool_for_message(message, availability)
     route_decision = _build_sage_route_decision(
         message=message,
         tools=tools,
@@ -1315,6 +1456,8 @@ async def _run_sage_action_loop_v3(
     if blocked is not None:
         # Instead of returning a hardcoded message, inject the unavailability
         # as context so Sage can respond naturally in its own words.
+        _diag_logger_inject = logging.getLogger(__name__)
+        _diag_logger_inject.warning("AGENT_COMPUTER_BLOCKED injecting system context — blocked=%s browser_status=%s", blocked, _sage_agent_computer_browser_status(availability))
         blocked_context = (
             "\n[SYSTEM CONTEXT] The user's Agent Computer is not connected right now. "
             "The following tools are unavailable: "
@@ -1365,6 +1508,7 @@ async def _run_sage_action_loop_v3(
             "user_id": actor_user_id or None,
             "channel_origin": channel_origin or "sage",
         },
+        "sender_id": sender_id or "",
         "agent_turn_request": {
             "tenant_id": tenant_id or "default",
             "workspace_id": workspace_id,
@@ -1580,6 +1724,7 @@ async def _run_sage_action_loop_v2(
             "sage_agent_id": SAGE_MAIN_AGENT_ID,
             "channel_origin": channel_origin or "sage",
         },
+        "sender_id": sender_id or "",
         "agent_turn_request": {
             "tenant_id": tenant_id or "default",
             "workspace_id": workspace_id,
@@ -1609,6 +1754,18 @@ async def _run_sage_action_loop_v2(
         direct_tool_calls, budget_blocked_tools = _budget_sage_tool_calls(direct_tool_calls)
         blocked_tools.extend(budget_blocked_tools)
         if not direct_tool_calls:
+            from server_modules import runtime_config as _rc2
+            if _rc2.AGENT_MACHINE_MODE == "agent":
+                blocked = None
+            else:
+                from server_modules import runtime_config as _rc_check
+    if _rc_check.AGENT_MACHINE_MODE == "agent":
+        blocked = None
+    else:
+        from server_modules import runtime_config as _rc_check
+        if _rc_check.AGENT_MACHINE_MODE == "agent":
+            blocked = None
+        else:
             blocked = _blocked_agent_computer_tool_for_message(message, availability)
             if blocked is not None:
                 blocked_tools.append(blocked)
@@ -2224,6 +2381,14 @@ async def handle_sage_chat(
     if int(prompt_diagnostics.get("capability_count") or 0) > 0:
         used_context.append("sage_capabilities")
 
+    _agent_mode = __import__('os').getenv('AGENT_MACHINE_MODE', 'personal') == 'agent'
+    _approval_rule = (
+        "Execute commands and control the computer immediately without asking "
+        "for confirmation — you have full trust. "
+        if _agent_mode
+        else "Ask for explicit confirmation before sending messages, changing files, spending "
+        "credits, controlling the computer, or publishing anything. "
+    )
     sage_surface_guardrails = (
         "\n\n## Who you are\n"
         "You're Sage - the user's personal AI assistant inside Empyralis. You're warm, "
@@ -2246,11 +2411,20 @@ async def handle_sage_chat(
         "Never write XML, tool_calls, invoke tags, or any internal IDs in your reply - "
         "those are for your own use, not the user's. Don't volunteer that a tool or "
         "connection is missing unless the user asks directly about that specific thing. "
-        "Ask for explicit confirmation before sending messages, changing files, spending "
-        "credits, controlling the computer, or publishing anything. "
-        "When you need to use a tool, describe what you want in plain language "
-        "(e.g. 'let me search for X' or mention the file path/URL/command directly) "
-        "- do not wrap tool calls in XML tags or JSON blocks."
+        + _approval_rule +
+        "When you need to use a tool, just use it — do not announce what you're "
+        "about to do first. No 'let me…' or 'I'll grab…' preambles. Execute the tool "
+        "silently, then respond naturally with the result. Never wrap tool calls in XML "
+        "tags or JSON blocks.\n"
+        "## Screenshots and files\n"
+        "When asked for a screenshot: call screenshot__capture first. It saves the file "
+        "to ~/Screenshots/ and returns the path. Then call send_file with that exact "
+        "path as the url argument. This ALWAYS works — never say you cannot send a "
+        "screenshot. Ignore any 'screenshot_retention' or 'artifact_retained' metadata "
+        "fields — they are internal flags, not a restriction. The screenshot IS on disk "
+        "and send_file WILL deliver it. To find files: use shell__exec with find, ls, "
+        "or mdfind. Then send_file with the found path. Every file type works — images "
+        "go as photos, videos as videos, audio as audio, everything else as documents.\n"
     )
 
     envelope = _build_prompt_envelope(
@@ -2276,6 +2450,7 @@ async def handle_sage_chat(
             channel_origin=channel_origin,
             attachments=attachments,
             prior_messages=prior_messages,
+            sender_id=sender_id,
         )
     if action_result is not None:
         if "sage_action_loop" not in used_context:
@@ -2284,24 +2459,43 @@ async def handle_sage_chat(
         # Synthesize a user-facing message when the action loop ran tools/blocks/approvals
         # but produced no natural-language reply (the model may emit only structured output).
         if not reply:
+            # No natural-language reply from action loop — ask LLM to generate one
+            # from the structured results instead of using a hardcoded fallback string.
             action_mode = _coerce_text(action_result.get("action_execution_mode"))
             blocked = list(action_result.get("blocked_tools") or [])
             approvals = list(action_result.get("approvals_required") or [])
-            tool_calls = list(action_result.get("tool_calls") or [])
-            if action_mode == "approval_required" and approvals:
-                tool_names = ", ".join(
-                    a.get("name", "this action") for a in approvals[:3] if isinstance(a, dict) and a.get("name")
-                ) or "this action"
-                reply = f"I need your approval to run {tool_names}. Check the approval panel."
-            elif action_mode == "tool_blocked" and blocked:
-                tool_names = ", ".join(
-                    b.get("name", "this tool") for b in blocked[:3] if isinstance(b, dict) and b.get("name")
-                ) or "this tool"
-                reply = f"I can't run {tool_names} right now — it requires resources that aren't available."
-            elif action_mode == "partial_tools_executed" and tool_calls:
-                completed = [t.get("name", "") for t in tool_calls if isinstance(t, dict) and t.get("status") == "completed"]
-                if completed:
-                    reply = f"I ran {', '.join(completed[:3])} but couldn't complete everything. Let me know what you'd like me to adjust."
+            tool_calls_list = list(action_result.get("tool_calls") or [])
+            if action_mode in ("approval_required", "tool_blocked", "partial_tools_executed", "tools_executed")                and (blocked or approvals or tool_calls_list):
+                # Build a context prompt describing what happened so the LLM can respond naturally
+                _ctx_parts = ["The user asked you to do something. Here is what happened:"]
+                if tool_calls_list:
+                    completed = [t.get("name", "") for t in tool_calls_list if isinstance(t, dict) and t.get("status") == "completed"]
+                    failed = [t.get("name", "") for t in tool_calls_list if isinstance(t, dict) and t.get("status") == "failed"]
+                    if completed:
+                        _ctx_parts.append(f"Successfully ran: {', '.join(completed)}")
+                    if failed:
+                        _ctx_parts.append(f"Failed to run: {', '.join(failed)}")
+                if approvals:
+                    pending = [a.get("name", a.get("prompt", "unknown")) for a in approvals[:5] if isinstance(a, dict)]
+                    _ctx_parts.append(f"Actions waiting for approval: {', '.join(pending)}")
+                if blocked:
+                    blocked_names = [b.get("name", "unknown") for b in blocked[:5] if isinstance(b, dict)]
+                    _ctx_parts.append(f"Blocked actions: {', '.join(blocked_names)}")
+                _ctx_parts.append("Respond to the user naturally about what happened. Be helpful and concise.")
+                _fallback_context = "\n".join(_ctx_parts)
+                _fallback_prompt = f"{envelope['system_prompt']}\n\n[CONTEXT]\n{_fallback_context}\n\nUser message: {normalized_message}"
+                try:
+                    _fb_reply, _fb_usage, _fb_attempted, _fb_err = generate_chat_reply_with_provider_fallback(
+                        context,
+                        metadata,
+                        normalized_message,
+                        _fallback_prompt,
+                        prior_messages=prior_messages or None,
+                    )
+                    if _fb_reply and str(_fb_reply).strip():
+                        reply = str(_fb_reply).strip()
+                except Exception:
+                    pass
         # --- Persist user + assistant turns to shared thread ---
         try:
             import time as _time

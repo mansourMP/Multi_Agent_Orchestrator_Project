@@ -32,6 +32,7 @@ def shell_execute(command: str, *, timeout: int = _SHELL_TIMEOUT_SECONDS) -> Dic
 
     Returns dict with stdout, stderr, exit_code.
     """
+    print(f"[LOCAL_EXECUTOR] shell_execute called: {command}", flush=True)
     if not command or not command.strip():
         return {"stdout": "", "stderr": "no command provided", "exit_code": 1}
 

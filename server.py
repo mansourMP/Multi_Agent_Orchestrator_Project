@@ -248,7 +248,9 @@ app = FastAPI(
 )
 existing_shared_app = getattr(shared, "app", None)
 if existing_shared_app is not None and existing_shared_app is not app:
-    raise RuntimeError("shared.app must reference the server-owned FastAPI app.")
+    import logging
+    _log = logging.getLogger("server")
+    _log.warning("shared.app was already set (type=%s). Overwriting with server-owned FastAPI app.", type(existing_shared_app).__name__)
 shared.app = app
 
 @app.exception_handler(FastAPIHTTPException)

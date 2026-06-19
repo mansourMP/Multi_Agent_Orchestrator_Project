@@ -152,7 +152,16 @@ def _scope_enforcement_enabled() -> bool:
 
 def _sqlite_session_compatibility_fallback_enabled() -> bool:
     raw = str(os.getenv("ORION_ALLOW_SERVER_SESSION_SQLITE_FALLBACK") or "0").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    # In local dev without Postgres, always allow SQLite fallback
+    env = str(os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
+    if env in {"development", "dev", "local"}:
+        return True
+    db_url = str(os.getenv("DATABASE_URL") or "").strip()
+    if not db_url:
+        return True
+    return False
 
 
 def _metadata_binding_token(metadata: Any, key: str) -> Optional[str]:

@@ -568,7 +568,7 @@ export class WhatsAppPersonalRuntime {
       return this.adapter;
     }
     const baileysModule = await dynamicImport<Record<string, any>>("@whiskeysockets/baileys");
-    const makeWASocket = baileysModule.default ?? baileysModule.makeWASocket;
+    const makeWASocket = typeof baileysModule.default === "function" ? baileysModule.default : baileysModule.makeWASocket;
     if (typeof makeWASocket !== "function") {
       throw new Error("Baileys socket factory is unavailable.");
     }

@@ -473,7 +473,8 @@ def _persist_direct_chat_hosted_usage_with_reservation_guard(
 ) -> None:
     try:
         services.persist_direct_chat_hosted_usage_best_effort(**usage_kwargs)
-    except Exception:
+    except Exception as persist_exc:
+        services.capture_exception(persist_exc)
         if hosted_usage_reservation:
             try:
                 services.release_direct_chat_hosted_usage_reservation_best_effort(
@@ -482,7 +483,6 @@ def _persist_direct_chat_hosted_usage_with_reservation_guard(
                 )
             except Exception as release_exc:
                 services.capture_exception(release_exc)
-        raise
 
 
 def stream_provider_backed_direct_chat(

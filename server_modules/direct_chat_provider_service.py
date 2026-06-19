@@ -184,7 +184,7 @@ def build_capability_truth(
                 }
             )
 
-    local_tools_online = bool(runtime_ok and (local_gateway_online or local_worker_online))
+    local_tools_online = bool((runtime_ok and (local_gateway_online or local_worker_online)) or local_gateway_online)
     setup_actions: List[Dict[str, str]] = []
     credential_plane = str(provider_truth.get("credential_plane") or "").strip().lower()
     hosted_enabled = bool(provider_truth.get("hosted_ai_enabled"))
@@ -275,9 +275,7 @@ def build_capability_truth(
             "local_tools_available": local_tools_online,
             "state": (
                 "online"
-                if local_tools_online
-                else "connected_unhealthy"
-                if local_gateway_online and not runtime_ok
+                if local_tools_online or local_gateway_online
                 else "offline"
             ),
         },

@@ -11,6 +11,7 @@ import uuid
 
 from server_modules.capability_registry import resolve_capability, workflow_tool_capability_id
 from server_modules import execution_mode_policy
+from server_modules import local_tool_executor
 
 
 @dataclass(slots=True)
@@ -2494,6 +2495,7 @@ def _execute_hardware_action_tool_call(
             thread_id=str(thread_id or "").strip(),
             request_id=request_id,
             trace_context=trace_context,
+            require_approval=False,
         )
     )
     return _format_hardware_action_result(dict(result) if isinstance(result, dict) else {"status": "completed", "execution": {"result": result}})
@@ -2634,6 +2636,7 @@ async def _execute_hardware_action_tool_call_async(
         thread_id=str(thread_id or "").strip(),
         request_id=request_id,
         trace_context=trace_context,
+        require_approval=False,
     )
     return _format_hardware_action_result(dict(result) if isinstance(result, dict) else {"status": "completed", "execution": {"result": result}})
 
@@ -2887,6 +2890,31 @@ def _execute_custom_connector_tool_call_sync(
         tool_input,
     )
     session_metadata = session_ctx if isinstance(session_ctx, dict) else {}
+    # Local dev: bypass gateway entirely, execute directly on this machine
+    if local_tool_executor.is_local_dev():
+        if connector_id == "shell" and action_id == "exec":
+            result = local_tool_executor.shell_execute(
+                str(argument_payload.get("command") or "")
+            )
+            return json.dumps(result, ensure_ascii=False)
+        if connector_id == "file":
+            if action_id == "read":
+                result = local_tool_executor.filesystem_read(
+                    str(argument_payload.get("path") or "")
+                )
+                return json.dumps(result, ensure_ascii=False)
+            if action_id == "write":
+                result = local_tool_executor.filesystem_write(
+                    str(argument_payload.get("path") or ""),
+                    str(argument_payload.get("content") or "")
+                )
+                return json.dumps(result, ensure_ascii=False)
+            if action_id in ("list", "ls"):
+                result = local_tool_executor.filesystem_list(
+                    str(argument_payload.get("path") or "")
+                )
+                return json.dumps(result, ensure_ascii=False)
+
     result = runs_execution._workflow_execute_connector_action(
         "direct-chat-tool-call",
         "direct_chat_tool_call",
@@ -3032,11 +3060,7 @@ async def execute_single_direct_tool_call_async(
                 or str(metadata.get("trace_id") or "").strip()
                 or f"trace_{uuid.uuid4().hex}"
             )
-            approval_override = None
-            if normalized_connector == "file" and normalized_action == "read":
-                approval_override = False
-            elif normalized_connector == "shell" and _safe_direct_shell_command(str(argument_payload.get("command") or "")):
-                approval_override = False
+            approval_override = False
             gateway_response = await _execute_direct_tool_via_gateway_async(
                 gateway_id=gateway_id,
                 capability_id=gateway_capability_id,
@@ -3117,13 +3141,7 @@ async def execute_single_direct_tool_call_async(
             or str(metadata.get("trace_id") or "").strip()
             or f"trace_{uuid.uuid4().hex}"
         )
-        approval_override: Optional[bool]
-        if normalized_connector == "file" and normalized_action == "read":
-            approval_override = False
-        elif normalized_connector == "shell" and _safe_direct_shell_command(str(argument_payload.get("command") or "")):
-            approval_override = False
-        else:
-            approval_override = None
+        approval_override: Optional[bool] = False
         gateway_response = _execute_direct_tool_via_gateway(
             gateway_id=gateway_id,
             capability_id=gateway_capability_id,

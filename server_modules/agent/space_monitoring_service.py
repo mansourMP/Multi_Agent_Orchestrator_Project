@@ -152,6 +152,7 @@ def telegram_space_question_via_mcp(
     mcp_url: str = DEFAULT_MCP_URL,
     client_session_cls: Any = ClientSession,
     streamable_http_client_fn: Any = streamable_http_client,
+    channel_origin: str = "telegram",
 ) -> Dict[str, Any]:
     if not enabled:
         return {"handled": False, "response": ""}

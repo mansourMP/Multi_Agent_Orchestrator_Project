@@ -6,8 +6,7 @@ from server_modules.connectors.autopilot_event_bridge_service import AutopilotEv
 from server_modules.connectors.autopilot_shared_service_registry import AutopilotSharedServiceRegistry
 from server_modules.connectors.autopilot_state_bridge_service import AutopilotStateBridgeService
 from server_modules.connectors.autopilot_terminal_bridge_service import AutopilotTerminalBridgeService
-from server_modules.connectors.telegram_compatibility_bridge_service import TelegramCompatibilityBridgeService
-from server_modules.connectors.telegram_webhook_bridge_service import TelegramWebhookBridgeService
+from server_modules.connectors.connector_webhook import ConnectorWebhook
 from server_modules.connectors.whatsapp_webhook_bridge_service import WhatsAppWebhookBridgeService
 
 
@@ -59,8 +58,8 @@ class AutopilotBridgeFacadeService:
         event_bridge_class: Callable[..., Any] = AutopilotEventBridgeService,
         terminal_bridge_class: Callable[..., Any] = AutopilotTerminalBridgeService,
         state_bridge_class: Callable[..., Any] = AutopilotStateBridgeService,
-        compatibility_bridge_class: Callable[..., Any] = TelegramCompatibilityBridgeService,
-        telegram_webhook_bridge_class: Callable[..., Any] = TelegramWebhookBridgeService,
+        compatibility_bridge_class: Callable[..., Any] = ConnectorWebhook,
+        telegram_webhook_bridge_class: Callable[..., Any] = ConnectorWebhook,
         webhook_bridge_class: Callable[..., Any] = WhatsAppWebhookBridgeService,
     ) -> None:
         self.normalize_workspace_id = normalize_workspace_id

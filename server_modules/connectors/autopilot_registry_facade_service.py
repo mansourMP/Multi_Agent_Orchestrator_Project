@@ -19,12 +19,11 @@ from server_modules.connectors.autopilot_support_service_registry import Autopil
 from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
 from server_modules.connectors.runtime_status_service import RuntimeStatusService
 from server_modules.connectors.telegram_connector_context_service import TelegramConnectorContextService
-from server_modules.connectors.telegram_connector_support_service import TelegramConnectorSupportService
-from server_modules.connectors.telegram_helper_registry_bridge_service import TelegramHelperRegistryBridgeService
-from server_modules.connectors.telegram_menu_service import TelegramMenuService
-from server_modules.connectors.telegram_autopilot_service_registry import TelegramAutopilotServiceRegistry
+from server_modules.connectors.telegram.connector_support import TelegramConnectorSupportService
+from server_modules.connectors.telegram_connector_services import TelegramConnectorServices
+from server_modules.agent.menu_content_service import TelegramMenuService
 from server_modules.connectors.telegram_terminal_service import TelegramTerminalService
-from server_modules.connectors.telegram_transport_service import TelegramTransportService
+from server_modules.connectors.telegram.transport import TelegramTransportService
 from server_modules.connectors.whatsapp_autopilot_service_registry import WhatsAppAutopilotServiceRegistry
 from server_modules.direct_tool_config_service import run_async_tool_call
 
@@ -143,8 +142,8 @@ class AutopilotRegistryFacadeService:
         runtime_builtin_skills_getter: Callable[[], Any],
         runtime_skills_snapshot_getter: Callable[[], Any],
         bridge_facade_getter: Callable[[], Any],
-        helper_registry_bridge_class: Callable[..., Any] = TelegramHelperRegistryBridgeService,
-        telegram_service_registry_class: Callable[..., Any] = TelegramAutopilotServiceRegistry,
+        helper_registry_bridge_class: Callable[..., Any] = TelegramConnectorServices,
+        telegram_service_registry_class: Callable[..., Any] = TelegramConnectorServices,
         whatsapp_service_registry_class: Callable[..., Any] = WhatsAppAutopilotServiceRegistry,
         support_registry_class: Callable[..., Any] = AutopilotSupportServiceRegistry,
         profile_service_class: Callable[..., Any] = AutopilotProfileService,
@@ -599,41 +598,124 @@ class AutopilotRegistryFacadeService:
             )
         return self._whatsapp_service_registry
 
+    def telegram_helper_registry(self) -> Any:
+        return self.helper_registry_bridge_service()
+
     def helper_registry_bridge_service(self) -> Any:
         if self._helper_registry_bridge is None:
-            self._helper_registry_bridge = self.helper_registry_bridge_class(
-                profile_state_file=self.helper_profile_state_file,
-                onboarding_state_file=self.helper_onboarding_state_file,
-                camera_setup_state_file=self.helper_camera_setup_state_file,
-                media_dir=self.helper_media_dir,
-                media_enabled=self.helper_media_enabled,
-                media_max_items=self.helper_media_max_items,
-                media_max_bytes=self.helper_media_max_bytes,
-                media_include_in_goal=self.helper_media_include_in_goal,
+            self._helper_registry_bridge = TelegramConnectorServices(
+                project_root=self.project_root,
+                default_workspace_id=self.telegram_default_workspace_id_getter(),
                 default_chat_prefix=self.default_chat_prefix,
-                quick_goal_templates=self.helper_quick_goal_templates,
-                menu_goal_templates=self.helper_menu_goal_templates,
-                read_json=lambda path, default: self.read_json(path, default),
-                write_json=lambda path, payload: self.write_json(path, payload),
-                now_iso=self.utc_now_iso,
-                truncate_one_line=self.truncate_one_line,
-                session_key_builder=lambda workspace_id, chat_id: self.telegram_helper_registry().profile_service().telegram_profile_key(
-                    workspace_id,
-                    chat_id,
-                ),
-                telegram_api_request=lambda bot_token, method, **kwargs: self.transport_service().api_request(
-                    bot_token,
-                    method,
-                    **kwargs,
-                ),
+                onboarding_enabled=self.telegram_onboarding_enabled,
+                require_prefix=self.telegram_require_prefix_getter(),
+                prefix=self.telegram_prefix_getter(),
+                space_status_enabled=self.telegram_space_status_enabled,
+                media_max_items=self.telegram_media_max_items,
+                max_updates=self.telegram_max_updates,
+                poll_seconds=self.telegram_poll_seconds,
+                delivery_mode=self.telegram_delivery_mode_getter(),
+                run_timeout_seconds=self.telegram_run_timeout_seconds_getter(),
+                max_reply_chars=self.telegram_max_reply_chars_getter(),
+                send_ack=self.telegram_send_ack_getter(),
+                state=self.telegram_state_getter(),
+                lock=self.telegram_lock_getter(),
+                state_file=self.telegram_state_file,
+                read_json=self.read_json,
+                write_json=self.write_json,
+                persist_state=lambda: self.telegram_helper_registry().persist_state(),
+                utc_now_iso=self.utc_now_iso,
+                classify_error=lambda detail: self.support_service_registry().channel_support_service().classify_error(detail),
+                iso_from_epoch=lambda ts: self.support_service_registry().channel_support_service().iso_from_epoch(ts),
+                normalize_workspace_id=self.normalize_workspace_id,
+                thread_alive=self.telegram_thread_alive,
+                enabled=self.telegram_enabled_getter(),
+                default_profile=self.telegram_default_profile_getter(),
+                list_connector_entries=lambda: self.telegram_helper_registry().list_connector_entries(self.telegram_default_workspace_id_getter()),
+                resolve_profile=lambda entry: self.support_service_registry().profile_service().resolve_telegram_profile(entry),
+                resolve_allow_from=lambda entry: self.runtime_service_registry().connector_support_service().resolve_allow_from(entry, self.telegram_allow_from_value()),
+                connector_state=lambda connector_id: self.telegram_helper_registry().connector_state(connector_id),
+                set_connector_state=lambda connector_id, patch: self.telegram_helper_registry().set_connector_state(connector_id, patch),
+                resolve_secret=lambda entry: self.runtime_service_registry().connector_support_service().get_secret(entry),
+                load_vault=self.load_vault,
+                workspace_visible=self.workspace_visible,
+                connector_paused=lambda item: self.runtime_service_registry().connector_support_service().connector_paused(item),
+                get_updates_process_lock=self.get_updates_process_lock,
+                notify_pending_approvals=lambda **kwargs: self.support_service_registry().approval_service().notify_pending_approvals(**kwargs),
+                telegram_api_request=lambda bot_token, method, **kwargs: self.runtime_service_registry().transport_service().api_request(bot_token, method, **kwargs),
+                record_channel_event=lambda **kwargs: self.event_bridge_service().record_channel_event(**kwargs),
+                record_channel_event_throttled=lambda **kwargs: self.event_bridge_service().record_channel_event_throttled(**kwargs),
+                send_message=lambda *args, **kwargs: self.runtime_service_registry().transport_service().send_message(*args, **kwargs),
+                send_chat_action=lambda *args, **kwargs: self.runtime_service_registry().transport_service().send_chat_action(*args, **kwargs),
+                edit_message=lambda *args, **kwargs: self.runtime_service_registry().transport_service().edit_message(*args, **kwargs),
+                autopilot_log=lambda message: self.support_service_registry().channel_support_service().telegram_autopilot_log(message),
+                autopilot_mark_error=lambda detail, source: self.telegram_helper_registry().mark_error(detail, source=source),
+                mark_poll=lambda clear_error: self.telegram_helper_registry().mark_poll(clear_error=clear_error),
+                mark_started=self.mark_telegram_started,
                 normalize_profile_field=lambda raw_value: self.telegram_helper_registry().profile_service().normalize_profile_field(raw_value),
-                select_skill_from_text=lambda raw_text: self.skill_service().select_skill_from_text(raw_text),
-                skill_goal_builder=lambda skill: self.skill_service().telegram_skill_goal(skill),
+                select_skill_from_text=lambda raw_text: self.support_service_registry().skill_service().select_skill_from_text(raw_text),
+                skill_goal_builder=lambda skill: self.support_service_registry().skill_service().telegram_skill_goal(skill),
+                help_text=lambda profile: self.telegram_helper_registry().routing_service().help_text(profile),
+                skills_menu_text=lambda profile: self.support_service_registry().skill_service().telegram_skills_menu_text(profile),
+                menu_keyboard=lambda profile, menu_id: self.runtime_service_registry().menu_service().menu_keyboard(profile, menu_id),
+                onboarding_prompt=lambda step_index, retry: self.telegram_helper_registry().profile_service().onboarding_prompt(step_index, retry=retry),
+                onboarding_start=lambda workspace_id, chat_id: self.telegram_helper_registry().profile_service().start_onboarding(workspace_id, chat_id),
+                profile_text=lambda profile, chat_profile: self.telegram_helper_registry().profile_service().profile_text(profile, chat_profile),
+                profile_help_text=lambda profile: self.telegram_helper_registry().profile_service().profile_help_text(profile),
+                profile_set=lambda workspace_id, chat_id, field_name, value: self.telegram_helper_registry().profile_service().set_profile_field(workspace_id, chat_id, field_name, value),
+                profile_clear=lambda workspace_id, chat_id, field_name: self.telegram_helper_registry().profile_service().clear_profile(workspace_id, chat_id, field_name),
+                runtime_status_text=lambda workspace_id: self.support_service_registry().runtime_status_service().runtime_status_text(workspace_id),
+                approvals_list=lambda limit, workspace_id=None: self.support_service_registry().approval_service().approvals_list(limit=limit, workspace_id=workspace_id),
+                approvals_text=lambda payload, prefix: self.support_service_registry().approval_service().approvals_text(payload, prefix=prefix),
+                approval_resolve=lambda event_id, approved, note, workspace_id=None: self.support_service_registry().approval_service().approval_resolve(event_id=event_id, approved=approved, note=note, workspace_id=workspace_id),
+                approval_result_text=lambda payload, approved: self.support_service_registry().approval_service().approval_result_text(payload, approved=approved),
+                extract_message=lambda update: self.telegram_helper_registry().media_service().extract_message(update),
+                chat_matches=lambda configured_chat_id, chat: self.runtime_service_registry().connector_support_service().chat_matches(configured_chat_id, chat),
+                store_attachments=lambda **kwargs: self.telegram_helper_registry().media_service().store_attachments(**kwargs),
+                route_message=lambda message_text, profile: self.telegram_helper_registry().routing_service().route_message(message_text, profile),
+                session_key_builder=lambda chat_id: self.support_service_registry().channel_support_service().telegram_session_key(chat_id),
+                trace_id_builder=lambda chat_id, update_id, message_id: self.support_service_registry().channel_support_service().telegram_trace_id(chat_id, update_id, message_id),
+                guided_setup_handler=lambda **kwargs: self.support_service_registry().workflow_setup_service().handle_telegram_guided_automation_setup(**kwargs, enabled=self.telegram_guided_automation_setup_enabled),
+                sender_allowed=lambda sender, allow_from: self.runtime_service_registry().connector_support_service().sender_allowed(sender, allow_from),
+                get_chat_profile=lambda workspace_id, chat_id: self.telegram_helper_registry().profile_service().get_profile(workspace_id, chat_id),
+                explicit_run_command=lambda raw_text: self.telegram_helper_registry().routing_service().is_explicit_run_command(raw_text),
+                onboarding_get_state=lambda workspace_id, chat_id: self.telegram_helper_registry().profile_service().get_onboarding_state(workspace_id, chat_id),
+                onboarding_consume_answer=lambda workspace_id, chat_id, text: self.telegram_helper_registry().profile_service().onboarding_consume_answer(workspace_id, chat_id, text),
+                profile_get=lambda workspace_id, chat_id: self.telegram_helper_registry().profile_service().get_profile(workspace_id, chat_id),
+                profile_has_context=lambda chat_profile: self.telegram_helper_registry().profile_service().profile_has_context(chat_profile),
+                build_goal_with_profile=lambda goal, chat_profile: self.telegram_helper_registry().profile_service().build_goal_with_profile(goal, chat_profile),
+                build_goal_with_attachments=lambda goal, attachments: self.telegram_helper_registry().media_service().build_goal_with_attachments(goal, attachments),
+                workspace_connector_context=lambda **kwargs: self.support_service_registry().connector_context_service().workspace_connector_context(**kwargs),
+                build_goal_with_connector_context=lambda goal, prompt_append: self.support_service_registry().connector_context_service().build_goal_with_connector_context(goal, prompt_append),
+                space_question_via_mcp=lambda goal, enabled, project_root: self.telegram_space_question_via_mcp(goal, enabled=enabled, project_root=project_root),
+                installed_skill_query=lambda **kwargs: self.support_service_registry().connector_context_service().installed_skill_query(**kwargs),
+                truncate_one_line=lambda text, limit: self.support_service_registry().channel_support_service().truncate_one_line(text, limit),
+                create_run=lambda **kwargs: self.runtime_service_registry().run_entry_service().create_telegram_run(**kwargs, media_max_items=self.telegram_media_max_items, trust_mode_value=self.telegram_trust_mode_value_getter(), execution_target_value=self.telegram_execution_target_value_getter()),
+                include_run_meta=lambda: self.support_service_registry().channel_support_service().include_run_meta(),
+                humanize_run_summary=lambda text: self.runtime_service_registry().runtime_support_service().humanize_telegram_run_summary(text),
+                runs_get=self.runs_get,
+                latest_run_error_message=lambda run: self.runtime_service_registry().runtime_support_service().latest_run_error_message(run),
+                is_non_retryable_run_error=lambda error: self.runtime_service_registry().runtime_support_service().is_non_retryable_run_error(error),
+                friendly_run_error=lambda error: self.runtime_service_registry().runtime_support_service().friendly_run_error(error),
+                summarize_run_terminal_result=lambda run, limit: self.runtime_service_registry().runtime_support_service().summarize_run_terminal_result(run, limit),
+                local_companion_snapshot=lambda: self.runtime_service_registry().runtime_support_service().local_companion_snapshot(),
+                can_auto_approve_wait=lambda run: self.runtime_service_registry().run_entry_service().can_auto_approve_wait(run),
+                pending_confirmation_payload=lambda run: self.runtime_service_registry().run_entry_service().pending_confirmation_payload(run),
+                emit_channel_run_delivery_event=outbox_service.emit_channel_run_delivery_event,
+                record_activity_event=lambda **kwargs: run_async_tool_call(activity_ledger_service.append_activity_event(**kwargs)),
+                sleep=time.sleep,
+                helper_profile_state_file=self.helper_profile_state_file,
+                helper_onboarding_state_file=self.helper_onboarding_state_file,
+                helper_camera_setup_state_file=self.helper_camera_setup_state_file,
+                helper_media_dir=self.helper_media_dir,
+                helper_media_enabled=self.helper_media_enabled,
+                helper_media_max_items=self.helper_media_max_items,
+                helper_media_max_bytes=self.helper_media_max_bytes,
+                helper_media_include_in_goal=self.helper_media_include_in_goal,
+                helper_quick_goal_templates=self.helper_quick_goal_templates,
+                helper_menu_goal_templates=self.helper_menu_goal_templates,
             )
         return self._helper_registry_bridge
-
-    def telegram_helper_registry(self) -> Any:
-        return self.helper_registry_bridge_service().telegram_helper_registry()
 
     def support_service_registry(self) -> Any:
         if self._support_service_registry is None:

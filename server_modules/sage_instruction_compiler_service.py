@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from server_modules.channel_adapter import ChannelOrigin
+
 from server_modules import sage_skills_api
 from server_modules import workspace_context
 from server_modules import workspace_context_memory_adapter
@@ -493,12 +495,12 @@ def _normalize_recent_messages(value: Sequence[Mapping[str, Any]] | None) -> lis
 
 # Per-channel format guidance injected into the system prompt.
 # Keys match channel_origin values set by each ingress path.
-CHANNEL_FORMAT_HINTS: dict[str, str] = {
-    "web": "Full markdown and tables are supported. Longer responses are acceptable.",
-    "telegram_hosted": "Markdown is supported (no HTML). Keep responses concise — under ~800 chars unless detail is needed.",
-    "telegram_personal": "Markdown is supported (no HTML). Keep responses concise — under ~800 chars unless detail is needed.",
-    "whatsapp_personal": "Plain text preferred with minimal markdown. Keep responses short and conversational.",
-    "discord_personal": "Markdown is supported. Embeds are not available via DM.",
+CHANNEL_FORMAT_HINTS: dict[ChannelOrigin, str] = {
+    ChannelOrigin.WEB: "Full markdown and tables are supported. Longer responses are acceptable.",
+    ChannelOrigin.TELEGRAM_HOSTED: "Markdown is supported (no HTML). Keep responses concise — under ~800 chars unless detail is needed.",
+    ChannelOrigin.TELEGRAM_PERSONAL: "Markdown is supported (no HTML). Keep responses concise — under ~800 chars unless detail is needed.",
+    ChannelOrigin.WHATSAPP_PERSONAL: "Plain text preferred with minimal markdown. Keep responses short and conversational.",
+    ChannelOrigin.DISCORD_PERSONAL: "Markdown is supported. Embeds are not available via DM.",
 }
 
 def build_sage_instruction_bundle(
@@ -624,6 +626,10 @@ def build_sage_instruction_bundle(
         append_section("channel_context", _channel_block)
 
     system_prompt = "\n\n".join(section for section in sections if _coerce_text(section)).strip()
+    # If there are prior messages, add a brief note to system prompt so the model
+    # treats this as a continuing conversation rather than a fresh interaction.
+    if prior_messages:
+        system_prompt += "\n\n## Ongoing Conversation\nThe messages above are your recent conversation with this user. Maintain continuity — remember what was just discussed, what tools ran, and what the user said. Do not reintroduce yourself or act like this is a new chat."
     messages = [
         {"role": "system", "content": system_prompt},
         *prior_messages,

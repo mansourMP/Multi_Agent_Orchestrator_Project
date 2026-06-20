@@ -14,7 +14,9 @@ class TelegramRoutingService:
         normalize_profile_field: Callable[[str], str],
         select_skill_from_text: Callable[[str], Optional[Dict[str, Any]]],
         skill_goal_builder: Callable[[Dict[str, Any]], str],
+        channel_origin: str = "telegram",
     ) -> None:
+        self.channel_origin = channel_origin
         self.default_chat_prefix = str(default_chat_prefix or "").strip() or "/empyralis"
         self.quick_goal_templates = dict(quick_goal_templates)
         self.menu_goal_templates = dict(menu_goal_templates)

@@ -383,7 +383,7 @@ class AgentMachineModeTests(unittest.TestCase):
                         with patch("server_modules.turn_ingress_service.start_system_run_start", side_effect=_fake_execute_system_run_start_request):
                             with patch("server_modules.connectors.autopilot_runtime_exports._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
                                 with patch("server_modules.connectors.autopilot_runtime_exports._run_execution_services", side_effect=lambda: object(), create=True):
-                                    with patch("server_modules.connectors.telegram_autopilot_state_service.TelegramAutopilotStateService.persist_state", return_value=None):
+                                    with patch("server_modules.connectors.connector_runtime.ConnectorRuntime.persist_state", return_value=None):
                                         autopilot_connectors._autopilot_run_entry_service().create_telegram_run(
                                             goal="Investigate this issue",
                                             workspace_id="default",

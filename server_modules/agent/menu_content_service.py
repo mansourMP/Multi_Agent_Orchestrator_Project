@@ -10,7 +10,9 @@ class TelegramMenuService:
         default_chat_prefix: str,
         show_buttons: bool,
         runtime_active_skills: Callable[[str, int], List[Dict[str, Any]]],
+        channel_origin: str = "telegram",
     ) -> None:
+        self.channel_origin = channel_origin
         self.default_chat_prefix = str(default_chat_prefix or "").strip()
         self.show_buttons = bool(show_buttons)
         self.runtime_active_skills = runtime_active_skills

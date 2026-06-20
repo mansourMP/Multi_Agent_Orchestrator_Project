@@ -17,7 +17,9 @@ class TelegramCameraSetupService:
         write_json: Callable[[Path, Dict[str, Any]], None],
         now_iso: Callable[[], str],
         session_key_builder: Callable[[str, str], str],
+        channel_origin: str = "telegram",
     ) -> None:
+        self.channel_origin = channel_origin
         self.state_file = Path(state_file)
         self.read_json = read_json
         self.write_json = write_json

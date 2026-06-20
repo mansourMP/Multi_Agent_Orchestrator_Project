@@ -27,7 +27,9 @@ class TelegramActionService:
         approval_resolve: Callable[[str, bool, str, Optional[str]], Dict[str, Any]],
         approval_result_text: Callable[[Dict[str, Any], bool], str],
         send_message: Callable[..., Any],
+        channel_origin: str = "telegram",
     ) -> None:
+        self.channel_origin = channel_origin
         self.default_chat_prefix = default_chat_prefix
         self.onboarding_enabled = onboarding_enabled
         self.help_text = help_text

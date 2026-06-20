@@ -65,7 +65,9 @@ class TelegramProfileService:
         write_json: Callable[[Path, Dict[str, Any]], None],
         now_iso: Callable[[], str],
         truncate_one_line: Callable[[str, int], str],
+        channel_origin: str = "telegram",
     ) -> None:
+        self.channel_origin = channel_origin
         self.profile_state_file = Path(profile_state_file)
         self.onboarding_state_file = Path(onboarding_state_file)
         self.default_chat_prefix = str(default_chat_prefix or "").strip() or "/empyralis"

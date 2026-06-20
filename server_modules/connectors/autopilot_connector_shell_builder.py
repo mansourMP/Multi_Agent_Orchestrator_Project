@@ -35,9 +35,9 @@ from server_modules.connectors.autopilot_connector_config import (
     PROJECT_ROOT,
 )
 from server_modules.connectors.autopilot_connector_shell_service import AutopilotConnectorShellService
-from server_modules.connectors.telegram_media_service import telegram_safe_path_token
-from server_modules.connectors.telegram_profile_service import TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS
-from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
+from server_modules.connectors.telegram.media import telegram_safe_path_token
+from server_modules.agent.user_profile_service import TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS
+from server_modules.agent.space_monitoring_service import telegram_space_question_via_mcp
 
 
 def _module_global(global_namespace: Dict[str, Any], name: str, default: Any = None) -> Any:
